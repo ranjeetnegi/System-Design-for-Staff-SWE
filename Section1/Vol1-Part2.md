@@ -1211,5 +1211,3 @@ SENIOR (L5) SCOPE                STAFF (L6) SCOPE
 | Describing what you built | Describe the outcomes you enabled |
 
 ---
-
-*End of Volume 1, Section 2*

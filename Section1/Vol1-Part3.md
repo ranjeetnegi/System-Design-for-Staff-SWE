@@ -1266,5 +1266,3 @@ As you continue preparing:
 The interview is a performance, but it's a performance of something real. The best way to perform Staff-level thinking in an interview is to practice Staff-level thinking in your work.
 
 ---
-
-*End of Volume 1, Section 3*

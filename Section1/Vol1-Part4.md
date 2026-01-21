@@ -1332,5 +1332,3 @@ The goal is not to find perfect answers. The goal is to make the best possible c
 That's what Staff engineers do.
 
 ---
-
-*End of Volume 1, Section 4*

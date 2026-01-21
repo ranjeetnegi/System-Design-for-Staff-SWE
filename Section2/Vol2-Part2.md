@@ -1171,5 +1171,3 @@ The techniques in this section are simple. The challenge is discipline—resisti
 Practice this discipline. It's a Staff-level habit.
 
 ---
-
-*End of Volume 2, Section 2*

@@ -11,37 +11,37 @@
 │                    STAFF-LEVEL INTERVIEW FLOW (45 min)                      │
 │                                                                             │
 │   ┌─────────────────┐                                                       │
-│   │  PHASE 1: UNDERSTAND (5-8 min)                                         │
-│   │  • Ask clarifying questions                                            │
-│   │  • Summarize understanding                                             │
-│   │  • Define scope → Get alignment                                        │
+│   │  PHASE 1: UNDERSTAND (5-8 min)                                          │
+│   │  • Ask clarifying questions                                             │
+│   │  • Summarize understanding                                              │
+│   │  • Define scope → Get alignment                                         │
 │   └─────────────────┘                                                       │
 │            │                                                                │
 │            ▼                                                                │
 │   ┌─────────────────┐                                                       │
-│   │  PHASE 2: HIGH-LEVEL DESIGN (10-12 min)                                │
-│   │  • Sketch architecture                                                 │
-│   │  • Explain components & data flow                                      │
-│   │  • Identify key decisions                                              │
+│   │  PHASE 2: HIGH-LEVEL DESIGN (10-12 min)                                 │
+│   │  • Sketch architecture                                                  │
+│   │  • Explain components & data flow                                       │
+│   │  • Identify key decisions                                               │
 │   └─────────────────┘                                                       │
 │            │                                                                │
 │            ▼                                                                │
 │   ┌─────────────────┐                                                       │
-│   │  PHASE 3: DEEP DIVES (15-20 min)                                       │
-│   │  • Pick 2-3 interesting areas                                          │
-│   │  • Explain approach in detail                                          │
-│   │  • Discuss trade-offs & failures                                       │
+│   │  PHASE 3: DEEP DIVES (15-20 min)                                        │
+│   │  • Pick 2-3 interesting areas                                           │
+│   │  • Explain approach in detail                                           │
+│   │  • Discuss trade-offs & failures                                        │
 │   └─────────────────┘                                                       │
 │            │                                                                │
 │            ▼                                                                │
 │   ┌─────────────────┐                                                       │
-│   │  PHASE 4: WRAP-UP (3-5 min)                                            │
-│   │  • Summarize key decisions                                             │
-│   │  • Acknowledge limitations                                             │
-│   │  • Invite questions                                                    │
+│   │  PHASE 4: WRAP-UP (3-5 min)                                             │
+│   │  • Summarize key decisions                                              │
+│   │  • Acknowledge limitations                                              │
+│   │  • Invite questions                                                     │
 │   └─────────────────┘                                                       │
 │                                                                             │
-│   KEY: YOU drive this flow. Interviewer observes, redirects, probes.       │
+│   KEY: YOU drive this flow. Interviewer observes, redirects, probes.        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1432,5 +1432,3 @@ Every system design interview is an opportunity to demonstrate not just what you
 Lead well.
 
 ---
-
-*End of Volume 1, Section 5*

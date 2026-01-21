@@ -1568,5 +1568,3 @@ The framework is your lens. Every design problem looks different through it—an
 Master the framework. Use it consistently. Watch your system design transform.
 
 ---
-
-*End of Volume 2, Section 1*
