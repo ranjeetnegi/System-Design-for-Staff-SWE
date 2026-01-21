@@ -1432,3 +1432,5 @@ Every system design interview is an opportunity to demonstrate not just what you
 Lead well.
 
 ---
+
+*End of Volume 1, Section 5*
