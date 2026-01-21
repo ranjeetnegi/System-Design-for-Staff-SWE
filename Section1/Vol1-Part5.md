@@ -4,6 +4,64 @@
 
 ---
 
+# Quick Visual: The Staff Interview Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAFF-LEVEL INTERVIEW FLOW (45 min)                      │
+│                                                                             │
+│   ┌─────────────────┐                                                       │
+│   │  PHASE 1: UNDERSTAND (5-8 min)                                         │
+│   │  • Ask clarifying questions                                            │
+│   │  • Summarize understanding                                             │
+│   │  • Define scope → Get alignment                                        │
+│   └─────────────────┘                                                       │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PHASE 2: HIGH-LEVEL DESIGN (10-12 min)                                │
+│   │  • Sketch architecture                                                 │
+│   │  • Explain components & data flow                                      │
+│   │  • Identify key decisions                                              │
+│   └─────────────────┘                                                       │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PHASE 3: DEEP DIVES (15-20 min)                                       │
+│   │  • Pick 2-3 interesting areas                                          │
+│   │  • Explain approach in detail                                          │
+│   │  • Discuss trade-offs & failures                                       │
+│   └─────────────────┘                                                       │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PHASE 4: WRAP-UP (3-5 min)                                            │
+│   │  • Summarize key decisions                                             │
+│   │  • Acknowledge limitations                                             │
+│   │  • Invite questions                                                    │
+│   └─────────────────┘                                                       │
+│                                                                             │
+│   KEY: YOU drive this flow. Interviewer observes, redirects, probes.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Simple Example: Passive vs Active Interview Approach
+
+| Aspect | Passive (L5) | Active (L6) |
+|--------|-------------|-------------|
+| **Starting** | Waits for interviewer's first question | "Let me start by clarifying requirements, then outline the design..." |
+| **Transitions** | Looks to interviewer for what's next | "I've covered the data model. Let me move to the API layer." |
+| **Depth** | Goes wherever interviewer steers | "I can go deeper on caching or move to scaling. Which would you prefer?" |
+| **Time** | Doesn't track time | "We're 20 min in. Let me wrap this up and cover scaling." |
+| **Check-ins** | Constant: "Is this right?" | Strategic: "Does this structure make sense before I go deeper?" |
+
+**The difference**: Staff engineers *lead* the interview. They don't wait to be told what to do.
+
+---
+
 # Introduction
 
 You can have the best design in the world, but if you can't communicate it clearly, you'll fail the interview.
@@ -175,6 +233,37 @@ The preview gives the interviewer a mental framework to organize what they hear.
 
 ## Structural Patterns for System Design
 
+### Quick Reference: 5 Explanation Patterns
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     5 STRUCTURAL PATTERNS FOR EXPLANATIONS                  │
+│                                                                             │
+│   1. TOP-DOWN (Forest → Trees)                                              │
+│      "The system has 3 layers: ingestion, processing, delivery.             │
+│       Let me go deeper on each..."                                          │
+│      → Use when: Introducing a new design                                   │
+│                                                                             │
+│   2. BOTTOM-UP (Trees → Forest)                                             │
+│      "Let me explain the database, then caching, then how they interact..." │
+│      → Use when: Answering specific questions, building up                  │
+│                                                                             │
+│   3. CHRONOLOGICAL (Follow the Request)                                     │
+│      "Request hits CDN → Load Balancer → API → DB → Response"               │
+│      → Use when: Data flow, debugging, latency analysis                     │
+│                                                                             │
+│   4. COMPARATIVE (Option A vs B)                                            │
+│      "Kafka gives us X but costs Y. RabbitMQ gives us Z but lacks W..."     │
+│      → Use when: Technology choices, design decisions                       │
+│                                                                             │
+│   5. PROBLEM-SOLUTION                                                       │
+│      "Challenge 1: peak load. Solution: auto-scaling + queues.              │
+│       Challenge 2: consistency. Solution: saga pattern..."                  │
+│      → Use when: Design driven by requirements/pain points                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Pattern 1: Top-Down (Forest to Trees)
 
 Start with the big picture, then zoom into details.
@@ -319,6 +408,47 @@ Signposting means verbally indicating where you are in your explanation. It's li
 # Part 3: When to Go Deep vs. Stay High-Level
 
 One of the most important judgment calls in a system design interview is knowing when to zoom in and when to stay zoomed out. Go too deep too early, and you'll run out of time before covering the full system. Stay too high-level throughout, and you'll seem superficial.
+
+## Quick Visual: The Depth Decision
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SHOULD I GO DEEP?                                   │
+│                                                                             │
+│   ASK YOURSELF:                           IF YES → GO DEEP                  │
+│                                                                             │
+│   ┌─────────────────────────────────┐                                       │
+│   │ Is this CORE to the design?     │ ──► The unique challenge, not infra   │
+│   └─────────────────────────────────┘                                       │
+│                                                                             │
+│   ┌─────────────────────────────────┐                                       │
+│   │ Is this NOVEL or interesting?   │ ──► Shows sophisticated thinking      │
+│   └─────────────────────────────────┘                                       │
+│                                                                             │
+│   ┌─────────────────────────────────┐                                       │
+│   │ Is this where PROBLEMS live?    │ ──► Scale challenges, failure modes   │
+│   └─────────────────────────────────┘                                       │
+│                                                                             │
+│   ┌─────────────────────────────────┐                                       │
+│   │ Is the INTERVIEWER interested?  │ ──► Questions, leaning in, engaged    │
+│   └─────────────────────────────────┘                                       │
+│                                                                             │
+│   IF NO TO ALL → STAY HIGH-LEVEL                                            │
+│   "Standard infrastructure, I'll summarize and move on..."                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Simple Example: URL Shortener
+
+| Component | Go Deep? | Why? |
+|-----------|----------|------|
+| Load balancer | No | Standard infrastructure |
+| Key generation algorithm | **Yes** | Core challenge: uniqueness, collisions, predictability |
+| Web server | No | Standard, stateless |
+| Redirect latency optimization | **Yes** | Where performance matters |
+| Database CRUD | No | Well-understood pattern |
+| Analytics pipeline at scale | **Yes** | Interesting scale challenge |
 
 ## The Depth Decision Framework
 
@@ -527,6 +657,43 @@ Identify the single most important aspect.
 
 Interruptions are a normal and healthy part of a Staff-level interview. They mean the interviewer is engaged. How you handle them reveals how you handle real-world discussions.
 
+## Quick Visual: The Acknowledge-Respond-Resume Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                THE ACKNOWLEDGE-RESPOND-RESUME PATTERN                       │
+│                                                                             │
+│   Interviewer: "What about data privacy?"                                   │
+│                                                                             │
+│   ┌─────────────┐                                                           │
+│   │ ACKNOWLEDGE │ → "That's an important consideration."                    │
+│   └─────────────┘                                                           │
+│          │                                                                  │
+│          ▼                                                                  │
+│   ┌─────────────┐    "We need encryption at rest and in transit,            │
+│   │   RESPOND   │ →  access controls, no sensitive data logging,            │
+│   └─────────────┘    and GDPR compliance if we have EU users."              │
+│          │                                                                  │
+│          ▼                                                                  │
+│   ┌─────────────┐                                                           │
+│   │   RESUME    │ → "With privacy addressed, let me continue                │
+│   └─────────────┘    with the delivery layer..."                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Quick Reference: Interruption Types & Responses
+
+| Type | What They Want | How to Handle |
+|------|---------------|---------------|
+| **Clarification** | "What do you mean by eventual consistency?" | Briefly explain, then continue where you left off |
+| **Challenge** | "Won't that have problems at scale?" | Acknowledge, explain reasoning, adjust if needed |
+| **Redirection** | "Let's talk about failure modes instead" | Pivot gracefully, note where you were |
+| **Depth-seeking** | "Can you go deeper on distributed locks?" | Go deeper, but bound it so you don't lose thread |
+| **Devil's advocate** | "What if we can't use Kafka?" | Engage genuinely with the constraint |
+
+---
+
 ## Types of Interruptions
 
 ### Clarification Questions
@@ -649,6 +816,49 @@ Sometimes an interruption is best handled later. It's okay to defer, but do it g
 # Part 6: How to Course-Correct Mid-Interview
 
 Things don't always go as planned. You might realize you've made a wrong assumption, gone down an unproductive path, or designed something that doesn't work. The ability to recognize and recover is a Staff-level skill.
+
+## Quick Visual: 5 Recovery Techniques
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      5 COURSE-CORRECTION TECHNIQUES                         │
+│                                                                             │
+│   1. THE RESET (Fundamental mistake)                                        │
+│      "Let me step back and restart. The right approach is actually..."      │
+│      → Use when: Wrong framing or approach                                  │
+│                                                                             │
+│   2. THE PIVOT (Wrong focus)                                                │
+│      "I've been focusing on X, but Y is more important. Let me shift..."    │
+│      → Use when: Deep on something non-central                              │
+│                                                                             │
+│   3. THE ADJUSTMENT (Specific mistake)                                      │
+│      "Actually, a relational DB won't scale here. Let me adjust to KV..."   │
+│      → Use when: Technical mistake but overall approach is sound            │
+│                                                                             │
+│   4. THE TIME CHECK (Running out of time)                                   │
+│      "Let me summarize what we have and quickly touch remaining topics..."  │
+│      → Use when: Spent too long on early parts                              │
+│                                                                             │
+│   5. THE INVITATION (Unsure what's wrong)                                   │
+│      "I'm sensing I might be missing something. What should I focus on?"    │
+│      → Use when: See confusion signals but not sure why                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Simple Example: Course-Correcting in Action
+
+**Situation**: You've spent 20 minutes building a complex microservices architecture for a payment system. Interviewer says: "This seems quite complex. Are there simpler approaches?"
+
+| Bad Response | Good Response |
+|-------------|---------------|
+| "No, this is the right way to do it." | "That's fair feedback. Let me step back." |
+| Gets defensive or flustered | "For 10K transactions/day, a simpler approach would work." |
+| Keeps going in same direction | "Let me redraw this with a single service and ACID transactions." |
+
+**Key**: Recognizing feedback and adapting gracefully shows maturity, not weakness.
+
+---
 
 ## Recognizing You're Off Track
 
@@ -1083,6 +1293,125 @@ The goal is to make clear explanation a natural habit.
 
 ---
 
+# Quick Reference Card
+
+## The 45-Minute Interview Timeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   0 min         8 min        20 min                40 min      45 min       │
+│     │─────────────│─────────────│─────────────────────│───────────│         │
+│     │  CLARIFY    │  HIGH-LEVEL │    DEEP DIVES       │  WRAP-UP  │         │
+│     │  & SCOPE    │   DESIGN    │   (2-3 areas)       │           │         │
+│     │  (5-8 min)  │  (10-12 min)│    (15-20 min)      │  (3-5 min)│         │
+│     │             │             │                     │           │         │
+│     │  Questions  │  Sketch     │  Go deep on         │  Summary  │         │
+│     │  Summary    │  Components │  interesting parts  │  Limits   │         │
+│     │  Scope      │  Data flow  │  Trade-offs         │  Q&A      │         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Self-Check: Am I Driving the Interview?
+
+| Signal | Weak (Passive) | Strong (Active) | ✓ |
+|--------|---------------|-----------------|---|
+| **Agenda** | Wait for interviewer | "Let me start with clarification, then design..." | ☐ |
+| **Transitions** | Pause, look to interviewer | "That covers data layer. Now the API..." | ☐ |
+| **Depth choices** | Go wherever steered | "I can go deeper here or move on. Which?" | ☐ |
+| **Time awareness** | Don't track | "We're 20 min in. Let me cover the key areas..." | ☐ |
+| **Check-ins** | Constant validation | Strategic: after major sections | ☐ |
+| **Summaries** | None | At key milestones and end | ☐ |
+
+---
+
+## Signposting Phrases Cheat Sheet
+
+### Transitions
+- "Now let me move on to..."
+- "That covers X. Next, the Y..."
+- "I've explained the happy path. Now for failure modes..."
+
+### Depth Signals
+- "Let me go deeper on this..." / "I'll stay high-level here..."
+- "This is important enough to spend more time on..."
+- "I can go deeper or move on—which would you prefer?"
+
+### Priority Signals
+- "The most important thing here is..."
+- "This is critical because..."
+- "If I had to pick one thing to get right, it's..."
+
+### Summaries
+- "To recap..."
+- "The key points so far are..."
+- "Let me quickly summarize before moving on..."
+
+---
+
+## Common Mistakes Quick Reference
+
+| Mistake | What It Looks Like | Fix |
+|---------|-------------------|-----|
+| **Monologue** | 10+ min without pause | Check in every 3-5 min |
+| **Mumble** | Trailing off, excessive "um" | Practice speaking clearly, embrace pauses |
+| **Jump** | No transitions between topics | "Now that we have X, let's talk about Y..." |
+| **Defensive** | Treating questions as attacks | "Good point, let me think about that." |
+| **Handwave** | "We'll handle that somehow" | "This is the tricky part. Let me work through it." |
+| **Jargon dump** | Every buzzword you know | Use terms you can explain |
+| **Silence** | Drawing without explaining | Narrate as you draw |
+| **Question dodge** | Not answering directly | Answer first, then expand |
+
+---
+
+## The "Good Structure" Template
+
+```
+"Before I start designing, let me clarify a few things..."
+                    ↓
+"Let me summarize: we're building X for Y scale, prioritizing Z."
+                    ↓
+"Here's my plan: I'll cover [1], [2], [3]. Starting with [1]..."
+                    ↓
+"[Draw high-level architecture]"
+"The main components are A, B, C. Data flows from A → B → C."
+                    ↓
+"The most interesting part is B. Let me go deep there..."
+"[Detailed explanation with trade-offs]"
+                    ↓
+"To summarize: we have X for this, Y for that.
+ Key trade-offs: A and B. Main limitation: C.
+ What questions do you have?"
+```
+
+---
+
+## Interview Recovery Phrases
+
+### When Resetting
+- "Let me step back and reconsider."
+- "I've been going down the wrong path. Let me restart."
+
+### When Pivoting
+- "I've been focusing on X, but Y is more important."
+- "Let me spend our remaining time on the core challenge."
+
+### When Adjusting
+- "Actually, let me revise that."
+- "I realize X doesn't work. A better approach is..."
+
+### When Running Out of Time
+- "Let me summarize what we have and quickly touch the remaining areas."
+- "In the interest of time, let me give you the headline for each."
+
+### When Seeking Guidance
+- "Am I focusing on the right areas?"
+- "Is there something I'm missing that you'd like me to address?"
+
+---
+
 # Conclusion
 
 Communication is the medium through which your technical skills become visible. In a system design interview, the interviewer experiences your abilities only through what you say, draw, and explain.
@@ -1105,5 +1434,3 @@ Lead well.
 ---
 
 *End of Volume 1, Section 5*
-
-*Next: Volume 2, Section 1 – "Deep Dive: Distributed Systems Fundamentals"*

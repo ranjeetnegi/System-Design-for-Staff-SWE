@@ -4,6 +4,53 @@
 
 ---
 
+# Quick Visual: The 4 Types of Users
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THINK BEYOND THE OBVIOUS USER                            │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  1. HUMAN USERS                                                     │   │
+│   │     End consumers, internal staff, support, admins, analysts        │   │
+│   │     → Care about: Latency, usability, personalization               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  2. SYSTEM USERS                                                    │   │
+│   │     Internal services, partner APIs, external integrations          │   │
+│   │     → Care about: API stability, consistency, throughput            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  3. SERVICE USERS                                                   │   │
+│   │     Batch jobs, cron jobs, automated processes, ML pipelines        │   │
+│   │     → Care about: Reliability, idempotency, efficiency              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  4. OPERATIONAL USERS                                               │   │
+│   │     SREs, on-call engineers, DevOps, platform teams                 │   │
+│   │     → Care about: Observability, debuggability, controllability     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   KEY: Most candidates only think about #1. Staff engineers think about ALL.│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Simple Example: Notification System Users
+
+| User Type | Who They Are | What They Need | Design Impact |
+|-----------|-------------|----------------|---------------|
+| **Human** | People receiving notifications | Real-time delivery, preference control | Push infra, preference storage |
+| **System** | Feed service, messaging service | High-throughput API, reliable delivery | Async processing, retries |
+| **Service** | Marketing batch jobs, analytics pipelines | Bulk operations, event consumption | Queue-based, event publishing |
+| **Operational** | SREs monitoring delivery | Dashboards, alerts, debug tools | Metrics, tracing, admin API |
+
+**The lesson**: A design that only serves human users might have terrible APIs for system users, or be impossible for operations to debug.
+
+---
+
 # Introduction
 
 Every system exists to serve someone. Before you draw a single box or choose a single technology, you need to understand who that someone is and what they're trying to accomplish.
@@ -153,6 +200,18 @@ This classification drives decisions: the rate limiter's core path must be fast 
 
 # Part 3: User Intent vs. Implementation
 
+## Quick Reference: Intent vs Implementation Examples
+
+| User Says (Implementation) | Actual Intent | Better Solution |
+|---------------------------|---------------|-----------------|
+| "I need a refresh button" | "I want current data, not stale" | Real-time updates |
+| "Notify me on every like" | "I want to feel appreciated" | Aggregated: "5 people liked" |
+| "Add a search bar" | "I need to find things quickly" | Better organization + search |
+| "Export to CSV" | "I need to analyze this data" | Built-in analytics dashboard |
+| "Send me daily emails" | "Keep me informed" | Smart digest based on activity |
+
+**Key insight**: Users express *implementation*, not *intent*. Your job is to dig deeper.
+
 ## Separating the "What" from the "How"
 
 A critical Staff-level skill is distinguishing between what users want to accomplish (intent) and how they might accomplish it (implementation).
@@ -225,6 +284,32 @@ Each answer reveals more about the true intent, which shapes the design:
 ---
 
 # Part 4: Core vs. Edge Use Cases
+
+## Quick Visual: Core vs Edge
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CORE vs EDGE USE CASES                               │
+│                                                                             │
+│   CORE (Design Meticulously)              EDGE (Handle Appropriately)       │
+│   ┌─────────────────────────┐             ┌────────────────────────-─┐      │
+│   │ • High frequency        │             │ • Low frequency          │      │
+│   │ • High value            │             │ • Lower priority         │      │
+│   │ • User expects perfect  │             │ • Graceful degradation OK│      │
+│   │ • Business critical     │             │ • Simple solutions fine  │      │
+│   └─────────────────────────┘             └─────────────────────────-┘      │
+│                                                                             │
+│   Example: Messaging System                                                 │
+│   ┌─────────────────────────┐             ┌─────────────────────────┐       │
+│   │ CORE:                   │             │ EDGE:                   │       │
+│   │ • Send message          │             │ • Delete message        │       │
+│   │ • Receive message       │             │ • Unsend message        │       │
+│   │ • View history          │             │ • Export conversation   │       │
+│   │                         │             │ • Report spam           │       │
+│   └─────────────────────────┘             └─────────────────────────┘       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Defining the Distinction
 
@@ -987,6 +1072,81 @@ The goal is to see how different Phase 1 decisions lead to genuinely different s
 
 ---
 
+# Quick Reference Card
+
+## Phase 1 Checklist: Users & Use Cases
+
+| Step | Question to Ask | Example Output |
+|------|-----------------|----------------|
+| **Identify all user types** | "Who interacts with this system?" | Human, System, Service, Operational users |
+| **Determine primary vs secondary** | "Whose needs drive the design?" | "Consumers are primary, ops is secondary" |
+| **Uncover intent** | "What problem are we really solving?" | "Keep users informed" not "send notifications" |
+| **Identify core vs edge** | "What's high frequency and high value?" | "Send/receive are core; export is edge" |
+| **Set explicit scope** | "What's in and what's out?" | "In: delivery. Out: content creation, billing" |
+
+---
+
+## Key Phrases for Phase 1
+
+### Identifying Users
+- "Who are all the users of this system?"
+- "Beyond end users, are there internal services? Operations teams?"
+- "Who operates this? Who debugs it when things go wrong?"
+
+### Determining Priority
+- "I'm treating [X] as primary users because..."
+- "Secondary users include [Y]—I'll accommodate but not optimize for them."
+
+### Uncovering Intent
+- "What problem are we really solving?"
+- "Is this for [intent A] or [intent B]? The design differs..."
+
+### Scoping
+- "For this design, I'm focusing on [in-scope]."
+- "I'm explicitly not designing [out-of-scope]—those are separate concerns."
+- "Does this scope work for what you had in mind?"
+
+---
+
+## Common Mistakes Quick Reference
+
+| Mistake | What It Looks Like | Fix |
+|---------|-------------------|-----|
+| **Single user type** | "Users send notifications" | "Who else? Internal services? Ops? Analytics?" |
+| **Taking prompt literally** | Immediately designing a rate limiter | "What problem are we solving? DDoS? Fair usage?" |
+| **Skipping discovery** | 30 seconds of questions, then architecture | Invest 5-10 minutes in Phase 1 |
+| **No prioritization** | All use cases treated equally | "Core: X, Y. Secondary: Z. Edge: W." |
+| **Implicit scope** | Designing without stating boundaries | "I'm focusing on X, not Y. Does that work?" |
+| **Confusing user/role** | "Senders and receivers" | "End users, internal services, marketing systems" |
+
+---
+
+## The Ripple Effect: Phase 1 → Architecture
+
+| Phase 1 Decision | Architectural Impact |
+|-----------------|---------------------|
+| **User types identified** | → APIs needed (REST for humans, gRPC for services) |
+| **Core use cases defined** | → Data model requirements (what to store) |
+| **Primary user chosen** | → Quality requirements (where to invest in availability/latency) |
+| **Scope boundaries set** | → Component boundaries (what you build vs. interface with) |
+
+**Example**: "System users generate 95% of notifications → service-to-service API is the critical path → optimize for throughput and low latency."
+
+---
+
+## Self-Check: Did I Cover Phase 1?
+
+| Signal | Weak | Strong | ✓ |
+|--------|------|--------|---|
+| **User types** | Assumed single user | Identified 4+ types including ops | ☐ |
+| **Primary/secondary** | Not distinguished | Explicit: "X is primary because..." | ☐ |
+| **Intent** | Accepted prompt literally | Asked "What problem are we solving?" | ☐ |
+| **Core vs edge** | Listed features flat | "Core: A, B. Edge: C, D." | ☐ |
+| **Scope** | Implicit or unclear | "In scope: X. Out of scope: Y." | ☐ |
+| **Confirmation** | Didn't check | "Does this scope work?" | ☐ |
+
+---
+
 # Conclusion
 
 Phase 1—Users & Use Cases—is where Staff engineers distinguish themselves.
@@ -1013,5 +1173,3 @@ Practice this discipline. It's a Staff-level habit.
 ---
 
 *End of Volume 2, Section 2*
-
-*Next: Volume 2, Section 3 – "Phase 2: Functional Requirements — Scoping Like a Staff Engineer"*

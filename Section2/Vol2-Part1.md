@@ -4,6 +4,63 @@
 
 ---
 
+# Quick Visual: The 5-Phase Framework
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                        │
+│                                                                             │
+│   Before you design ANYTHING, establish context through 5 phases:           │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  1. USERS & USE CASES                                               │   │
+│   │     Who are we building for? What are they trying to do?            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  2. FUNCTIONAL REQUIREMENTS                                         │   │
+│   │     What must the system do? (Core, Important, Nice-to-have)        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  3. SCALE                                                           │   │
+│   │     How big is this problem? (Users, Data, Requests, Growth)        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  4. NON-FUNCTIONAL REQUIREMENTS                                     │   │
+│   │     What qualities must it have? (Availability, Latency, Durability)│   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  5. ASSUMPTIONS & CONSTRAINTS                                       │   │
+│   │     What's given? What limits us? (Infra, Team, Budget, Timeline)   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│                    NOW you can start designing!                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Simple Example: Senior vs Staff Approach
+
+**Problem**: "Design a notification system."
+
+| Phase | Senior (L5) Approach | Staff (L6) Approach |
+|-------|---------------------|---------------------|
+| **Opening** | "Okay, so we need a database, a message queue..." | "Before I design, let me understand the context..." |
+| **Users** | Assumes "users" | "Who sends? Who receives? Internal ops users?" |
+| **Requirements** | Enumerates features | "Core: send/receive. Important: preferences. Nice-to-have: analytics." |
+| **Scale** | "We need to handle a lot of traffic" | "30M DAU × 20 notifs/day = 7K/sec. Peak 10x = 70K/sec." |
+| **NFRs** | "It should be fast and reliable" | "99.9% availability, 5-second delivery P95, eventual consistency OK" |
+| **Constraints** | Designs in vacuum | "Small team → favor operational simplicity" |
+
+**The difference**: Staff engineers establish a *contract* before designing. They don't build for a generic problem—they build for *this specific* problem.
+
+---
+
 # Introduction
 
 Every Staff engineer I've worked with at Google approaches system design interviews the same way—without realizing they do it.
@@ -310,6 +367,38 @@ Do these estimates seem reasonable for what you have in mind?"
 
 "Are there any extreme cases? For example, a celebrity with 50 million followers posting—that's a massive fan-out. Or a viral event causing 100x normal traffic. How much do we need to handle?"
 
+### Quick Reference: Back-of-Envelope Cheat Sheet
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BACK-OF-ENVELOPE QUICK REFERENCE                         │
+│                                                                             │
+│   TIME CONVERSIONS:                                                         │
+│   • 1 day = 86,400 seconds ≈ 100K seconds                                   │
+│   • 1 month ≈ 2.5 million seconds                                           │
+│   • 1 year ≈ 30 million seconds                                             │
+│                                                                             │
+│   STORAGE SIZES:                                                            │
+│   • 1 KB = 1,000 bytes (text, small JSON)                                   │
+│   • 1 MB = 1,000 KB (image, audio clip)                                     │
+│   • 1 GB = 1,000 MB (video, large dataset)                                  │
+│   • 1 TB = 1,000 GB                                                         │
+│   • 1 PB = 1,000 TB                                                         │
+│                                                                             │
+│   THROUGHPUT RULES OF THUMB:                                                │
+│   • Single server: 10K-100K simple requests/sec                             │
+│   • Single DB: 10K-50K queries/sec (depends on complexity)                  │
+│   • Network: 1-10 Gbps within datacenter                                    │
+│                                                                             │
+│   QUICK FORMULAS:                                                           │
+│   • QPS = (Daily requests) / 100K                                           │
+│   • Storage = (Items) × (Size per item) × (Retention period)                │
+│   • Bandwidth = QPS × (Response size)                                       │
+│   • Peak = 2-10x average (use 10x for safety)                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Back-of-Envelope Calculations
 
 This is where back-of-envelope math becomes essential. Staff engineers should be comfortable with quick estimations:
@@ -386,6 +475,16 @@ Request volume is obvious, but data volume often determines architecture choices
 ---
 
 ## Phase 4: Non-Functional Requirements
+
+### Quick Reference: NFR Dimensions
+
+| Dimension | Question to Ask | Example Target | Trade-off |
+|-----------|-----------------|----------------|-----------|
+| **Availability** | "What % uptime?" | 99.9% = 8.76 hrs/yr downtime | Higher = more redundancy, cost |
+| **Latency** | "How fast? P50? P99?" | P99 < 200ms | Lower = more caching, complexity |
+| **Durability** | "Can we lose data?" | 11 nines (99.999999999%) | Higher = more replication, cost |
+| **Consistency** | "Same data everywhere?" | Eventual vs Strong | Strong = higher latency |
+| **Security** | "Auth? Encryption? Compliance?" | PCI-DSS, HIPAA, GDPR | More = more complexity |
 
 ### What This Phase Covers
 
@@ -1346,6 +1445,100 @@ Goal: Understand that constraints are often more negotiable than they appear.
 
 ---
 
+# Quick Reference Card
+
+## The 5 Phases At a Glance
+
+| Phase | Key Question | What to Cover | Time |
+|-------|-------------|---------------|------|
+| **1. Users & Use Cases** | Who and why? | User types, primary/secondary use cases, edge cases | 1-2 min |
+| **2. Functional Requirements** | What must it do? | Core vs Important vs Nice-to-have, explicit scope | 2-3 min |
+| **3. Scale** | How big? | Users, data volume, QPS, growth, back-of-envelope math | 2-3 min |
+| **4. Non-Functional Requirements** | How well? | Availability, latency, durability, consistency, security | 2-3 min |
+| **5. Assumptions & Constraints** | What's given? | Infrastructure, team, budget, timeline, integrations | 1-2 min |
+
+**Total: 8-13 minutes** → Then you design with clarity!
+
+---
+
+## Self-Check: Did I Cover Everything?
+
+| Signal | Weak | Strong | ✓ |
+|--------|------|--------|---|
+| **Users** | Assumed single user type | Identified 3+ user types including internal | ☐ |
+| **Requirements** | Listed features flat | Prioritized: core / important / nice-to-have | ☐ |
+| **Scale** | "A lot of traffic" | "7K QPS average, 70K peak, 200TB storage" | ☐ |
+| **NFRs** | "Fast and reliable" | "99.9% availability, P99 < 200ms" | ☐ |
+| **Constraints** | Designed in vacuum | Asked about team, timeline, integrations | ☐ |
+| **Summary** | Started designing immediately | Summarized understanding before designing | ☐ |
+
+---
+
+## Key Phrases for Each Phase
+
+### Phase 1: Users & Use Cases
+- "Before I design, I want to understand who we're building for..."
+- "Who are the primary users? Are there secondary users?"
+- "Are there internal users I should consider—ops, support, analytics?"
+
+### Phase 2: Functional Requirements
+- "Based on the use cases, here are the requirements..."
+- "I'll categorize as core, important, and nice-to-have..."
+- "For this design, I'll focus on [X]. Does that scope work?"
+
+### Phase 3: Scale
+- "What scale are we designing for?"
+- "Let me estimate: [X] users × [Y] actions = [Z] QPS..."
+- "At that rate, we need [architecture implication]..."
+
+### Phase 4: Non-Functional Requirements
+- "What are the availability requirements? 99.9% or 99.99%?"
+- "What latency targets? What's the P99 budget?"
+- "Is eventual consistency acceptable, or do we need strong consistency?"
+
+### Phase 5: Assumptions & Constraints
+- "I'm assuming we have existing [auth/monitoring/infra]..."
+- "Are there technology constraints I should know about?"
+- "What's the team situation—size, expertise?"
+
+---
+
+## The Availability Cheat Sheet
+
+| Availability | Downtime/Year | Downtime/Month | What It Means |
+|-------------|---------------|----------------|---------------|
+| 99% | 3.65 days | 7.2 hours | Simple architecture OK |
+| 99.9% | 8.76 hours | 43.8 min | Need redundancy |
+| 99.99% | 52.6 min | 4.38 min | Need automation |
+| 99.999% | 5.26 min | 26.3 sec | Extreme engineering |
+
+---
+
+## Scale Mental Model: Powers of 10
+
+| Users | Architecture Approach |
+|-------|----------------------|
+| 10³ (1K) | Single server, simple DB |
+| 10⁶ (1M) | Caching, read replicas |
+| 10⁹ (1B) | Sharding, distributed systems |
+| 10¹² (1T) | Custom infrastructure |
+
+**Key insight**: Each order of magnitude requires fundamentally different approaches.
+
+---
+
+## Common Mistakes Quick Reference
+
+| Phase | Common Mistake | Fix |
+|-------|---------------|-----|
+| **Users** | Single user type assumed | "Are there user segments with different needs?" |
+| **Requirements** | All features equal priority | "What's core vs important vs nice-to-have?" |
+| **Scale** | "A lot" without numbers | "Let me calculate: X × Y = Z QPS" |
+| **NFRs** | Vague ("fast") | Quantify: "P99 < 200ms, 99.9% availability" |
+| **Constraints** | Design in vacuum | "Team size? Existing systems? Timeline?" |
+
+---
+
 # Conclusion
 
 The Staff-Level System Design Framework is simple:
@@ -1377,5 +1570,3 @@ Master the framework. Use it consistently. Watch your system design transform.
 ---
 
 *End of Volume 2, Section 1*
-
-*Next: Volume 2, Section 2 – "Deep Dive: Storage and Database Design Patterns"*

@@ -16,6 +16,31 @@ This section will give you clear mental models for understanding scope, impact, 
 
 # Part 1: What "Scope" Means at Staff Level
 
+## Quick Visual: Scope at a Glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    SCOPE DIMENSIONS BY LEVEL                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   TECHNICAL SCOPE (What you reason about)                               │
+│   L5: ████░░░░░░░░░░  My component + interfaces                         │
+│   L6: ████████████░░  Systems + cross-team patterns                     │
+│   L7: ██████████████  Org-wide architecture                             │
+│                                                                         │
+│   TEMPORAL SCOPE (How far ahead you think)                              │
+│   L5: ██░░░░░░░░░░░░  This quarter                                      │
+│   L6: ████████░░░░░░  1-2 years                                         │
+│   L7: ██████████████  3-5 years                                         │
+│                                                                         │
+│   ORGANIZATIONAL SCOPE (How far your influence reaches)                 │
+│   L5: ███░░░░░░░░░░░  My team                                           │
+│   L6: █████████░░░░░  Multiple teams                                    │
+│   L7: ██████████████  Entire organization                               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ## The Scope Misconception
 
 Let's start by dismantling a common misconception: scope is not about project size.
@@ -98,6 +123,18 @@ Staff engineers expand scope through:
 - **Humility**: They incorporate feedback and give others credit
 
 Authority-based scope is fragile—it disappears when you change roles. Credibility-based scope is durable—it follows you wherever you go.
+
+## Simple Example: Same Situation, Different Scope
+
+**Situation**: You notice the API is slow.
+
+| Level | Response | Scope Signal |
+|-------|----------|--------------|
+| **L4** | "I'll profile and optimize the slow endpoints." | Task-focused |
+| **L5** | "I'll optimize the endpoints and add performance monitoring to catch this earlier." | Component ownership |
+| **L6** | "I'll fix this, but I noticed three other services have similar issues. Let me propose a shared performance library and org-wide latency SLOs." | Problem space ownership |
+
+The L6 response shows: **fix immediate issue + identify pattern + propose systemic solution**.
 
 ## How to Expand Your Scope
 
@@ -393,6 +430,43 @@ For Staff engineers, all three are expected:
 
 A candidate who demonstrates all three is showing Staff-level contribution. A candidate who demonstrates only one or two may be assessed as a strong Senior.
 
+## Quick Reference: Ownership vs Leadership vs Influence
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   OWNERSHIP        LEADERSHIP         INFLUENCE                         │
+│   ─────────        ──────────         ─────────                         │
+│                                                                         │
+│   "I'm accountable "I'm driving       "People follow my                 │
+│    for this         this initiative"   patterns even when               │
+│    outcome"                            I'm not involved"                │
+│                                                                         │
+│   TEST:            TEST:              TEST:                             │
+│   If it fails,     If you left,       Do your ideas spread              │
+│   do you feel      would it lose      beyond conversations              │
+│   responsible?     direction?         you're part of?                   │
+│                                                                         │
+│   EXAMPLE:         EXAMPLE:           EXAMPLE:                          │
+│   "Notifications   "I'm leading       "Teams use my API                 │
+│   aren't being     the database       design patterns even              │
+│   delivered—I'm    migration across   when I'm not                      │
+│   investigating"   3 teams"           reviewing"                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+## Simple Self-Check: Am I Demonstrating Staff-Level Ownership?
+
+Ask yourself these questions:
+
+| Question | L5 Answer | L6 Answer |
+|----------|-----------|-----------|
+| What do you own? | "The recommendation service" | "User relevance outcomes" |
+| When something breaks in your area, what do you do? | "Check if it's my code" | "Coordinate the fix regardless of whose code" |
+| How do you describe your responsibility? | "I build features for X" | "I ensure X works well for users" |
+| What happens when you go on vacation? | "My tasks wait" | "My ownership continues through docs/delegation" |
+
 ---
 
 # Part 4: How Staff Engineers Drive Direction Without Authority
@@ -556,6 +630,24 @@ The third approach shows you can drive direction while remaining open to input.
 Do you accept the problem as stated and solve it? (Fine for Senior)
 
 Or do you reframe the problem, question assumptions, and clarify what problem is really worth solving? (Staff-level)
+
+## Quick Example: Driving Direction Without Authority
+
+**Situation**: You believe the team should adopt a new testing approach.
+
+**Approach WITH Authority** (Manager):
+> "We're switching to integration tests. I've assigned tickets to everyone."
+
+**Approach WITHOUT Authority** (Staff Engineer):
+> 1. Analyze data: "60% of our prod bugs would've been caught by integration tests"
+> 2. Build credibility: Run a pilot on your own code, show results
+> 3. Write a proposal: Document the approach, tradeoffs, migration path
+> 4. Get buy-in: Discuss with skeptics 1:1, address concerns
+> 5. Build coalition: Get 2-3 allies who agree
+> 6. Propose to team: Present with data, allies, and a concrete plan
+> 7. Support adoption: Help others, iterate based on feedback
+
+The second approach takes longer but creates **durable change with genuine buy-in**.
 
 ---
 
@@ -723,6 +815,25 @@ Interviewer: "What about the case where user data changes while a notification i
 Narrow scope candidate: "The user service would need to handle that. We'd just send whatever data we have at the time of notification creation."
 
 Broad scope candidate: "That's an interesting cross-service consistency challenge. We have a few options. We could accept stale data—if a name change takes 30 seconds to reflect in notifications, that's probably okay. We could delay notification processing briefly and fetch fresh data. We could implement event-driven updates so we get notified of changes. The choice depends on how often data changes and how sensitive it is. Let me think about what makes sense for our use case..."
+
+## Quick Interview Example: Narrow vs Broad Scope
+
+**Question**: "Design a caching layer for the product catalog."
+
+**Narrow Scope Response** (L5):
+> "I'll use Redis with a write-through cache. Keys will be product IDs, values will be product JSON. TTL of 5 minutes. Cache invalidation on product updates."
+
+*Analysis*: Correct, but limited to the stated problem.
+
+**Broad Scope Response** (L6):
+> "Before I design the cache, a few questions:
+> - Is caching the right solution, or is this masking a DB performance issue we should fix?
+> - Are other services also caching product data? Should we have a shared cache?
+> - What's the consistency requirement? Some use cases (checkout) need fresh data; others (browsing) can tolerate staleness.
+> 
+> Assuming caching is right, I'd design it as a reusable service that other teams can use, with configurable consistency levels..."
+
+*Analysis*: Questions the premise, considers broader patterns, designs for reuse.
 
 ## Signal 6: How You Talk About Tradeoffs
 
@@ -1022,6 +1133,83 @@ The interview is a performance, but it's a performance of something real. The be
 
 ---
 
-*End of Volume 1, Section 2*
+# Quick Reference Card
 
-*Next: Volume 1, Section 3 – "Core Frameworks for Staff-Level System Design"*
+## Phrases That Signal Staff-Level Scope
+
+**For Demonstrating Broad Scope:**
+- "Before I solve this, let me understand the broader context..."
+- "I notice this affects Team X too. Should we coordinate?"
+- "This is a pattern I've seen in three places. Maybe we need a shared solution."
+- "This works for now, but in 18 months when we hit X scale..."
+
+**For Demonstrating Ownership:**
+- "I own [problem space], not just [component]."
+- "Even though it's not my code, I feel responsible for the outcome."
+- "Let me coordinate the fix across teams."
+- "I'll make sure this gets resolved."
+
+**For Driving Direction:**
+- "I've analyzed the data, and here's what I recommend..."
+- "I've talked to the affected teams, and here's the common ground..."
+- "Let me propose a path forward and get your feedback."
+- "I think we should do X because [evidence]. What am I missing?"
+
+## Impact Level Quick Reference
+
+| Level | Typical Impact | Example |
+|-------|----------------|---------|
+| **Team** | Improves your team's work | "I reduced our build time by 50%" |
+| **Multi-team** | Improves multiple teams | "I built a shared auth library 4 teams use" |
+| **Org** | Shapes organizational direction | "I defined the testing strategy for the org" |
+
+## The 3 Tests for Staff-Level Contribution
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   THE OWNERSHIP TEST                                                    │
+│   If something breaks in your area, do you feel responsible             │
+│   even if you didn't directly cause it?                                 │
+│                                                                         │
+│   THE RIPPLE TEST                                                       │
+│   Do your ideas spread beyond conversations you're part of?             │
+│                                                                         │
+│   THE DIRECTION TEST                                                    │
+│   If you left, would the initiative lose direction?                     │
+│                                                                         │
+│   All 3 YES = Staff-level. 1-2 YES = Strong Senior. 0 = Keep growing.   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+## One-Page Summary: Senior vs Staff Scope
+
+```
+SENIOR (L5) SCOPE                STAFF (L6) SCOPE
+──────────────────────           ──────────────────────
+
+✓ Owns component                 ✓ Owns problem space
+✓ Plans this quarter             ✓ Plans 1-2 years ahead
+✓ Influences team                ✓ Influences multiple teams
+✓ Solves given problems          ✓ Identifies which problems to solve
+✓ Accountable for code           ✓ Accountable for outcomes
+✓ Respected by teammates         ✓ Consulted across org
+✓ Mentors individuals            ✓ Builds team capability
+✓ Escalates blockers             ✓ Resolves cross-team conflicts
+```
+
+## Common Mistakes When Demonstrating Scope
+
+| Mistake | Fix |
+|---------|-----|
+| "That's not my area" | Own the outcome, coordinate the fix |
+| Waiting for scope to be assigned | Create scope through initiative |
+| Going deep on your component only | Reason about the whole system |
+| Only thinking about today's problem | Discuss 1-year and 3-year implications |
+| Designing for just your team | Ask "Could other teams use this?" |
+| Describing what you built | Describe the outcomes you enabled |
+
+---
+
+*End of Volume 1, Section 2*
