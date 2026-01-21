@@ -37,19 +37,19 @@ The jump from L5 to L6 is often described as the hardest transition in a Google 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    L5 (Senior) vs L6 (Staff) QUICK COMPARISON           │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
+│                                                                         │
 │   L5 SENIOR                          L6 STAFF                           │
 │   ─────────                          ─────────                          │
-│   "Here's how I'll build it"   →    "Here's what we should build"      │
-│   "I finished my task"         →    "I identified the next 3 tasks"    │
-│   "My code is solid"           →    "The system is solid"              │
-│   "I asked for requirements"   →    "I defined the requirements"       │
-│   "I work well with my team"   →    "I influence multiple teams"       │
-│                                                                          │
+│   "Here's how I'll build it"   →    "Here's what we should build"       │
+│   "I finished my task"         →    "I identified the next 3 tasks"     │
+│   "My code is solid"           →    "The system is solid"               │
+│   "I asked for requirements"   →    "I defined the requirements"        │
+│   "I work well with my team"   →    "I influence multiple teams"        │
+│                                                                         │
 │   SCOPE: Component/Feature           SCOPE: System/Problem Space        │
 │   FOCUS: Execution                   FOCUS: Direction + Execution       │
 │   IMPACT: Within team                IMPACT: Across teams               │
-│                                                                          │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -737,37 +737,37 @@ You'll have a whiteboard (or virtual equivalent). You're expected to draw, write
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    IDEAL TIME ALLOCATION (45 min)                        │
+│                    IDEAL TIME ALLOCATION (45 min)                       │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
+│                                                                         │
 │   0:00 - 0:02   Problem statement from interviewer                      │
-│                                                                          │
+│                                                                         │
 │   0:02 - 0:08   CLARIFY (6 min)                                         │
 │                 • Ask 4-6 clarifying questions                          │
 │                 • State your understanding back                         │
 │                 • Confirm scope and priorities                          │
-│                                                                          │
+│                                                                         │
 │   0:08 - 0:15   HIGH-LEVEL DESIGN (7 min)                               │
-│                 • Draw main components                                   │
-│                 • Explain data flow                                      │
+│                 • Draw main components                                  │
+│                 • Explain data flow                                     │
 │                 • State key design decisions                            │
-│                                                                          │
+│                                                                         │
 │   0:15 - 0:35   DEEP DIVES (20 min)                                     │
 │                 • Focus on 2-3 most interesting areas                   │
-│                 • Discuss tradeoffs                                      │
+│                 • Discuss tradeoffs                                     │
 │                 • Handle interviewer questions                          │
 │                 • Cover failure modes                                   │
-│                                                                          │
+│                                                                         │
 │   0:35 - 0:42   SCALE & OPERATIONS (7 min)                              │
-│                 • Capacity estimation                                    │
+│                 • Capacity estimation                                   │
 │                 • Monitoring and alerting                               │
-│                 • Scaling strategy                                       │
-│                                                                          │
+│                 • Scaling strategy                                      │
+│                                                                         │
 │   0:42 - 0:45   WRAP UP (3 min)                                         │
 │                 • Summarize key decisions                               │
 │                 • Acknowledge limitations                               │
-│                 • Invite questions                                       │
-│                                                                          │
+│                 • Invite questions                                      │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -956,19 +956,19 @@ After each practice interview, honestly assess yourself:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                          │
+│                                                                         │
 │   1. Would I want this person LEADING a technical initiative?           │
-│                                                                          │
+│                                                                         │
 │   2. Do they THINK like our best Staff engineers?                       │
-│                                                                          │
+│                                                                         │
 │   3. Can they OWN a problem space and drive it forward?                 │
-│                                                                          │
+│                                                                         │
 │   4. Would they make engineers around them MORE EFFECTIVE?              │
-│                                                                          │
+│                                                                         │
 │   5. Can they COMMUNICATE clearly to different audiences?               │
-│                                                                          │
+│                                                                         │
 │   Everything you do is evidence FOR or AGAINST these questions.         │
-│                                                                          │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -989,7 +989,5 @@ L5 (SENIOR) SIGNALS              L6 (STAFF) SIGNALS
 ```
 
 ---
-
-*End of Volume 1, Section 1*
 
 
