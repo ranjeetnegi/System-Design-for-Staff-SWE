@@ -24,7 +24,7 @@ By the end, you'll have clear decision frameworks for async model selection and 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    QUEUES, LOGS, AND STREAMS                                │
 │                                                                             │
-│   QUEUE (Traditional Message Queue)                                        │
+│   QUEUE (Traditional Message Queue)                                         │
 │   ────────────────────────────────                                          │
 │   [Producer] → [ M M M M M ] → [Consumer]                                   │
 │                     ↓                                                       │
@@ -36,8 +36,8 @@ By the end, you'll have clear decision frameworks for async model selection and 
 │                                                                             │
 │   LOG (Append-Only Log)                                                     │
 │   ────────────────────                                                      │
-│   [Producer] → [ 0 | 1 | 2 | 3 | 4 | 5 ] → [Consumer A at offset 3]        │
-│                                          → [Consumer B at offset 1]        │
+│   [Producer] → [ 0 | 1 | 2 | 3 | 4 | 5 ] → [Consumer A at offset 3]         │
+│                                          → [Consumer B at offset 1]         │
 │   • Messages persist after consumption                                      │
 │   • Multiple consumers track their own position                             │
 │   • Can replay from any point                                               │
@@ -129,9 +129,9 @@ User Request → Service A → [Message Buffer] → Service C (eventually)
 │   ASK: "Does the user need to wait for this operation to complete?"         │
 │                                                                             │
 │   YES, USER MUST WAIT                    NO, USER DOESN'T NEED RESULT       │
-│   ─────────────────────                  ────────────────────────────        │
-│   • Account balance check                • Sending email notification        │
-│   • Product search                       • Updating analytics                │
+│   ─────────────────────                  ────────────────────────────       │
+│   • Account balance check                • Sending email notification       │
+│   • Product search                       • Updating analytics               │
 │   • Authentication                       • Processing uploaded video        │
 │   • Payment processing*                  • Generating reports               │
 │   → USE SYNC                             → USE ASYNC                        │
@@ -163,31 +163,6 @@ Async isn't free. Trade-offs include:
 **Staff-level insight**: Async is a tool, not a default. Use it when the benefits outweigh the complexity costs.
 
 ---
-
-## Mermaid Diagram: Sync vs Async Communication
-
-```mermaid
-flowchart LR
-    subgraph Synchronous["Synchronous (Blocking)"]
-        direction LR
-        U1[User] --> A1[Service A]
-        A1 -->|waits| B1[Service B]
-        B1 -->|waits| C1[Service C]
-        C1 --> B1
-        B1 --> A1
-        A1 --> U1
-    end
-
-    subgraph Asynchronous["Asynchronous (Non-Blocking)"]
-        direction LR
-        U2[User] --> A2[Service A]
-        A2 --> Q[Message Buffer]
-        A2 -->|immediate| U2
-        Q -.->|eventually| C2[Service C]
-    end
-
-    style Q fill:#f9f,stroke:#333
-```
 
 ---
 
@@ -325,8 +300,8 @@ A stream is a *continuous, unbounded flow of events* with *time-aware processing
 │                                                                             │
 │   1. UNBOUNDED DATA                                                         │
 │      ──────────────                                                         │
-│      Events flow forever: ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿→ (no end)                │
-│      (Contrast with batch: finite dataset, clear beginning and end)        │
+│      Events flow forever: ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿→ (no end)                  │
+│      (Contrast with batch: finite dataset, clear beginning and end)         │
 │                                                                             │
 │   2. TIME-AWARE PROCESSING                                                  │
 │      ──────────────────────                                                 │
@@ -411,38 +386,6 @@ A stream is a *continuous, unbounded flow of events* with *time-aware processing
 | **Backpressure** | Queue grows | Consumers fall behind | Framework-dependent |
 | **State management** | Stateless | Offset only | Rich state (windows, joins) |
 | **Typical scale** | Millions/day | Billions/day | Continuous throughput |
-
-### Mermaid Diagram: Queue vs Log vs Stream Patterns
-
-```mermaid
-flowchart TB
-    subgraph Queue["QUEUE: Work Distribution"]
-        direction TB
-        P1[Producer] --> Q1[Message Queue]
-        Q1 --> C1A[Consumer 1]
-        Q1 --> C1B[Consumer 2]
-        Q1 --> C1C[Consumer 3]
-    end
-
-    subgraph Log["LOG: Event History"]
-        direction TB
-        P2[Producer] --> L1["Log: offset 0,1,2,3,4,5"]
-        L1 --> C2A["Consumer A @ offset 3"]
-        L1 --> C2B["Consumer B @ offset 1"]
-        L1 --> C2C["Consumer C @ offset 5"]
-    end
-
-    subgraph Stream["STREAM: Continuous Processing"]
-        direction TB
-        P3[Producers] --> S1[Event Flow]
-        S1 --> SP[Stream Processor]
-        SP --> Sink[Output]
-    end
-
-    style Q1 fill:#ffcccc
-    style L1 fill:#ccffcc
-    style S1 fill:#ccccff
-```
 
 **Key Difference:**
 - **Queue**: Message goes to ONE consumer, then deleted
@@ -706,45 +649,6 @@ Partition 2 is causing most of the lag → investigate
 
 Understanding consumer group behavior is essential for Staff Engineers operating Kafka-based systems.
 
-### Mermaid Diagram: Consumer Group Rebalancing
-
-```mermaid
-sequenceDiagram
-    participant C1 as Consumer 1
-    participant C2 as Consumer 2
-    participant C3 as Consumer 3 (New)
-    participant Coord as Group Coordinator
-
-    Note over C1,Coord: Initial State: 2 consumers, 4 partitions
-
-    rect rgb(200, 255, 200)
-        Note over C1: P0, P1
-        Note over C2: P2, P3
-    end
-
-    C3->>Coord: JoinGroup
-    Coord->>C1: Rebalance triggered
-    Coord->>C2: Rebalance triggered
-    
-    Note over C1,C3: STOP THE WORLD - No processing!
-
-    C1->>Coord: JoinGroup (rejoin)
-    C2->>Coord: JoinGroup (rejoin)
-    C3->>Coord: JoinGroup
-
-    Coord->>C1: Assignment: P0
-    Coord->>C2: Assignment: P1, P2
-    Coord->>C3: Assignment: P3
-
-    rect rgb(200, 255, 200)
-        Note over C1: P0
-        Note over C2: P1, P2
-        Note over C3: P3
-    end
-
-    Note over C1,Coord: Processing resumes
-```
-
 ### Rebalancing Triggers
 
 | Trigger | Cause | Impact |
@@ -821,34 +725,6 @@ consumer = KafkaConsumer(
 # Part 5: Delivery Semantics — At-Least-Once and Exactly-Once
 
 This is where most confusion happens. Let's be precise.
-
-### Mermaid Diagram: Delivery Semantics Comparison
-
-```mermaid
-flowchart LR
-    subgraph AtMostOnce["AT-MOST-ONCE"]
-        P1[Producer] -->|send| B1[Broker]
-        B1 -->|maybe| C1[Consumer]
-        Result1["0 or 1 times<br/>Risk: Data Loss ⚠️"]
-    end
-
-    subgraph AtLeastOnce["AT-LEAST-ONCE"]
-        P2[Producer] -->|send + ack| B2[Broker]
-        B2 -->|deliver + ack| C2[Consumer]
-        B2 -.->|retry on failure| C2
-        Result2["1 or more times<br/>Risk: Duplicates ⚠️"]
-    end
-
-    subgraph ExactlyOnce["EXACTLY-ONCE"]
-        P3[Producer] -->|transactional| B3[Broker]
-        B3 -->|dedup + transactional| C3[Consumer]
-        Result3["Exactly 1 time<br/>Cost: Complexity + Latency"]
-    end
-
-    style AtMostOnce fill:#ffcccc
-    style AtLeastOnce fill:#ffffcc
-    style ExactlyOnce fill:#ccffcc
-```
 
 ## At-Most-Once: Fire and Forget
 
@@ -948,7 +824,7 @@ def process_payment(payment):
 │                                                                             │
 │   Option 1: Transactional Processing                                        │
 │   ─────────────────────────────────────                                     │
-│   [ Read message ] + [ Process ] + [ Write result ] + [ Commit offset ]    │
+│   [ Read message ] + [ Process ] + [ Write result ] + [ Commit offset ]     │
 │                         ALL IN ONE TRANSACTION                              │
 │   If anything fails, entire transaction rolls back                          │
 │                                                                             │
@@ -1047,54 +923,6 @@ Let's apply this understanding to three systems: notification service, metrics p
 - Duplicate notifications are annoying but not catastrophic
 - Each notification should be sent once (ideally)
 
-### Mermaid Diagram: Notification Service Architecture
-
-```mermaid
-flowchart LR
-    subgraph Producers
-        AS1[App Server 1]
-        AS2[App Server 2]
-        AS3[App Server N]
-    end
-
-    subgraph MessageQueue["SQS Queue"]
-        Q[(notifications)]
-        DLQ[(Dead Letter Queue)]
-    end
-
-    subgraph Consumers["Notification Workers"]
-        W1[Worker 1]
-        W2[Worker 2]
-        W3[Worker N]
-    end
-
-    subgraph Providers
-        APNS[APNs - iOS Push]
-        FCM[FCM - Android Push]
-        SES[SES - Email]
-        Twilio[Twilio - SMS]
-    end
-
-    AS1 --> Q
-    AS2 --> Q
-    AS3 --> Q
-    
-    Q --> W1
-    Q --> W2
-    Q --> W3
-    Q -.->|after 3 failures| DLQ
-    
-    W1 --> APNS
-    W1 --> FCM
-    W2 --> SES
-    W3 --> Twilio
-    
-    DLQ --> Alert[Alerts & Manual Review]
-
-    style Q fill:#ff9999
-    style DLQ fill:#ffcc99
-```
-
 ### Analysis: Queue vs Log vs Stream
 
 ```
@@ -1106,7 +934,7 @@ flowchart LR
 │   Do we need replay?                No - once sent, it's sent               │
 │   Multiple consumers same data?     No - each notification sent once        │
 │   Ordering critical?                Not really - within reason              │
-│   High throughput?                  Medium - 100M/day = 1K/sec             │
+│   High throughput?                  Medium - 100M/day = 1K/sec              │
 │   Scale horizontally?               Yes - more senders for throughput       │
 │                                                                             │
 │   VERDICT: QUEUE (SQS, RabbitMQ)                                            │
@@ -1133,7 +961,7 @@ flowchart LR
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    NOTIFICATION SERVICE ARCHITECTURE                        │
 │                                                                             │
-│   [App Servers] → [SQS Queue: notifications] → [Notification Workers]      │
+│   [App Servers] → [SQS Queue: notifications] → [Notification Workers]       │
 │                         │                              │                    │
 │                         │                              ├→ Push (APNs/FCM)   │
 │                         │                              ├→ Email (SES)       │
@@ -1204,41 +1032,6 @@ CONCLUSION: Kafka is over-engineering for this use case
 - Multiple consumers: real-time dashboards, long-term storage, alerting
 - Need to replay for backfill if consumer has bugs
 - Ordering within a service matters (time-series)
-
-### Mermaid Diagram: Metrics Pipeline Architecture
-
-```mermaid
-flowchart TB
-    subgraph Services["10,000 Services"]
-        S1[Service 1]
-        S2[Service 2]
-        SN[Service N]
-    end
-
-    subgraph Kafka["Kafka Cluster"]
-        Topic["metrics-raw<br/>(partitioned by service_id)"]
-    end
-
-    subgraph ConsumerGroups["Independent Consumer Groups"]
-        CG1["Group: dashboard<br/>→ Real-time Grafana"]
-        CG2["Group: storage<br/>→ TimescaleDB"]
-        CG3["Group: alerting<br/>→ Flink → PagerDuty"]
-        CG4["Group: analytics<br/>→ BigQuery"]
-    end
-
-    S1 --> Topic
-    S2 --> Topic
-    SN --> Topic
-
-    Topic --> CG1
-    Topic --> CG2
-    Topic --> CG3
-    Topic --> CG4
-
-    style Topic fill:#99ff99
-    
-    Note["Each consumer group:<br/>• Maintains own offset<br/>• Can replay independently<br/>• Doesn't affect others"]
-```
 
 ### Analysis: Queue vs Log vs Stream
 
@@ -1377,73 +1170,6 @@ CONCLUSION: SQS fundamentally wrong for this use case
 - Search indexer needs to index all posts
 - Analytics needs to track all posts
 - Might need to replay if ranking algorithm changes
-
-### Mermaid Diagram: Feed Fan-Out Architecture (Hybrid)
-
-```mermaid
-flowchart TB
-    subgraph PostCreation["Post Creation"]
-        User[User Posts]
-        PS[Post Service]
-    end
-
-    subgraph EventLog["Kafka: Event Log"]
-        Posts["posts topic<br/>(partitioned by author_id)"]
-    end
-
-    subgraph Consumers["Consumer Groups"]
-        FO[Fan-out Consumer]
-        Search[Search Indexer]
-        Analytics[Analytics]
-    end
-
-    subgraph FanOutLogic["Fan-out Logic"]
-        Small["Small Accounts<br/>< 1000 followers"]
-        Large["Large Accounts<br/>> 1000 followers"]
-    end
-
-    subgraph WorkQueue["SQS: Work Queue"]
-        Tasks["fan-out-tasks"]
-    end
-
-    subgraph Workers["Fan-out Workers"]
-        W1[Worker 1]
-        W2[Worker 2]
-        WN[Worker N]
-    end
-
-    subgraph Storage
-        Cache[(Feed Caches)]
-        ES[(Elasticsearch)]
-        DW[(Data Warehouse)]
-    end
-
-    User --> PS --> Posts
-    
-    Posts --> FO
-    Posts --> Search
-    Posts --> Analytics
-    
-    FO --> Small
-    FO --> Large
-    
-    Small -->|Direct Write| Cache
-    Large --> Tasks
-    
-    Tasks --> W1
-    Tasks --> W2
-    Tasks --> WN
-    
-    W1 --> Cache
-    W2 --> Cache
-    WN --> Cache
-    
-    Search --> ES
-    Analytics --> DW
-
-    style Posts fill:#99ff99
-    style Tasks fill:#ff9999
-```
 
 **Why Hybrid?**
 - **Kafka (Log)**: Source of truth for posts - replayable, multiple consumers
@@ -1609,28 +1335,6 @@ CONCLUSION: Use the right tool for each job
 
 Backpressure occurs when producers generate data faster than consumers can process it. Staff Engineers must design systems that handle this gracefully.
 
-### Mermaid Diagram: Backpressure Strategies
-
-```mermaid
-flowchart TB
-    subgraph Problem["THE PROBLEM"]
-        P[Producer: 10K msg/sec] --> Buffer[Buffer]
-        Buffer --> C[Consumer: 5K msg/sec]
-        Buffer -.->|Growing!| Overflow[Buffer Overflow]
-    end
-
-    subgraph Solutions["SOLUTIONS"]
-        direction TB
-        S1["1. DROP<br/>Discard excess messages"]
-        S2["2. SAMPLE<br/>Process 1 in N messages"]
-        S3["3. BUFFER<br/>Accept lag, catch up later"]
-        S4["4. SCALE<br/>Add more consumers"]
-        S5["5. THROTTLE<br/>Slow down producer"]
-    end
-
-    Problem --> Solutions
-```
-
 ### Backpressure by System Type
 
 | System | Strategy | Trade-off |
@@ -1674,33 +1378,6 @@ class AdaptiveProducer:
 ## Schema Evolution
 
 As systems evolve, message schemas change. Staff Engineers must design for backward and forward compatibility.
-
-### Mermaid Diagram: Schema Compatibility
-
-```mermaid
-flowchart LR
-    subgraph Compatibility["SCHEMA COMPATIBILITY TYPES"]
-        direction TB
-        BC["BACKWARD COMPATIBLE<br/>New reader, old data ✓"]
-        FC["FORWARD COMPATIBLE<br/>Old reader, new data ✓"]
-        Full["FULL COMPATIBLE<br/>Both directions ✓"]
-    end
-
-    subgraph Safe["SAFE CHANGES"]
-        Add["Add optional field"]
-        AddDefault["Add field with default"]
-        Remove["Remove optional field"]
-    end
-
-    subgraph Unsafe["BREAKING CHANGES"]
-        Rename["Rename field"]
-        ChangeType["Change field type"]
-        RemoveReq["Remove required field"]
-    end
-
-    Safe -->|OK| Compatibility
-    Unsafe -->|BREAKS| Compatibility
-```
 
 ### Schema Evolution Best Practices
 
@@ -1746,44 +1423,6 @@ message UserEvent {
 ## Transactional Outbox Pattern
 
 When you need to update a database AND publish an event atomically, use the Transactional Outbox pattern.
-
-### Mermaid Diagram: Transactional Outbox Pattern
-
-```mermaid
-flowchart LR
-    subgraph Service["Order Service"]
-        API[API Handler]
-        DB[(Database)]
-        Outbox[(Outbox Table)]
-    end
-
-    subgraph Relay["Outbox Relay"]
-        Poller[Polling Process]
-    end
-
-    subgraph Messaging
-        Kafka[Kafka Topic]
-    end
-
-    subgraph Consumers
-        C1[Notification Service]
-        C2[Analytics Service]
-    end
-
-    API -->|"1. BEGIN TX"| DB
-    API -->|"2. Insert Order"| DB
-    API -->|"3. Insert Event"| Outbox
-    API -->|"4. COMMIT TX"| DB
-    
-    Poller -->|"5. Poll unpublished"| Outbox
-    Poller -->|"6. Publish"| Kafka
-    Poller -->|"7. Mark published"| Outbox
-    
-    Kafka --> C1
-    Kafka --> C2
-
-    style Outbox fill:#ffff99
-```
 
 ### Why Transactional Outbox?
 
@@ -1843,27 +1482,6 @@ WHERE published_at IS NULL;
 
 Staff Engineers must size async infrastructure correctly. Under-provisioning causes lag and data loss; over-provisioning wastes money.
 
-### Kafka Partition Planning
-
-```mermaid
-flowchart TB
-    subgraph Inputs["INPUTS"]
-        Peak["Peak throughput: 100K msg/sec"]
-        ConsumerRate["Consumer rate: 10K msg/sec/consumer"]
-        Parallelism["Desired parallelism: 10x"]
-    end
-
-    subgraph Calculation["CALCULATION"]
-        Formula["Partitions = max(<br/>Peak / Consumer Rate,<br/>Desired Parallelism)"]
-    end
-
-    subgraph Result["RESULT"]
-        Partitions["Partitions = max(10, 10) = 10<br/>But plan for 2x growth = 20 partitions"]
-    end
-
-    Inputs --> Calculation --> Result
-```
-
 ### Capacity Planning Checklist
 
 | Dimension | Question | Rule of Thumb |
@@ -1904,38 +1522,6 @@ PARTITIONS:
 ---
 
 # Part 7: Decision Frameworks
-
-### Mermaid Diagram: Async Model Decision Tree
-
-```mermaid
-flowchart TD
-    Start([Start: Choose Async Model]) --> Q1{Need to replay<br/>historical events?}
-    
-    Q1 -->|Yes| LOG1[Consider LOG]
-    Q1 -->|No| Q2{One consumer<br/>per message?}
-    
-    Q2 -->|Yes| QUEUE1[Use QUEUE]
-    Q2 -->|No| Q3{Multiple independent<br/>consumers?}
-    
-    Q3 -->|Yes| LOG2[Use LOG]
-    Q3 -->|No| QUEUE2[Use QUEUE]
-    
-    LOG1 --> Q4{Need time-window<br/>aggregations?}
-    LOG2 --> Q4
-    
-    Q4 -->|Yes| STREAM[Use STREAM PROCESSING<br/>Flink / Kafka Streams]
-    Q4 -->|No| LOG3[Use LOG<br/>Kafka / Kinesis]
-
-    QUEUE1 --> Final1([SQS / RabbitMQ])
-    QUEUE2 --> Final2([SQS / RabbitMQ])
-    STREAM --> Final3([Flink + Kafka])
-    LOG3 --> Final4([Kafka / Kinesis])
-
-    style QUEUE1 fill:#ffcccc
-    style QUEUE2 fill:#ffcccc
-    style LOG3 fill:#ccffcc
-    style STREAM fill:#ccccff
-```
 
 ## The Async Model Decision Tree
 
@@ -2040,21 +1626,6 @@ Staff Engineers must design async systems that are observable. When something br
 
 ### Queue Metrics (SQS, RabbitMQ)
 
-```mermaid
-flowchart LR
-    subgraph HealthyQueue["HEALTHY QUEUE"]
-        H1["Queue Depth: ~0"]
-        H2["Age of Oldest: < 1 min"]
-        H3["DLQ Depth: 0"]
-    end
-
-    subgraph UnhealthyQueue["UNHEALTHY QUEUE"]
-        U1["Queue Depth: Growing ⚠️"]
-        U2["Age of Oldest: > 10 min 🔥"]
-        U3["DLQ Depth: > 0 🚨"]
-    end
-```
-
 | Metric | Alert Threshold | Action |
 |--------|-----------------|--------|
 | **Queue depth** | > 10,000 messages | Scale consumers |
@@ -2064,21 +1635,6 @@ flowchart LR
 | **Messages received** | 50% drop | Check producers |
 
 ### Log Metrics (Kafka)
-
-```mermaid
-flowchart LR
-    subgraph HealthyKafka["HEALTHY KAFKA CONSUMER"]
-        H1["Consumer Lag: < 1000"]
-        H2["Time Lag: < 30 sec"]
-        H3["Partition Balance: Even"]
-    end
-
-    subgraph UnhealthyKafka["UNHEALTHY KAFKA CONSUMER"]
-        U1["Consumer Lag: Growing 📈"]
-        U2["Time Lag: > Retention 💀"]
-        U3["Hot Partition 🔥"]
-    end
-```
 
 | Metric | Alert Threshold | Action |
 |--------|-----------------|--------|
@@ -2105,26 +1661,26 @@ flowchart LR
 │                    ASYNC SYSTEM HEALTH DASHBOARD                            │
 │                                                                             │
 │   TOP ROW: Overall Health                                                   │
-│   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │
-│   │ Queue Depth │ │ Kafka Lag   │ │ Error Rate  │ │ DLQ Count   │          │
-│   │    142      │ │   1.2K      │ │    0.01%    │ │     0       │          │
-│   │     ✓       │ │     ✓       │ │     ✓       │ │     ✓       │          │
-│   └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘          │
+│   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│   │ Queue Depth │ │ Kafka Lag   │ │ Error Rate  │ │ DLQ Count   │           │
+│   │    142      │ │   1.2K      │ │    0.01%    │ │     0       │           │
+│   │     ✓       │ │     ✓       │ │     ✓       │ │     ✓       │           │
+│   └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
 │                                                                             │
 │   MIDDLE ROW: Throughput Over Time                                          │
-│   ┌─────────────────────────────────────────────────────────────┐          │
-│   │  Messages/sec: ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆▇█▇▆▅▄▃▂▁                 │          │
-│   │  Produced: ━━━  Consumed: ━━━                               │          │
-│   └─────────────────────────────────────────────────────────────┘          │
+│   ┌─────────────────────────────────────────────────────────────┐           │
+│   │  Messages/sec: ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆▇█▇▆▅▄▃▂▁                │           │
+│   │  Produced: ━━━  Consumed: ━━━                               │           │
+│   └─────────────────────────────────────────────────────────────┘           │
 │                                                                             │
 │   BOTTOM ROW: Per-Consumer/Partition Details                                │
-│   ┌──────────────────────────┐ ┌──────────────────────────────┐            │
-│   │ Consumer Group Lag       │ │ Partition Lag Distribution   │            │
-│   │ dashboard:     120       │ │ P0: ▓▓░░░░░ 1.2K             │            │
-│   │ storage:       1,542     │ │ P1: ▓░░░░░░ 800              │            │
-│   │ alerting:      89        │ │ P2: ▓▓▓▓▓▓▓ 5.2K ⚠️          │            │
-│   │ analytics:     12,301 ⚠️ │ │ P3: ▓▓░░░░░ 1.1K             │            │
-│   └──────────────────────────┘ └──────────────────────────────┘            │
+│   ┌──────────────────────────┐ ┌──────────────────────────────┐             │
+│   │ Consumer Group Lag       │ │ Partition Lag Distribution   │             │
+│   │ dashboard:     120       │ │ P0: ▓▓░░░░░ 1.2K             │             │
+│   │ storage:       1,542     │ │ P1: ▓░░░░░░ 800              │             │
+│   │ alerting:      89        │ │ P2: ▓▓▓▓▓▓▓ 5.2K ⚠️          │             │
+│   │ analytics:     12,301 ⚠️ │ │ P3: ▓▓░░░░░ 1.1K             │             │
+│   └──────────────────────────┘ └──────────────────────────────┘             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2395,35 +1951,6 @@ This gives us reliable delivery without the complexity of a log-based system tha
 # Part 9B: Technology Deep Dive — Choosing Between Implementations
 
 ## Log-Based Systems: Kafka vs Pulsar vs Kinesis
-
-### Mermaid Diagram: Technology Decision
-
-```mermaid
-flowchart TD
-    Start([Choose Log Technology]) --> Q1{Managed service<br/>preferred?}
-    
-    Q1 -->|Yes| Q2{AWS ecosystem?}
-    Q1 -->|No| Q3{Multi-tenancy<br/>required?}
-    
-    Q2 -->|Yes| Kinesis[Amazon Kinesis]
-    Q2 -->|No| Confluent[Confluent Cloud]
-    
-    Q3 -->|Yes| Pulsar[Apache Pulsar]
-    Q3 -->|No| Kafka[Apache Kafka]
-    
-    Kinesis --> Note1["+ Fully managed<br/>+ AWS integration<br/>- Limited partitions<br/>- Higher cost at scale"]
-    
-    Confluent --> Note2["+ Managed Kafka<br/>+ Schema Registry<br/>- Vendor lock-in<br/>- Cost"]
-    
-    Pulsar --> Note3["+ Multi-tenancy<br/>+ Tiered storage<br/>+ Geo-replication<br/>- Smaller ecosystem"]
-    
-    Kafka --> Note4["+ Mature ecosystem<br/>+ High throughput<br/>+ Kafka Streams<br/>- Operational overhead"]
-
-    style Kinesis fill:#ff9900
-    style Confluent fill:#0052cc
-    style Pulsar fill:#188fff
-    style Kafka fill:#231f20,color:#fff
-```
 
 ### Detailed Technology Comparison
 

@@ -112,76 +112,6 @@ T+5.0s      Load balancer marks instances unhealthy Full outage
 T+10.0s     Remaining instances overwhelmed         Extended outage
 ```
 
-### Mermaid Diagram: Retry Amplification
-
-```mermaid
-flowchart TD
-    subgraph Client Layer
-        C1[Client 1]
-        C2[Client 2]
-        C3[Client 3]
-    end
-    
-    subgraph Service A [Service A - 3 retries each]
-        A1[Request 1]
-        A2[Request 2]
-        A3[Request 3]
-    end
-    
-    subgraph Service B [Service B - 3 retries each]
-        B1[Attempt 1]
-        B2[Attempt 2]
-        B3[Attempt 3]
-        B4[Attempt 4]
-        B5[Attempt 5]
-        B6[Attempt 6]
-        B7[Attempt 7]
-        B8[Attempt 8]
-        B9[Attempt 9]
-    end
-    
-    subgraph Database
-        DB[(Database<br/>GC PAUSE)]
-    end
-    
-    C1 --> A1
-    C2 --> A2
-    C3 --> A3
-    
-    A1 --> B1
-    A1 --> B2
-    A1 --> B3
-    
-    A2 --> B4
-    A2 --> B5
-    A2 --> B6
-    
-    A3 --> B7
-    A3 --> B8
-    A3 --> B9
-    
-    B1 --> DB
-    B2 --> DB
-    B3 --> DB
-    B4 --> DB
-    B5 --> DB
-    B6 --> DB
-    B7 --> DB
-    B8 --> DB
-    B9 --> DB
-    
-    style DB fill:#ff6b6b,color:#fff
-    style B1 fill:#ffa94d
-    style B2 fill:#ffa94d
-    style B3 fill:#ffa94d
-    style B4 fill:#ffa94d
-    style B5 fill:#ffa94d
-    style B6 fill:#ffa94d
-    style B7 fill:#ffa94d
-    style B8 fill:#ffa94d
-    style B9 fill:#ffa94d
-```
-
 **Result**: 3 client requests → 9 Service A attempts → 27 database hits!
 
 ### The Five Deadly Retry Sins
@@ -1272,39 +1202,6 @@ fall behind, the queue grows - but the gateway never slows down."
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Mermaid Diagram: Backpressure Propagation
-
-```mermaid
-flowchart LR
-    subgraph External
-        EXT[External<br/>Clients]
-    end
-    
-    subgraph Edge Layer
-        GW[API Gateway<br/>Rate Limit: 10K/s]
-    end
-    
-    subgraph Application Layer
-        SVC[Order Service<br/>Queue: 1000 max]
-    end
-    
-    subgraph Data Layer
-        DB[(Database<br/>Pool: 50 conn)]
-    end
-    
-    EXT -->|"10K req/s"| GW
-    GW -->|"Accept or 429"| SVC
-    SVC -->|"Process or Queue"| DB
-    
-    DB -.->|"Pool exhausted<br/>signal"| SVC
-    SVC -.->|"Queue full<br/>signal"| GW
-    GW -.->|"429 Too Many<br/>Requests"| EXT
-    
-    style DB fill:#4dabf7,color:#fff
-    style SVC fill:#69db7c,color:#000
-    style GW fill:#ffd43b,color:#000
-```
-
 **Key Insight**: Backpressure signals flow BACKWARD through the system, from the slowest component to the fastest.
 
 ### Backpressure Across Service Boundaries
@@ -1527,59 +1424,6 @@ FUNCTION should_process(request):
     RETURN true
 
 // Why process a request the client has already abandoned?
-```
-
-### Mermaid Diagram: Load Shedding Boundaries
-
-```mermaid
-flowchart TD
-    subgraph Incoming Traffic
-        R1[Critical<br/>Health Checks]
-        R2[High Priority<br/>Payments]
-        R3[Normal<br/>Product Views]
-        R4[Low Priority<br/>Analytics]
-    end
-    
-    subgraph Load Shedding Layer
-        LS{Priority<br/>Classifier}
-    end
-    
-    subgraph Processing
-        P1[Always Process]
-        P2[Process if capacity > 10%]
-        P3[Process if capacity > 25%]
-        P4[Process if capacity > 50%]
-    end
-    
-    subgraph Outcomes
-        OK[✅ 200 OK]
-        SHED[❌ 503 Shed]
-    end
-    
-    R1 --> LS
-    R2 --> LS
-    R3 --> LS
-    R4 --> LS
-    
-    LS -->|CRITICAL| P1
-    LS -->|HIGH| P2
-    LS -->|NORMAL| P3
-    LS -->|LOW| P4
-    
-    P1 --> OK
-    P2 -->|"capacity OK"| OK
-    P2 -->|"overloaded"| SHED
-    P3 -->|"capacity OK"| OK
-    P3 -->|"overloaded"| SHED
-    P4 -->|"capacity OK"| OK
-    P4 -->|"overloaded"| SHED
-    
-    style R1 fill:#2ecc71,color:#fff
-    style R2 fill:#3498db,color:#fff
-    style R3 fill:#f39c12,color:#fff
-    style R4 fill:#e74c3c,color:#fff
-    style SHED fill:#c0392b,color:#fff
-    style OK fill:#27ae60,color:#fff
 ```
 
 **Key Insight**: Under pressure, analytics (red) sheds first. Health checks (green) never shed. This keeps the system observable even during failures.
@@ -2053,46 +1897,6 @@ DEFENSE IN DEPTH:
 • Layer 6: Idempotency (prevent duplicates)
 
 STATUS: "Survives chaos monkey, recovers in minutes"
-```
-
-### Mermaid Diagram: Failure Timeline
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant G as Gateway
-    participant O as Order Service
-    participant P as Payment
-    participant I as Inventory
-    
-    Note over P: GC Pause Begins (T+0)
-    
-    C->>G: POST /orders
-    G->>O: Create Order
-    O->>P: Charge $100
-    Note over P: Timeout (5s)
-    P-->>O: Timeout Error
-    
-    Note over O: Circuit Breaker: 1/5 failures
-    
-    O->>P: Retry #1 (after 1s backoff)
-    Note over P: Still in GC
-    P-->>O: Timeout Error
-    
-    Note over O: Circuit Breaker: 2/5 failures
-    Note over O: Retry budget: 2/10 used
-    
-    O->>P: Retry #2 (after 2s backoff)
-    Note over P: GC Ends (T+12s)
-    P-->>O: Success!
-    
-    O->>I: Reserve Inventory
-    I-->>O: Success
-    
-    O->>G: Order Created
-    G->>C: 200 OK
-    
-    Note over O: Total time: 15s (but completed!)
 ```
 
 ### Staff Engineer Interview Signal
