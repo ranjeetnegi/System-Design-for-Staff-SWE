@@ -1911,174 +1911,6 @@ For production systems, single Redis is unacceptable:
 
 ---
 
-# Brainstorming Questions
-
-## Cache Strategy
-
-1. **You're building a product catalog with 1 million products. Each product page gets 1000 views/day on average, but the top 100 products get 1 million views/day. How do you design the caching strategy?**
-
-2. **Your cache hit rate is 60%. The team suggests lowering TTL will help freshness. What questions do you ask before making changes?**
-
-3. **A service caches user permissions with a 1-hour TTL. A security audit flags this as a risk. How do you balance security with performance?**
-
-4. **You have a feed that's personalized per user. Another engineer suggests caching the entire feed per user. What's your analysis?**
-
-## Failure Scenarios
-
-5. **Redis cluster experiences a network partition. Half your cache is unreachable. How does your application behave, and how should it behave?**
-
-6. **A bug in your invalidation logic causes stale data to be served for 6 hours. How do you detect this, and how do you recover?**
-
-7. **Cache warming after a deploy is overwhelming your database. What's your immediate response, and your long-term fix?**
-
-8. **CDN is serving a cached error page (500 response was cached). How did this happen, and how do you prevent it?**
-
-## Trade-offs
-
-9. **You can either cache at the CDN (cheap, 15-minute TTL) or Redis (expensive, instant invalidation). The data changes every 5 minutes. Which do you choose?**
-
-10. **The business wants real-time inventory counts. Engineering wants to cache for performance. How do you navigate this?**
-
-11. **You're adding caching to a legacy system with no cache invalidation hooks. What's your strategy?**
-
-12. **A microservice doesn't own its data—it calls another service. Should it cache those responses? What are the risks?**
-
----
-
-# Homework Assignment
-
-## Design: A Cache Strategy That Survives Cache Outage
-
-### Scenario
-
-You are designing the caching layer for a high-traffic e-commerce platform with the following characteristics:
-
-- **Traffic**: 500,000 requests/minute during peak hours
-- **Product catalog**: 2 million products
-- **User sessions**: 10 million active sessions
-- **Workload distribution**:
-  - 60% product page views
-  - 25% search queries
-  - 10% cart operations
-  - 5% checkout/payment
-
-Currently, the system uses a single Redis cluster that handles:
-- Product data caching (2-hour TTL)
-- User session storage (24-hour TTL)
-- Search result caching (15-minute TTL)
-- Shopping cart state (persistent until checkout)
-
-### The Problem
-
-Last month, a Redis cluster failure caused a 4-hour outage:
-1. Redis became unreachable due to network issues
-2. All traffic hit the database
-3. Database connection pool exhausted in 30 seconds
-4. Database crashed under load
-5. Full outage until Redis was restored and database recovered
-
-### Your Task
-
-Design a caching architecture that:
-
-1. **Survives complete Redis failure** without full outage
-2. **Degrades gracefully** under partial failure
-3. **Recovers automatically** when cache is restored
-4. **Maintains consistency** for critical data (cart, checkout)
-5. **Provides observability** into cache health
-
-### Deliverables
-
-1. **Architecture Diagram**
-   - Show all caching layers
-   - Mark which components are cache vs. persistent storage
-   - Show failover paths
-
-2. **Data Classification**
-   For each data type, specify:
-   - Where it's cached (which layer)
-   - TTL and invalidation strategy
-   - What happens if cache is unavailable
-   - Consistency requirements
-
-3. **Failure Handling Matrix**
-
-   | Failure Scenario | Impact | Mitigation | Recovery |
-   |-----------------|--------|------------|----------|
-   | Redis primary down | ? | ? | ? |
-   | Redis cluster partition | ? | ? | ? |
-   | Full Redis outage | ? | ? | ? |
-   | CDN outage | ? | ? | ? |
-   | Database overload | ? | ? | ? |
-
-4. **Degradation Modes**
-   Define what functionality is available in each mode:
-   - Normal operation
-   - Cache degraded (elevated miss rate)
-   - Cache unavailable
-   - Database stressed
-
-5. **Runbook**
-   Write the on-call response for:
-   - "Redis cluster unreachable" alert
-   - "Cache hit rate < 50%" alert
-   - "Database connection pool saturated" alert
-
-### Evaluation Criteria
-
-Your design will be evaluated on:
-
-| Criterion | Weight | What We're Looking For |
-|-----------|--------|----------------------|
-| Resilience | 30% | Can the system survive component failures? |
-| Graceful degradation | 25% | Does it fail softly, not catastrophically? |
-| Operational clarity | 20% | Is it clear how to respond to incidents? |
-| Complexity management | 15% | Is the complexity justified? |
-| Trade-off articulation | 10% | Are trade-offs explicit and reasoned? |
-
-### Hints
-
-Consider:
-- Multiple cache layers (CDN, Redis, in-process)
-- Different strategies for different data types
-- Circuit breakers and rate limiters
-- Cache-aside vs. read-through for different scenarios
-- What data MUST be fresh vs. what can be stale
-- Separating critical path (checkout) from browsing
-
-### Example Starting Point
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    POSSIBLE ARCHITECTURE                                    │
-│                                                                             │
-│   [CDN Layer]                                                               │
-│       │                                                                     │
-│       ├── Static assets (images, CSS, JS)                                   │
-│       └── Public product data (for logged-out users)                        │
-│                                                                             │
-│   [Application Layer]                                                       │
-│       │                                                                     │
-│       ├── In-process cache (config, feature flags, ultra-hot data)          │
-│       │                                                                     │
-│       ├── Redis Primary (sessions, carts, personalized data)                │
-│       │       └── Sentinel/Cluster for HA                                   │
-│       │                                                                     │
-│       └── Redis Secondary (product cache, search cache)                     │
-│               └── Can be rebuilt from DB                                    │
-│                                                                             │
-│   [Database Layer]                                                          │
-│       │                                                                     │
-│       ├── Primary: Sessions, Carts, Orders (critical, consistent)           │
-│       └── Read Replicas: Product catalog, Search (can be slightly stale)    │
-│                                                                             │
-│   Key Insight: Separate caches by criticality and rebuildability            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
 # Part 8: Staff-Level Deep Dives
 
 ## Blast Radius Analysis for Cache Failures
@@ -5007,6 +4839,529 @@ The content demonstrates:
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+# Part 11: Brainstorming Questions & Exercises
+
+## Section A: Cache Strategy Questions
+
+### Warm-up (5-10 minutes each)
+
+1. **You're building a product catalog with 1 million products. Each product page gets 1000 views/day on average, but the top 100 products get 1 million views/day. How do you design the caching strategy?**
+
+2. **Your cache hit rate is 60%. The team suggests lowering TTL will help freshness. What questions do you ask before making changes?**
+
+3. **A service caches user permissions with a 1-hour TTL. A security audit flags this as a risk. How do you balance security with performance?**
+
+4. **You have a feed that's personalized per user. Another engineer suggests caching the entire feed per user. What's your analysis?**
+
+5. **A junior engineer proposes adding Redis cache to every database read. What's your response, and how do you guide them?**
+
+### Intermediate (15-20 minutes each)
+
+6. **Design a caching strategy for a live sports score application:**
+   - Scores update every 10 seconds
+   - 50 million concurrent users during major events
+   - Users expect near-real-time updates
+   - What do you cache? What TTLs? What about consistency?
+
+7. **Your e-commerce platform has a flash sale starting at noon:**
+   - 10x normal traffic expected
+   - Inventory is limited (100 units)
+   - Price changes at exactly noon
+   - How do you ensure cache consistency while handling the traffic spike?
+
+8. **You're building a multi-tenant SaaS application:**
+   - 10,000 tenants with isolated data
+   - Some tenants are 1000x larger than others
+   - How do you design cache key structure?
+   - How do you prevent one tenant from filling the cache?
+
+9. **A critical production bug causes corrupted user profile data to be cached:**
+   - Bug is fixed, database is corrected
+   - Cache still has corrupted data for 500,000 users
+   - TTL is 24 hours
+   - How do you recover without causing an outage?
+
+10. **Your company is expanding from US-only to global:**
+    - Adding EU and APAC regions
+    - Users should see low latency reads
+    - Writes must be strongly consistent
+    - Design the multi-region caching strategy
+
+---
+
+## Section B: Failure Scenario Questions
+
+### System Failure Analysis
+
+11. **Redis cluster experiences a network partition. Half your cache is unreachable. How does your application behave, and how should it behave?**
+
+12. **A bug in your invalidation logic causes stale data to be served for 6 hours. How do you detect this, and how do you recover?**
+
+13. **Cache warming after a deploy is overwhelming your database. What's your immediate response, and your long-term fix?**
+
+14. **CDN is serving a cached error page (500 response was cached). How did this happen, and how do you prevent it?**
+
+15. **Your Redis primary fails over to replica, but 30 seconds of writes are lost. What data is affected? How do you detect and recover?**
+
+### Cascading Failure Prevention
+
+16. **Walk through exactly what happens in the first 60 seconds when your cache becomes unavailable. Identify every failure point and propose mitigations.**
+
+17. **Your database can handle 10,000 QPS. Your cache handles 95% of 200,000 QPS. If cache fails, what happens? Design the protection mechanisms.**
+
+18. **A cache stampede is happening right now on production. You're on-call. Walk through your response minute by minute.**
+
+19. **Post-incident: Your cache was down for 10 minutes. Traffic during that time was 5x database capacity. Design a system that survives this.**
+
+20. **Your CDN provider has a global outage. All traffic is hitting your origin. What happens, and what should your runbook say?**
+
+---
+
+## Section C: Trade-off Questions
+
+### Making Hard Choices
+
+21. **You can either cache at the CDN (cheap, 15-minute TTL) or Redis (expensive, instant invalidation). The data changes every 5 minutes. Which do you choose?**
+
+22. **The business wants real-time inventory counts. Engineering wants to cache for performance. How do you navigate this?**
+
+23. **You're adding caching to a legacy system with no cache invalidation hooks. What's your strategy?**
+
+24. **A microservice doesn't own its data—it calls another service. Should it cache those responses? What are the risks?**
+
+25. **You can afford either 100GB of Redis OR 10TB of CDN. Traffic is 70% dynamic (personalized), 30% static. How do you allocate?**
+
+### Cost vs Performance vs Consistency
+
+26. **Your current cache costs $50K/month. Finance asks you to cut it by 50%. What do you sacrifice, and what are the implications?**
+
+27. **Two teams are arguing:**
+    - Team A: "Cache everything with 1-hour TTL for performance"
+    - Team B: "No caching, data must be fresh"
+    - You're the Staff Engineer mediating. What's your framework for resolution?
+
+28. **A customer reports they changed their email but still see the old one. Investigation shows cache is working correctly (5-minute TTL). How do you handle this?**
+
+29. **Your cache hit rate is 99%, but user complaints about stale data are increasing. What's happening, and how do you investigate?**
+
+30. **You can implement either read-your-writes consistency OR 50% cost reduction. The business values both. How do you decide?**
+
+---
+
+## Section D: Design Exercises
+
+### Exercise 1: Cache Strategy That Survives Outage (90 minutes)
+
+**Scenario:**
+
+You are designing the caching layer for a high-traffic e-commerce platform:
+
+- **Traffic**: 500,000 requests/minute during peak hours
+- **Product catalog**: 2 million products
+- **User sessions**: 10 million active sessions
+- **Workload distribution**:
+  - 60% product page views
+  - 25% search queries
+  - 10% cart operations
+  - 5% checkout/payment
+
+Currently, the system uses a single Redis cluster that handles:
+- Product data caching (2-hour TTL)
+- User session storage (24-hour TTL)
+- Search result caching (15-minute TTL)
+- Shopping cart state (persistent until checkout)
+
+**The Problem:**
+
+Last month, a Redis cluster failure caused a 4-hour outage:
+1. Redis became unreachable due to network issues
+2. All traffic hit the database
+3. Database connection pool exhausted in 30 seconds
+4. Database crashed under load
+5. Full outage until Redis was restored and database recovered
+
+**Your Task:**
+
+Design a caching architecture that:
+
+1. **Survives complete Redis failure** without full outage
+2. **Degrades gracefully** under partial failure
+3. **Recovers automatically** when cache is restored
+4. **Maintains consistency** for critical data (cart, checkout)
+5. **Provides observability** into cache health
+
+**Deliverables:**
+
+1. **Architecture Diagram**
+   - Show all caching layers
+   - Mark which components are cache vs. persistent storage
+   - Show failover paths
+
+2. **Data Classification Matrix**
+
+   | Data Type | Cache Layer | TTL | Invalidation | If Cache Unavailable | Consistency Req |
+   |-----------|-------------|-----|--------------|---------------------|-----------------|
+   | Product catalog | ? | ? | ? | ? | ? |
+   | User session | ? | ? | ? | ? | ? |
+   | Shopping cart | ? | ? | ? | ? | ? |
+   | Search results | ? | ? | ? | ? | ? |
+   | Inventory counts | ? | ? | ? | ? | ? |
+
+3. **Failure Handling Matrix**
+
+   | Failure Scenario | Impact | Mitigation | Recovery Time |
+   |-----------------|--------|------------|---------------|
+   | Redis primary down | ? | ? | ? |
+   | Redis cluster partition | ? | ? | ? |
+   | Full Redis outage | ? | ? | ? |
+   | CDN outage | ? | ? | ? |
+   | Database overload | ? | ? | ? |
+
+4. **Degradation Modes**
+   
+   For each mode, specify what functionality is available:
+   - Normal operation
+   - Cache degraded (elevated miss rate)
+   - Cache unavailable
+   - Database stressed
+
+5. **On-Call Runbook**
+   
+   Write the response procedure for:
+   - "Redis cluster unreachable" alert
+   - "Cache hit rate < 50%" alert
+   - "Database connection pool saturated" alert
+
+**Evaluation Criteria:**
+
+| Criterion | Weight | What We're Looking For |
+|-----------|--------|----------------------|
+| Resilience | 30% | Can the system survive component failures? |
+| Graceful degradation | 25% | Does it fail softly, not catastrophically? |
+| Operational clarity | 20% | Is it clear how to respond to incidents? |
+| Complexity management | 15% | Is the complexity justified? |
+| Trade-off articulation | 10% | Are trade-offs explicit and reasoned? |
+
+**Hints:**
+
+Consider:
+- Multiple cache layers (CDN, Redis, in-process)
+- Different strategies for different data types
+- Circuit breakers and rate limiters
+- Cache-aside vs. read-through for different scenarios
+- What data MUST be fresh vs. what can be stale
+- Separating critical path (checkout) from browsing
+
+**Example Starting Point:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    POSSIBLE ARCHITECTURE                                    │
+│                                                                             │
+│   [CDN Layer]                                                               │
+│       │                                                                     │
+│       ├── Static assets (images, CSS, JS)                                   │
+│       └── Public product data (for logged-out users)                        │
+│                                                                             │
+│   [Application Layer]                                                       │
+│       │                                                                     │
+│       ├── In-process cache (config, feature flags, ultra-hot data)          │
+│       │                                                                     │
+│       ├── Redis Primary (sessions, carts, personalized data)                │
+│       │       └── Sentinel/Cluster for HA                                   │
+│       │                                                                     │
+│       └── Redis Secondary (product cache, search cache)                     │
+│               └── Can be rebuilt from DB                                    │
+│                                                                             │
+│   [Database Layer]                                                          │
+│       │                                                                     │
+│       ├── Primary: Sessions, Carts, Orders (critical, consistent)           │
+│       └── Read Replicas: Product catalog, Search (can be slightly stale)    │
+│                                                                             │
+│   Key Insight: Separate caches by criticality and rebuildability            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Exercise 2: Multi-Region Cache Design (60 minutes)
+
+**Scenario:**
+
+Your social media platform is expanding globally:
+- Currently US-only, 50M DAU
+- Expanding to EU (GDPR) and APAC
+- User profiles, posts, and feeds are the primary data
+- Target: <100ms p99 latency for reads in all regions
+- Writes can have higher latency but must be durable
+
+**Constraints:**
+- GDPR requires EU user data to stay in EU
+- Some content is global (public posts)
+- Some content is regional (user-specific data)
+- Budget: $100K/month for caching infrastructure
+
+**Your Task:**
+
+1. **Design the multi-region cache topology**
+   - Where are caches located?
+   - What data goes where?
+   - How does invalidation work across regions?
+
+2. **Solve the consistency problem**
+   - User in EU updates profile
+   - User in US views that profile
+   - How stale can it be? How do you minimize?
+
+3. **Handle GDPR requirements**
+   - EU user data must stay in EU
+   - But what about caching at CDN?
+   - What about when EU user travels to US?
+
+4. **Design the invalidation flow**
+   - Post is created in US
+   - Followers are in EU and APAC
+   - How do their feeds get updated?
+
+**Deliverables:**
+- Architecture diagram showing all regions
+- Data flow for read and write operations
+- Invalidation sequence diagram
+- GDPR compliance strategy
+
+---
+
+### Exercise 3: Cache Migration (45 minutes)
+
+**Scenario:**
+
+You're migrating from Memcached to Redis Cluster:
+- 50-node Memcached cluster
+- 200K QPS, 80GB data
+- Zero-downtime requirement
+- 4-week timeline
+
+**Challenges:**
+- Different serialization (Memcached uses different client)
+- Different key limitations (Redis Cluster has slot restrictions)
+- Multi-key operations (MGET) used extensively
+- Team has no Redis experience
+
+**Your Task:**
+
+1. **Create the migration plan**
+   - Week-by-week breakdown
+   - Risk mitigation at each stage
+   - Rollback procedures
+
+2. **Identify and solve technical issues**
+   - Serialization compatibility
+   - Multi-key operation handling
+   - Key slot distribution
+
+3. **Design the traffic cutover**
+   - How to run both systems?
+   - How to validate correctness?
+   - How to gradually shift traffic?
+
+4. **Plan for failure**
+   - What if Redis performance is worse?
+   - What if data corruption is discovered?
+   - What's the "abort" criteria?
+
+---
+
+### Exercise 4: Cache Security Audit (30 minutes)
+
+**Scenario:**
+
+Security team has flagged your caching infrastructure for audit:
+
+Current state:
+- Redis on port 6379, no auth (internal network)
+- Cache keys include user emails for lookup
+- Session tokens cached with 7-day TTL
+- API responses cached including user PII
+- No encryption in transit or at rest
+
+**Your Task:**
+
+1. **Identify all security vulnerabilities**
+   - Prioritize by severity
+   - Estimate blast radius for each
+
+2. **Create remediation plan**
+   - Immediate fixes (this week)
+   - Short-term fixes (this month)
+   - Long-term improvements (this quarter)
+
+3. **Design secure cache architecture**
+   - Authentication and authorization
+   - Data classification
+   - Key design that doesn't leak information
+   - PII handling
+
+4. **Create security monitoring**
+   - What to monitor for intrusion?
+   - What alerts to create?
+   - How to detect data exfiltration?
+
+---
+
+### Exercise 5: Incident Response Simulation (30 minutes)
+
+**Scenario:**
+
+It's 3 AM. You're on-call. These alerts fire simultaneously:
+
+```
+CRITICAL: redis-primary CPU 100% for 5 minutes
+WARNING:  cache_hit_rate dropped from 95% to 45%
+CRITICAL: database_connections at 95% of pool
+WARNING:  api_latency_p99 increased from 50ms to 2000ms
+```
+
+**Your Task:**
+
+1. **Triage (5 minutes)**
+   - What's the root cause?
+   - What's the user impact?
+   - What's the priority order for investigation?
+
+2. **Immediate Response (10 minutes)**
+   - What commands do you run first?
+   - Who do you page?
+   - What's your hypothesis?
+
+3. **Mitigation (10 minutes)**
+   - What do you do to stop the bleeding?
+   - How do you prevent cascade failure?
+   - What's your communication to stakeholders?
+
+4. **Post-Incident (5 minutes)**
+   - What would you investigate tomorrow?
+   - What permanent fixes would you propose?
+   - How would you prevent recurrence?
+
+---
+
+## Section E: Interview Practice Questions
+
+These questions simulate what you might face in a Staff Engineer interview.
+
+### Question 1: Design Twitter's Home Timeline Cache
+
+**Interviewer prompt:**
+"Design the caching strategy for Twitter's home timeline. Users see tweets from people they follow. Assume 500M DAU, average 300 follows per user, 500M tweets per day."
+
+**What they're looking for:**
+- Fan-out on read vs. fan-out on write trade-off
+- Hot user problem (celebrities with 100M followers)
+- Cache consistency when tweets are deleted
+- Read-your-writes consistency
+- Multi-region considerations
+
+**Time:** 35 minutes
+
+---
+
+### Question 2: Design a Rate Limiter
+
+**Interviewer prompt:**
+"Design a distributed rate limiter that limits each API client to 1000 requests per minute. It must work across 100 application servers."
+
+**What they're looking for:**
+- Sliding window vs. fixed window trade-off
+- Redis vs. local counter approaches
+- What happens when Redis is down?
+- Accuracy vs. performance trade-off
+- Client experience (rate limit headers)
+
+**Time:** 25 minutes
+
+---
+
+### Question 3: Cache Invalidation Problem
+
+**Interviewer prompt:**
+"You have a product catalog service with 10M products. Product data is cached in Redis with 1-hour TTL. The business wants instant price updates when prices change. How do you solve this?"
+
+**What they're looking for:**
+- Event-driven invalidation
+- Pub/sub for cache invalidation
+- Version-based cache keys
+- Trade-off between complexity and freshness
+- CDN considerations
+
+**Time:** 20 minutes
+
+---
+
+### Question 4: Debugging Production Issue
+
+**Interviewer prompt:**
+"Users report they're seeing other users' data. You suspect cache poisoning. How do you investigate and fix?"
+
+**What they're looking for:**
+- Systematic debugging approach
+- Cache key design analysis
+- Vary header investigation
+- Security implications
+- Immediate mitigation vs. root cause fix
+
+**Time:** 20 minutes
+
+---
+
+### Question 5: Cache Cost Optimization
+
+**Interviewer prompt:**
+"Your cache infrastructure costs $500K/year. The CFO asks for 40% reduction. Current hit rate is 85%. How do you approach this?"
+
+**What they're looking for:**
+- Data-driven analysis first
+- TTL optimization opportunities
+- Compression strategies
+- Tiered caching
+- Trade-off articulation (cost vs. performance)
+
+**Time:** 20 minutes
+
+---
+
+## Section F: Self-Assessment Rubric
+
+After completing exercises, evaluate yourself:
+
+| Competency | L5 (Senior) | L6 (Staff) | L7 (Principal) |
+|------------|-------------|------------|----------------|
+| **Cache selection** | Knows Redis vs. Memcached | Chooses based on failure modes and ops cost | Defines caching strategy for org |
+| **Failure thinking** | Handles cache misses | Designs for cold start, stampede, cascade | Prevents failure classes via architecture |
+| **Trade-off articulation** | Explains consistency/latency | Quantifies cost/performance/consistency | Frames trade-offs for exec communication |
+| **Multi-region** | Understands replication | Designs regional cache strategy | Defines global cache architecture |
+| **Security** | Knows to use auth | Designs data classification for cache | Creates security standards for cache |
+| **Operations** | Can debug cache issues | Writes runbooks, defines SLOs | Establishes monitoring standards |
+| **Cross-team impact** | Works within standards | Creates standards for team | Drives org-wide cache strategy |
+
+---
+
+## Section G: Further Reading & Resources
+
+### Papers
+1. "Scaling Memcache at Facebook" - Facebook Engineering
+2. "Dynamo: Amazon's Highly Available Key-value Store" - Amazon
+3. "TAO: Facebook's Distributed Data Store for the Social Graph"
+
+### Topics to Explore Next
+- Write-behind caching with change data capture
+- Distributed caching with consistent hashing
+- Cache-as-a-service architectures
+- Machine learning for cache eviction (LeCaR, etc.)
+- Database-integrated caching (MySQL query cache, PostgreSQL pg_prewarm)
 
 ---
 
