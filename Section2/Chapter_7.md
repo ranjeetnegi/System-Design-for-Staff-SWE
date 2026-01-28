@@ -1,1605 +1,2043 @@
-# Chapter 7: Phase 1 — Users & Use Cases: Staff-Level Thinking
+# Chapter 6: The Staff-Level System Design Framework
 
 ---
 
-# Quick Visual: The 4 Types of Users
+# Quick Visual: The 5-Phase Framework
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    THINK BEYOND THE OBVIOUS USER                            │
+│              THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                        │
+│                                                                             │
+│   Before you design ANYTHING, establish context through 5 phases:           │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  1. HUMAN USERS                                                     │   │
-│   │     End consumers, internal staff, support, admins, analysts        │   │
-│   │     → Care about: Latency, usability, personalization               │   │
+│   │  1. USERS & USE CASES                                               │   │
+│   │     Who are we building for? What are they trying to do?            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  2. SYSTEM USERS                                                    │   │
-│   │     Internal services, partner APIs, external integrations          │   │
-│   │     → Care about: API stability, consistency, throughput            │   │
+│   │  2. FUNCTIONAL REQUIREMENTS                                         │   │
+│   │     What must the system do? (Core, Important, Nice-to-have)        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  3. SERVICE USERS                                                   │   │
-│   │     Batch jobs, cron jobs, automated processes, ML pipelines        │   │
-│   │     → Care about: Reliability, idempotency, efficiency              │   │
+│   │  3. SCALE                                                           │   │
+│   │     How big is this problem? (Users, Data, Requests, Growth)        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  4. OPERATIONAL USERS                                               │   │
-│   │     SREs, on-call engineers, DevOps, platform teams                 │   │
-│   │     → Care about: Observability, debuggability, controllability     │   │
+│   │  4. NON-FUNCTIONAL REQUIREMENTS                                     │   │
+│   │     What qualities must it have? (Availability, Latency, Durability)│   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│   KEY: Most candidates only think about #1. Staff engineers think about ALL.│
+│                              ↓                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  5. ASSUMPTIONS & CONSTRAINTS                                       │   │
+│   │     What's given? What limits us? (Infra, Team, Budget, Timeline)   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              ↓                                              │
+│                    NOW you can start designing!                             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-# Simple Example: Notification System Users
+# Simple Example: Senior vs Staff Approach
 
-| User Type | Who They Are | What They Need | Design Impact |
-|-----------|-------------|----------------|---------------|
-| **Human** | People receiving notifications | Real-time delivery, preference control | Push infra, preference storage |
-| **System** | Feed service, messaging service | High-throughput API, reliable delivery | Async processing, retries |
-| **Service** | Marketing batch jobs, analytics pipelines | Bulk operations, event consumption | Queue-based, event publishing |
-| **Operational** | SREs monitoring delivery | Dashboards, alerts, debug tools | Metrics, tracing, admin API |
+**Problem**: "Design a notification system."
 
-**The lesson**: A design that only serves human users might have terrible APIs for system users, or be impossible for operations to debug.
+| Phase | Senior (L5) Approach | Staff (L6) Approach |
+|-------|---------------------|---------------------|
+| **Opening** | "Okay, so we need a database, a message queue..." | "Before I design, let me understand the context..." |
+| **Users** | Assumes "users" | "Who sends? Who receives? Internal ops users?" |
+| **Requirements** | Enumerates features | "Core: send/receive. Important: preferences. Nice-to-have: analytics." |
+| **Scale** | "We need to handle a lot of traffic" | "30M DAU × 20 notifs/day = 7K/sec. Peak 10x = 70K/sec." |
+| **NFRs** | "It should be fast and reliable" | "99.9% availability, 5-second delivery P95, eventual consistency OK" |
+| **Constraints** | Designs in vacuum | "Small team → favor operational simplicity" |
+
+**The difference**: Staff engineers establish a *contract* before designing. They don't build for a generic problem—they build for *this specific* problem.
 
 ---
 
 # Introduction
 
-Every system exists to serve someone. Before you draw a single box or choose a single technology, you need to understand who that someone is and what they're trying to accomplish.
+Every Staff engineer I've worked with at Google approaches system design interviews the same way—without realizing they do it.
 
-This sounds obvious. And yet, it's where many experienced engineers stumble in Staff-level interviews. They hear "design a rate limiter" and immediately start thinking about token buckets and sliding windows. They hear "design a messaging system" and jump to message queues and delivery guarantees. They're solving before they've understood.
+When a Senior engineer is asked to "design a notification system," they often jump straight into components: "We'll need a database, a message queue, some servers..." They're building. When a Staff engineer hears the same prompt, something different happens. They pause. They ask questions. They explore the problem space before touching the solution space.
 
-Staff engineers do something different. They pause. They ask: Who will use this system? What are they actually trying to do? What matters most to them? Only after understanding the users and their goals do they begin to design.
+This isn't hesitation—it's discipline. And it follows a pattern.
 
-This section is about Phase 1 of the Staff-Level System Design Framework: Users & Use Cases. We'll explore what "user" means at Staff level (it's broader than you might think), how to distinguish primary from secondary users, how to separate user intent from implementation details, how to identify core versus edge use cases, and how to make intentional scope decisions that shape everything that follows.
+Over years of observing Staff engineers design systems (both in interviews and in production), I've codified that pattern into what I call the Staff-Level System Design Framework. It has five phases:
 
-By the end of this section, you'll approach the opening minutes of any system design interview with confidence and structure. You'll know what questions to ask, what to listen for, and how to establish a foundation that makes the rest of your design coherent.
+1. **Users & Use Cases** — Who are we building for, and what are they trying to do?
+2. **Functional Requirements** — What must the system do?
+3. **Scale** — How big is this problem?
+4. **Non-Functional Requirements** — What qualities must the system have?
+5. **Assumptions & Constraints** — What are we taking as given, and what limits us?
 
----
+This section will teach you this framework in depth. We'll explore why each phase matters, how Google Staff engineers use it implicitly, how interviewers evaluate candidates through its lens, and most importantly—how to apply it yourself to transform how you approach system design.
 
-# Part 1: What "User" Means at Staff Level
+By the end of this section, you'll have a structured mental model that makes system design interviews significantly more tractable. You won't be guessing what to do next. You'll know.
 
-## Beyond the Human User
-
-When most engineers think "user," they picture a person—someone clicking buttons, viewing screens, receiving notifications. This is a natural starting point, but it's incomplete.
-
-At Staff level, you need to think about users more broadly:
-
-**Human users**: People who interact with the system directly. This includes end consumers, but also internal users like operations staff, customer support, data analysts, and administrators.
-
-**System users**: Other software systems that call your APIs, consume your events, or depend on your data. These might be internal services within your organization or external systems from partners and third parties.
-
-**Service users**: Internal microservices, batch jobs, and automated processes that interact with your system programmatically.
-
-**Operational users**: Engineers who deploy, monitor, debug, and maintain the system. Their needs are often invisible but critically important.
-
-A notification system, for example, has:
-- **Human users**: People receiving notifications on their phones
-- **System users**: The feed service that triggers "new post" notifications, the messaging service that triggers "new message" notifications
-- **Service users**: Batch jobs that send marketing notifications, analytics pipelines that consume delivery events
-- **Operational users**: SREs monitoring delivery rates, support engineers debugging missed notifications
-
-Each user type has different needs, different scale characteristics, and different quality requirements. A design that serves human users well might fail to serve system users—or vice versa.
-
-## Why This Matters for Design
-
-Different user types drive different design decisions:
-
-**Human users** often care about:
-- Latency (perceived responsiveness)
-- Usability (clear interfaces, forgiving of mistakes)
-- Personalization (relevant content, remembered preferences)
-
-**System users** often care about:
-- API stability (no breaking changes)
-- Consistency (predictable behavior)
-- Throughput (handling high volumes)
-
-**Service users** often care about:
-- Reliability (always available when needed)
-- Idempotency (safe to retry)
-- Efficiency (low overhead per operation)
-
-**Operational users** often care about:
-- Observability (easy to see what's happening)
-- Debuggability (easy to diagnose problems)
-- Controllability (ability to adjust behavior without code changes)
-
-If you design only for human users, you might create a system with beautiful UX but terrible APIs. If you design only for system users, you might create a system that's powerful but impossible to operate when things go wrong.
-
-## Identifying All User Types
-
-In an interview, systematically surface all user types:
-
-**The direct question approach:**
-"Who are the users of this system? I'm thinking about end users, but are there also internal systems that will interact with it? And what about operations—is there a team that will need to monitor and maintain this?"
-
-**The workflow approach:**
-"Let me trace through how this system gets used. Someone initiates an action... that flows through these services... produces this output... which needs to be monitored by... Is there any user I'm missing?"
-
-**The lifecycle approach:**
-"During normal operation, these users interact with the system. During incidents, who gets involved? During scaling events? During maintenance windows?"
-
-The goal is to avoid the trap of designing for the obvious user while ignoring the others.
+Let's begin.
 
 ---
 
-# Part 2: Primary vs. Secondary Users
+# Part 1: Why a Structured Framework Is Necessary at Staff Level
 
-## Defining the Distinction
+## The Problem with "Just Design"
 
-Not all users are equally important to your design. Primary users are the ones whose needs you optimize for; secondary users are important but subordinate.
+When you're an experienced engineer, you've designed a lot of systems. You have intuition. You can look at a problem and see solutions immediately. This intuition is valuable—it's what makes you good at your job.
 
-**Primary users**: The users whose needs drive the core design decisions. If you had to choose between serving them well or serving someone else well, you'd choose them.
+But in Staff-level interviews, this intuition can hurt you.
 
-**Secondary users**: Users whose needs matter, but not at the expense of primary users. You accommodate them where possible without compromising the primary experience.
+Here's why: Your intuition leads you to *a* solution. Not *the right* solution for this specific context. When you jump to implementation, you're revealing that you don't differentiate between contexts. You treat every problem the same way—with whatever architecture pattern is currently in your head.
 
-This distinction isn't about who's "more important" in an abstract sense—it's about who drives the design. A payment system might have consumers as primary users and fraud analysts as secondary users. The core design optimizes for consumer experience (fast, reliable payments), while accommodating analyst needs (audit logs, investigation tools) in ways that don't degrade the primary experience.
+Staff engineers think differently. They recognize that the "right" design depends entirely on context:
+- A notification system for 1,000 users is different from one for 100 million users
+- A payment system with 99.99% uptime requirements is different from a social feed with 99% uptime requirements
+- A greenfield system with unlimited budget is different from a migration under resource constraints
 
-## Why This Matters
+Without establishing context first, any design you propose is essentially random—it might fit the problem, or it might not.
 
-Trying to optimize for everyone equally leads to a system that serves no one well. Trade-offs are inevitable, and primary/secondary designation tells you how to make them.
+## What a Framework Provides
 
-Consider a real-time feed system:
-- **Primary users**: End users viewing their feed
-- **Secondary users**: Content creators, advertisers, analytics systems
+A structured framework gives you several crucial advantages:
 
-If you had to choose between:
-- Fast feed rendering for viewers vs. Detailed analytics for advertisers
+### 1. Completeness
 
-The primary/secondary distinction tells you: optimize for viewers, accommodate advertisers.
+Without a framework, you'll miss things. Maybe you'll forget to ask about scale. Maybe you'll assume functional requirements that weren't intended. Maybe you'll optimize for latency when durability was the real concern.
 
-This doesn't mean you ignore secondary users—it means you have a clear priority when trade-offs arise.
+A framework is a checklist. It ensures you cover the ground you need to cover.
 
-## Determining Primary vs. Secondary
+### 2. Prioritization
 
-Several factors help you determine which users are primary:
+Not all requirements are equal. Some are make-or-break; others are nice-to-have. A framework forces you to identify which is which, so you can allocate your design time appropriately.
 
-**Business criticality**: Which users are most important to the business? For a consumer app, end users are usually primary. For an internal platform, developers using the platform might be primary.
+### 3. Communication
 
-**Interaction frequency**: Users who interact constantly often take priority over occasional users.
+When you articulate your framework to the interviewer, you're showing them how you think. You're giving them a map of your approach. This makes you easier to follow—and easier to evaluate positively.
 
-**Scale impact**: Users whose usage patterns dominate the scale profile often need to be primary.
+### 4. Flexibility
 
-**Revenue relationship**: Users who directly generate revenue (or whose satisfaction enables revenue) are often primary.
+Paradoxically, structure gives you flexibility. When you've explicitly established requirements, you can explicitly change them. "Earlier we said latency was critical—but if we relax that, we could simplify the design significantly. Is that worth considering?"
 
-In an interview, make this determination explicit:
+### 5. Calibration
 
-"I'm going to treat end consumers as primary users because they're the core of the product. Internal analytics and operations are secondary—I'll design to accommodate them without compromising the consumer experience. Does that priority make sense for this problem?"
+A framework helps you avoid two failure modes: over-engineering and under-engineering. By understanding the actual requirements, you design to the right level of complexity.
 
-## Example: Rate Limiter
+## Why Senior Engineers Often Skip This
 
-Let's apply this to designing a rate limiter:
+Senior engineers frequently skip the framework phase because:
 
-**Potential users:**
-- Services calling APIs (the ones being rate-limited)
-- The APIs being protected
-- Operations teams configuring limits
-- Security teams investigating abuse
-- Product teams wanting usage analytics
+**They think it's obvious**: "Of course we need a database. Of course we need caching." They treat requirements as background assumptions rather than explicit decisions.
 
-**Primary users:**
-- The APIs being protected (the rate limiter exists to protect them)
-- Services calling APIs (they need predictable, understandable behavior)
+**They want to demonstrate building skills**: They're eager to show they can design complex systems, so they rush to the complex parts.
 
-**Secondary users:**
-- Operations teams (need configuration interfaces, but not at the cost of latency)
-- Security and product teams (need visibility, but as a secondary concern)
+**They feel time pressure**: 45 minutes feels short, so they think they need to start designing immediately.
 
-This classification drives decisions: the rate limiter's core path must be fast and reliable (for primary users), while configuration and analytics interfaces can be eventually consistent and slightly slower.
+**They've internalized patterns**: They've seen enough systems that they pattern-match immediately. "This is a pub-sub system" → default pub-sub architecture.
 
----
+These instincts are understandable but counterproductive. Staff interviews are specifically testing whether you can slow down, establish context, and design for the actual problem—not a generic version of the problem.
 
-# Part 3: User Intent vs. Implementation
+## The Framework as a Contract
 
-## Quick Reference: Intent vs Implementation Examples
+Think of the framework phase as establishing a contract with your interviewer.
 
-| User Says (Implementation) | Actual Intent | Better Solution |
-|---------------------------|---------------|-----------------|
-| "I need a refresh button" | "I want current data, not stale" | Real-time updates |
-| "Notify me on every like" | "I want to feel appreciated" | Aggregated: "5 people liked" |
-| "Add a search bar" | "I need to find things quickly" | Better organization + search |
-| "Export to CSV" | "I need to analyze this data" | Built-in analytics dashboard |
-| "Send me daily emails" | "Keep me informed" | Smart digest based on activity |
+Before you design, you're saying: "Here's what I understand we're building, for whom, at what scale, with what quality requirements, under what constraints. Do you agree?"
 
-**Key insight**: Users express *implementation*, not *intent*. Your job is to dig deeper.
+The interviewer either confirms or corrects. Now you have shared understanding.
 
-## Separating the "What" from the "How"
+Without this contract, you might design brilliantly—but for the wrong problem. That's not a success; that's a demonstration that you don't validate requirements before building.
 
-A critical Staff-level skill is distinguishing between what users want to accomplish (intent) and how they might accomplish it (implementation).
-
-**User intent**: The underlying goal or problem the user is trying to solve
-**Implementation**: A specific way of achieving that goal
-
-Users often express themselves in terms of implementation rather than intent. Your job is to dig deeper.
-
-**User says**: "I need a button that refreshes the data."
-**Implementation**: A refresh button
-**Actual intent**: "I want to see current data, not stale data."
-**Better solution**: Real-time updates that eliminate the need to refresh
-
-**User says**: "I need to receive a notification when someone likes my post."
-**Implementation**: Push notification on every like
-**Actual intent**: "I want to feel connected and know people appreciate my content."
-**Better solution**: Aggregated notifications ("5 people liked your post") that provide satisfaction without overwhelming
-
-## Why This Matters for System Design
-
-When you design for implementation rather than intent, you often:
-- Build the wrong thing (solving the stated problem, not the real problem)
-- Over-constrain your design (locking into a specific approach)
-- Miss simpler solutions (the stated implementation might be more complex than necessary)
-
-Staff engineers constantly ask: "What are you really trying to accomplish?" This question surfaces the true requirements.
-
-## Uncovering Intent in Interviews
-
-In a system design interview, the prompt is often framed in terms of implementation:
-
-- "Design a notification system" (implementation)
-- "Design a URL shortener" (implementation)
-- "Design a rate limiter" (implementation)
-
-Your job is to uncover the intent behind these implementations:
-
-**For a notification system:**
-"What's the purpose of these notifications? Is it to inform users of things they need to act on? To keep them engaged with the platform? To provide time-sensitive alerts? The answer affects how I design delivery guarantees, aggregation, and prioritization."
-
-**For a URL shortener:**
-"What problem are we solving with short URLs? Is it character limits in tweets? Cleaner appearance in marketing materials? Tracking clicks? Analytics on sharing patterns? Each of these intents suggests a different design emphasis."
-
-**For a rate limiter:**
-"What are we protecting against? DDoS attacks? Expensive operations by a few users? Ensuring fair access across all users? Preventing accidental abuse from bug loops? The threat model shapes the design."
-
-## Example: Messaging System
-
-**Stated requirement**: "Design a messaging system where users can send messages to each other."
-
-**Surface implementation**: Two users exchanging text messages
-
-**Uncovering intent through questions:**
-
-"What's the core use case? Is this chat (real-time, conversational, presence-aware) or messaging (asynchronous, like email)? Are messages typically short and rapid, or longer and thoughtful?"
-
-"What matters more: guaranteed delivery or low latency? If a message takes 5 seconds to deliver but is never lost, versus usually instant but occasionally lost, which is preferable?"
-
-"Are there group conversations? How large can groups be? Is this more like iMessage (small groups) or Slack (large channels)?"
-
-"What about multimedia? Are we sending text, images, videos, files? Does this need to support voice/video calls?"
-
-Each answer reveals more about the true intent, which shapes the design:
-- Real-time chat needs presence and typing indicators; async messaging doesn't
-- Guaranteed delivery needs acknowledgment protocols; low-latency can be best-effort
-- Large groups need fan-out optimization; small groups can be simpler
-- Multimedia needs content delivery infrastructure; text-only is simpler
+At Google, Staff engineers are responsible for ensuring they're solving the right problem. The framework phase is where you demonstrate that capability.
 
 ---
 
-# Part 4: Core vs. Edge Use Cases
+# Part 2: The Five Phases in Depth
 
-## Quick Visual: Core vs Edge
+Let me walk through each phase of the framework, explaining what to cover, why it matters, and how to execute it well.
+
+## Phase 1: Users & Use Cases
+
+### What This Phase Covers
+
+Before you can design a system, you need to understand who will use it and what they're trying to accomplish. This seems obvious, but it's frequently skipped or rushed.
+
+**Key questions to explore:**
+- Who are the users of this system? End users? Internal services? Both?
+- What are they trying to accomplish?
+- What's their context? Mobile? Desktop? API integration?
+- What's their technical sophistication?
+- How frequently do they interact with this system?
+- What's their tolerance for errors or degradation?
+
+### Why This Phase Matters
+
+Different users have different needs. A notification system for consumers (people checking their phones) has different requirements than a notification system for trading systems (algorithms reacting to market events).
+
+Understanding users helps you:
+- Prioritize features and capabilities
+- Choose appropriate quality levels
+- Identify the most important flows to optimize
+- Anticipate edge cases and failure modes
+
+### How to Execute This Phase
+
+**Start by identifying user types:**
+
+"Who are the primary users of this system? I'm imagining end consumers on mobile devices, but there might also be internal systems that need to interact with this. Can you clarify?"
+
+**Explore their primary use cases:**
+
+"What are the main things users are trying to do? For a notification system, I imagine: receiving notifications in real-time, managing notification preferences, viewing notification history. Are there others I'm missing?"
+
+**Understand their context:**
+
+"Are these users primarily on mobile or desktop? Is this a global user base or specific regions? These factors will affect our latency requirements and how we design the client experience."
+
+**Identify power users and edge cases:**
+
+"Are there users who will push the system harder than typical? For example, celebrity accounts with millions of followers, or system integrations that generate high volumes?"
+
+### Example Application
+
+**Prompt**: "Design a ride-sharing system."
+
+**Poor approach**: "Okay, so we need to match riders with drivers..."
+
+**Staff approach**: "Let me understand the users first. I see at least three user types: riders who want transportation, drivers who provide rides, and potentially internal operations staff who manage the system. For riders, the primary use case is requesting a ride and getting picked up quickly. For drivers, it's receiving ride requests and navigating to pickups. Are there other user types or use cases I should consider?"
+
+### Common Mistakes in This Phase
+
+**Mistake 1: Assuming a single user type**
+
+Many systems serve multiple users with different needs. A marketplace serves buyers and sellers. A notification system serves senders and receivers. A data pipeline serves data producers and data consumers.
+
+**Mistake 2: Focusing only on happy-path use cases**
+
+Users also need to cancel, undo, recover from errors, and handle edge cases. These use cases matter too.
+
+**Mistake 3: Ignoring internal users**
+
+Many systems have internal users (operations, customer support, data science) whose needs differ from external users.
+
+**Mistake 4: Not quantifying user behavior**
+
+"Users browse products" is less useful than "Users browse an average of 20 products per session, with sessions lasting about 10 minutes, and 2% of sessions resulting in a purchase."
+
+---
+
+## Phase 2: Functional Requirements
+
+### What This Phase Covers
+
+Functional requirements describe what the system must do. These are the capabilities and behaviors that define the system's purpose.
+
+**Key questions to explore:**
+- What are the core features this system must provide?
+- What data does the system need to store and manage?
+- What operations can users perform?
+- What are the input/output formats and interfaces?
+- What integrations are required?
+
+### Why This Phase Matters
+
+Functional requirements determine the scope of your design. Without clarity here, you might:
+- Design for features that weren't required
+- Miss features that were essential
+- Build the wrong abstractions
+
+They also help you identify what's technically interesting. A simple CRUD API is straightforward. A real-time collaborative editor is complex. Knowing which you're building affects everything.
+
+### How to Execute This Phase
+
+**Enumerate the core capabilities:**
+
+"Based on the use cases we discussed, let me list the core functional requirements:
+1. Users can send notifications to other users or groups
+2. Users can receive notifications in real-time
+3. Users can set notification preferences (channels, frequency, muting)
+4. Users can view notification history
+5. System can send notifications across channels (push, email, SMS)
+
+Am I missing anything critical?"
+
+**Prioritize ruthlessly:**
+
+"For this interview, I'll focus on requirements 1, 2, and 5—the core sending and receiving flow. I'll acknowledge preferences and history but design them at a high level. Does that prioritization make sense?"
+
+**Identify what's NOT in scope:**
+
+"I'm assuming we don't need to build the email or SMS sending infrastructure—we'll integrate with external providers. And I'm assuming authentication is handled by another service. Is that correct?"
+
+### Example Application
+
+**Prompt**: "Design a URL shortening service."
+
+**Poor approach**: "We need to generate short URLs and redirect to long URLs."
+
+**Staff approach**: "Let me enumerate the functional requirements:
+
+**Core features:**
+1. Create a short URL from a long URL
+2. Redirect from short URL to long URL
+3. (Optional) Custom short URLs chosen by user
+4. (Optional) Expiration of short URLs
+
+**Analytics features:**
+5. Track click counts per URL
+6. Track click metadata (time, location, referrer)
+
+**Management features:**
+7. List URLs created by a user
+8. Delete or disable a short URL
+
+For this design, I'll focus on 1, 2, and 5 as the core. The others are additions we can discuss if time permits. Does this scope work?"
+
+### Common Mistakes in This Phase
+
+**Mistake 1: Being too vague**
+
+"The system should handle notifications" is not a requirement. "Users can send notifications to specific users or broadcast to groups, with delivery across push, email, and SMS channels" is a requirement.
+
+**Mistake 2: Gold-plating**
+
+Adding every possible feature makes your design unfocused. Prioritize ruthlessly. You can always mention nice-to-haves without designing them in detail.
+
+**Mistake 3: Not confirming with the interviewer**
+
+State your requirements explicitly and ask if they're correct. The interviewer might have a specific feature in mind that you missed.
+
+**Mistake 4: Confusing functional with non-functional**
+
+"The system must be fast" is not a functional requirement. "Users can retrieve their notification history" is functional. "Notification history retrieval completes in under 200ms" is non-functional.
+
+---
+
+## Phase 3: Scale
+
+### What This Phase Covers
+
+Scale determines the magnitude of the problem. This phase quantifies the load the system must handle.
+
+**Key dimensions to explore:**
+- Number of users (total, daily active, concurrent)
+- Data volume (storage requirements, growth rate)
+- Request volume (reads/second, writes/second, peak vs. average)
+- Geographic distribution
+- Growth expectations (current vs. 1 year vs. 5 years)
+
+### Why This Phase Matters
+
+Scale is the single biggest determinant of system architecture.
+
+A system for 1,000 users can run on a single server with a simple database. A system for 100 million users requires distributed systems, caching, sharding, and sophisticated infrastructure.
+
+Designing for the wrong scale is a critical failure:
+- Under-designing means your system falls over when it hits real load
+- Over-designing means you've built complexity you don't need and can't maintain
+
+Staff engineers calibrate their designs to actual scale—not hypothetical scale, not impressive scale, actual scale.
+
+### How to Execute This Phase
+
+**Get the numbers:**
+
+"Let me understand the scale we're designing for. How many users does this system serve? What's the expected request volume—reads per second, writes per second?"
+
+**If not given, estimate:**
+
+"If you don't have specific numbers, let me estimate. For a consumer notification system at a major company, I'd expect something like:
+- 100 million users
+- 10 million daily active users
+- Average user receives 20 notifications/day
+- That's 200 million notifications/day, or about 2,500/second average
+- Peak might be 10x average, so 25,000/second
+
+Do these estimates seem reasonable for what you have in mind?"
+
+**Think about growth:**
+
+"What's the growth trajectory? Are we designing for current scale or anticipating 10x growth? I want to make sure my design has headroom without over-engineering."
+
+**Consider the hard cases:**
+
+"Are there any extreme cases? For example, a celebrity with 50 million followers posting—that's a massive fan-out. Or a viral event causing 100x normal traffic. How much do we need to handle?"
+
+### Quick Reference: Back-of-Envelope Cheat Sheet
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        CORE vs EDGE USE CASES                               │
+│                    BACK-OF-ENVELOPE QUICK REFERENCE                         │
 │                                                                             │
-│   CORE (Design Meticulously)              EDGE (Handle Appropriately)       │
-│   ┌─────────────────────────┐             ┌────────────────────────-─┐      │
-│   │ • High frequency        │             │ • Low frequency          │      │
-│   │ • High value            │             │ • Lower priority         │      │
-│   │ • User expects perfect  │             │ • Graceful degradation OK│      │
-│   │ • Business critical     │             │ • Simple solutions fine  │      │
-│   └─────────────────────────┘             └─────────────────────────-┘      │
+│   TIME CONVERSIONS:                                                         │
+│   • 1 day = 86,400 seconds ≈ 100K seconds                                   │
+│   • 1 month ≈ 2.5 million seconds                                           │
+│   • 1 year ≈ 30 million seconds                                             │
 │                                                                             │
-│   Example: Messaging System                                                 │
-│   ┌─────────────────────────┐             ┌─────────────────────────┐       │
-│   │ CORE:                   │             │ EDGE:                   │       │
-│   │ • Send message          │             │ • Delete message        │       │
-│   │ • Receive message       │             │ • Unsend message        │       │
-│   │ • View history          │             │ • Export conversation   │       │
-│   │                         │             │ • Report spam           │       │
-│   └─────────────────────────┘             └─────────────────────────┘       │
+│   STORAGE SIZES:                                                            │
+│   • 1 KB = 1,000 bytes (text, small JSON)                                   │
+│   • 1 MB = 1,000 KB (image, audio clip)                                     │
+│   • 1 GB = 1,000 MB (video, large dataset)                                  │
+│   • 1 TB = 1,000 GB                                                         │
+│   • 1 PB = 1,000 TB                                                         │
+│                                                                             │
+│   THROUGHPUT RULES OF THUMB:                                                │
+│   • Single server: 10K-100K simple requests/sec                             │
+│   • Single DB: 10K-50K queries/sec (depends on complexity)                  │
+│   • Network: 1-10 Gbps within datacenter                                    │
+│                                                                             │
+│   QUICK FORMULAS:                                                           │
+│   • QPS = (Daily requests) / 100K                                           │
+│   • Storage = (Items) × (Size per item) × (Retention period)                │
+│   • Bandwidth = QPS × (Response size)                                       │
+│   • Peak = 2-10x average (use 10x for safety)                               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Defining the Distinction
+### Back-of-Envelope Calculations
 
-**Core use cases**: The primary flows that most users experience most of the time. These define the system's essential behavior and must work flawlessly.
+This is where back-of-envelope math becomes essential. Staff engineers should be comfortable with quick estimations:
 
-**Edge use cases**: Less common scenarios that still need to be handled, but don't drive the primary design. These include error cases, unusual inputs, rare user behaviors, and corner cases.
+**Storage calculation example:**
 
-## Why This Matters
+"If we have 100 million users and each user has 1,000 notifications in their history, at 1KB per notification, that's:
+- 100M × 1,000 × 1KB = 100 billion KB = 100TB of notification storage
+- That's substantial but manageable with distributed storage."
 
-Core use cases determine your architecture. Edge cases are handled within that architecture.
+**Throughput calculation example:**
 
-If you design for edge cases first, you'll often create unnecessary complexity. If you ignore edge cases entirely, you'll have gaps that cause real problems.
+"2,500 notifications/second, at 25,000/second peak:
+- A single machine can handle maybe 10,000 simple requests/second
+- We need at least 3 machines for peak, probably 10 for redundancy
+- With geographic distribution, maybe 30-50 machines globally"
 
-The Staff-level skill is identifying which is which, and allocating design attention appropriately.
+**Bandwidth calculation example:**
 
-## Identifying Core Use Cases
+"25,000 notifications/second × 1KB = 25MB/second
+- That's 200Mbps—well within modern network capacity
+- Not a bottleneck"
 
-Core use cases typically have these characteristics:
+### Example Application
 
-**High frequency**: They happen often—most of your traffic
-**High value**: They deliver the primary value of the system
-**User expectations**: Users expect them to work perfectly
-**Business critical**: Failure here is unacceptable
+**Prompt**: "Design a messaging system like WhatsApp."
 
-For a messaging system:
-- **Core**: Send a message, receive a message, view conversation history
-- **Edge**: Delete a message, unsend a message, report spam, export conversation
+**Staff approach**: "Let me understand the scale:
 
-For a rate limiter:
-- **Core**: Check if a request is allowed, enforce the limit
-- **Edge**: View current usage, manually override limits, handle clock skew
+**User scale:**
+- Let's say 500 million users globally
+- 200 million daily active
+- Average user sends 50 messages/day, receives 100 messages/day
 
-## Handling Edge Cases Appropriately
+**Message volume:**
+- 200M × 50 = 10 billion messages/day sent
+- That's about 115,000 messages/second average
+- Peak could be 3-5x, so let's design for 500,000 messages/second
 
-Edge cases shouldn't be ignored, but they shouldn't drive core design decisions either. Common strategies:
+**Storage:**
+- 10 billion messages/day × 1KB average = 10TB/day new data
+- Keeping 1 year of history = 3.6PB
+- Significant storage infrastructure required
 
-**Acknowledge and defer**: "This is an edge case—I'll handle it, but let me first design the core flow. The edge case will likely be a variation on that."
+**Connections:**
+- 200 million users online at any time
+- Each needs a persistent connection for real-time delivery
+- That's 200 million concurrent connections—major infrastructure
 
-**Simple over perfect**: "For this edge case, a simple solution is fine. It doesn't need to be optimized because it's rare."
+This scale tells me we need: distributed messaging, sharded storage, connection servers at edge locations, and careful attention to efficiency. A simple architecture won't work."
 
-**Explicit degradation**: "If this edge case happens, the system will gracefully degrade to [fallback behavior]. That's acceptable given the rarity."
+### Common Mistakes in This Phase
 
-## Example: Feed System
+**Mistake 1: Not asking about scale at all**
 
-**Core use cases:**
-- User opens app, sees personalized feed of content from followed accounts
-- User scrolls, more content loads smoothly
-- User interacts with content (like, comment, share)
+This is surprisingly common. Candidates dive into architecture without knowing whether they're building for a startup or for Google-scale.
 
-**Edge use cases:**
-- User has no followers (empty feed)
-- User follows 10,000 accounts (massive input set)
-- User hasn't opened app in 6 months (stale relevance data)
-- Content is deleted after being loaded into feed
-- User is in a region with poor connectivity
+**Mistake 2: Assuming massive scale**
 
-For core use cases, design meticulously:
-- Feed generation must be fast (under 200ms)
-- Ranking must be relevant and personalized
-- Pagination must be smooth
+Don't design for 1 billion users if the actual requirement is 10,000 users. Over-engineering is as much a failure as under-engineering.
 
-For edge cases, design appropriately:
-- Empty feed: Show onboarding/recommendations (simple fallback)
-- 10,000 follows: Cap the active set considered (reasonable limit)
-- Stale user: Use global trending as fallback (graceful degradation)
-- Deleted content: Show placeholder, filter on next refresh (acceptable lag)
-- Poor connectivity: Aggressive caching, smaller payloads (optimization)
+**Mistake 3: Using round numbers without justification**
 
----
+"Let's assume 1 million requests per second" sounds impressive but is meaningless without derivation. Show your math.
 
-# Part 5: Mapping Users to Use Cases
+**Mistake 4: Ignoring growth**
 
-## Building the User-Use Case Matrix
+A system designed for today's scale might not survive tomorrow's growth. But a system designed for 100x growth might never ship. Find the balance.
 
-A powerful technique is explicitly mapping which users care about which use cases. This surfaces priorities and reveals gaps.
+**Mistake 5: Forgetting about data scale**
 
-**Format:**
-
-| Use Case | User A | User B | User C | Priority |
-|----------|--------|--------|--------|----------|
-| Use Case 1 | Primary | Secondary | — | High |
-| Use Case 2 | — | Primary | Secondary | High |
-| Use Case 3 | Secondary | Secondary | Primary | Medium |
-
-## Example: Notification System
-
-**Users:**
-- End consumers (receiving notifications)
-- Product teams (sending notifications)
-- Operations (monitoring/debugging)
-- Analytics (measuring engagement)
-
-**Use Cases:**
-
-| Use Case | Consumers | Product | Ops | Analytics | Priority |
-|----------|-----------|---------|-----|-----------|----------|
-| Receive push notification | Primary | — | — | Secondary | High |
-| Set notification preferences | Primary | — | — | — | High |
-| Send targeted notification | — | Primary | — | Secondary | High |
-| View delivery metrics | — | Secondary | Primary | Primary | Medium |
-| Debug failed delivery | — | — | Primary | — | Medium |
-| A/B test notification content | — | Primary | — | Primary | Medium |
-| View notification history | Primary | — | Secondary | — | Medium |
-
-This matrix reveals:
-- Consumer notification delivery is the highest priority
-- Operations and analytics share some use cases
-- Some use cases serve multiple users (design for the primary one)
-
-## Using the Matrix in Design
-
-The matrix guides several decisions:
-
-**API design**: Which operations need to be exposed? To whom?
-
-**Quality requirements**: Which use cases need the highest availability/lowest latency?
-
-**Access control**: Who can perform which operations?
-
-**Monitoring**: What metrics matter for which users?
-
-In an interview, you might sketch this matrix quickly:
-
-"Let me map out who cares about what. End users primarily care about receiving notifications and managing preferences. Product teams care about sending notifications and measuring effectiveness. Ops cares about system health. This tells me my core design must optimize for notification delivery, with solid—but secondary—support for sending and monitoring."
+Request volume is obvious, but data volume often determines architecture choices. A system storing petabytes is different from one storing terabytes.
 
 ---
 
-# Part 6: Scope Control and Intentional Exclusions
+## Phase 4: Non-Functional Requirements
 
-## The Importance of Scope
+### Quick Reference: NFR Dimensions
 
-In a 45-minute interview, you cannot design everything. In a 6-month project, you cannot build everything. Scope control—deciding what's in and what's out—is a critical Staff-level skill.
+| Dimension | Question to Ask | Example Target | Trade-off |
+|-----------|-----------------|----------------|-----------|
+| **Availability** | "What % uptime?" | 99.9% = 8.76 hrs/yr downtime | Higher = more redundancy, cost |
+| **Latency** | "How fast? P50? P99?" | P99 < 200ms | Lower = more caching, complexity |
+| **Durability** | "Can we lose data?" | 11 nines (99.999999999%) | Higher = more replication, cost |
+| **Consistency** | "Same data everywhere?" | Eventual vs Strong | Strong = higher latency |
+| **Security** | "Auth? Encryption? Compliance?" | PCI-DSS, HIPAA, GDPR | More = more complexity |
 
-Scope control isn't about doing less; it's about doing the right amount. Under-scoping means you miss critical requirements. Over-scoping means you waste time on things that don't matter.
+### What This Phase Covers
 
-## Making Exclusions Explicit
+Non-functional requirements describe the qualities the system must have. While functional requirements are about *what* the system does, non-functional requirements are about *how well* it does it.
 
-A common mistake is leaving scope ambiguous. This creates problems:
-- You might spend time designing something that wasn't needed
-- The interviewer might expect something you didn't plan to cover
-- Your design might have implicit assumptions that aren't valid
+**Key dimensions to explore:**
 
-Instead, make exclusions explicit:
+**Availability**: What percentage of time must the system be operational? 99%? 99.9%? 99.99%?
 
-"For this design, I'm focusing on [in-scope items]. I'm explicitly not designing [out-of-scope items]—those would be handled by separate systems or future phases. Is that scope appropriate?"
+**Latency**: How fast must responses be? P50? P99? Different for different operations?
 
-## Types of Exclusions
+**Durability**: Can we lose data? What's the acceptable data loss?
 
-**Functional exclusions**: Features you're not building
-- "I'm designing the notification delivery system, not the notification content creation system."
+**Consistency**: Do all users see the same data at the same time? Can we tolerate eventual consistency?
 
-**User exclusions**: Users you're not optimizing for
-- "I'm optimizing for consumer experience, not for power-user features like bulk operations."
+**Security**: What are the authentication, authorization, and data protection requirements?
 
-**Scale exclusions**: Scale ranges you're not handling
-- "I'm designing for 10 million users. The 1 billion user case would require different architectural choices."
+**Compliance**: Are there regulatory requirements (GDPR, HIPAA, PCI)?
 
-**Quality exclusions**: Quality levels you're not achieving
-- "I'm designing for 99.9% availability, not 99.99%. The additional nine would require significantly different infrastructure."
+### Why This Phase Matters
 
-**Integration exclusions**: Systems you're not connecting to
-- "I'm assuming notifications are delivered via existing push infrastructure. I'm not designing the push delivery system itself."
+Non-functional requirements drive architectural decisions more than functional requirements do.
 
-## Scope Control Phrases
+Consider two notification systems with identical functional requirements:
+- System A: 99% availability, 1-second latency, eventual consistency acceptable
+- System B: 99.99% availability, 100ms latency, strong consistency required
 
-Develop a vocabulary for scope control:
+These are completely different architectures. System A can be simple and forgiving. System B requires redundancy, geographic distribution, careful consistency protocols, and sophisticated monitoring.
 
-**Setting scope:**
-- "For this design, I'm focusing on..."
-- "The core scope includes..."
-- "I'm treating [X] as in-scope and [Y] as out-of-scope."
+Without understanding non-functional requirements, you might build System A when System B was needed—or vice versa, wasting effort on unnecessary complexity.
 
-**Excluding with rationale:**
-- "I'm explicitly not designing [X] because it's a separate concern that's well-understood."
-- "I'll acknowledge [X] but not design it in detail—it's not where the interesting challenges are."
-- "[X] is important but can be added later without changing the core architecture."
+### How to Execute This Phase
 
-**Inviting feedback:**
-- "Does this scope make sense for what you had in mind?"
-- "Should I include [X], or is my current scope appropriate?"
-- "Is there anything in my scope that you'd like me to drop, or anything outside it you'd like me to add?"
+**Availability:**
 
-## Example: Rate Limiter Scope
+"What are the availability requirements? Is this a system where an hour of downtime is acceptable, or is it critical infrastructure where even minutes of downtime are catastrophic? For a consumer notification app, I'd expect 99.9% availability—about 8 hours of downtime per year. Is that the right ballpark?"
 
-**Prompt**: "Design a rate limiter."
+**Latency:**
 
-**Potential scope:**
-- Single-service vs. distributed rate limiting
-- Different algorithms (token bucket, sliding window, fixed window)
-- Configuration management
-- Multi-tenant isolation
-- Analytics and reporting
-- Quota management
-- Billing integration
-- Abuse detection and response
+"What latency targets are we designing for? For push notifications, I'd expect users to receive them within a few seconds of sending. For API calls, maybe 200ms P99. Are there specific latency requirements I should know about?"
 
-**Scoping conversation:**
+**Durability:**
 
-"Before I design, let me establish scope. I'll focus on:
-- Distributed rate limiting across multiple API servers
-- Core enforcement (checking limits, rejecting requests)
-- Basic configuration (setting limits per client or endpoint)
+"How important is data durability? Can we ever lose a notification, or is every notification sacred? For consumer notifications, I'd assume some loss is acceptable—better to occasionally miss a notification than to significantly slow down the system. But for financial notifications, we might need stronger guarantees."
 
-I'll acknowledge but not design in detail:
-- Analytics dashboards (they'd consume the same data)
-- Quota management and billing (related but separate systems)
-- Abuse detection beyond rate limiting (a different problem space)
+**Consistency:**
 
-Is there anything you'd like me to add or remove from this scope?"
+"Do all users need to see the same state at the same time? For notification read status, eventual consistency is probably fine—if it takes a few seconds for 'read' status to propagate, that's acceptable. But for notification preferences, maybe we need stronger consistency so users don't get notifications they've disabled."
 
----
+**Security:**
 
-# Part 7: How Phase 1 Decisions Affect Later Architecture
+"What are the security requirements? I assume notifications can contain sensitive data, so we need encryption in transit and at rest. We need authentication for all API endpoints. Are there specific compliance requirements—GDPR for EU users, for example?"
 
-## The Ripple Effects of User Decisions
+### The Trade-off Awareness
 
-Decisions you make in Phase 1 ripple through your entire design. Understanding these connections helps you make informed choices early and explain your design coherently later.
+Staff engineers understand that non-functional requirements trade off against each other:
 
-### User Types → API Design
+- **Consistency vs. Availability**: Strong consistency often requires sacrificing availability during network partitions (CAP theorem)
+- **Latency vs. Durability**: Waiting for writes to be fully durable adds latency
+- **Availability vs. Cost**: Higher availability requires more redundancy, which costs more
+- **Security vs. Usability**: Stronger security often adds friction for users
 
-The users you identify determine what APIs you need:
-- Human users → User-facing APIs (often REST, optimized for simplicity)
-- System users → Service APIs (often gRPC, optimized for efficiency)
-- Operational users → Admin APIs (internal, privileged access)
+When clarifying non-functional requirements, be aware of these trade-offs and surface them:
 
-**Example**: A notification system with human and system users needs:
-- REST API for mobile clients to manage preferences
-- gRPC API for internal services to trigger notifications
-- Admin API for operations to manage delivery
+"You mentioned both strong consistency and high availability. Those can conflict during network partitions. Which should we prioritize if we can't have both?"
 
-### Use Cases → Data Model
+### Example Application
 
-The use cases you identify determine what data you need to store:
-- "View notification history" → Need to persist notifications per user
-- "Set preferences" → Need to store user preferences
-- "Aggregate similar notifications" → Need to track notification types and counts
+**Prompt**: "Design a payment processing system."
 
-**Example**: If "view history" is a core use case, you need:
-- Efficient per-user storage (probably user-sharded)
-- Support for pagination
-- Retention policy decisions
+**Staff approach**: "Let me understand the non-functional requirements—these are critical for a payment system.
 
-If history is out of scope, you might not need persistent notification storage at all—just a delivery queue.
+**Availability**: This is financial infrastructure. I'd expect 99.99% availability minimum—about 52 minutes of downtime per year. Is that the target?
 
-### Primary Users → Quality Requirements
+**Latency**: For payment processing, I'd expect:
+- Authorization: Under 500ms P99 (users are waiting at checkout)
+- Settlement: Can be batch/async—less latency-sensitive
 
-Your primary users determine where you invest in quality:
-- Primary users need highest availability, lowest latency
-- Secondary users can tolerate degraded service
+**Durability**: This is non-negotiable for payments. We cannot lose transaction records. I'd design for 11 nines of durability with multi-region replication.
 
-**Example**: If consumers are primary and analytics is secondary:
-- Notification delivery path: 99.99% availability, <500ms latency
-- Analytics data export: 99.9% availability, eventual consistency fine
+**Consistency**: Strong consistency required. We cannot have a payment succeed in one view and fail in another. ACID transactions essential.
 
-### Scope Decisions → Component Boundaries
+**Compliance**: PCI-DSS is mandatory for handling card data. This constrains how we store data, who can access it, and our audit requirements.
 
-What you include and exclude determines your system's boundaries:
-- In-scope items → Components you design
-- Out-of-scope items → Interfaces to external systems
+These requirements tell me this is a high-stakes system requiring significant infrastructure investment, redundancy, and careful design. We can't take shortcuts here."
 
-**Example**: If you're not designing push delivery infrastructure:
-- Your system has a component that formats notifications
-- It interfaces with an external push service (APNs, FCM)
-- You need to design that interface carefully
+### Common Mistakes in This Phase
 
-## Tracing Decisions Forward
+**Mistake 1: Not asking about non-functional requirements**
 
-In your design, make these connections explicit:
+Assuming everything must be fast, available, consistent, and durable leads to over-engineering. Different systems have different needs.
 
-"Earlier I identified that system users (internal services) trigger most notifications—about 95% of volume. This tells me the service-to-service API is the critical path, so I'm designing it for maximum throughput and lowest latency. The human-user API for preference management can be simpler since it's low-volume."
+**Mistake 2: Using vague terms**
 
-"Because viewing history is a core use case, I need persistent storage. If it were out of scope, I could use a simpler fire-and-forget architecture."
+"The system should be reliable" is meaningless. "The system should have 99.9% availability with P99 latency under 200ms" is actionable.
 
-This tracing demonstrates that your design is coherent—that later decisions follow logically from earlier ones.
+**Mistake 3: Ignoring trade-offs**
+
+Asking for strong consistency, high availability, low latency, AND perfect durability is unrealistic. Staff engineers understand trade-offs and probe to understand priorities.
+
+**Mistake 4: Assuming highest standards everywhere**
+
+Not every system needs 99.99% availability. An internal dashboard might be fine with 99%. Calibrate to actual needs.
+
+**Mistake 5: Forgetting security and compliance**
+
+These are often afterthoughts, but they significantly constrain architecture, especially for financial, healthcare, or user data systems.
 
 ---
 
-# Part 8: Interview-Style Clarification Questions
+## Phase 5: Assumptions & Constraints
 
-Let me provide concrete examples of how to apply Phase 1 thinking in interview contexts.
+### What This Phase Covers
 
-## Rate Limiter
+This phase makes explicit the things you're taking for granted and the boundaries you're operating within.
 
-**Prompt**: "Design a rate limiter."
+**Assumptions** are things you believe to be true that you're not designing for:
+- "I assume authentication is handled by a separate service."
+- "I assume we have reliable cloud infrastructure."
+- "I assume network latency within a region is under 5ms."
 
-**Phase 1 clarification questions:**
+**Constraints** are limitations you must work within:
+- "The budget limits us to X machines."
+- "We must integrate with the existing legacy system."
+- "The team has no experience with technology Y."
+- "We need to launch within 3 months."
 
-**Users:**
-"Who are the users of this rate limiter? I'm imagining:
-- The APIs being protected (they want protection from overload)
-- The clients calling those APIs (they need to understand and respect limits)
-- Operations teams configuring limits
-- Security teams monitoring for abuse
+### Why This Phase Matters
 
-Is this right? Are there other users I should consider?"
+Assumptions and constraints bound the problem. They prevent you from:
+- Re-solving already-solved problems (authentication, logging, monitoring)
+- Proposing solutions that are infeasible given constraints
+- Designing in a vacuum without organizational context
 
-**Use cases:**
-"What are the primary use cases?
-- Protecting APIs from being overwhelmed by any single client
-- Ensuring fair access across clients
-- Preventing abuse (intentional or accidental)
+They also make your design defensible. If someone later asks "Why didn't you design for X?", you can point to your stated assumptions.
 
-Are we also trying to do quota management (billing based on usage) or is that separate?"
+### How to Execute This Phase
 
-**Intent:**
-"What problem are we really solving? Is this primarily:
-- DDoS protection (malicious high-volume attacks)
-- Fair usage enforcement (prevent one client from starving others)
-- Cost protection (expensive operations need limits)
-- Compliance (SLAs with rate guarantees)
+**State your assumptions explicitly:**
 
-Each of these might suggest different design choices."
+"I'm going to make a few assumptions—please correct me if any are wrong:
+1. We have existing authentication and authorization services I can integrate with
+2. We're operating on standard cloud infrastructure (I'll use AWS examples)
+3. We have existing monitoring and logging infrastructure
+4. Other services can publish events to a message bus for us to consume
 
-**Scope:**
-"Let me scope this. I'll design:
-- Distributed rate limiting across multiple API servers
-- Core enforcement with configurable limits per client/endpoint
-- Basic visibility into current usage
+With those assumptions, I don't need to design those pieces—I can focus on the notification system itself."
 
-I'll assume existing infrastructure for:
-- Authentication (knowing who the client is)
-- Monitoring and alerting
-- Configuration management (though I'll design the data model)
+**Probe for constraints:**
 
-Does this scope work?"
+"Are there any constraints I should know about? For example:
+- Do we need to integrate with existing systems?
+- Are there technology choices we must use or avoid?
+- Is there a budget constraint that limits infrastructure?
+- Are there timeline constraints that affect scope?
+- Are there team skill constraints I should consider?"
 
-## Messaging System
+**Surface hidden constraints:**
 
-**Prompt**: "Design a messaging system."
+Sometimes constraints are implied rather than stated. If the interviewer mentions "a small startup," that implies limited resources. If they mention "a legacy migration," that implies integration requirements.
 
-**Phase 1 clarification questions:**
+"You mentioned this is for a startup. That suggests we should favor simple, low-operational-overhead solutions over complex distributed systems, even if we sacrifice some theoretical scalability. Is that the right trade-off?"
 
-**Users:**
-"Who's messaging whom? I can imagine:
-- Consumers messaging each other (1:1, group chats)
-- Businesses messaging consumers (customer support)
-- System-generated messages (notifications, alerts)
-- Internal services using this as infrastructure
+### Example Application
 
-Which of these are in scope?"
+**Prompt**: "Design a content recommendation system."
 
-**Use cases:**
-"What type of messaging?
-- Real-time chat (typing indicators, presence, instant delivery)
-- Asynchronous messaging (like email—no expectation of immediate response)
-- Something in between (like iMessage—usually fast, but not guaranteed)
+**Staff approach**: "Let me state my assumptions and probe for constraints:
 
-This affects delivery guarantees, UI expectations, and scale patterns."
+**Assumptions:**
+1. We have a content catalog with metadata (managed by another system)
+2. We have user profiles with basic information (managed by another system)
+3. We have event infrastructure to capture user behavior (clicks, views, etc.)
+4. We have compute infrastructure for ML model training and serving
+5. This is for a single region initially
 
-**Intent:**
-"What's the core purpose?
-- Social connection (chatting with friends)
-- Productivity (work communication)
-- Customer engagement (business-to-consumer)
+**Constraint questions:**
+- Are we building recommendations from scratch, or integrating with an existing recommendation engine?
+- Do we have ML expertise on the team, or should I favor simpler heuristic approaches?
+- Is there a latency budget for serving recommendations? Some systems are okay with seconds; others need milliseconds.
+- Are there cold-start considerations—new users or new content that we need to handle specially?
 
-The answer affects features like read receipts, message history depth, and search requirements."
+**Discovered constraints:**
+- [Interviewer mentions limited ML expertise]
+- Given limited ML expertise, I'll favor a hybrid approach: simple heuristics for cold-start, and a relatively simple collaborative filtering model that's easier to maintain than deep learning. We can evolve to more sophisticated models as the team grows."
 
-**Scope:**
-"I'll design for:
-- 1:1 messaging between consumers
-- Group messaging (up to ~100 participants)
-- Text and image messages
-- Mobile and web clients
+### Common Mistakes in This Phase
 
-I'll exclude (but can discuss):
-- Voice/video calling
-- End-to-end encryption
-- Business accounts
-- Very large groups (1000+)
+**Mistake 1: Not stating assumptions**
 
-Does this capture what you had in mind?"
+When you don't state assumptions, the interviewer can't correct them. You might design based on incorrect beliefs.
 
-## Feed System
+**Mistake 2: Making unrealistic assumptions**
 
-**Prompt**: "Design a social media feed."
+"I assume we have infinite budget and time" is unhelpful. Assumptions should be realistic.
 
-**Phase 1 clarification questions:**
+**Mistake 3: Ignoring organizational constraints**
 
-**Users:**
-"Who interacts with this feed?
-- Consumers viewing their personalized feed
-- Content creators whose posts appear in feeds
-- Advertisers who want placement in feeds
-- Internal ranking/ML teams who tune the algorithm
-- Operations monitoring feed generation health
+The best technical solution might not be the best solution. Team skills, existing infrastructure, political realities—these all matter.
 
-Which are primary?"
+**Mistake 4: Treating constraints as fixed when they might be flexible**
 
-**Use cases:**
-"For the viewer:
-- Open app and see relevant content immediately
-- Scroll for more content (pagination)
-- Interact with content (like, comment, share)
-- Refresh for new content
+Sometimes constraints can be negotiated. "Must we integrate with the legacy system, or could we propose a migration path?"
 
-For creators:
-- Understand who sees their content
-- Know how content performs
+**Mistake 5: Forgetting to revisit assumptions**
 
-Which flows should I prioritize?"
-
-**Intent:**
-"What's the goal of this feed?
-- Maximize engagement (time spent)
-- Maximize social connection (content from friends)
-- Maximize discovery (new accounts and content)
-- Maximize monetization (ad integration)
-
-These can conflict—what's the priority?"
-
-**Scope:**
-"I'll design:
-- Home feed generation for a logged-in user
-- Basic ranking (recency + engagement signals)
-- Infinite scroll pagination
-
-I'll assume existing systems for:
-- Content storage (posts, images, videos)
-- Social graph (follow relationships)
-- Engagement tracking (likes, comments)
-
-Does this scope work?"
+Assumptions made early might not hold as you design. Check back: "I assumed eventual consistency was okay—given what we've discussed, is that still valid?"
 
 ---
 
-# Part 9: Common Mistakes by Strong Senior Engineers
+# Part 3: How Google Staff Engineers Use This Framework Implicitly
 
-Strong Senior engineers often stumble in Phase 1—not because they lack skill, but because they have habits that work at Senior level but fail at Staff level.
+Walk into any design review at Google, and you'll hear Staff engineers ask the same questions—without referencing any formal framework. They've internalized the pattern through experience. Let me show you what this looks like in practice.
 
-## Mistake 1: Assuming a Single User Type
+## The Instinctive Clarification
 
-**The pattern**: Immediately focusing on the most obvious user (end consumers) and ignoring others.
+When a Staff engineer hears a new project idea, they don't start brainstorming solutions. They start asking questions.
 
-**Why it happens**: In day-to-day work, you're often given a specific user to focus on. The habit of single-user thinking becomes ingrained.
+**Product Manager**: "We need a system to notify users when their friends post new content."
 
-**The problem**: You design a system that serves consumers but is impossible for operations to maintain, or that has no API for other services to integrate with.
+**Staff Engineer**: "Interesting. A few questions:
+- How many users are we talking about? Are we building for our current user base or anticipating growth?
+- What's 'content' in this context? Posts? Photos? Comments? All of the above?
+- How real-time does 'notify' need to be? Immediate, or is within a few minutes acceptable?
+- What channels—push notifications, email, in-app?
+- This sounds similar to the activity feed we already have. Is this replacing that, or supplementing it?"
 
-**The fix**: Systematically enumerate user types. Ask: "Who else interacts with this system? Who operates it? Who integrates with it?"
+The Staff engineer isn't being difficult. They're establishing context because they know design decisions depend on it.
 
-**Example**:
-- **Senior approach**: "Users send notifications to other users."
-- **Staff approach**: "End users receive notifications. Internal services generate most notifications. Operations monitors delivery. Analytics measures engagement. Let me map out how each interacts with the system."
+## The Priority Negotiation
 
-## Mistake 2: Taking the Prompt Literally
+Staff engineers don't treat all requirements as equal. They negotiate priorities.
 
-**The pattern**: Hearing "design a rate limiter" and immediately designing a rate limiter, without questioning whether rate limiting is the right solution.
+**Product Manager**: "We need this to be really fast, super reliable, and cost-effective."
 
-**Why it happens**: Senior engineers are trained to execute on requirements, not to question them.
+**Staff Engineer**: "Those three can tension against each other. Let me understand the priorities:
+- If we had to choose between faster delivery and lower cost, which wins?
+- If we had to choose between reliability and speed, which wins?
 
-**The problem**: You might design an excellent rate limiter when what's actually needed is a circuit breaker, or a quota system, or a CDN.
+I'm asking because the architecture choices are different. If reliability is paramount, I'd recommend synchronous acknowledgment and stronger durability guarantees, which adds latency and cost. If speed is paramount, I'd recommend async processing with best-effort delivery, which is cheaper but might occasionally drop notifications."
 
-**The fix**: Probe the intent behind the prompt. "What problem is this solving? Is rate limiting the only approach, or are there alternatives we should consider?"
+## The Explicit Trade-off
 
-**Example**:
-- **Senior approach**: "I'll design a token bucket rate limiter..."
-- **Staff approach**: "Let me understand the goal. Is rate limiting protecting against DDoS, ensuring fair usage, or something else? Depending on the answer, the design—or even the approach—might differ."
+Staff engineers make trade-offs explicit rather than hiding them.
 
-## Mistake 3: Skipping User Discovery to "Save Time"
+**In a design doc**: "This design prioritizes delivery speed over perfect ordering. Users may occasionally see notifications out of chronological order—for example, a like might appear before the post it references. We accept this trade-off because: (1) users are tolerant of minor ordering inconsistencies, (2) strict ordering would require coordination that adds 100ms+ latency, and (3) our experiments show users don't notice out-of-order notifications in 98% of cases."
 
-**The pattern**: Spending 30 seconds on clarifying questions and jumping into architecture.
+Compare this to how a less experienced engineer might write: "Notifications are delivered in real-time." The second version hides the trade-off. The first makes it discussable.
 
-**Why it happens**: The interview feels short. You want to demonstrate building skills, not asking skills.
+## The Scope Defense
 
-**The problem**: You design for the wrong requirements. Or you design for correct requirements but can't articulate why your design choices are appropriate.
+Staff engineers protect scope fiercely. They know that unbounded scope kills projects.
 
-**The fix**: Invest 5-10 minutes in Phase 1. This investment pays off in a more focused, defensible design.
+**Product Manager**: "Can we also add notification analytics? And maybe A/B testing for notification content? And what about internationalization?"
 
-**Example**:
-- **Senior approach**: "Let me start drawing the architecture—I'll ask questions as I go."
-- **Staff approach**: "Let me take 5 minutes to understand the users and use cases. This will make my design more focused."
+**Staff Engineer**: "Those are all valuable, but let's scope clearly:
+- For v1, I'm proposing we focus on core delivery: sending notifications reliably across push, email, and SMS. That alone is a significant system.
+- Analytics can be v1.1—we'll capture events from v1 that make analytics straightforward to add later.
+- A/B testing and internationalization are v2 features once we've proven the core system works.
 
-## Mistake 4: Not Prioritizing Use Cases
+If any of these are must-haves for launch, we need to either extend the timeline or reduce scope elsewhere. What's the priority stack?"
 
-**The pattern**: Listing many use cases and treating them all as equally important.
+## The Failure Mode Anticipation
 
-**Why it happens**: At Senior level, you're often asked to "cover everything." Prioritization feels like leaving things out.
+Staff engineers think about what can go wrong before being asked.
 
-**The problem**: You spread design effort thinly across many use cases, none designed well.
+**In a design review**: "Before I continue, let me address the failure modes I'm worried about:
 
-**The fix**: Explicitly categorize use cases as core vs. edge. Announce what you're optimizing for.
+1. **Celebrity fan-out**: If a user with 10 million followers posts, we suddenly need to fan out 10 million notifications. Our current design handles this by... [explanation].
 
-**Example**:
-- **Senior approach**: "The system needs to handle sending, receiving, preferences, history, search, export..."
-- **Staff approach**: "The core use cases are sending and receiving. Preferences and history are secondary—I'll design for them but not optimize. Search and export are edge cases—I'll acknowledge but not detail."
+2. **Thundering herd**: If our notification service goes down and comes back up, there's a backlog of notifications that could overwhelm the system. We handle this by... [explanation].
 
-## Mistake 5: Implicit Scope
+3. **Circular notifications**: In theory, a notification could trigger another notification, which triggers another... We prevent infinite loops by... [explanation].
 
-**The pattern**: Having a mental model of scope but not articulating it.
+I wanted to surface these because they're the things that would wake us up at 2 AM."
 
-**Why it happens**: Scope feels obvious to you. You don't realize the interviewer might have different expectations.
+## The Retrospective Reasoning
 
-**The problem**: Misalignment surfaces late. You either design too much (wasting time) or too little (missing requirements).
+Staff engineers connect decisions to requirements throughout the design.
 
-**The fix**: State scope explicitly and get confirmation. "I'm focusing on X and Y, not Z. Does that work?"
+**Not this**: "I chose Kafka for the message queue."
 
-**Example**:
-- **Senior approach**: [Designs notification delivery without mentioning what's excluded]
-- **Staff approach**: "I'm designing notification delivery, not content creation or analytics. Those integrate with my system but are separate concerns. Does this scope match your expectations?"
+**But this**: "I chose Kafka because we established that we need to handle 100K messages/second with the ability to replay in case of consumer failures. Kafka gives us the throughput we need and native replay capability. If we didn't need replay, RabbitMQ would be simpler to operate. If we didn't need this throughput, we could use a simple database queue. The specific requirements drove this choice."
 
-## Mistake 6: Conflating Users and Roles
-
-**The pattern**: Describing users by their role in the system (sender, receiver) rather than who they actually are.
-
-**Why it happens**: Roles feel more relevant to system design than user identities.
-
-**The problem**: You miss that the same person might have multiple roles, or that different types of people have the same role but different needs.
-
-**The fix**: Identify real user types first, then map them to roles.
-
-**Example**:
-- **Senior approach**: "Senders send notifications, receivers receive them."
-- **Staff approach**: "We have end users, who are primarily receivers but sometimes senders (when they trigger notifications by liking). We have internal services, who are the high-volume senders. We have marketing systems, who send bulk notifications. Each has different patterns and needs."
+Every decision references back to the requirements established in the framework phases.
 
 ---
 
-# Part 10: Examples from Real Systems
+# Part 4: How This Framework Differs from Senior (L5) Approaches
 
-Let me walk through Phase 1 thinking for three real system types.
+Understanding the difference between Senior and Staff approaches helps you calibrate your own behavior. Let me contrast them phase by phase.
 
-## Example 1: Rate Limiter
+## Phase 1: Users & Use Cases
 
-**Users identified:**
+**Senior approach**: Takes users as given. "The user wants to send notifications." Focuses on the primary use case.
 
-| User Type | Description | Needs |
-|-----------|-------------|-------|
-| APIs being protected | Services that call the rate limiter | Low latency, high reliability |
-| Client applications | Systems being rate-limited | Clear feedback, predictable behavior |
-| Platform operators | Engineers configuring limits | Easy configuration, visibility |
-| Security team | Analysts investigating abuse | Access to logs, ability to trace patterns |
+**Staff approach**: Explores user types and priorities. "Who are all the users? End consumers, yes, but also operations staff, data scientists querying logs, customer support looking up delivery status. How do we prioritize their different needs?"
 
-**Primary users**: APIs being protected (the rate limiter exists for them)
+**The gap**: Staff engineers see the full ecosystem, not just the obvious user.
 
-**Secondary users**: Client applications (need to behave correctly under limits), Platform operators, Security team
+## Phase 2: Functional Requirements
 
-**Core use cases:**
-1. Check if a request is allowed (inline, every request)
-2. Enforce rate limit (reject or throttle)
-3. Return meaningful feedback to clients
+**Senior approach**: Enumerates features. "We need to send notifications, store preferences, track delivery status."
 
-**Edge use cases:**
-- Update limits without restart
-- Handle clock skew across servers
-- Manage limits during partial outages
-- Generate usage reports
+**Staff approach**: Prioritizes and scopes features. "Core requirements: send and receive. Important but secondary: preferences and history. Nice-to-have: analytics and A/B testing. For this design, I'm focusing on core requirements. The secondary features inform the architecture but won't be designed in detail."
 
-**Scope decisions:**
-- In scope: Distributed rate limiting, per-client limits
-- Out of scope: Billing integration, long-term analytics, abuse detection (beyond rate limiting)
+**The gap**: Staff engineers are explicit about scope and priority.
 
-**Architectural implications:**
-- Core path must be extremely fast (<1ms overhead)
-- Eventual consistency acceptable for limit updates
-- Need distributed coordination (Redis, or distributed counter)
+## Phase 3: Scale
 
-## Example 2: Messaging System
+**Senior approach**: Notes that scale matters. "We need to handle a lot of traffic." May do some calculations when prompted.
 
-**Users identified:**
+**Staff approach**: Derives scale from first principles and uses it to drive decisions. "With 10M DAU and 20 notifications per user per day, we're at 2,300/second average. Peak is 10x, so 23,000/second. At that rate, a single database can handle reads but writes would bottleneck. Let me design the write path to be horizontally scalable from day one."
 
-| User Type | Description | Needs |
-|-----------|-------------|-------|
-| End consumers | People messaging each other | Real-time delivery, reliability, intuitive UX |
-| Mobile/web clients | Apps on user devices | Efficient sync, offline support |
-| Internal services | Services triggering system messages | Programmatic API, high throughput |
-| Support agents | Customer service accessing chats | Read-only access, search |
-| Compliance team | Legal/regulatory reviews | Export capability, retention management |
+**The gap**: Staff engineers don't just acknowledge scale; they use it to drive specific design decisions.
 
-**Primary users**: End consumers (the product is for them)
+## Phase 4: Non-Functional Requirements
 
-**Secondary users**: Support, Compliance (important but don't drive core design)
+**Senior approach**: Mentions non-functional requirements when asked. "Yes, it should be fast and reliable."
 
-**Core use cases:**
-1. Send a message to another user
-2. Receive messages in real-time
-3. View conversation history
-4. Send messages to a group
+**Staff approach**: Probes for specific targets and trade-offs. "What's our latency target—1 second is fine, or do we need sub-100ms? What's our availability target—99.9% or 99.99%? Those thresholds drive completely different architectures. And how do we prioritize when they conflict—if we can't be both fast AND consistent, which wins?"
 
-**Edge use cases:**
-- Delete/unsend a message
-- Block a user
-- Export conversation
-- Handle message to offline user
+**The gap**: Staff engineers quantify non-functional requirements and understand their trade-offs.
 
-**Scope decisions:**
-- In scope: 1:1 and group messaging, text and images, read receipts
-- Out of scope: Voice/video, end-to-end encryption, very large groups
+## Phase 5: Assumptions & Constraints
 
-**Architectural implications:**
-- Need real-time push (WebSockets or long-polling)
-- Need persistent storage for history (probably per-user sharded)
-- Need fan-out for group messages
-- Offline delivery adds queuing requirements
+**Senior approach**: Makes assumptions implicitly. Designs as if there are no constraints.
 
-## Example 3: Feed System
+**Staff approach**: Makes assumptions explicit and probes for constraints. "I'm assuming we're on cloud infrastructure with standard tools. I'm assuming we have an existing auth system. Are there technology constraints—for example, must we use the company's existing message queue, or can we choose what's best? Are there team constraints—for example, is there ML expertise for sophisticated personalization, or should I favor simpler heuristics?"
 
-**Users identified:**
+**The gap**: Staff engineers acknowledge the organizational context, not just the technical problem.
 
-| User Type | Description | Needs |
-|-----------|-------------|-------|
-| Feed consumers | Users viewing their feed | Fast load, relevant content, fresh content |
-| Content creators | Users whose content appears in feeds | Reach, understanding of performance |
-| Advertisers | Buyers of feed placement | Targeting, performance metrics |
-| ML/ranking team | Engineers tuning the algorithm | Experiment infrastructure, feature access |
-| Operations | SREs keeping feed running | Observability, controls for degradation |
+## The Overall Difference
 
-**Primary users**: Feed consumers (the feed exists for them)
+**Senior engineers** treat the framework phases as a checklist they know they "should" do. They ask the right questions, but sometimes mechanically. The requirements-gathering feels like a warm-up before the "real" design work.
 
-**Secondary users**: Creators, Advertisers, ML team, Operations
+**Staff engineers** treat the framework phases as the foundation of the design. The requirements aren't just gathered—they're analyzed, prioritized, and used to drive every subsequent decision. A Staff engineer would say: "The requirements we established tell us this MUST be a distributed system" or "Given the constraints we identified, the simple approach is actually appropriate."
 
-**Core use cases:**
-1. Open app, see personalized feed instantly
-2. Scroll to load more content
-3. Interact with content (like, comment)
+The framework isn't a box to check—it's a lens through which all design decisions are filtered.
 
-**Edge use cases:**
-- New user with no follows (cold start)
-- User follows 50,000 accounts (massive input)
-- Breaking news (time-sensitive content)
-- Ad injection and pacing
+---
 
-**Scope decisions:**
-- In scope: Home feed, basic ranking, pagination
-- Out of scope: Search, discovery/explore, creator analytics
+# Part 5: How Interviewers Evaluate Candidates Using This Framework
 
-**Architectural implications:**
-- Feed generation must be fast (<200ms)
-- Can pre-compute or compute on-demand (trade-off based on scale)
-- Need social graph access (follow relationships)
-- Need content storage access (posts)
-- Ranking is a core concern (simple first, extensible for ML)
+Google interviewers are trained to assess specific signals. Understanding their rubric helps you demonstrate the right behaviors.
+
+## What Interviewers Look For in Each Phase
+
+### Phase 1: Users & Use Cases
+
+**Strong signals**:
+- Asks about user types without being prompted
+- Identifies non-obvious users (internal, operational, edge cases)
+- Understands user priorities and contexts
+- Connects users to requirements naturally
+
+**Weak signals**:
+- Assumes a single, obvious user
+- Doesn't ask about users at all
+- Focuses only on the happy path
+
+**Example of a strong candidate**: "Before I design, I want to understand the users. You mentioned consumers receiving notifications. But who sends them? Other users, automated systems, both? And are there internal users I should consider—operations teams who need to monitor delivery, customer support who needs to look up specific notifications?"
+
+### Phase 2: Functional Requirements
+
+**Strong signals**:
+- Enumerates requirements clearly
+- Prioritizes actively ("core vs. nice-to-have")
+- Scopes explicitly ("I'm focusing on X, acknowledging Y, deferring Z")
+- Checks alignment with interviewer
+
+**Weak signals**:
+- Treats all features as equal priority
+- Doesn't scope—tries to design everything
+- Doesn't confirm requirements with interviewer
+
+**Example of a strong candidate**: "Let me list the functional requirements: send notifications, receive in real-time, set preferences, view history. For this design, I'll focus on send and receive—that's the core. Preferences and history inform the data model but I won't design them in detail unless you'd like me to. Does that scope work?"
+
+### Phase 3: Scale
+
+**Strong signals**:
+- Asks about scale proactively
+- Derives numbers from first principles
+- Uses scale to drive design decisions
+- Shows back-of-envelope calculation fluency
+
+**Weak signals**:
+- Doesn't ask about scale
+- Assumes massive scale without justification
+- Treats scale as an afterthought
+
+**Example of a strong candidate**: "What scale are we designing for? If you don't have specific numbers, let me estimate: for a major consumer app, I'd expect 50 million DAU, averaging 30 notifications each per day. That's 1.5 billion notifications per day, about 17,000 per second average. Peak at 10x is 170,000/second. That's significant—we need distributed systems and careful design. Does this order of magnitude match your expectations?"
+
+### Phase 4: Non-Functional Requirements
+
+**Strong signals**:
+- Asks about availability, latency, durability, consistency
+- Quantifies targets ("99.9% availability, not just 'high availability'")
+- Understands trade-offs between requirements
+- Connects NFRs to architecture decisions
+
+**Weak signals**:
+- Uses vague terms ("fast," "reliable")
+- Doesn't ask about NFRs at all
+- Treats all NFRs as equally important
+
+**Example of a strong candidate**: "Let me understand the non-functional requirements. For availability, are we targeting 99.9% or 99.99%? That's the difference between 8 hours of downtime per year and 52 minutes. For latency, what's acceptable for notification delivery—real-time means different things in different contexts. For consistency, if a user disables notifications, how quickly must that take effect—immediately, or is a few seconds of propagation delay acceptable?"
+
+### Phase 5: Assumptions & Constraints
+
+**Strong signals**:
+- States assumptions explicitly
+- Asks about constraints proactively
+- Considers organizational context
+- Revisits assumptions during design
+
+**Weak signals**:
+- Makes assumptions implicitly
+- Ignores organizational constraints
+- Designs in a vacuum
+
+**Example of a strong candidate**: "I'm going to assume we have existing auth and monitoring infrastructure. I'm assuming standard cloud infrastructure—I'll use AWS as a reference but the design is portable. Are there technology constraints I should know about—existing systems I must integrate with, or technologies I must use or avoid?"
+
+## The Overall Assessment
+
+Interviewers aren't just checking boxes. They're asking themselves:
+
+**"Does this candidate understand the problem before solving it?"**
+
+A candidate who jumps to solutions is showing Senior behavior. A candidate who establishes requirements first is showing Staff behavior.
+
+**"Does this candidate design for the actual requirements?"**
+
+A candidate who designs a massively scalable system for a 1,000-user problem is showing poor judgment. A candidate who designs a simple system for a billion-user problem is showing poor judgment.
+
+**"Does this candidate make trade-offs explicit?"**
+
+A candidate who presents their design as optimal without acknowledging trade-offs is hiding complexity. A candidate who says "I chose this approach because [tradeoff], and the alternative would be better if [different constraints]" is showing Staff-level thinking.
+
+**"Would I trust this candidate to own a significant project?"**
+
+Staff engineers own projects—meaning they ensure the right thing gets built, not just that something gets built. The framework phases demonstrate this ownership mindset.
+
+---
+
+# Part 6: Mental Models for Each Phase
+
+Mental models are thinking tools. Here are models that help in each phase of the framework.
+
+## Phase 1: Users & Use Cases
+
+### The Stakeholder Map
+
+Visualize all the people and systems that interact with your system:
+- **Primary users**: The main people using the system
+- **Secondary users**: People who use it less frequently but have important needs
+- **Internal users**: Operations, support, analytics teams
+- **System users**: Other services that integrate with yours
+- **Affected parties**: People impacted by the system even if they don't directly use it
+
+For a notification system, this might be: senders, receivers, operations (monitoring delivery), support (debugging issues), analytics (measuring engagement), and connected systems (event sources).
+
+### The Job-To-Be-Done
+
+Instead of asking "what features do users want?", ask "what job are users hiring this system to do?"
+
+A notification system isn't hired to "send notifications." It's hired to "keep me informed about things I care about without overwhelming me."
+
+This framing surfaces deeper requirements: personalization, preference management, rate limiting.
+
+## Phase 2: Functional Requirements
+
+### The MVP Concentric Circles
+
+Visualize requirements as concentric circles:
+- **Core** (innermost): Must have these for the system to function at all
+- **Important**: Should have these for the system to be useful
+- **Nice-to-have**: Would be good but can be added later
+- **Out of scope** (outermost): Explicitly not building these now
+
+Be able to articulate which circle each requirement is in.
+
+### The Verb-Noun Matrix
+
+List all the nouns (entities) and verbs (actions) in your system:
+
+| | Notification | Preference | User | Channel |
+|---|---|---|---|---|
+| Create | ✓ | ✓ | - | - |
+| Read | ✓ | ✓ | ✓ | ✓ |
+| Update | - | ✓ | - | - |
+| Delete | ✓ | ✓ | - | - |
+| Send | ✓ | - | - | - |
+| Receive | ✓ | - | - | - |
+
+This matrix helps you enumerate requirements systematically.
+
+## Phase 3: Scale
+
+### The Powers of Ten
+
+Think about scale in orders of magnitude:
+- 10^3 (1,000): Single server, simple database
+- 10^6 (1,000,000): Needs caching, maybe replication
+- 10^9 (1,000,000,000): Needs sharding, distributed systems
+- 10^12 (1,000,000,000,000): Needs specialized infrastructure, custom solutions
+
+What order of magnitude are you designing for? Each level up requires fundamentally different approaches.
+
+### The Bottleneck Hunt
+
+At any scale, there's a bottleneck. Find it before it finds you:
+- Is it compute (CPU-bound)?
+- Is it memory (working set doesn't fit)?
+- Is it storage (IOPS limited)?
+- Is it network (bandwidth or latency)?
+- Is it a single point of contention (locks, shared state)?
+
+For a notification system, the bottleneck is often fan-out: a single event needs to reach many recipients. Design for that specifically.
+
+### The Growth Time Bomb
+
+Current scale tells you what works today. Growth rate tells you when it breaks:
+- If you're at 50% of capacity and growing 10%/month, you have about 7 months before crisis
+- If you're at 50% of capacity and growing 100%/month, you have about 1 month
+
+"Capacity" isn't just servers—it's also team ability to maintain complexity, budget for infrastructure, and debt in the codebase.
+
+## Phase 4: Non-Functional Requirements
+
+### The SLA Pyramid
+
+Visualize non-functional requirements as a pyramid where violations are increasingly severe:
+- **Bottom**: Performance (things are slow but work)
+- **Middle**: Availability (things are down but recoverable)
+- **Top**: Durability (data is lost permanently)
+
+Design your system so higher levels of the pyramid are more protected than lower levels.
+
+### The Dial Panel
+
+Imagine a control panel with dials:
+- **Availability dial**: 99% → 99.9% → 99.99% → 99.999%
+- **Latency dial**: 1s → 100ms → 10ms → 1ms
+- **Consistency dial**: Eventual → Session → Strong → Linearizable
+- **Cost dial**: $ → $$ → $$$ → $$$$
+
+You can't have all dials at maximum. The design question is: which dials matter most?
+
+### The 9s Game
+
+Each additional "9" in availability is 10x harder:
+- 99% = 3.65 days of downtime/year (simple architecture)
+- 99.9% = 8.76 hours of downtime/year (redundancy needed)
+- 99.99% = 52.6 minutes of downtime/year (sophisticated automation)
+- 99.999% = 5.26 minutes of downtime/year (extreme engineering)
+
+Know what level you're designing for and what it costs.
+
+## Phase 5: Assumptions & Constraints
+
+### The Dependency Web
+
+Visualize what your system depends on:
+- What infrastructure must exist for your system to work?
+- What other systems do you integrate with?
+- What team capabilities do you assume?
+- What organizational processes do you rely on?
+
+If any dependency fails, does your system fail? What's your blast radius?
+
+### The Constraint Gradient
+
+Not all constraints are equally fixed:
+- **Immovable**: Laws of physics, regulatory requirements
+- **Hard to change**: Existing infrastructure, organizational structure
+- **Negotiable**: Timeline, scope, technology choices
+- **Soft**: Best practices, past decisions, preferences
+
+Know which constraints are truly fixed and which might have flexibility.
+
+### The Build vs. Buy Matrix
+
+For every capability you need, consider:
+- **Build**: Full control, high initial cost, ongoing maintenance burden
+- **Buy/Use**: Less control, lower initial cost, external dependency
+
+Your assumptions about what's available (internal services, external tools) shape your build-vs-buy decisions throughout the design.
+
+---
+
+# Part 7: End-to-End Example
+
+Let me walk through a complete example applying the framework.
+
+## The Problem
+
+"Design a notification system for a social media platform."
+
+## Phase 1: Users & Use Cases
+
+**My opening**: "Before I start designing, I want to understand who we're building this for and what they're trying to accomplish."
+
+**Questions I'd ask**:
+- "Who sends notifications? Other users (likes, comments, follows), the platform itself (announcements, reminders), or both?"
+- "Who receives notifications? All users, or are there different tiers with different notification expectations?"
+- "What are the primary use cases? I'm thinking: social interactions (someone liked your post), content updates (someone you follow posted), and system messages (security alerts, announcements). Are there others?"
+- "Are there internal users? Operations monitoring delivery rates, customer support looking up specific notifications?"
+
+**After clarification**: "So we're building for a consumer social platform. Users send notifications through actions (like, comment, follow), and users receive notifications on mobile (push) and in-app. There's also an operations team that needs visibility into delivery health. Primary use case is social interactions—that's 80% of notification volume."
+
+## Phase 2: Functional Requirements
+
+**My enumeration**: "Based on the use cases, here are the functional requirements:
+
+**Core**:
+1. Generate notifications from user actions (like, comment, follow, etc.)
+2. Deliver notifications to recipients in real-time (push, in-app)
+3. Store notification history for later retrieval
+
+**Important**:
+4. User preferences (mute, notification channels, frequency)
+5. Aggregation (combine multiple similar notifications: '5 people liked your post')
+
+**Nice-to-have**:
+6. Analytics (open rates, engagement)
+7. Scheduling (send at optimal times)
+
+For this design, I'll focus on core requirements 1-3 and address #4 (preferences) at the data model level. I'll mention #5 (aggregation) but not design it in detail. Does this scope work?"
+
+## Phase 3: Scale
+
+**My estimation**: "Let me understand the scale:
+- How many users? Let's say 100 million monthly active, 30 million daily active
+- Notification volume: Average user generates maybe 5 notifications/day (posting once, liking 4 things). Average user receives maybe 20 notifications/day
+- That's 150 million sent and 600 million delivered per day
+- About 7,000 notifications generated/second and 7,000 delivered/second average
+- Peak at 10x: 70,000/second
+
+For storage:
+- 600 million notifications/day × 365 days × 1KB = 220TB/year if we keep a year of history
+- That's substantial but manageable
+
+This scale tells me we need distributed message processing and horizontally scalable storage. A single database won't handle this."
+
+## Phase 4: Non-Functional Requirements
+
+**My probing**: "Let me understand the quality requirements:
+
+**Availability**: I'd target 99.9%—8 hours of downtime per year maximum. Missing a notification is annoying but not catastrophic for a social app. Does that match your expectations?
+
+**Latency**: For push notifications, I'd target 95% delivered within 5 seconds of the triggering action. For in-app history, I'd target 200ms P99 to load. Does that seem right?
+
+**Durability**: I'd say notifications are important but not sacred. We shouldn't lose them routinely, but if 0.01% of notifications are lost due to system issues, that's acceptable. We're not dealing with financial transactions.
+
+**Consistency**: Eventual consistency is fine. If it takes a few seconds for 'notification read' status to propagate across devices, that's acceptable.
+
+**Security**: Notifications can contain user-generated content, so we need standard content moderation. Personal notifications should only be visible to the recipient."
+
+## Phase 5: Assumptions & Constraints
+
+**My explicit assumptions**: "I'm going to assume:
+1. We have authentication/authorization infrastructure I can integrate with
+2. We have push notification infrastructure (APNs, FCM integration)
+3. We have a standard cloud environment (I'll reference AWS, but the design is portable)
+4. Other services (post service, like service, etc.) can publish events I can consume
+5. We have monitoring and alerting infrastructure
+
+Are there specific constraints?
+- Do we need to integrate with existing systems or is this greenfield?
+- Are there technology mandates or preferences?
+- What's the team situation—new team or existing team with relevant expertise?"
+
+**After clarification**: "Understood. This is greenfield for the notification system, but we need to consume events from existing services via our standard Kafka infrastructure. The team is small—3 engineers—so operational simplicity is valuable."
+
+## Summary Before Designing
+
+"Let me summarize what we're building:
+
+**Users**: Consumers sending/receiving social notifications; internal ops monitoring health
+**Core requirements**: Generate from events, deliver in real-time, store history
+**Scale**: ~7K notifications/second, 200TB storage/year
+**NFRs**: 99.9% availability, 5-second delivery latency, eventual consistency acceptable
+**Constraints**: Small team, integrate with existing Kafka, operational simplicity matters
+
+With this foundation, let me design the system..."
+
+[The actual design would follow, but the framework phases are complete.]
+
+---
+
+# Part 8: Common Mistakes at Each Phase
+
+## Phase 1: Users & Use Cases Mistakes
+
+**Mistake**: Assuming a single homogeneous user base
+
+**Example**: Designing a notification system for "users" without distinguishing high-profile users (celebrities) from regular users
+
+**Why it matters**: Celebrity fan-out (1 post → 10 million notifications) is a completely different scaling challenge than regular users
+
+**Fix**: Always ask "Are there user segments with significantly different behaviors or needs?"
+
+---
+
+**Mistake**: Ignoring internal users
+
+**Example**: Designing the API only for end users, not for operations or support teams
+
+**Why it matters**: Operations needs monitoring endpoints, support needs debugging tools, analytics needs data access
+
+**Fix**: Explicitly list internal users and their needs alongside external users
+
+---
+
+**Mistake**: Only considering the happy path
+
+**Example**: Focusing on "user receives notification" without considering "user wants to stop receiving notifications" or "user missed notifications and wants to catch up"
+
+**Why it matters**: These edge cases often drive significant design decisions (preference storage, history depth)
+
+**Fix**: For each happy path, ask "What's the opposite? What's the error case? What's the recovery?"
+
+## Phase 2: Functional Requirements Mistakes
+
+**Mistake**: Treating requirements as equal priority
+
+**Example**: Spending equal time on core delivery and nice-to-have analytics
+
+**Why it matters**: Time is limited; focus on what matters most
+
+**Fix**: Explicitly categorize requirements into core/important/nice-to-have and allocate effort accordingly
+
+---
+
+**Mistake**: Not scoping explicitly
+
+**Example**: Trying to design a complete system with every feature
+
+**Why it matters**: You'll run out of time before covering anything well
+
+**Fix**: State your scope explicitly: "I'm focusing on X, acknowledging Y, deferring Z"
+
+---
+
+**Mistake**: Assuming requirements are obvious
+
+**Example**: Starting to design without confirming what the system should do
+
+**Why it matters**: The interviewer might have different expectations; implicit misalignment wastes time
+
+**Fix**: Always enumerate requirements and confirm alignment before designing
+
+## Phase 3: Scale Mistakes
+
+**Mistake**: Not asking about scale
+
+**Example**: Designing an architecture without knowing if it's for 1,000 or 100 million users
+
+**Why it matters**: Scale determines architecture; wrong scale assumptions mean wrong architecture
+
+**Fix**: Always ask about scale, or estimate explicitly and confirm
+
+---
+
+**Mistake**: Over-engineering for hypothetical scale
+
+**Example**: Building a globally distributed system for a product that has 1,000 beta users
+
+**Why it matters**: Complexity has costs; premature optimization wastes resources
+
+**Fix**: Design for current scale + expected growth, not infinite theoretical scale
+
+---
+
+**Mistake**: Not doing the math
+
+**Example**: Saying "that's a lot of data" without calculating actual numbers
+
+**Why it matters**: Numbers expose assumptions; "a lot" might be 1TB or 1PB depending on context
+
+**Fix**: Always do back-of-envelope calculations and show your work
+
+## Phase 4: Non-Functional Requirements Mistakes
+
+**Mistake**: Using vague terms
+
+**Example**: "The system should be fast and reliable"
+
+**Why it matters**: "Fast" could mean 10ms or 10 seconds; vague targets mean arbitrary design decisions
+
+**Fix**: Quantify: "P99 latency under 200ms, 99.9% availability"
+
+---
+
+**Mistake**: Ignoring trade-offs
+
+**Example**: Claiming the system will be highly available AND strongly consistent AND very fast AND cheap
+
+**Why it matters**: These properties trade off; claiming all of them suggests you don't understand the trade-offs
+
+**Fix**: Acknowledge trade-offs explicitly: "I'm prioritizing X over Y because..."
+
+---
+
+**Mistake**: Forgetting security and compliance
+
+**Example**: Designing a healthcare notification system without mentioning HIPAA
+
+**Why it matters**: Compliance requirements can fundamentally change architecture
+
+**Fix**: Ask about regulatory requirements for any system handling sensitive data
+
+## Phase 5: Assumptions & Constraints Mistakes
+
+**Mistake**: Making assumptions implicitly
+
+**Example**: Using a specific cloud provider's features without stating that assumption
+
+**Why it matters**: The interviewer might have different assumptions; explicit assumptions are discussable
+
+**Fix**: State assumptions out loud: "I'm assuming we're on AWS with access to their managed services"
+
+---
+
+**Mistake**: Ignoring organizational constraints
+
+**Example**: Proposing a Kubernetes-based architecture to a team that only knows VMs
+
+**Why it matters**: The best technical solution might be wrong if the team can't implement or maintain it
+
+**Fix**: Ask about team skills, existing infrastructure, and organizational preferences
+
+---
+
+**Mistake**: Treating all constraints as fixed
+
+**Example**: Accepting a 2-week deadline without exploring whether it could be extended
+
+**Why it matters**: Some constraints are negotiable; understanding which ones helps you make better trade-offs
+
+**Fix**: Probe constraints: "Is this fixed, or is there flexibility if we can justify it?"
 
 ---
 
 # Quick Reference Card
 
-## Phase 1 Checklist: Users & Use Cases
+## The 5 Phases At a Glance
 
-| Step | Question to Ask | Example Output |
-|------|-----------------|----------------|
-| **Identify all user types** | "Who interacts with this system?" | Human, System, Service, Operational users |
-| **Determine primary vs secondary** | "Whose needs drive the design?" | "Consumers are primary, ops is secondary" |
-| **Uncover intent** | "What problem are we really solving?" | "Keep users informed" not "send notifications" |
-| **Identify core vs edge** | "What's high frequency and high value?" | "Send/receive are core; export is edge" |
-| **Set explicit scope** | "What's in and what's out?" | "In: delivery. Out: content creation, billing" |
+| Phase | Key Question | What to Cover | Time |
+|-------|-------------|---------------|------|
+| **1. Users & Use Cases** | Who and why? | User types, primary/secondary use cases, edge cases | 1-2 min |
+| **2. Functional Requirements** | What must it do? | Core vs Important vs Nice-to-have, explicit scope | 2-3 min |
+| **3. Scale** | How big? | Users, data volume, QPS, growth, back-of-envelope math | 2-3 min |
+| **4. Non-Functional Requirements** | How well? | Availability, latency, durability, consistency, security | 2-3 min |
+| **5. Assumptions & Constraints** | What's given? | Infrastructure, team, budget, timeline, integrations | 1-2 min |
+
+**Total: 8-13 minutes** → Then you design with clarity!
 
 ---
 
-## Key Phrases for Phase 1
+## Self-Check: Did I Cover Everything?
 
-### Identifying Users
-- "Who are all the users of this system?"
-- "Beyond end users, are there internal services? Operations teams?"
-- "Who operates this? Who debugs it when things go wrong?"
+| Signal | Weak | Strong | ✓ |
+|--------|------|--------|---|
+| **Users** | Assumed single user type | Identified 3+ user types including internal | ☐ |
+| **Requirements** | Listed features flat | Prioritized: core / important / nice-to-have | ☐ |
+| **Scale** | "A lot of traffic" | "7K QPS average, 70K peak, 200TB storage" | ☐ |
+| **NFRs** | "Fast and reliable" | "99.9% availability, P99 < 200ms" | ☐ |
+| **Constraints** | Designed in vacuum | Asked about team, timeline, integrations | ☐ |
+| **Summary** | Started designing immediately | Summarized understanding before designing | ☐ |
 
-### Determining Priority
-- "I'm treating [X] as primary users because..."
-- "Secondary users include [Y]—I'll accommodate but not optimize for them."
+---
 
-### Uncovering Intent
-- "What problem are we really solving?"
-- "Is this for [intent A] or [intent B]? The design differs..."
+## Key Phrases for Each Phase
 
-### Scoping
-- "For this design, I'm focusing on [in-scope]."
-- "I'm explicitly not designing [out-of-scope]—those are separate concerns."
-- "Does this scope work for what you had in mind?"
+### Phase 1: Users & Use Cases
+- "Before I design, I want to understand who we're building for..."
+- "Who are the primary users? Are there secondary users?"
+- "Are there internal users I should consider—ops, support, analytics?"
+
+### Phase 2: Functional Requirements
+- "Based on the use cases, here are the requirements..."
+- "I'll categorize as core, important, and nice-to-have..."
+- "For this design, I'll focus on [X]. Does that scope work?"
+
+### Phase 3: Scale
+- "What scale are we designing for?"
+- "Let me estimate: [X] users × [Y] actions = [Z] QPS..."
+- "At that rate, we need [architecture implication]..."
+
+### Phase 4: Non-Functional Requirements
+- "What are the availability requirements? 99.9% or 99.99%?"
+- "What latency targets? What's the P99 budget?"
+- "Is eventual consistency acceptable, or do we need strong consistency?"
+
+### Phase 5: Assumptions & Constraints
+- "I'm assuming we have existing [auth/monitoring/infra]..."
+- "Are there technology constraints I should know about?"
+- "What's the team situation—size, expertise?"
+
+---
+
+## The Availability Cheat Sheet
+
+| Availability | Downtime/Year | Downtime/Month | What It Means |
+|-------------|---------------|----------------|---------------|
+| 99% | 3.65 days | 7.2 hours | Simple architecture OK |
+| 99.9% | 8.76 hours | 43.8 min | Need redundancy |
+| 99.99% | 52.6 min | 4.38 min | Need automation |
+| 99.999% | 5.26 min | 26.3 sec | Extreme engineering |
+
+---
+
+## Scale Mental Model: Powers of 10
+
+| Users | Architecture Approach |
+|-------|----------------------|
+| 10³ (1K) | Single server, simple DB |
+| 10⁶ (1M) | Caching, read replicas |
+| 10⁹ (1B) | Sharding, distributed systems |
+| 10¹² (1T) | Custom infrastructure |
+
+**Key insight**: Each order of magnitude requires fundamentally different approaches.
 
 ---
 
 ## Common Mistakes Quick Reference
 
-| Mistake | What It Looks Like | Fix |
-|---------|-------------------|-----|
-| **Single user type** | "Users send notifications" | "Who else? Internal services? Ops? Analytics?" |
-| **Taking prompt literally** | Immediately designing a rate limiter | "What problem are we solving? DDoS? Fair usage?" |
-| **Skipping discovery** | 30 seconds of questions, then architecture | Invest 5-10 minutes in Phase 1 |
-| **No prioritization** | All use cases treated equally | "Core: X, Y. Secondary: Z. Edge: W." |
-| **Implicit scope** | Designing without stating boundaries | "I'm focusing on X, not Y. Does that work?" |
-| **Confusing user/role** | "Senders and receivers" | "End users, internal services, marketing systems" |
+| Phase | Common Mistake | Fix |
+|-------|---------------|-----|
+| **Users** | Single user type assumed | "Are there user segments with different needs?" |
+| **Requirements** | All features equal priority | "What's core vs important vs nice-to-have?" |
+| **Scale** | "A lot" without numbers | "Let me calculate: X × Y = Z QPS" |
+| **NFRs** | Vague ("fast") | Quantify: "P99 < 200ms, 99.9% availability" |
+| **Constraints** | Design in vacuum | "Team size? Existing systems? Timeline?" |
 
 ---
 
-## The Ripple Effect: Phase 1 → Architecture
+# Part 9: Failure Requirements—The Missing Phase (L6 Gap Coverage)
 
-| Phase 1 Decision | Architectural Impact |
-|-----------------|---------------------|
-| **User types identified** | → APIs needed (REST for humans, gRPC for services) |
-| **Core use cases defined** | → Data model requirements (what to store) |
-| **Primary user chosen** | → Quality requirements (where to invest in availability/latency) |
-| **Scope boundaries set** | → Component boundaries (what you build vs. interface with) |
+This section addresses a critical dimension of Staff-level requirements gathering: **explicitly gathering requirements about failure modes, degradation behavior, and recovery expectations**.
 
-**Example**: "System users generate 95% of notifications → service-to-service API is the critical path → optimize for throughput and low latency."
+Senior engineers focus on what the system should do when it works. Staff engineers also establish what the system should do when things go wrong.
 
 ---
 
-## Self-Check: Did I Cover Phase 1?
+## Why Failure Requirements Matter at L6
 
-| Signal | Weak | Strong | ✓ |
-|--------|------|--------|---|
-| **User types** | Assumed single user | Identified 4+ types including ops | ☐ |
-| **Primary/secondary** | Not distinguished | Explicit: "X is primary because..." | ☐ |
-| **Intent** | Accepted prompt literally | Asked "What problem are we solving?" | ☐ |
-| **Core vs edge** | Listed features flat | "Core: A, B. Edge: C, D." | ☐ |
-| **Scope** | Implicit or unclear | "In scope: X. Out of scope: Y." | ☐ |
-| **Confirmation** | Didn't check | "Does this scope work?" | ☐ |
+Most requirements-gathering frameworks focus on functional and non-functional requirements during normal operation. But Staff engineers know that systems spend significant time in degraded states.
 
----
-
-# Part 11: User Needs Under Failure — Staff-Level Thinking
-
-A critical gap in most Senior engineers' thinking: they identify users and use cases for the happy path, but forget that failures affect different users differently. Staff engineers think about user needs under failure from the beginning.
-
-## The Failure Experience Matrix
-
-Different user types experience the same failure in fundamentally different ways:
+### The Failure Requirements Test
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              HOW USERS EXPERIENCE THE SAME FAILURE                          │
+│                    FAILURE REQUIREMENTS COMPARISON                          │
 │                                                                             │
-│   Failure: Notification delivery delayed 30+ seconds                        │
+│   L5 REQUIREMENTS GATHERING:                                                │
+│   ─────────────────────────                                                 │
+│   "What should the system do?"                                              │
+│   "How fast should it be?"                                                  │
+│   "How available should it be?"                                             │
 │                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  HUMAN USER                                                         │   │
-│   │  Experience: "App feels slow today"                                 │   │
-│   │  Tolerance: Low - expects instant gratification                     │   │
-│   │  Need: Feedback that something is happening                         │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  SYSTEM USER (calling service)                                      │   │
-│   │  Experience: Timeout errors, retry storms                           │   │
-│   │  Tolerance: Medium - has retry logic, but consumes budget           │   │
-│   │  Need: Clear error codes, backoff guidance                          │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  SERVICE USER (batch job)                                           │   │
-│   │  Experience: Job running longer than SLA                            │   │
-│   │  Tolerance: High - can wait, but needs visibility                   │   │
-│   │  Need: Progress indicators, partial success handling                │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  OPERATIONAL USER (on-call SRE)                                     │   │
-│   │  Experience: Alert firing, needs to diagnose                        │   │
-│   │  Tolerance: None - this IS their problem                            │   │
-│   │  Need: Metrics, traces, runbooks, control levers                    │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
+│   L6 REQUIREMENTS GATHERING (adds):                                         │
+│   ───────────────────────────────                                           │
+│   "What should the system do when the database is slow?"                    │
+│   "What's acceptable user experience during degradation?"                   │
+│   "Which failures are acceptable to users vs. which are catastrophic?"      │
+│   "How long can the system be degraded before it's considered an outage?"   │
+│   "What should we preserve vs. sacrifice during partial failure?"           │
+│                                                                             │
+│   THE DIFFERENCE:                                                           │
+│   L5 → Requirements for the happy path                                      │
+│   L6 → Requirements for the full operational spectrum                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Staff-Level Questions for User Failure Analysis
+---
 
-When identifying users, Staff engineers immediately ask:
+## The Failure Requirements Framework
 
-**For each user type:**
-1. "What does failure look like to this user?"
-2. "What's their tolerance for degradation?"
-3. "What information do they need during failure?"
-4. "What fallback serves this user when the primary path fails?"
+When gathering requirements, explicitly cover:
 
-**Example: Rate Limiter Failure Analysis**
+### 1. Degradation Behavior Requirements
 
-| User Type | Failure Mode | Impact | Tolerance | Fallback Need |
-|-----------|--------------|--------|-----------|---------------|
-| APIs protected | Rate limiter unavailable | Unprotected, risk overload | Zero - this defeats the purpose | Fail-closed (block all) or fail-open with caching |
-| Clients calling APIs | Incorrect rate info | Unexpected rejections | Low - causes cascading failures | Stale limits with error budget |
-| Operations | Metrics missing | Blind to abuse patterns | Medium - can wait for recovery | Degraded dashboard, alerting still works |
-| Security team | Audit logs delayed | Investigation blocked | High - can analyze later | Buffer and replay when healthy |
+**Questions to ask**:
+- "When the system is slow or partially unavailable, what should users experience?"
+- "Which features can degrade gracefully? Which must work or fail completely?"
+- "Is stale data acceptable during degradation? How stale?"
 
-## Designing for Failure from Phase 1
+**Example for Notification System**:
+"If the notification delivery pipeline backs up, what should happen?
+- Option A: Delay all notifications equally (fair but slow)
+- Option B: Prioritize critical notifications, delay others (fast for critical)
+- Option C: Drop low-priority notifications after X hours (shed load)
 
-The user analysis should inform failure design from the start:
+I'm recommending Option B—critical notifications like 2FA and fraud alerts should always get through, even if 'someone liked your post' is delayed. Does that priority model match business expectations?"
 
-**L5 Approach**: "I'll handle failures later in the design."
+### 2. Failure Mode Tolerance
 
-**L6 Approach**: "For each user type, I'm noting their failure tolerance now. This shapes my core architecture—I can't add fault tolerance as an afterthought."
+**Questions to ask**:
+- "What types of failures are acceptable? Lost data? Duplicate delivery? Delayed processing?"
+- "What's the blast radius that's acceptable? Single user? Single feature? Entire system?"
+- "How quickly must we recover from different failure types?"
 
-**Example in Interview:**
+**Example for Notification System**:
+"For notification delivery, which failures are acceptable?
+- Lost notification: Acceptable for social notifications (likes, comments), unacceptable for security notifications (2FA, fraud alerts)
+- Duplicate notification: Mildly annoying but acceptable for all types
+- Delayed notification: Acceptable up to 5 minutes for social, unacceptable for time-sensitive (2FA expires)
 
-"I've identified four user types. Let me think about how each experiences failure:
-- Human users need graceful degradation—show cached content, not errors
-- System users need clear error codes and retry guidance—I'll design for that
-- Batch services need idempotent operations and progress checkpoints
-- Operations needs observability baked in—not bolted on
+This tells me we need different reliability guarantees for different notification types—not a one-size-fits-all approach."
 
-This means my core design must include: cached fallbacks, structured error responses, idempotency keys, and metrics emission at key points."
+### 3. Recovery Requirements
 
-## User-Specific Failure Requirements
+**Questions to ask**:
+- "What's the recovery time objective (RTO) for different failure scenarios?"
+- "What's the recovery point objective (RPO)—how much data loss is acceptable?"
+- "Should recovery be automatic or can it require human intervention?"
 
-For each user type, identify specific failure requirements:
+**Example for Notification System**:
+"If the entire notification system goes down:
+- RTO: Back online within 15 minutes
+- RPO: Notifications generated during outage should be delivered after recovery (no loss)
+- Backlog processing: Spread over 30 minutes to avoid thundering herd
 
-### Human Users Under Failure
-
-| Requirement | Why | Design Impact |
-|-------------|-----|---------------|
-| Graceful degradation | Users prefer partial functionality to errors | Fallback UI, cached content |
-| Progress feedback | Uncertainty is worse than delay | Loading states, estimated times |
-| Retry transparency | Users shouldn't double-submit | Optimistic UI, confirmation |
-| Clear error messages | Technical errors frustrate | User-friendly messages |
-
-### System Users Under Failure
-
-| Requirement | Why | Design Impact |
-|-------------|-----|---------------|
-| Idempotency | Retries must be safe | Idempotency keys, deduplication |
-| Structured errors | Machines parse responses | Error codes, not strings |
-| Retry guidance | Prevent thundering herd | Retry-After headers, backoff |
-| Partial success handling | Batch operations may half-succeed | Transaction semantics, results arrays |
-
-### Operational Users Under Failure
-
-| Requirement | Why | Design Impact |
-|-------------|-----|---------------|
-| Real-time metrics | Can't debug what you can't see | Metrics per component, SLI tracking |
-| Distributed tracing | Request flow visibility | Trace context propagation |
-| Control levers | Need to mitigate without deploys | Feature flags, circuit breakers |
-| Runbook hooks | Scripted remediation | Admin APIs, safe restart procedures |
+This tells me we need durable message storage and controlled replay capability."
 
 ---
 
-# Part 12: Conflict Resolution Between User Types
+## Integrating Failure Requirements into the Framework
 
-When different user types have incompatible needs, Staff engineers reason through the conflict explicitly—not by gut feeling, but with a structured approach.
-
-## The Conflict Pattern
-
-User conflicts arise when:
-- Optimizing for one user degrades experience for another
-- Resource constraints force trade-offs
-- Quality attributes conflict (latency vs. durability, simplicity vs. flexibility)
-
-## Conflict Resolution Framework
+The five phases now look like:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              USER CONFLICT RESOLUTION DECISION TREE                         │
+│                    EXTENDED FRAMEWORK WITH FAILURE REQUIREMENTS             │
 │                                                                             │
-│   1. IDENTIFY THE CONFLICT                                                  │
-│      "User A needs X, User B needs Y. X and Y are incompatible."            │
+│   1. USERS & USE CASES                                                      │
+│      + "What do users experience during degradation?"                       │
+│      + "Which user journeys are critical vs. deferrable?"                   │
 │                                                                             │
-│   2. DETERMINE USER PRIORITY                                                │
-│      "Who is primary? Whose needs drive the core design?"                   │
-│      │                                                                      │
-│      ├─► Primary wins outright?                                             │
-│      │   → If secondary user can tolerate degradation: yes                  │
-│      │                                                                      │
-│      └─► No clear winner?                                                   │
-│          → Move to trade-off analysis                                       │
+│   2. FUNCTIONAL REQUIREMENTS                                                │
+│      + "Which functions must work vs. can degrade vs. can fail?"            │
+│      + "What's the fallback behavior for each function?"                    │
 │                                                                             │
-│   3. TRADE-OFF ANALYSIS                                                     │
-│      "What's the cost of each choice?"                                      │
-│      │                                                                      │
-│      ├─► Can we serve both with different paths?                            │
-│      │   → Separate APIs, async processing, tiered service                  │
-│      │                                                                      │
-│      ├─► Can we time-slice?                                                 │
-│      │   → Serve primary during peak, secondary off-peak                    │
-│      │                                                                      │
-│      └─► Must choose one?                                                   │
-│          → Choose primary, document secondary degradation                   │
+│   3. SCALE                                                                  │
+│      + "What's the scale during failure recovery (backlog processing)?"     │
+│      + "What's the peak load during failover scenarios?"                    │
 │                                                                             │
-│   4. DOCUMENT THE DECISION                                                  │
-│      "I'm prioritizing X because..."                                        │
-│      "User B will experience degraded service in these scenarios..."        │
+│   4. NON-FUNCTIONAL REQUIREMENTS                                            │
+│      + "What's the degraded latency budget?"                                │
+│      + "What's availability during planned maintenance?"                    │
+│      + "What's the acceptable error rate during degradation?"               │
+│                                                                             │
+│   5. ASSUMPTIONS & CONSTRAINTS                                              │
+│      + "What's the on-call response time assumption?"                       │
+│      + "What recovery automation exists?"                                   │
+│      + "What's the budget for redundancy?"                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Real-World Conflict Examples
+---
 
-### Example 1: Notification System — Delivery Speed vs. Aggregation
+## Failure Requirements Interview Example
 
-**Conflict:**
-- Human users want real-time notifications (within seconds)
-- System users (analytics) want aggregated data (batched for efficiency)
-- Same event triggers both
+**Prompt**: "Design a payment processing system."
 
-**L5 Resolution:** Pick one—either real-time or batched.
+**Staff-Level Failure Requirements Gathering**:
 
-**L6 Resolution:**
-"These needs aren't actually incompatible if I design for it. I'll use:
-- A real-time path for immediate delivery to human users
-- An async fan-out that also writes to an event stream
-- Analytics consumes from the stream, aggregating as needed
+"Before I design, I want to understand failure requirements—payments are high-stakes.
 
-The core path optimizes for human users (latency). Analytics gets eventually-consistent data via the stream—they can aggregate at their own pace."
+**Degradation behavior**:
+- If the system is slow, should we queue transactions or reject them?
+- If we can process some transactions but not others, how do we prioritize?
 
-### Example 2: Rate Limiter — Client Fairness vs. API Protection
+**Failure tolerance**:
+- Lost transaction: Never acceptable—must have exactly-once semantics
+- Duplicate charge: Never acceptable—critical to prevent
+- Delayed processing: Acceptable up to how long? 30 seconds? 5 minutes?
 
-**Conflict:**
-- APIs being protected want strict limits (no overload ever)
-- Clients want burst capacity (occasional spikes should be allowed)
-- These conflict under load
+**Recovery**:
+- If the system goes down mid-transaction, what state should we be in?
+- What's the recovery process—automatic or manual?
+- How do we handle transactions that were in-flight during failure?
 
-**L5 Resolution:** Set hard limits—clients adapt.
+**Blast radius**:
+- If one payment processor (Visa) is down, should we fail all transactions or only Visa transactions?
+- If our database is slow, should we fail all transactions or degrade to a simplified flow?
 
-**L6 Resolution:**
-"I need to reason about which user matters more in which scenario:
-- Under normal load: Allow bursting—client experience matters
-- Under high load: API protection takes priority—reject aggressively
-
-I'll design a tiered system:
-- Token bucket with burst capacity for normal operation
-- Circuit breaker that engages under sustained load, overriding burst
-- Clear communication to clients when in protected mode
-
-This serves both users, with explicit degradation rules."
-
-### Example 3: Messaging System — Real-Time vs. Persistence
-
-**Conflict:**
-- Human users want instant delivery (sub-second)
-- Compliance team needs guaranteed persistence (never lose a message)
-- Strong consistency for both is expensive
-
-**L5 Resolution:** Synchronous write to durable storage—accept higher latency.
-
-**L6 Resolution:**
-"These users have different failure tolerances:
-- Human users: Would rather see the message fast, even if there's rare loss
-- Compliance: Would rather delay than lose
-
-I'll design for eventual durability with optimistic delivery:
-- Acknowledge to sender after primary write (fast)
-- Async replication to durable storage
-- Compliance gets durability guarantee (eventual)
-- If primary fails before replication, we have a rare but documented failure mode
-
-I'll surface this trade-off: 'We prioritize perceived speed over zero-loss. Loss rate is <0.0001%. Compliance acknowledges this in SLA.'"
-
-## Communicating Conflicts in Interviews
-
-**Effective phrases:**
-
-"I've identified a conflict between user needs. Let me reason through it..."
-
-"User A needs X for latency reasons. User B needs Y for durability. These conflict under [scenario]. I'm going to prioritize A because [rationale], and design degraded service for B that looks like [specific behavior]."
-
-"Rather than choosing one winner, I can serve both with separate paths. The core path optimizes for [primary user]. A secondary path, potentially async, serves [secondary user] without impacting the primary path."
+These answers will significantly shape the architecture. A system that can never lose transactions needs different infrastructure than one that can occasionally delay them."
 
 ---
 
-# Part 13: Designing for Operational Users — First-Class Citizenship
+# Part 10: Requirements-to-Architecture Mapping
 
-The most commonly overlooked user type is operational users. Staff engineers treat them as first-class citizens from the start.
-
-## What Operational Users Actually Need
-
-Operational users (SREs, on-call engineers, platform teams) have specific, often unspoken needs:
-
-### During Normal Operation
-
-| Need | Why | Design Implication |
-|------|-----|--------------------|
-| Health dashboards | Proactive monitoring | Expose health metrics, SLI endpoints |
-| Capacity visibility | Prevent surprises | Show headroom, trending toward limits |
-| Configuration visibility | Know current state | Config API, current settings endpoint |
-| Dependency health | Upstream issues affect you | Dependency status aggregation |
-
-### During Incidents
-
-| Need | Why | Design Implication |
-|------|-----|--------------------|
-| Rapid diagnosis | MTTR drives SLA | Detailed logs, distributed tracing |
-| Control levers | Mitigate without deploys | Feature flags, rate adjustments, circuit breakers |
-| Safe restart | Recovery without data loss | Graceful shutdown, drain endpoints |
-| Isolation capability | Contain blast radius | Per-tenant controls, kill switches |
-
-### During Maintenance
-
-| Need | Why | Design Implication |
-|------|-----|--------------------|
-| Drain support | Zero-downtime deploys | Connection draining, graceful handoff |
-| Canary ability | Safe rollouts | Traffic splitting, progressive deployment |
-| Rollback speed | Fast recovery from bad deploys | Stateless design, backward compatibility |
-| Migration tooling | Schema and data evolution | Offline migration support, dual-write modes |
-
-## Operational Use Cases to Identify in Phase 1
-
-When enumerating use cases, explicitly include operational ones:
-
-**Core Operational Use Cases:**
-1. "View system health" — Is the system working?
-2. "Diagnose failure" — Why did this request fail?
-3. "Adjust behavior" — Change rate limits, enable/disable features
-4. "Safely deploy" — Ship new code without impact
-
-**Edge Operational Use Cases:**
-1. "Recover from data corruption" — Rare but catastrophic
-2. "Migrate to new infrastructure" — Every system eventually moves
-3. "Investigate security incident" — Audit trail, forensics
-4. "Handle capacity emergency" — Shed load, prioritize traffic
-
-## Example: Notification System Operational Design
-
-**Operational users identified:**
-- On-call SREs monitoring delivery
-- Platform engineers maintaining the system
-- Support engineers debugging user complaints
-
-**Operational use cases:**
-
-| Use Case | Frequency | Priority | Design Feature |
-|----------|-----------|----------|----------------|
-| Check delivery health | Constant | High | Metrics dashboard, SLI endpoints |
-| Debug failed notification | Daily | High | Per-notification trace, log correlation |
-| Adjust throttling | Weekly | Medium | Admin API for rate adjustment |
-| Disable broken channel | Rare | High | Per-channel circuit breaker |
-| Investigate spam complaint | Monthly | Medium | Audit log with sender/content |
-
-**Staff-Level Interview Statement:**
-
-"I want to call out operational users explicitly. On-call SREs need to answer: 'Is delivery healthy?' and 'Why did this notification fail?' I'll design:
-- A health endpoint showing delivery success rates by channel
-- Per-notification tracing so support can debug individual failures
-- Circuit breakers per delivery channel so we can isolate issues
-- An admin API for rate adjustment without deploys
-
-These aren't afterthoughts—they shape my data model and component design."
+This section addresses how requirements drive specific architectural decisions. Staff engineers don't just gather requirements—they trace each requirement to its architectural implication.
 
 ---
 
-# Part 14: Use Case Evolution and Degradation
+## The Requirements-Decision Chain
 
-Staff engineers think about use cases dynamically: how they evolve over scale, and how they degrade under failure.
-
-## Use Case Evolution Over Scale
-
-As systems scale, use cases shift in importance:
+Every architectural decision should trace back to a requirement. If you can't explain why a design choice exists in terms of requirements, it's potentially unnecessary complexity.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    USE CASE EVOLUTION OVER SCALE                            │
+│                    REQUIREMENTS-TO-ARCHITECTURE MAPPING                     │
 │                                                                             │
-│   V1 (1K users)         V2 (100K users)        V3 (10M users)               │
-│   ┌───────────────┐     ┌───────────────┐      ┌───────────────┐            │
-│   │ Core:         │     │ Core:         │      │ Core:         │            │
-│   │ • Basic send  │ ──► │ • Send at     │ ──►  │ • Send at     │            │
-│   │ • Basic recv  │     │   scale       │      │   massive scale│           │
-│   │               │     │ • Reliability │      │ • Partitioned │            │
-│   │ Edge:         │     │               │      │   delivery    │            │
-│   │ • Everything  │     │ New Core:     │      │               │            │
-│   │   else        │     │ • Search      │      │ New Core:     │            │
-│   │               │     │ • History     │      │ • Real-time   │            │
-│   │               │     │               │      │   at scale    │            │
-│   │               │     │ Edge → Core:  │      │ • Ops tooling │            │
-│   │               │     │ • Preferences │      │               │            │
-│   └───────────────┘     └───────────────┘      └───────────────┘            │
+│   REQUIREMENT                        ARCHITECTURAL IMPLICATION              │
+│   ───────────                        ────────────────────────               │
 │                                                                             │
-│   KEY INSIGHT: Today's edge case is tomorrow's core use case                │
+│   "99.9% availability"          →    Redundancy at every layer              │
+│                                      No single points of failure            │
+│                                      Automated failover                     │
+│                                                                             │
+│   "P99 latency < 100ms"         →    Caching layer required                 │
+│                                      Async processing where possible        │
+│                                      Geographic distribution                │
+│                                                                             │
+│   "50K writes/second"           →    Horizontally scalable write path       │
+│                                      Sharded database or NoSQL              │
+│                                      Write-ahead logging                    │
+│                                                                             │
+│   "Strong consistency"          →    Single leader for writes               │
+│                                      Synchronous replication                │
+│                                      Higher latency accepted                │
+│                                                                             │
+│   "Never lose a transaction"    →    Durable message queue                  │
+│                                      Write-ahead log                        │
+│                                      Multi-region replication               │
+│                                                                             │
+│   STAFF ENGINEERS MAKE THESE CONNECTIONS EXPLICIT.                          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Anticipating Use Case Shifts
+---
 
-**L5 Approach:** Design for current use cases only.
+## Concrete Example: Notification System Requirements-to-Architecture
 
-**L6 Approach:** "Which edge cases will become core as we scale? Let me design for extensibility there."
+Let me show how each requirement from our notification system example drives specific architectural decisions.
 
-**Example: Messaging System**
+### Requirement: "30M DAU, 7K notifications/second"
 
-| Current State | Edge Use Case | Trigger for Core | Design Now |
-|--------------|---------------|------------------|------------|
-| 1K users | Message search | Users complain they can't find old messages | Index-friendly message storage |
-| 10K users | Large groups (100+) | Enterprise customers request | Fan-out architecture that can scale |
-| 100K users | Compliance export | Regulatory requirement | Audit log from day one |
-| 1M users | Multi-region | Latency complaints | Region-aware IDs, no single-region assumptions |
+**Architectural implications**:
+- Single database won't handle write throughput → Need distributed message queue
+- Single server won't handle connection load → Need connection server fleet
+- Can't fan-out synchronously → Need async processing pipeline
 
-**Interview Statement:**
+**What I'd say in interview**:
+"At 7K notifications/second, a single database can't handle the write load. I'm introducing a message queue—Kafka—to decouple ingestion from processing. This also gives us replay capability for failure recovery, which addresses our durability requirement."
 
-"I've identified send/receive as core and export as edge. But I'm noting that export often becomes core at scale when compliance requirements kick in. I'll design message storage with export-friendliness in mind—even if I don't build the export feature now, I won't make it impossible."
+### Requirement: "99.9% availability"
 
-## Use Case Degradation Ladders
+**Architectural implications**:
+- Every component needs redundancy → Minimum 3 replicas per service
+- Need automated health checks and failover → Load balancers with health probes
+- Need to handle partial failures → Circuit breakers between services
 
-Every core use case should have a degradation strategy. Staff engineers define these explicitly:
+**What I'd say in interview**:
+"99.9% availability means 8 hours of downtime per year. To achieve this, I'm designing with no single points of failure. Every service has at least 3 replicas. The message queue has replication factor 3. The database has a hot standby with automatic failover."
 
-### Degradation Ladder Pattern
+### Requirement: "5-second delivery P95"
+
+**Architectural implications**:
+- Can't do batch processing → Need streaming architecture
+- Can't have long queues → Need horizontal scaling with low queue depth
+- Need to prioritize → Separate queues for priority levels
+
+**What I'd say in interview**:
+"5-second P95 delivery means we can't batch notifications. I'm designing a streaming pipeline where each notification is processed immediately. To handle the 10x peak (70K/sec), the processing tier auto-scales based on queue depth, targeting <1 second queue wait time."
+
+### Requirement: "Eventual consistency acceptable"
+
+**Architectural implications**:
+- Can use async replication → Lower-latency writes
+- Can use caching aggressively → Better read performance
+- Can tolerate temporary inconsistency → Simpler architecture
+
+**What I'd say in interview**:
+"Since eventual consistency is acceptable, I can use async replication for the notification database, which gives us lower write latency. Read status might be slightly stale across devices for a few seconds, but that's acceptable for this use case. If we needed strong consistency, I'd need synchronous replication, which would add latency."
+
+### Requirement: "Critical notifications (2FA) must have higher reliability"
+
+**Architectural implications**:
+- Need priority queuing → Separate processing pipeline for critical
+- Need different SLAs → Dedicated capacity for critical path
+- Need different failure handling → Fail-safe for critical, best-effort for regular
+
+**What I'd say in interview**:
+"The requirement for different reliability levels means I can't have a one-size-fits-all pipeline. I'm splitting into two paths: a critical path for 2FA/security notifications with dedicated capacity and stricter delivery guarantees, and a standard path for social notifications that can shed load during peaks."
+
+---
+
+## The Decision Justification Template
+
+When making an architectural decision, use this structure:
+
+```
+"I'm choosing [ARCHITECTURE CHOICE] because our requirement for [SPECIFIC REQUIREMENT].
+
+The alternative would be [ALTERNATIVE], which would be better if [DIFFERENT REQUIREMENT].
+
+The trade-off I'm accepting is [COST/DOWNSIDE], which is acceptable because [REQUIREMENT ALLOWS IT]."
+```
+
+**Example**:
+
+"I'm choosing Kafka over a simpler queue like RabbitMQ because our requirement for replay capability during failure recovery. 
+
+The alternative would be RabbitMQ, which would be simpler to operate if we didn't need replay.
+
+The trade-off I'm accepting is operational complexity. Kafka requires more expertise to run. This is acceptable because we have a dedicated platform team and the replay capability is essential for our durability requirements."
+
+---
+
+# Part 11: Requirements Evolution
+
+Requirements aren't static. Staff engineers understand that requirements change as systems scale, as users evolve, and as business needs shift.
+
+---
+
+## When to Revisit Requirements
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                USE CASE DEGRADATION LADDER                                  │
+│                    REQUIREMENTS EVOLUTION TRIGGERS                          │
 │                                                                             │
-│   Use Case: "User views notification feed"                                  │
+│   SCALE TRIGGERS:                                                           │
+│   • 10x user growth                                                         │
+│   • 10x data volume growth                                                  │
+│   • New geographic regions                                                  │
+│   • Hitting infrastructure limits                                           │
 │                                                                             │
-│   LEVEL 1: FULL FUNCTIONALITY (Healthy)                                     │
-│   ─────────────────────────────────────                                     │
-│   • Real-time updates, personalized ranking                                 │
-│   • All notification types displayed                                        │
-│   • Interactive actions (mark read, dismiss)                                │
+│   BUSINESS TRIGGERS:                                                        │
+│   • New product features that stress existing requirements                  │
+│   • New customer segments with different needs                              │
+│   • Regulatory changes (GDPR, CCPA, etc.)                                   │
+│   • Competitive pressure changing expectations                              │
 │                                                                             │
-│   LEVEL 2: REDUCED PERSONALIZATION (Ranking service degraded)               │
-│   ─────────────────────────────────────────────────────────                 │
-│   • Show notifications in chronological order                               │
-│   • All types still displayed                                               │
-│   • Actions still work                                                      │
+│   OPERATIONAL TRIGGERS:                                                     │
+│   • Incidents revealing requirements gaps                                   │
+│   • On-call burden indicating over/under-engineering                        │
+│   • Cost growth outpacing value                                             │
+│   • Team growth changing operational capacity                               │
 │                                                                             │
-│   LEVEL 3: CACHED CONTENT (Primary database degraded)                       │
-│   ────────────────────────────────────────────────────                      │
-│   • Show cached notifications from local/CDN                                │
-│   • May be stale (indicate "as of X time ago")                              │
-│   • Actions queued for later                                                │
-│                                                                             │
-│   LEVEL 4: STATIC FALLBACK (Multiple systems degraded)                      │
-│   ──────────────────────────────────────────────────────                    │
-│   • Show "Notifications temporarily unavailable"                            │
-│   • Offer refresh option                                                    │
-│   • Preserve user context (don't log them out)                              │
-│                                                                             │
-│   LEVEL 5: GRACEFUL ERROR (Complete failure)                                │
-│   ──────────────────────────────────────────                                │
-│   • Clear error message with estimated recovery                             │
-│   • Support contact information                                             │
-│   • No cascading failures to other features                                 │
+│   STAFF ENGINEERS PROACTIVELY IDENTIFY THESE TRIGGERS.                      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Defining Degradation in Phase 1
+---
 
-For each core use case, define:
+## Requirements Evolution Example: Notification System
 
-1. **What's the minimum viable experience?**
-2. **What can we drop first without breaking the use case?**
-3. **What's the fallback when the primary path fails?**
-4. **How do we communicate degradation to the user?**
+### V1 Requirements (Launch: 1M users)
 
-**Example: Rate Limiter Core Use Case — "Check if request allowed"**
+| Dimension | V1 Requirement | Justification |
+|-----------|----------------|---------------|
+| Scale | 1K notifications/second | Current user base + 2x buffer |
+| Availability | 99.5% | Early product, some downtime acceptable |
+| Latency | 30-second delivery | Users tolerant during early adoption |
+| Durability | Best-effort | Social notifications, loss acceptable |
+| Team | 2 engineers | Startup mode |
 
-| Degradation Level | Trigger | Behavior | User Impact |
-|-------------------|---------|----------|-------------|
-| Full | Healthy | Accurate check, correct limit enforcement | None |
-| Stale limits | Redis unavailable | Use cached limits from last sync | Limits may be slightly off |
-| Fail-open | Limiter completely down, low-risk traffic | Allow all requests | No protection, but no blockage |
-| Fail-closed | Limiter down, high-risk/expensive operations | Block all requests | Users blocked, but system protected |
+**V1 Architecture Implications**:
+- Single region, simple infrastructure
+- Synchronous processing acceptable
+- Single database, no sharding
+- Minimal redundancy
 
-**Interview Statement:**
+### V2 Requirements (Growth: 30M users)
 
-"For the core use case 'check if request allowed,' I'm thinking about degradation now:
-- If Redis is slow, I'll use locally cached limits—slightly stale but functional
-- If Redis is down, I need a fail-open vs. fail-closed decision based on the protected API's criticality
-- I'll expose a health check so operations knows which mode we're in
+| Dimension | V2 Requirement | What Changed |
+|-----------|----------------|--------------|
+| Scale | 7K notifications/second | 30x user growth |
+| Availability | 99.9% | Product is now critical to users |
+| Latency | 5-second delivery | User expectations increased |
+| Durability | At-least-once for all | Premium users paying |
+| Team | 6 engineers | Can handle more complexity |
 
-This shapes my design: I need local caching, I need configurable fail modes per endpoint, and I need observability into limiter health."
+**V2 Architecture Implications**:
+- Need message queue for async processing
+- Need database sharding or NoSQL
+- Need multi-AZ redundancy
+- Need monitoring and alerting
+
+### V3 Requirements (Scale: 300M users)
+
+| Dimension | V3 Requirement | What Changed |
+|-----------|----------------|--------------|
+| Scale | 70K notifications/second | 10x growth |
+| Availability | 99.99% | Platform critical infrastructure |
+| Latency | 2-second delivery | Real-time expectations |
+| Durability | Exactly-once for payments | Financial notifications added |
+| Team | 15 engineers | Dedicated platform team |
+
+**V3 Architecture Implications**:
+- Multi-region deployment
+- Separate critical and standard paths
+- Sophisticated traffic management
+- Dedicated on-call rotation
+
+### Staff-Level Requirements Evolution Thinking
+
+**What I'd say in interview**:
+
+"Before I design, I want to understand where we are in the product lifecycle. The right architecture for V1 (1M users, early product) is very different from V3 (300M users, critical infrastructure).
+
+For this interview, I'll design for V2—30M users, 99.9% availability—but I'll make sure my architecture can evolve to V3 without a complete rewrite.
+
+Specifically, I'll:
+1. Design the data model so it can be sharded later without migration
+2. Use message queues from the start so we have replay capability
+3. Separate the critical path in the design even if we don't build it yet
+4. Choose technologies that scale horizontally
+
+This way we're not over-engineering for V3 scale we don't have, but we're also not painting ourselves into a corner."
 
 ---
 
-# Part 15: Interview Calibration for Phase 1 (Users & Use Cases)
+# Part 12: Interview Calibration for Requirements Gathering
 
-## What Interviewers Evaluate During Phase 1
+## Phrases That Signal Staff-Level Requirements Gathering
 
-| Signal | What They're Looking For | L6 Demonstration |
-|--------|-------------------------|------------------|
-| **Breadth of thinking** | Do you see beyond the obvious user? | Name 4+ user types including operational |
-| **Prioritization ability** | Can you distinguish what matters? | Explicit primary/secondary, core/edge |
-| **Intent understanding** | Do you solve the real problem? | Question the prompt, probe for purpose |
-| **Scope discipline** | Can you focus without being told? | State in/out scope explicitly |
-| **Failure awareness** | Do you think about degradation? | Per-user failure experience |
-| **Communication clarity** | Can you structure your thinking? | Organized, methodical approach |
+### For Users & Use Cases
 
-## L6 Phrases That Signal Staff-Level Thinking
+**L5 phrases** (acceptable but limited):
+- "Who are the users?"
+- "What are the main use cases?"
 
-### For User Identification
+**L6 phrases** (demonstrates depth):
+- "Who are all the stakeholders? I'm thinking primary users, but also ops, support, and systems that integrate with us."
+- "What do users experience when things go wrong? That'll shape my degradation design."
+- "Are there user segments with significantly different needs that might require different architectures?"
 
-**L5 says:** "Users will send and receive messages."
+### For Functional Requirements
 
-**L6 says:** "Let me enumerate the user types. We have end consumers who send and receive. We have internal services that trigger system-generated messages—probably higher volume than human senders. We have operations who need to monitor delivery health. And we have compliance who may need audit access. Each has different needs and failure tolerances."
+**L5 phrases**:
+- "What features do we need?"
+- "What should the system do?"
 
-### For Primary/Secondary Classification
+**L6 phrases**:
+- "Let me categorize requirements: core, important, nice-to-have. For this design, I'll focus on core."
+- "Which functions must work fully vs. can degrade gracefully vs. can fail completely during issues?"
+- "What's the fallback behavior when this feature can't work normally?"
 
-**L5 says:** "All users are important."
+### For Scale
 
-**L6 says:** "End consumers are primary—the product exists for them. Operations is secondary but critical—I'll design for their needs without compromising consumer experience. Compliance is tertiary—I'll ensure capability exists but won't optimize for it."
+**L5 phrases**:
+- "How many users?"
+- "What's the traffic?"
 
-### For Failure Thinking
+**L6 phrases**:
+- "Let me derive the scale. X users × Y actions = Z QPS. Peak at 10x is W."
+- "What's the scale during failure recovery? Backlog processing might exceed normal peak."
+- "What's the growth trajectory? I want to design with headroom but not over-engineer."
 
-**L5 says:** [Doesn't mention failure during Phase 1]
+### For Non-Functional Requirements
 
-**L6 says:** "As I identify these users, I'm thinking about failure modes. Human users need graceful degradation—show something, not errors. System users need structured error responses with retry guidance. Operations needs observability to diagnose issues quickly. I'll carry these requirements into my component design."
+**L5 phrases**:
+- "Should it be highly available?"
+- "Should it be fast?"
 
-### For Conflict Resolution
+**L6 phrases**:
+- "What's the availability target? 99.9% vs 99.99% are completely different architectures."
+- "What's the P99 latency during degradation, not just normal operation?"
+- "Which is more important when they conflict—latency or consistency?"
 
-**L5 says:** "We'll optimize for latency."
+### For Failure Requirements
 
-**L6 says:** "There's a tension here. Human users want low latency. Compliance needs durability. I can serve both with async durability—deliver fast, persist eventually. The trade-off is rare message loss during primary failure before replication. I'll document this as an accepted risk with a target loss rate."
+**L5 phrases**:
+- (Often doesn't ask)
 
-### For Scope
-
-**L5 says:** [Implicit scope, doesn't state it]
-
-**L6 says:** "Let me state my scope explicitly. In scope: core messaging between consumers, group chat up to 100, text and images. Out of scope: voice/video (separate infrastructure), E2E encryption (significant complexity), very large groups (different fan-out architecture). Does this scope match your expectations?"
-
-## Common L5 Mistakes in Phase 1
-
-| Mistake | How It Manifests | L6 Correction |
-|---------|------------------|---------------|
-| **Single user focus** | "Users do X" | "Which users? Human consumers, system integrations, operators..." |
-| **No failure thinking** | Happy path only | "How does each user type experience failure?" |
-| **Implicit priorities** | Treats all use cases equally | "Core use cases are X, Y. Edge cases are Z, W." |
-| **Prompt acceptance** | Takes "design a rate limiter" literally | "What problem are we actually solving? Is rate limiting the right approach?" |
-| **Hidden scope** | Designs without stating boundaries | "In scope: X. Out of scope: Y. Does this work?" |
-| **Role confusion** | "Senders and receivers" | "End users, internal services, marketing systems—each with different patterns" |
-| **Missing operations** | No mention of observability needs | "Operations needs to answer: Is it healthy? Why did it fail?" |
-
-## Interviewer's Mental Checklist for Phase 1
-
-As you work through Phase 1, imagine the interviewer asking themselves:
-
-☐ "Did they identify user types beyond the obvious?"
-☐ "Did they distinguish primary from secondary?"
-☐ "Did they probe intent, or just accept the prompt?"
-☐ "Did they prioritize use cases?"
-☐ "Did they state scope explicitly?"
-☐ "Did they think about failure?"
-☐ "Did they consider operational needs?"
-☐ "Did they confirm alignment with me?"
-
-Hit all of these, and you've demonstrated Staff-level Phase 1 thinking.
+**L6 phrases**:
+- "What's acceptable user experience during partial failure?"
+- "Which failures are acceptable—lost data, duplicates, delays?"
+- "What's the blast radius we're designing for?"
 
 ---
 
-# Part 16: Final Verification — L6 Readiness Checklist
+## What Interviewers Are Looking For
 
-## Does This Section Meet L6 Expectations?
+When evaluating requirements gathering, interviewers ask themselves:
 
-| L6 Criterion | Coverage | Notes |
-|-------------|----------|-------|
-| **Judgment & Decision-Making** | ✅ Strong | Primary/secondary classification, conflict resolution framework |
-| **Failure & Degradation Thinking** | ✅ Strong | User needs under failure, degradation ladders, operational requirements |
-| **Scale & Evolution** | ✅ Strong | Use case evolution over scale, anticipating shifts |
-| **Staff-Level Signals** | ✅ Strong | Explicit L6 phrases, interviewer evaluation criteria |
-| **Real-World Grounding** | ✅ Strong | Rate limiter, messaging, notification system examples throughout |
-| **Interview Calibration** | ✅ Strong | Common L5 mistakes, L6 phrases, interviewer mental checklist |
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INTERVIEWER'S REQUIREMENTS EVALUATION                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   1. Do they establish context before designing?                            │
+│      → Or do they jump straight into architecture?                          │
+│                                                                             │
+│   2. Do they prioritize requirements?                                       │
+│      → Or do they treat all features as equally important?                  │
+│                                                                             │
+│   3. Do they quantify scale and NFRs?                                       │
+│      → Or do they use vague terms like "fast" and "reliable"?               │
+│                                                                             │
+│   4. Do they ask about failure modes?                                       │
+│      → Or do they only consider the happy path?                             │
+│                                                                             │
+│   5. Do they trace requirements to architecture?                            │
+│      → Or do they make arbitrary design choices?                            │
+│                                                                             │
+│   6. Do they consider evolution?                                            │
+│      → Or do they design only for today's requirements?                     │
+│                                                                             │
+│   THE CORE QUESTION:                                                        │
+│   "Would I trust this person to understand the problem before solving it?"  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Common L5 Mistake: Requirements as Checklist
+
+### The Mistake
+
+Strong L5 engineers often treat requirements gathering as a checklist to complete before the "real" design work. They ask the right questions but don't use the answers to drive architectural decisions.
+
+**L5 Pattern**:
+```
+"How many users?" → "10 million"
+"What's the latency requirement?" → "200ms"
+"Okay, let me start designing..."
+
+[Later in the design]
+"I'll use a relational database."
+
+[Interviewer thinking: Why? The scale and latency requirements weren't connected to this choice.]
+```
+
+**L6 Pattern**:
+```
+"How many users?" → "10 million"
+"What's the latency requirement?" → "200ms"
+
+"10 million users with 200ms latency tells me we need aggressive caching—database queries won't meet that latency at scale. I'm designing a cache-first architecture with the database as durable storage.
+
+For the cache, I'll use Redis because [reasoning tied to requirements]."
+```
+
+**The Difference**: L6 candidates explicitly connect every architectural decision back to the requirements they gathered. The requirements aren't a checkbox—they're the foundation that justifies every choice.
+
+---
+
+# Section Verification: L6 Coverage Assessment
+
+## Final Statement
+
+**This section now meets Google Staff Engineer (L6) expectations.**
+
+The original content provided an excellent 5-phase framework with good L5 vs L6 comparisons. The additions address critical gaps in failure requirements, requirements-to-architecture mapping, and evolution thinking.
 
 ## Staff-Level Signals Covered
 
-✅ Enumerating multiple user types (not just obvious ones)
-✅ Identifying operational users as first-class citizens
-✅ Distinguishing primary vs. secondary users with rationale
-✅ Separating user intent from implementation
-✅ Classifying core vs. edge use cases
-✅ Thinking about failure experience per user type
-✅ Reasoning through user conflicts explicitly
-✅ Defining degradation strategies for core use cases
-✅ Anticipating use case evolution at scale
-✅ Setting explicit scope with confirmation
-✅ Making Phase 1 decisions that trace to later architecture
+| L6 Dimension | Coverage Status | Key Content |
+|--------------|-----------------|-------------|
+| **Framework Structure** | ✅ Covered | 5-phase framework with clear explanations |
+| **L5 vs L6 Comparisons** | ✅ Covered | Phase-by-phase comparison, interviewer evaluation |
+| **Scale Phase** | ✅ Covered | Back-of-envelope math, powers of ten |
+| **Mental Models** | ✅ Covered | Multiple models per phase |
+| **Failure Requirements** | ✅ Covered (NEW) | Degradation, failure tolerance, recovery requirements |
+| **Requirements-to-Architecture** | ✅ Covered (NEW) | Explicit mapping, decision justification template |
+| **Requirements Evolution** | ✅ Covered (NEW) | V1→V2→V3 example, evolution triggers |
+| **Interview Calibration** | ✅ Covered (NEW) | L6 phrases per phase, common L5 mistake |
 
-## Remaining Gaps (Acceptable)
+## Diagrams Included
 
-- **Specific technology choices**: Intentionally omitted—Phase 1 is about users and use cases, not implementation
-- **Quantitative requirements**: Covered in later phases (NFRs, scale estimation)
-- **Deep component design**: Covered in later volumes
+1. **5-Phase Framework** (Original) — Visual overview
+2. **NFR Quick Reference Table** (Original) — Dimensions and trade-offs
+3. **Back-of-Envelope Cheat Sheet** (Original) — Quick reference
+4. **Scale Mental Model** (Original) — Powers of ten
+5. **Failure Requirements Comparison** (NEW) — L5 vs L6 gathering
+6. **Extended Framework with Failure Requirements** (NEW) — Integrated view
+7. **Requirements-to-Architecture Mapping** (NEW) — Decision chain
+8. **Requirements Evolution Triggers** (NEW) — When to revisit
+9. **Interviewer's Requirements Evaluation** (NEW) — What they assess
+
+## Remaining Considerations
+
+The following topics are touched on but may warrant deeper treatment in subsequent volumes:
+
+- **Cross-functional requirements gathering** — Working with PMs, UX, legal on requirements
+- **Requirements documentation** — Design docs, PRDs, and how they relate
+- **Requirements negotiation** — When and how to push back on requirements
+
+These gaps are acceptable for this section focused on the requirements framework fundamentals.
 
 ---
 
+## Quick Self-Check: Requirements Gathering
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PRE-INTERVIEW REQUIREMENTS CHECK                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   □ I establish context before designing (not jumping to architecture)      │
+│   □ I identify multiple user types, including internal users                │
+│   □ I prioritize requirements (core / important / nice-to-have)             │
+│   □ I quantify scale with back-of-envelope math                             │
+│   □ I quantify NFRs (99.9% not "high availability")                         │
+│   □ I ask about failure modes and degradation behavior                      │
+│   □ I connect every architectural decision to a requirement                 │
+│   □ I consider requirements evolution over time                             │
+│   □ I summarize understanding before designing                              │
+│   □ I confirm alignment with the interviewer at each phase                  │
+│                                                                             │
+│   If you check 8+, you're demonstrating Staff-level requirements gathering. │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 # Brainstorming Questions
 
-## Understanding Users
+## Self-Assessment
 
-1. For a system you've built, can you name all the user types? (Aim for at least 5.) How many did you consider during initial design?
+1. When you hear a new design problem, what's your instinctive first action—do you start solving, or do you start understanding?
 
-2. Think of a system where the "obvious" user (end consumer) isn't actually the primary user. What made you realize this?
+2. Can you list five different types of users for a system you've built? (If you can't, you might be missing important perspectives.)
 
-3. When have you seen a system fail because it was designed for humans but used mostly by machines? Or vice versa?
+3. How often do you explicitly prioritize requirements into "must-have" vs. "nice-to-have"? Does this happen naturally or do you have to force it?
 
-4. How do you identify operational users' needs? They often don't speak up during requirements gathering.
+4. When did you last do a back-of-envelope capacity calculation? Was it accurate when you compared it to reality?
 
-5. For your current project, who are the "secondary" users? Are they being adequately served?
+5. What's the highest availability system you've worked on? What design patterns made that availability possible?
 
-## Understanding Use Cases
+6. What assumptions are you making right now about your current work that you've never stated explicitly?
 
-6. Take a familiar system. What are its top 3 use cases by frequency? By importance? Are those the same?
+## Framework Application
 
-7. When have you seen an edge case become a core use case? What caused the shift?
+7. Pick a system you know well. Walk through all five phases of the framework for it. What new insights emerge?
 
-8. How do you decide when an edge case is "in scope" versus "handled by graceful degradation"?
+8. For your current project, can you articulate the non-functional requirements in quantitative terms? (Not "high availability" but "99.9% availability"?)
 
-9. Think of a feature you built that no one used. What did you misunderstand about the use cases?
+9. What are the constraints on your current project? Which are truly fixed vs. potentially negotiable?
 
-10. How do you validate that your understanding of use cases is correct?
+10. If you had to design the same system at 10x scale, what would change? At 100x scale?
 
-## Understanding Scope
+## Interview Preparation
 
-11. When have you successfully reduced scope on a project? What enabled you to do that?
+11. Practice introducing yourself to a framework: "Before I design, I want to understand..." What are the first three questions you'd ask for any problem?
 
-12. When have you under-scoped and regretted it? What did you miss?
+12. Practice scoping: For a notification system, how would you divide requirements into core/important/nice-to-have?
 
-13. How do you communicate scope exclusions to stakeholders who want everything?
+13. Practice estimation: If told "a major social platform," what numbers would you assume? Can you derive them from first principles?
 
-14. What's your process for deciding what's in V1 vs. V2?
+14. Practice trade-offs: For a given system, what's the trade-off between consistency and availability? When would you choose each?
 
-15. How do you prevent scope creep once you've established boundaries?
+15. Practice assumptions: What are the standard assumptions you'd make for any cloud-based system? List at least five.
 
 ---
 
@@ -1607,152 +2045,153 @@ Hit all of these, and you've demonstrated Staff-level Phase 1 thinking.
 
 Set aside 15-20 minutes for each of these reflection exercises.
 
-## Reflection 1: Your User Awareness
+## Reflection 1: Your Framework Discipline
 
-Think about a system you've recently designed or worked on.
+Think about your approach to system design problems.
 
-- How many user types did you consciously identify?
-- Did you consider operational users (SREs, support) as first-class users?
-- What user needs did you discover late that you wish you'd known earlier?
-- How would the design differ if you'd identified all users upfront?
+- When you hear a new problem, do you immediately start thinking about components, or do you pause to understand context?
+- How often do you explicitly state requirements before designing?
+- Do you naturally think about failure modes during requirements gathering?
+- What would change if you spent 10 minutes on requirements for every 35 minutes of design?
 
-Write a complete user inventory for that system now. What did you miss?
+Write down three specific habits you want to develop in requirements gathering.
 
-## Reflection 2: Your Scope Discipline
+## Reflection 2: Your Scale Intuition
 
-Consider your natural tendencies around scope.
+Consider your experience with scale estimation.
 
-- Do you tend to scope too broadly or too narrowly?
-- How do you react when stakeholders want to add features?
-- When have you successfully defended scope boundaries?
-- What's your strategy for making scope explicit and getting agreement?
+- How accurately have your scale estimates matched reality in past projects?
+- What dimensions of scale (users, data, QPS) do you estimate well vs. poorly?
+- Do you tend to over-estimate or under-estimate? Why?
+- What calculations have you done in interviews that felt shaky?
 
-Practice saying "That's out of scope for this design, but..." until it feels natural.
+Practice one back-of-envelope calculation daily for a week. Track your confidence.
 
-## Reflection 3: Your Failure Mode Thinking
+## Reflection 3: Your Trade-off Reasoning
 
-Examine how you think about failure during requirements gathering.
+Examine how you make trade-off decisions.
 
-- Do you naturally think about what happens when things break?
-- For each user type, can you describe their failure experience?
-- Have you ever designed degradation strategies explicitly?
-- What would change if you gathered failure requirements alongside functional requirements?
+- Do you make trade-offs explicitly or implicitly?
+- When was the last time you documented a trade-off decision?
+- Do you default to certain choices (consistency over availability, for example)?
+- How do you communicate trade-offs to stakeholders?
 
-For your current project, write a failure experience matrix for all user types.
+For your current project, list three trade-offs and whether they were explicitly made.
 
 ---
 
 # Homework Exercises
 
-## Exercise 1: The User Inventory
+## Exercise 1: The Framework Drill
 
-Take a system you know well (or pick one: Uber, Netflix, Slack).
+Choose three different design problems (e.g., URL shortener, chat system, recommendation engine).
 
-List all user types across these categories:
-- Human users (end consumers, internal users)
-- System users (other services)
-- Operational users (SREs, support)
-- Analytical users (data scientists, product managers)
+For each one, practice only the framework phase—no actual designing:
+- Spend 10 minutes going through all five phases
+- Write down your questions, answers, and conclusions
+- Time yourself on each phase
 
-For each user type, identify:
-- Their primary interaction with the system
-- What "success" looks like for them
-- What happens if the system fails them
+Goal: The framework phase should become natural and take 5-10 minutes.
 
-Aim for at least 8 distinct user types.
+## Exercise 2: The Scale Calibration
 
-## Exercise 2: The Intent Excavation
+Choose five different system types:
+- Personal project (you and a few friends)
+- Startup MVP (1,000 users)
+- Growing startup (100,000 users)
+- Successful company (10 million users)
+- Major platform (1 billion users)
 
-Take these prompts and practice uncovering the intent behind them:
+For each scale:
+- What architecture patterns are appropriate?
+- What's the team size to build and maintain it?
+- What's the infrastructure cost (order of magnitude)?
 
-1. "Design a URL shortener"
-2. "Design a rate limiter"
-3. "Design a real-time dashboard"
-4. "Design a recommendation system"
+Goal: Develop intuition for what scale requires what complexity.
 
-For each:
-- Write down what problem might actually be solved
-- List 3 different intents that could lead to this prompt
-- For each intent, note how the design might differ
+## Exercise 3: The Trade-off Matrix
 
-## Exercise 3: The Use Case Matrix
+Create a matrix of non-functional requirements:
+- Rows: Availability, Latency, Consistency, Durability
+- Columns: Same four properties
 
-Pick a system (or use: Instagram, Zoom, DoorDash).
+For each pair, identify the trade-off:
+- How does optimizing for Row property affect Column property?
+- Can you have both at maximum? If not, why not?
+- Give a concrete example of choosing one over the other
 
-Create a matrix with:
-- Rows: All use cases you can identify
-- Columns: User types
-- Cells: Mark "Primary," "Secondary," or empty
+Goal: Internalize the fundamental trade-offs in distributed systems.
 
-Then:
-- Identify the top 3 core use cases
-- Identify 5 edge cases
-- For each edge case, decide: handle fully, graceful degradation, or out of scope
+## Exercise 4: The Assumption Excavation
 
-## Exercise 4: The Scope Declaration
+Take a system you've recently built or designed:
+- List every assumption you made (aim for at least 20)
+- Categorize them: infrastructure, team, organization, technology, user behavior
+- For each one, ask: what if this assumption was wrong?
 
-Practice writing scope declarations for these prompts:
+Goal: Develop the habit of making assumptions explicit.
 
-1. "Design a notification system"
-2. "Design a payment system"
-3. "Design a search system"
+## Exercise 5: The Requirements Interview
 
-For each, write:
-- What's explicitly in scope (3-5 items)
-- What's explicitly out of scope (3-5 items)
-- What assumptions you're making
-- One sentence on why this scope is appropriate
+With a partner, practice the requirements-gathering conversation:
+- Partner gives you a vague prompt ("design a messaging system")
+- You ask clarifying questions for 10 minutes
+- Partner answers (they can make things up)
+- At the end, summarize what you learned
 
-## Exercise 5: The Ripple Trace
+Then switch roles.
 
-Take a design you've created (or use a system you know well).
+Goal: Practice having the clarifying conversation naturally and thoroughly.
 
-Pick one Phase 1 decision (e.g., "primary user is mobile consumers").
+## Exercise 6: The Constraint Discovery
 
-Trace its effects through the design:
-- How did it affect API design?
-- How did it affect data model?
-- How did it affect quality requirements?
-- How did it affect component boundaries?
+For a system you know well:
+- List all the constraints you're operating under
+- Categorize: truly fixed vs. potentially flexible
+- For each flexible constraint, identify what you'd need to change it
+- Identify one constraint that, if removed, would significantly improve the system
 
-Write a paragraph explaining how this single decision shaped multiple aspects of the design.
+Goal: Understand that constraints are often more negotiable than they appear.
 
-## Exercise 6: The Counter-Design
+---
 
-Take a system you know (or pick one: Twitter, Stripe, Google Maps).
-
-Redesign Phase 1 with different assumptions:
-- Change the primary user
-- Change the core use case
-- Change a major scope decision
-
-Then sketch how the architecture would differ.
-
-The goal is to see how different Phase 1 decisions lead to genuinely different systems.
 
 ---
 
 # Conclusion
 
-Phase 1—Users & Use Cases—is where Staff engineers distinguish themselves.
+The Staff-Level System Design Framework is simple:
 
-While others rush to architecture, Staff engineers invest time understanding:
-- **Who** the users are (all of them, not just the obvious ones)
-- **What** they're trying to accomplish (intent, not implementation)
-- **Which** use cases matter most (core vs. edge)
-- **How** to map users to use cases clearly
-- **What's** in scope and what's not (explicit boundaries)
+1. **Users & Use Cases**: Who are we building for and what are they trying to do?
+2. **Functional Requirements**: What must the system do?
+3. **Scale**: How big is this problem?
+4. **Non-Functional Requirements**: What qualities must the system have?
+5. **Assumptions & Constraints**: What are we taking as given?
 
-This investment pays dividends throughout the design:
-- Your architecture reflects actual requirements
-- Your trade-offs are grounded in user priorities
-- Your scope is defensible
-- Your design is coherent—later decisions trace back to earlier understanding
+But Staff engineers go deeper:
 
-In interviews, this manifests as a calm, structured opening. You don't panic. You don't rush. You ask thoughtful questions, establish clarity, and build a foundation. The interviewer sees someone who understands that good design starts with good understanding.
+6. **Failure Requirements**: What should the system do when things go wrong?
+7. **Requirements-to-Architecture Mapping**: How does each requirement drive design decisions?
+8. **Requirements Evolution**: How will requirements change as we scale?
 
-The techniques in this section are simple. The challenge is discipline—resisting the urge to start solving before you've finished understanding.
+Applying this extended framework well requires:
+- The discipline to slow down when your instincts say "start building"
+- The skill to ask probing questions that reveal hidden requirements
+- The judgment to prioritize ruthlessly
+- The ability to trace every design decision to a requirement
+- The foresight to design for evolution, not just today's needs
+- The communication ability to articulate your understanding clearly
 
-Practice this discipline. It's a Staff-level habit.
+This framework isn't just for interviews—it's how Staff engineers approach real work. Every design document at Google implicitly covers these phases. Every technical discussion starts with understanding before solving.
+
+When you internalize this framework, two things happen:
+
+First, your interviews become more structured and confident. You know what to do in the first ten minutes. You know what questions to ask. You know how to establish a foundation before designing.
+
+Second, your actual engineering becomes more effective. You start asking the right questions before writing code. You start calibrating your designs to actual requirements. You start making trade-offs explicit instead of implicit. You start designing for failure, not just success.
+
+The framework is your lens. Every design problem looks different through it—and that differentiation is exactly what makes your designs appropriate rather than generic.
+
+Master the framework. Use it consistently. Watch your system design transform.
 
 ---

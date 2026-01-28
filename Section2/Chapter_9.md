@@ -1,1653 +1,1882 @@
-# Chapter 9: Phase 3 — Scale: Capacity Planning and Growth at Staff Level
+# Chapter 8: Phase 2 — Functional Requirements: Staff-Level Precision
 
 ---
 
-# Quick Visual: The Scale Translation Process
+# Quick Visual: The Functional Requirements Sweet Spot
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FROM VAGUE TO CONCRETE: THE SCALE PIPELINE               │
+│                   FUNCTIONAL REQUIREMENTS SWEET SPOT                        │
 │                                                                             │
-│   "Design for a large               Staff engineers translate this:         │
-│    social network"                                                          │
-│         │                                                                   │
-│         ▼                                                                   │
-│   ┌─────────────────┐                                                       │
-│   │ 1. ANCHOR ON    │  "500M MAU, 200M DAU"                                 │
-│   │    USERS        │                                                       │
-│   └────────┬────────┘                                                       │
-│            ▼                                                                │
-│   ┌─────────────────┐                                                       │
-│   │ 2. DERIVE       │  "20 actions/user/day = 4B actions/day"               │
-│   │    ACTIVITY     │                                                       │
-│   └────────┬────────┘                                                       │
-│            ▼                                                                │
-│   ┌─────────────────┐                                                       │
-│   │ 3. CONVERT TO   │  "4B / 86,400 = 46K requests/second"                  │
-│   │    RATES        │                                                       │
-│   └────────┬────────┘                                                       │
-│            ▼                                                                │
-│   ┌─────────────────┐                                                       │
-│   │ 4. ACCOUNT FOR  │  "Peak = 3x average = 140K RPS"                       │
-│   │    PEAKS        │                                                       │
-│   └─────────────────┘                                                       │
+│   TOO VAGUE                    JUST RIGHT                    TOO DETAILED   │
+│   ┌─────────────┐              ┌─────────────┐              ┌─────────────┐ │
+│   │"System      │              │"Users can   │              │"Store in    │ │
+│   │ handles     │      →       │ send text   │      ←       │ Cassandra   │ │
+│   │ messages"   │              │ messages to │              │ with user_id│ │
+│   │             │              │ other users"│              │ partition"  │ │
+│   └─────────────┘              └─────────────┘              └─────────────┘ │
+│        ↓                              ↓                            ↓        │
+│   No design                    Drives design               Constrains       │
+│   guidance                     decisions                   implementation   │
 │                                                                             │
-│   KEY: Show your work. Derive, don't guess.                                 │
+│   KEY: Describe WHAT the system does, not HOW it does it.                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-# Simple Example: Senior vs Staff Scale Thinking
+# Simple Example: Senior vs Staff Requirements
 
 | Aspect | Senior (L5) Approach | Staff (L6) Approach |
 |--------|---------------------|---------------------|
-| **Establishing scale** | "We need to handle a lot of traffic" | "200M DAU × 20 actions = 4B/day = 46K RPS" |
-| **Peak handling** | Designs for average | "Average 46K, peak 3x = 140K, events 10x = 500K" |
-| **Read/write ratio** | Not considered | "100:1 read-heavy → caching essential" |
-| **Fan-out** | "1,000 posts/second is fine" | "1K posts × 1K followers = 1M feed updates" |
-| **Hot keys** | Assumes uniform distribution | "Top 1% = 50% traffic. Celebrity = 10M followers" |
-| **Growth** | Current scale only | "10x in 2 years. Schema supports sharding now." |
+| **Level of detail** | "System sends notifications" | "Services submit notifications with recipient, content, channel; system delivers in near-real-time respecting user preferences" |
+| **Prioritization** | Lists all features equally | "Core: send, deliver. Supporting: aggregation. Out of scope: A/B testing" |
+| **Edge cases** | Happy path only | "If recipient offline, queue. If delivery fails, retry 3x. If user blocked sender, suppress." |
+| **Scope** | Implicit or unclear | "In scope: delivery. Out of scope: content creation, analytics" |
+| **Confirmation** | Moves straight to design | "Does this capture what you had in mind?" |
 
 ---
 
 # Introduction
 
-Scale changes everything.
+After understanding your users and their use cases, the next step is defining what the system actually does. This is Phase 2: Functional Requirements.
 
-A system serving 1,000 users can run on a single server with a simple database. A system serving 100 million users requires distributed infrastructure, careful capacity planning, and fundamentally different architectural decisions. The same functional requirements lead to completely different designs depending on scale.
+Functional requirements describe the behaviors and capabilities of your system. They answer the question: "What must this system do?" Not how it does it (that's architecture), not how well it does it (that's non-functional requirements), but what it does.
 
-This is why Phase 3—Scale—is where Staff engineers spend significant time. Before you can design an architecture, you need to know how big the problem is. Before you can choose technologies, you need to understand the load they'll face. Before you can make trade-offs, you need to quantify what you're trading.
+This sounds straightforward, and in some ways it is. But Staff-level precision in functional requirements is harder than it appears. Too vague, and your design has no foundation. Too detailed, and you've wasted precious interview time on specifications that don't matter. Too broad, and you'll never finish. Too narrow, and you've missed critical functionality.
 
-In this section, we'll cover how to think about scale at Staff level. We'll explore the key metrics you need to understand, how to translate vague prompts into concrete numbers, how to reason about growth, and how to identify the patterns—like fan-out and hot keys—that make scale challenging. By the end, you'll approach scale estimation with confidence and precision.
+Staff engineers hit the sweet spot: precise enough to drive design decisions, focused enough to fit the time available, complete enough to cover the core, and explicit enough about what's excluded.
 
----
-
-# Part 1: Why Scale Is a First-Class Concern at Staff Level
-
-## Scale Determines Architecture
-
-The most fundamental truth in system design: **scale determines architecture**.
-
-At small scale, almost anything works. You can use a monolith, a single database, synchronous processing. Simplicity is a virtue because the overhead of distributed systems isn't justified.
-
-At large scale, you have no choice but to distribute. A single database can't handle a million writes per second. A single server can't maintain 10 million concurrent connections. The laws of physics and the limits of hardware force you into distributed systems.
-
-The transition points—where simple solutions break and complex solutions become necessary—are driven by scale. Knowing where you are relative to these points is essential for making appropriate design choices.
-
-## Scale Reveals Hidden Complexity
-
-Systems that work perfectly at small scale often fail in surprising ways at large scale:
-
-- A database query that takes 10ms becomes a bottleneck when executed 10,000 times per second
-- A fan-out that's negligible with 100 followers becomes catastrophic with 10 million followers
-- An algorithm that's linear in complexity becomes unusable when N grows by 1000x
-- A hot key that's invisible at low load causes cascading failures at high load
-
-Staff engineers anticipate these failure modes. They don't just ask "Will this work?" They ask "Will this work at our expected scale? What about 10x that scale?"
-
-## Scale Affects Cost
-
-Every unit of scale costs money:
-
-- More users = more servers
-- More data = more storage
-- More requests = more bandwidth
-- More complexity = more engineering time
-
-Staff engineers think about cost efficiency at scale. A 10% inefficiency is negligible at 1,000 users but costs millions of dollars at 100 million users. The design decisions you make at the whiteboard translate directly to infrastructure bills.
-
-## Interviewers Test Scale Thinking
-
-In Staff-level interviews, interviewers probe your scale awareness:
-
-- Do you ask about scale before designing?
-- Can you translate user numbers into technical metrics?
-- Do you recognize when scale changes design choices?
-- Can you estimate capacity with reasonable accuracy?
-- Do you anticipate scale-related failure modes?
-
-A candidate who designs without establishing scale is showing Senior-level (or below) behavior. A candidate who uses scale to drive every design decision is showing Staff-level thinking.
+This section will teach you how to define functional requirements with Staff-level precision. We'll cover what functional requirements really mean, how to distinguish core from supporting functionality, how to think about different types of system operations, how to handle edge cases explicitly, and how to avoid the feature creep that derails many designs.
 
 ---
 
-# Part 2: Translating Vague Scale into Concrete Numbers
+# Part 1: What Functional Requirements Really Mean
 
-## The Problem with Vague Scale
+## The Definition
 
-Interviewers often provide vague scale hints:
+Functional requirements describe what a system does—the capabilities it provides and the behaviors it exhibits. They are:
 
-- "Design for a large social network"
-- "Assume this is for a major e-commerce platform"
-- "Think about Netflix-scale"
-- "This should work for millions of users"
+**Observable**: Users or other systems can see the effects
+**Testable**: You can verify whether the system meets them
+**Behavior-focused**: They describe what happens, not how it happens internally
 
-These hints are deliberately imprecise. The interviewer wants to see if you can translate vagueness into specificity.
+Contrast with non-functional requirements, which describe qualities like performance, availability, and security. Functional requirements say "the system sends notifications"; non-functional requirements say "notifications are delivered within 5 seconds."
 
-## The Translation Process
+## Functional vs. Non-Functional: The Line
 
-Staff engineers translate vague scale into concrete metrics through a systematic process:
+The distinction matters because functional and non-functional requirements drive different design decisions.
 
-### Step 1: Anchor on Users
+| Functional | Non-Functional |
+|------------|----------------|
+| Users can send messages | Messages are delivered within 1 second |
+| Users can search their message history | Search returns results in under 200ms |
+| Users can set notification preferences | Preferences take effect within 5 seconds |
+| System logs all API calls | Logs are retained for 90 days |
 
-Start with the user count. This is usually the most grounded number:
+When defining functional requirements, focus on the capability, not the quality. You'll address quality in Phase 4 (Non-Functional Requirements).
 
-- "For a large social network, I'm thinking 500 million monthly active users, 200 million daily active users. Does that match your expectations?"
+## Functional Requirements vs. Use Cases
 
-If the interviewer hasn't given a hint, propose a range:
+Use cases describe user goals and workflows. Functional requirements describe system capabilities that enable those workflows.
 
-- "Let me assume we're designing for a significant scale—say 10 million daily active users. I can adjust if you have a different scale in mind."
+**Use case**: "A user wants to message a friend."
+**Functional requirements**:
+- System allows users to compose and send messages
+- System delivers messages to recipients
+- System notifies recipients of new messages
+- System stores messages for later retrieval
 
-### Step 2: Derive Activity Metrics
+A single use case often requires multiple functional requirements. And a single functional requirement often supports multiple use cases.
 
-From users, derive activity:
+## The Right Level of Detail
 
-- Average actions per user per day
-- Average sessions per day
-- Average session length
-- Average content consumed/produced per session
+Functional requirements should be:
 
-"With 200 million DAU, if the average user opens the app 5 times per day and views 20 items per session, that's:
-200M × 5 × 20 = 20 billion item views per day"
+**Specific enough** to guide design decisions:
+- ❌ "System handles messages" (too vague)
+- ✅ "System allows users to send text messages up to 10,000 characters to other users"
 
-### Step 3: Convert to Requests
+**Abstract enough** to avoid implementation details:
+- ❌ "System stores messages in a Cassandra table with user_id as partition key" (implementation)
+- ✅ "System stores messages and allows retrieval by conversation"
 
-Activity translates to system requests:
-
-- Each item view might require 1-3 API calls
-- Each action (like, comment) might require 1-2 API calls
-- Background sync might add additional requests
-
-"20 billion item views, let's say 1.5 API calls each = 30 billion API calls per day"
-
-### Step 4: Calculate Rates
-
-Daily totals become per-second rates:
-
-- 30 billion requests per day
-- 30B / 86,400 seconds = ~350,000 requests per second average
-
-### Step 5: Account for Peaks
-
-Average is not peak. Systems must handle peak load:
-
-- Peak is typically 2-10x average depending on usage patterns
-- Events (sports, news, product launches) can cause spikes
-
-"350K average RPS, but peak during prime time might be 3x, so ~1 million RPS. And during major events, we might see 2-3x peak, so design for 2-3 million RPS burst capacity."
-
-## When Numbers Aren't Given
-
-If the interviewer provides no scale hints, you have two options:
-
-### Option A: Ask Directly
-
-"Before I design, I need to understand scale. How many users are we designing for? Is this a startup MVP or a major platform?"
-
-### Option B: Propose and Confirm
-
-"Let me establish some scale assumptions. I'll design for:
-- 50 million daily active users
-- 500 requests per second per million users = 25,000 RPS average
-- 100,000 RPS peak
-
-If the scale is significantly different, some architectural choices might change. Does this order of magnitude work?"
+**Bounded enough** to be achievable:
+- ❌ "System handles all possible message types" (unbounded)
+- ✅ "System handles text messages and image attachments"
 
 ---
 
-# Part 3: Key Scale Metrics
+# Part 2: Core vs. Supporting Functionality
 
-## Quick Reference: Scale Metrics Cheat Sheet
+## Quick Visual: Core vs Supporting
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      SCALE METRICS CHEAT SHEET                              │
+│                     CORE vs SUPPORTING FUNCTIONALITY                        │
 │                                                                             │
-│   TIME CONVERSIONS:                                                         │
-│   • 1 day = 86,400 seconds (≈ 10^5)                                         │
-│   • 1 month ≈ 2.6 million seconds (≈ 2.5 × 10^6)                            │
-│   • 1 year ≈ 31.5 million seconds (≈ 3 × 10^7)                              │
+│   ┌───────────────────────────────────────────────────────────────────┐     │
+│   │  CORE FUNCTIONALITY (Design First, Most Carefully)                │     │
+│   │                                                                   │     │
+│   │  ✓ System is USELESS without it                                   │     │
+│   │  ✓ Primary reason system exists                                   │     │
+│   │  ✓ Users would abandon product without it                         │     │
+│   │  ✓ Failure = emergency                                            │     │
+│   │                                                                   │     │
+│   │  Example (Messaging): Send message, receive message, view history │     │
+│   └───────────────────────────────────────────────────────────────────┘     │
 │                                                                             │
-│   STORAGE:                                                                  │
-│   • 1 KB = 10^3 bytes    • 1 MB = 10^6 bytes                                │
-│   • 1 GB = 10^9 bytes    • 1 TB = 10^12 bytes                               │
-│   • 1 PB = 10^15 bytes                                                      │
+│   ┌───────────────────────────────────────────────────────────────────┐     │
+│   │  SUPPORTING FUNCTIONALITY (Fit Around Core)                       │     │
+│   │                                                                   │     │
+│   │  ✓ System WORKS without it (in diminished way)                    │     │
+│   │  ✓ Enhances but not essential                                     │     │
+│   │  ✓ Can have lower quality guarantees                              │     │
+│   │  ✓ Failure = degradation (not emergency)                          │     │
+│   │                                                                   │     │
+│   │  Example (Messaging): Reactions, read receipts, typing indicators │     │
+│   └───────────────────────────────────────────────────────────────────┘     │
 │                                                                             │
-│   QUICK QPS FORMULA:                                                        │
-│   QPS = (DAU × actions_per_user) / 86,400                                   │
-│                                                                             │
-│   QUICK STORAGE FORMULA:                                                    │
-│   Storage = items × item_size × retention_period                            │
-│                                                                             │
-│   PEAK MULTIPLIERS:                                                         │
-│   • Normal peak: 2-5x average                                               │
-│   • Event spike: 10-50x average                                             │
+│   TIME LIMITED? Cut supporting, keep core.                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## DAU and MAU
+## Defining the Distinction
 
-**DAU (Daily Active Users)**: Unique users who engage with the product each day.
+Not all functionality is equally important. Staff engineers distinguish:
 
-**MAU (Monthly Active Users)**: Unique users who engage at least once per month.
+**Core functionality**: The capabilities without which the system has no value. These define the system's essential purpose. If core functionality fails, the system is useless.
 
-**DAU/MAU Ratio**: Indicates engagement stickiness.
-- 10-20%: Low engagement (occasional use apps)
-- 30-50%: Moderate engagement (social media, news)
-- 50%+: High engagement (messaging, essential tools)
+**Supporting functionality**: Capabilities that enhance the system but aren't essential to its basic operation. The system still works (in a diminished way) if these fail.
 
-**Why they matter**:
-- DAU determines daily load
-- MAU determines total data scale (profiles, history)
-- DAU/MAU affects caching strategies (active user data is hot)
+## Why This Matters
 
-**Example calculation**:
-- MAU: 100 million
-- DAU: 30 million (30% DAU/MAU ratio)
-- Data for 100M users, but daily load from 30M
+This distinction drives multiple decisions:
 
-## QPS (Queries Per Second)
+**Design priority**: Core functionality is designed first and most carefully. Supporting functionality fits around it.
 
-**QPS**: The number of requests your system handles each second.
+**Quality investment**: Core functionality needs the highest reliability and performance. Supporting functionality can have lower guarantees.
 
-**Variants**:
-- Read QPS vs Write QPS
-- Average QPS vs Peak QPS
-- External QPS vs Internal QPS (microservices amplify)
+**Scope management**: When time is limited, supporting functionality is what you cut.
 
-**Calculating QPS**:
-```
-QPS = (DAU × actions_per_user_per_day) / seconds_per_day
-    = (DAU × actions_per_user_per_day) / 86,400
-```
+**Failure modes**: Core functionality failures are emergencies. Supporting functionality failures are degradations.
 
-**Example**:
-- 30 million DAU
-- 100 actions per user per day
-- QPS = 30M × 100 / 86,400 = ~35,000 QPS average
+## Identifying Core Functionality
 
-**Peak multiplier**:
-- Apply 2-5x for peak hours
-- Apply additional 2-3x for special events
-- Peak QPS = 35K × 3 = 105K, event peak = 300K
+Ask these questions:
 
-## Throughput and Bandwidth
+**Would the system be useless without this?**
+- Sending messages in a messaging system: Yes → Core
+- Read receipts in a messaging system: No → Supporting
 
-**Throughput**: Data volume processed per unit time (bytes/second, records/second).
+**Is this the primary reason the system exists?**
+- Rate limiting in a rate limiter: Yes → Core
+- Usage analytics in a rate limiter: No → Supporting
 
-**Bandwidth**: Network capacity (bits/second or bytes/second).
+**Would users abandon the product without this?**
+- Viewing the feed in a social app: Yes → Core
+- Filtering the feed by content type: No → Supporting
 
-**Calculating data throughput**:
-```
-Throughput = QPS × average_payload_size
-```
+## Examples Across Systems
 
-**Example**:
-- 35,000 QPS
-- Average response size: 5 KB
-- Throughput = 35K × 5 KB = 175 MB/second = 1.4 Gbps
+### Messaging System
 
-**Why it matters**:
-- Network capacity planning
-- Database I/O sizing
-- Cache sizing
-- CDN capacity
+**Core functionality:**
+- Send a message to a user or group
+- Receive messages in real-time
+- Retrieve conversation history
 
-## Storage
+**Supporting functionality:**
+- Message reactions (emoji)
+- Read receipts
+- Typing indicators
+- Message search
+- Message deletion/unsend
 
-**Types of storage**:
-- Hot storage: Frequently accessed, fast (SSD, in-memory)
-- Warm storage: Occasional access (regular disk)
-- Cold storage: Archive, rarely accessed (object storage)
+### Rate Limiter
 
-**Calculating storage**:
-```
-Total storage = number_of_items × average_item_size × retention_period_factor
-```
+**Core functionality:**
+- Check if a request is within limits
+- Enforce the limit (allow or reject)
+- Track usage per client/endpoint
 
-**Example for messages**:
-- 1 billion messages per day
-- Average message size: 500 bytes
-- Keep 1 year of history
-- Storage = 1B × 500 bytes × 365 = 182 TB
+**Supporting functionality:**
+- View current usage
+- Configure limits via API
+- Generate usage reports
+- Alert on limit exhaustion
 
-**Growth considerations**:
-- Data compounds over time
-- 182 TB year 1, 364 TB year 2, 546 TB year 3
-- Plan for 3-5 years of growth
+### Feed System
 
----
+**Core functionality:**
+- Generate a personalized feed for a user
+- Render feed content
+- Support pagination/infinite scroll
 
-# Part 4: Peak vs. Average Load
+**Supporting functionality:**
+- Feed filtering by content type
+- Hiding/snoozing accounts
+- Saving posts for later
+- Feed refresh controls
 
-## Why Peak Matters
+## Articulating the Distinction in Interviews
 
-Systems don't fail at average load—they fail at peak load. Designing for average leaves you vulnerable when usage spikes.
+Make your prioritization explicit:
 
-**The peak/average ratio** varies by use case:
+"For this notification system, the core functionality is:
+1. Accepting notification requests from services
+2. Delivering notifications to users across channels
+3. Respecting user preferences
 
-| System Type | Typical Peak/Average Ratio |
-|-------------|---------------------------|
-| Messaging apps | 2-3x |
-| Social feeds | 3-5x |
-| E-commerce | 5-10x (sales, holidays) |
-| Streaming video | 3-4x (primetime) |
-| Sports/news | 10-50x (events) |
+Supporting functionality includes:
+- Notification history/inbox
+- Analytics on open rates
+- A/B testing notification content
 
-## Understanding Peak Patterns
-
-### Daily Patterns
-
-Most consumer applications follow daily patterns:
-- Low: 3 AM - 6 AM local time
-- Ramp: 6 AM - 9 AM
-- Moderate: 9 AM - 6 PM
-- Peak: 6 PM - 11 PM
-- Decline: 11 PM - 3 AM
-
-**Global systems** see smoother curves because time zones overlap, but still have patterns.
-
-### Weekly Patterns
-
-- Weekday vs. weekend differences
-- Friday/Saturday evenings often highest
-- Monday mornings can spike (catch-up behavior)
-
-### Event-Driven Spikes
-
-Unpredictable but significant:
-- Breaking news
-- Celebrity activity
-- Product launches
-- Sports events (Super Bowl, World Cup final)
-- System failures elsewhere (users flood alternatives)
-
-## Designing for Peak
-
-### Option 1: Provision for Peak
-
-Size your system for maximum expected load.
-
-**Pros**: Always available, simple operations
-**Cons**: Expensive, wasted capacity at low load
-
-### Option 2: Auto-Scaling
-
-Dynamically add/remove capacity based on load.
-
-**Pros**: Cost-efficient, handles variability
-**Cons**: Scale-up latency, complexity, may not handle sudden spikes
-
-### Option 3: Graceful Degradation
-
-Accept that extreme peaks may receive degraded service.
-
-**Pros**: Practical for extreme events
-**Cons**: User experience impact, requires careful design
-
-### Hybrid Approach (Most Common)
-
-- Provision baseline capacity (maybe 2x average)
-- Auto-scale for normal peaks (up to 5x average)
-- Graceful degradation for extreme events (beyond 5x)
-
-## Articulating Peak in Interviews
-
-"The average load is 50,000 QPS. Peak during primetime is 3x, so 150,000 QPS. During major events—a celebrity announcement or breaking news—we might see 10x average, so 500,000 QPS.
-
-I'll design the system to auto-scale from 50K to 200K smoothly. Beyond that, we'll have graceful degradation: non-critical features (like recommendations) might be disabled, but core functionality (posting, viewing) remains available."
+I'll design the core in detail. Supporting functionality will inform my data model but won't be fully designed unless we have time."
 
 ---
 
-# Part 5: Read vs. Write Ratios
+# Part 3: Read, Write, and Control Flows
 
-## Why the Ratio Matters
-
-Most systems have asymmetric read/write patterns. Understanding this ratio drives fundamental architecture decisions.
-
-**Read-heavy systems** (read/write >> 1):
-- Can benefit heavily from caching
-- Can use read replicas
-- Eventually consistent often acceptable
-- Examples: Social feeds, e-commerce product pages, news sites
-
-**Write-heavy systems** (read/write ≈ 1 or < 1):
-- Caching provides limited benefit
-- Write scaling is the challenge
-- Need fast, efficient write path
-- Examples: Logging, metrics, IoT data ingestion
-
-**Balanced systems** (read/write ≈ 1-10):
-- Need balanced optimization
-- Can't ignore either path
-- Examples: Messaging, collaborative documents
-
-## Typical Ratios by System Type
-
-| System | Typical Read:Write Ratio |
-|--------|--------------------------|
-| Social feed | 100:1 to 1000:1 |
-| E-commerce catalog | 100:1 to 10,000:1 |
-| URL shortener | 100:1 to 1000:1 |
-| Messaging | 1:1 to 10:1 |
-| Metrics/logging | 1:10 to 1:100 (write-heavy) |
-| Collaborative docs | 5:1 to 20:1 |
-| User profiles | 50:1 to 500:1 |
-
-## Deriving the Ratio
-
-Calculate from user behavior:
-
-**Example: Social Feed**
-- User opens feed: 1 read
-- User scrolls: 5-20 more reads
-- User posts: Rare (maybe 0.1 posts per session)
-- User likes: Maybe 2 per session
-
-Per session: ~15 reads, 2 writes → 7.5:1
-
-But likes affect many users' feeds (fan-out), while reads are singular.
-
-Actual system ratio: Very read-heavy on the database, but write fan-out means significant write processing.
-
-## Impact on Architecture
-
-### For Read-Heavy (100:1+)
-
-- **Caching is essential**: Cache aggressively; cache hits avoid database load
-- **Read replicas**: Distribute read load across replicas
-- **CDN for static content**: Push content to the edge
-- **Precomputation**: Compute results ahead of time
-- **Eventually consistent is often fine**: Stale data acceptable for seconds
-
-### For Write-Heavy (1:1 or below)
-
-- **Write optimization is critical**: Fast write path, minimal overhead
-- **Append-only designs**: Write ahead, process later
-- **Partitioning/sharding**: Distribute writes across nodes
-- **Asynchronous processing**: Accept writes quickly, process in background
-- **Batching**: Group small writes into larger operations
-
-### For Balanced (10:1)
-
-- **Can't ignore either path**: Need reasonable read and write performance
-- **Careful cache invalidation**: Writes must invalidate/update caches correctly
-- **Trade-off awareness**: Improving one path might hurt the other
-
-## Articulating in Interviews
-
-"Let me think about the read/write ratio. For a social feed:
-- Every time a user opens the app, they read the feed
-- They might scroll through 20-30 items
-- Occasionally they like or comment—maybe 2-3 times per session
-- Rarely they post—maybe once per day if active
-
-This is heavily read-biased—probably 100:1 or more for the feed reads. This tells me caching is essential, read replicas make sense, and eventual consistency is acceptable for the feed. The write path is less frequent but has fan-out implications—when someone posts, it affects many feeds."
-
----
-
-# Part 6: Fan-Out and Amplification Effects
-
-## Quick Visual: The Fan-Out Problem
+## Quick Visual: The Three Flow Types
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          THE FAN-OUT PROBLEM                                │
+│                        THE THREE FLOW TYPES                                 │
 │                                                                             │
-│   What you see:                  What actually happens:                     │
+│   ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐ │
+│   │     READ FLOWS      │  │    WRITE FLOWS      │  │   CONTROL FLOWS     │ │
+│   │                     │  │                     │  │                     │ │
+│   │  Retrieve data      │  │  Create/modify data │  │  Modify behavior    │ │
+│   │  without modifying  │  │                     │  │  or configuration   │ │
+│   ├─────────────────────┤  ├─────────────────────┤  ├─────────────────────┤ │
+│   │ • View messages     │  │ • Send a message    │  │ • Set rate limits   │ │
+│   │ • Check rate limit  │  │ • Update profile    │  │ • Enable features   │ │
+│   │ • Fetch user profile│  │ • Create a post     │  │ • Configure routing │ │
+│   │ • Load feed         │  │ • Record an event   │  │ • Manage permissions│ │
+│   ├─────────────────────┤  ├─────────────────────┤  ├─────────────────────┤ │
+│   │ Frequency: HIGHEST  │  │ Frequency: MEDIUM   │  │ Frequency: LOWEST   │ │
+│   │ Latency: Often HIGH │  │ Latency: Variable   │  │ Latency: Usually LOW│ │
+│   │ Consistency:Eventual│  │ Consistency: Strong │  │ Consistency: Strong │ │
+│   │ Cacheable: YES      │  │ Cacheable: NO       │  │ Cacheable: Rarely   │ │
+│   └─────────────────────┘  └─────────────────────┘  └─────────────────────┘ │
 │                                                                             │
-│   ┌─────────────┐                ┌─────────────┐                            │
-│   │  1,000      │                │  1,000      │                            │
-│   │  posts/sec  │      →         │  posts/sec  │                            │
-│   └─────────────┘                └──────┬──────┘                            │
-│                                         │                                   │
-│                                    × 1,000 followers                        │
-│                                         │                                   │
-│                                         ▼                                   │
-│                                  ┌─────────────┐                            │
-│                                  │ 1,000,000   │                            │
-│                                  │ feed updates│                            │
-│                                  │ per second! │                            │
-│                                  └─────────────┘                            │
+│   KEY: Don't forget control flows! They're often overlooked but critical.   │
 │                                                                             │
-│   THE CELEBRITY PROBLEM:                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## The Three Flow Types
+
+Most systems have three types of operations. Understanding these helps you enumerate functional requirements systematically.
+
+**Read flows**: Operations that retrieve data without modifying it
+- View messages
+- Check rate limit status
+- Fetch user profile
+- Load feed
+
+**Write flows**: Operations that create or modify data
+- Send a message
+- Update preferences
+- Create a post
+- Record an event
+
+**Control flows**: Operations that modify system behavior or configuration
+- Set rate limits
+- Enable/disable features
+- Configure routing rules
+- Manage user permissions
+
+## Why This Taxonomy Matters
+
+Different flow types have different characteristics:
+
+| Aspect | Read | Write | Control |
+|--------|------|-------|---------|
+| Frequency | Usually highest | Medium | Usually lowest |
+| Latency sensitivity | Often high | Variable | Usually low |
+| Consistency needs | Can be eventual | Often needs strong | Often needs strong |
+| Failure tolerance | Can serve stale | Must not lose data | Must not corrupt state |
+| Cacheability | Often cacheable | Not cacheable | Rarely relevant |
+
+These differences drive design decisions. A system that's 99% reads might be designed completely differently from one that's 50% writes.
+
+## Enumerating Flows Systematically
+
+For each flow type, ask: "What operations exist?"
+
+### Example: Notification System
+
+**Read flows:**
+- Fetch user preferences
+- Get notification history for user
+- Get delivery status of a notification
+- View notification metrics (ops)
+
+**Write flows:**
+- Create/send a notification
+- Mark notification as read
+- Update user preferences
+- Record delivery confirmation
+
+**Control flows:**
+- Enable/disable notification types
+- Configure rate limits for notifications
+- Set up routing rules (e.g., route to SMS if push fails)
+- Manage channel configurations (APNs credentials, etc.)
+
+### Example: Rate Limiter
+
+**Read flows:**
+- Check if request is allowed
+- Get current usage for a client
+- View configured limits
+
+**Write flows:**
+- Record a request (increment counter)
+- Reset usage (periodic or manual)
+
+**Control flows:**
+- Configure rate limits
+- Override limits for specific clients
+- Enable/disable rate limiting
+- Set up alerting thresholds
+
+### Example: URL Shortener
+
+**Read flows:**
+- Resolve short URL to long URL
+- Get analytics for a short URL
+- List URLs created by a user
+
+**Write flows:**
+- Create a short URL
+- Delete a short URL
+- Record a click event
+
+**Control flows:**
+- Configure URL expiration policies
+- Set up custom domain mappings
+- Manage banned URL patterns
+
+## Using Flows to Structure Requirements
+
+In an interview, use this taxonomy to ensure completeness:
+
+"Let me enumerate the functional requirements by flow type.
+
+**Read flows:**
+- Users can view their notification history
+- Users can check their notification preferences
+- Ops can view delivery metrics
+
+**Write flows:**
+- Services can send notifications to users
+- Users can mark notifications as read
+- Users can update their preferences
+
+**Control flows:**
+- Ops can configure notification routing
+- Ops can enable/disable notification types
+
+Does this cover the functionality you had in mind, or are there flows I'm missing?"
+
+---
+
+# Part 4: Defining Behavior Without Over-Specifying
+
+## The Goldilocks Zone
+
+Functional requirements need to be specific enough to be useful but not so detailed that they constrain implementation or waste time.
+
+**Too vague:**
+"System sends notifications"
+- What triggers a notification?
+- To whom?
+- Through what channels?
+- How do users control this?
+
+**Too detailed:**
+"When a user with ID matching pattern /^[a-z0-9]+$/ receives a message from a user they follow, and they have push_enabled=true in the preferences table, and they haven't been active in the last 5 minutes, send a push notification using Firebase Cloud Messaging with the message body truncated to 100 characters..."
+- This is implementation, not requirements
+- It constrains design unnecessarily
+- It takes too long to articulate
+
+**Just right:**
+"When a triggering event occurs (like, comment, message, etc.), the system sends a notification to the affected user through their preferred channels, respecting their preference settings and suppression rules."
+- Clear enough to understand what the system does
+- Flexible enough to allow design choices
+- Complete enough to identify key behaviors
+
+## The Behavior Specification Pattern
+
+A useful pattern for specifying behavior:
+
+**When** [trigger condition] **the system** [action] **for** [affected entities] **according to** [relevant rules/conditions]
+
+Examples:
+
+"When a message is sent, the system delivers it to the recipient in real-time and stores it for later retrieval."
+
+"When a request arrives, the system checks the client's usage against their configured limits and allows or rejects accordingly."
+
+"When a user creates a short URL, the system generates a unique key and stores the mapping for the configured retention period."
+
+## What to Specify vs. Leave Open
+
+**Specify:**
+- What triggers the behavior
+- What the observable outcome is
+- Who/what is affected
+- What constraints or rules apply
+
+**Leave open:**
+- How the behavior is implemented
+- What technologies are used
+- Internal data representations
+- Optimization strategies
+
+**Example - Notification delivery:**
+
+**Specify:**
+- "Notifications are delivered to users in near-real-time"
+- "Delivery occurs through the user's preferred channels"
+- "Failed deliveries are retried up to 3 times"
+- "Users can suppress notifications from specific sources"
+
+**Leave open:**
+- Whether to use push vs. pull for delivery
+- The exact retry timing and backoff
+- How preferences are stored and looked up
+- The notification queueing mechanism
+
+## Avoiding Premature Commitment
+
+A common mistake is committing to details too early:
+
+**Premature commitment:**
+"The notification is stored in Cassandra with the user_id as partition key, then published to a Kafka topic, which triggers a consumer that calls the FCM API..."
+
+**Why it's a problem:**
+- You haven't validated that Cassandra, Kafka, or FCM are the right choices
+- You're mixing requirements with design
+- You're spending interview time on implementation details
+
+**Better approach:**
+"The notification needs to be stored durably and delivered in real-time. Let me first establish all the requirements, then I'll design the architecture to meet them. The choice of specific technologies will come from the requirements."
+
+---
+
+# Part 5: Handling Edge Cases Explicitly
+
+## Quick Visual: Edge Case Triage
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         EDGE CASE TRIAGE FRAMEWORK                          │
+│                                                                             │
+│   For EACH edge case, decide:                                               │
+│                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Regular users (99%): 990 posts × 500 followers = 495K updates      │   │
-│   │  Celebrities (1%):    10 posts × 5M followers = 50M updates !!!     │   │
-│   │                                                                     │   │
-│   │  1% of posts cause 99% of fan-out load                              │   │
+│   │  HANDLE FULLY: Design a complete solution                           │   │
+│   │  → Use when: Frequent OR severe consequences                        │   │
+│   │  → Example: "Message to offline user → Queue and deliver on online" │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              │                                              │
+│                              ▼                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  HANDLE GRACEFULLY: Provide degraded but acceptable behavior        │   │
+│   │  → Use when: Rare but shouldn't crash the system                    │   │
+│   │  → Example: "Content deleted mid-load → Show placeholder"           │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                              │                                              │
+│                              ▼                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  EXCLUDE EXPLICITLY: State this case is out of scope                │   │
+│   │  → Use when: Very rare OR disproportionate complexity               │   │
+│   │  → Example: "Sender deletes account → Messages stay, show 'deleted'"│   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   SOLUTION: Push for regular users, Pull for celebrities                    │
-│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## What Is Fan-Out?
+## What Are Edge Cases?
 
-**Fan-out** occurs when a single action triggers multiple subsequent actions or operations.
+Edge cases are scenarios that deviate from the typical flow. They include:
 
-**Examples**:
-- One post → notify 1000 followers
-- One message to group → deliver to 500 members
-- One API call → 10 internal service calls
-- One database write → updates 50 cache entries
+**Unusual inputs**: Empty values, maximum values, invalid formats
+**Error conditions**: Network failures, service unavailable, timeout
+**Boundary conditions**: First item, last item, exactly at limit
+**Race conditions**: Concurrent updates, out-of-order events
+**Exceptional users**: Power users, inactive users, new users
 
-## Why Fan-Out Is Critical
+## Why Edge Cases Matter
 
-Fan-out multiplies load. What looks like a reasonable operation at the source becomes massive at the destination.
+Edge cases reveal the true complexity of a system. A design that only handles the happy path will fail in production.
 
-**The math**:
-- 1,000 posts per second
-- Average 1,000 followers per poster
-- Fan-out: 1,000 × 1,000 = 1,000,000 notifications per second
+But edge cases can also be a trap. Trying to enumerate every possible edge case leads to analysis paralysis and wasted time.
 
-Your "1,000 posts per second" system actually needs to handle a million notifications per second.
+Staff engineers find the balance: they identify significant edge cases, decide how to handle them (fully, gracefully, or explicitly exclude), and move on.
 
-## Types of Fan-Out
+## The Edge Case Triage
 
-### Write-Time Fan-Out (Push Model)
+For each edge case, decide:
 
-When content is created, immediately push to all destinations.
+**Handle fully**: Design a complete solution
+- Use for: Edge cases that happen frequently or have severe consequences
 
-**Pros**:
-- Fast reads (data already at destination)
-- Simple read path
+**Handle gracefully**: Provide degraded but acceptable behavior
+- Use for: Edge cases that are rare but shouldn't crash the system
 
-**Cons**:
-- Slow writes (must complete fan-out)
-- High storage (duplicated data)
-- Wasted work if content never read
+**Exclude explicitly**: State that this case is out of scope
+- Use for: Edge cases that are very rare or would add disproportionate complexity
 
-**Good for**:
-- Users with small follower counts
-- Time-sensitive notifications
-- Systems with high read/write ratios
+## Identifying Significant Edge Cases
 
-### Read-Time Fan-Out (Pull Model)
+Ask these questions:
 
-When content is requested, pull from all sources.
+**What if inputs are extreme?**
+- Empty list, zero value, maximum allowed value
+- Very long strings, very large numbers
+- Malformed data, unexpected types
 
-**Pros**:
-- Fast writes (minimal work at write time)
-- Storage efficient
-- No wasted work
+**What if things fail?**
+- Downstream service unavailable
+- Database write fails
+- Network timeout
+- Partial failure (some operations succeed, some fail)
 
-**Cons**:
-- Slow reads (must aggregate at read time)
-- Complex read path
-- Repeated work if content read multiple times
+**What if timing is unusual?**
+- Request received twice
+- Events arrive out of order
+- Update during read
+- Stale data
 
-**Good for**:
-- Users with large follower counts (celebrities)
-- Content with uncertain readership
-- Systems with lower read/write ratios
+**What if users are unusual?**
+- Brand new user (no history)
+- Extremely active user (10x normal volume)
+- User who hasn't been active in years
+- User at the exact limit
 
-### Hybrid Fan-Out
+## Edge Cases by System Type
 
-Combine approaches based on characteristics:
-- Push for "normal" users (< 10K followers)
-- Pull for celebrities (> 10K followers)
+### Messaging System
 
-This is what Twitter, Facebook, and other major social platforms do.
+| Edge Case | How to Handle |
+|-----------|---------------|
+| Message to self | Handle fully (allow it) |
+| Empty message | Handle fully (reject with error) |
+| Very long message | Handle fully (enforce limit, provide error) |
+| Message to non-existent user | Handle fully (reject with clear error) |
+| Message while recipient is offline | Handle fully (queue for later delivery) |
+| Recipient blocks sender after message sent | Handle gracefully (deliver, but block future) |
+| Message contains malicious content | Handle gracefully (content moderation, flag) |
+| Exactly at rate limit | Handle fully (reject cleanly) |
+| Sender deletes account after sending | Exclude (message remains, sender shows as "deleted user") |
 
-## Calculating Fan-Out Impact
+### Rate Limiter
 
-**Example: Feed system**
+| Edge Case | How to Handle |
+|-----------|---------------|
+| First request ever | Handle fully (initialize counter) |
+| Exactly at limit | Handle fully (reject this request) |
+| Request from unknown client | Handle fully (use default limits or reject) |
+| Limit changed while request in flight | Handle gracefully (use old or new, document which) |
+| Clock skew across servers | Handle gracefully (tolerate small drift, document bounds) |
+| Distributed counter inconsistency | Handle gracefully (may slightly over/under limit) |
+| Limit set to zero | Handle fully (reject all requests) |
+| Negative limit configured | Exclude (prevent at configuration time) |
 
-Setup:
-- 1,000 posts per second
-- Users have average 500 followers
-- Celebrity accounts (1%) have 5 million followers
+### Feed System
 
-Without special handling:
-- Regular users: 990 posts × 500 = 495,000 fan-out operations
-- Celebrities: 10 posts × 5,000,000 = 50,000,000 fan-out operations
+| Edge Case | How to Handle |
+|-----------|---------------|
+| New user with no follows | Handle fully (show recommendations/trending) |
+| User follows 100,000 accounts | Handle gracefully (limit considered sources) |
+| User hasn't opened app in 1 year | Handle gracefully (fall back to trending + recent) |
+| Post deleted after loaded in feed | Handle gracefully (show placeholder or filter on scroll) |
+| Simultaneous scroll and new content | Handle fully (merge without disruption) |
+| All followed accounts inactive | Handle gracefully (show recommendations) |
+| Content flagged during feed generation | Handle gracefully (filter, refresh on next load) |
 
-Celebrities (1% of posts) cause 99% of fan-out load!
+## Articulating Edge Cases in Interviews
 
-**Solution**:
-- Push for regular users: 495K/second (manageable)
-- Pull for celebrities at read time
-- Total managed load vs. 50M/second chaos
+Be explicit about your edge case decisions:
 
-## Microservice Amplification
+"Let me address a few edge cases.
 
-In microservice architectures, a single external request often triggers many internal requests:
+**Messages to offline users**: I'll handle this fully—messages are queued and delivered when the user comes online.
 
-**Example**:
-- 1 feed request → 10 content service calls → 50 user service calls → 5 recommendation calls
-- Amplification factor: 65x
+**Very long messages**: I'll enforce a character limit. If exceeded, the client shows an error before sending.
 
-**Implications**:
-- Internal systems must handle much higher load than external
-- Internal latency adds up
-- Internal failures can cascade
+**Sender blocks recipient after message sent**: I'll handle this gracefully—the message is delivered, but future messages are blocked. This is simpler than trying to recall an in-flight message.
 
-**Articulating in interviews**:
+**Sender deletes account**: I'm excluding this—if a sender deletes their account, their messages remain but the sender shows as 'deleted user.'
 
-"I need to consider fan-out. When a user posts, that post needs to appear in all followers' feeds. The average user has 500 followers, so our 1,000 posts/second becomes 500,000 feed updates/second.
-
-But we have celebrity accounts with millions of followers. Pushing to them at write time would be catastrophic—10 million operations for one post. For these accounts, I'll use a pull model: we store the post once and pull it into feeds at read time. The trade-off is slightly slower feed load for users who follow celebrities, but that's acceptable given the alternative."
+Are there other edge cases you'd like me to address?"
 
 ---
 
-# Part 7: Hot Keys and Skew
+# Part 6: In-Scope vs. Out-of-Scope Decisions
 
-## Quick Visual: Hot Keys Break Partitions
+## Quick Reference: Four Types of Scope Boundaries
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      HOT KEYS BREAK PARTITIONS                              │
-│                                                                             │
-│   EXPECTED (Uniform):                 REALITY (Hot Key):                    │
-│                                                                             │
-│   ┌────────┐ ┌────────┐              ┌────────┐ ┌────────┐                  │
-│   │  25%   │ │  25%   │              │  10%   │ │  60%   │ ← HOT KEY        │
-│   │ 10K QPS│ │ 10K QPS│              │  4K QPS│ │ 24K QPS│   HERE!          │
-│   └────────┘ └────────┘              └────────┘ └────────┘                  │
-│   ┌────────┐ ┌────────┐              ┌────────┐ ┌────────┐                  │
-│   │  25%   │ │  25%   │              │  15%   │ │  15%   │                  │
-│   │ 10K QPS│ │ 10K QPS│              │  6K QPS│ │  6K QPS│                  │
-│   └────────┘ └────────┘              └────────┘ └────────┘                  │
-│                                                                             │
-│   Total: 40K QPS ✓                   Partition B: Overwhelmed! ✗            │
-│                                                                             │
-│   EXAMPLES OF HOT KEYS:                                                     │
-│   • Celebrity account (millions viewing)                                    │
-│   • Viral product (flash sale)                                              │
-│   • Breaking news article                                                   │
-│   • Popular hashtag                                                         │
-│   • Default/example values in systems                                       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| Boundary Type | What It Defines | Example |
+|--------------|-----------------|---------|
+| **Functional** | Which features are included | "Designing delivery, not search" |
+| **User** | Which users are served | "For consumers, not admin users" |
+| **Scale** | What scale range is addressed | "1-10M users, not 1B" |
+| **Integration** | What's assumed to exist | "Auth exists; not designing it" |
 
-## What Are Hot Keys?
+**Key phrases:**
+- "In scope: [X, Y, Z]"
+- "Out of scope: [A, B, C]"
+- "I'm assuming [D] exists"
+- "Does this scope work for you?"
 
-**Hot keys** are specific keys (user IDs, product IDs, etc.) that receive disproportionate traffic. They create load imbalance and can overwhelm individual nodes.
+## The Purpose of Scope Boundaries
 
-**Examples**:
-- Celebrity user posting (millions rush to see)
-- Viral product (everyone checking the same product page)
-- Breaking news article
-- Popular hashtag
-- Default or example values in systems
+In an interview (and in real projects), you can't design everything. Scope boundaries define what you're responsible for and what you're not.
 
-## Why Hot Keys Are Dangerous
+Clear scope boundaries:
+- Focus your design effort
+- Set expectations with the interviewer
+- Prevent scope creep
+- Enable integration assumptions
 
-Distributed systems spread load by partitioning data:
+## Types of Scope Boundaries
 
-| Partition | Normal Load | With Hot Key |
-|-----------|-------------|--------------|
-| Partition A | 10,000 QPS | 10,000 QPS |
-| Partition B | 10,000 QPS | 500,000 QPS ← Hot key here |
-| Partition C | 10,000 QPS | 10,000 QPS |
-| Partition D | 10,000 QPS | 10,000 QPS |
+### Functional Boundaries
 
-Total capacity: 200,000 QPS
-Actual capacity limited by Partition B: ~500,000 QPS or failure
+What features are included vs. excluded:
+- "I'm designing message delivery, not message search"
+- "I'm designing notification sending, not notification content creation"
+- "I'm designing the rate limiter, not the quota billing system"
 
-A single hot key can bring down a partition, causing cascading failures.
+### User Boundaries
 
-## Types of Skew
+Which users are served:
+- "I'm designing for end consumers, not for admin users"
+- "I'm designing for API clients, not for web UI"
 
-### Temporal Skew
+### Scale Boundaries
 
-Load concentrated in time periods:
-- Flash sales
-- Event starts (concert tickets on sale)
-- Time-zone-aligned activity
+What scale range is addressed:
+- "I'm designing for 1-10 million users, not for 1 billion"
+- "I'm designing for the initial launch, not for the 10-year vision"
 
-### Key Skew
+### Integration Boundaries
 
-Load concentrated on specific keys:
-- Celebrity accounts
-- Popular content
-- Viral items
+What's assumed to exist vs. what's being built:
+- "I'm assuming authentication exists; I'm not designing it"
+- "I'm assuming we have a message queue; I'm not choosing which one"
 
-### Partition Skew
+## Making Scope Decisions
 
-Uneven data/load distribution across partitions:
-- Poor partition key choice
-- Natural data distribution (power law)
+For each potential scope item, ask:
 
-## Handling Hot Keys
+**Is this core to the problem?** If yes, it's in scope.
 
-### Strategy 1: Caching
+**Is this interesting or differentiating?** If yes, consider including it.
 
-For read-heavy hot keys, cache aggressively:
+**Is this well-understood/standard?** If yes, consider excluding it.
 
-- Cache at multiple levels (CDN, application cache, database cache)
-- Use short TTLs to balance freshness and load reduction
-- Pre-warm caches for predictable hot keys
+**Does the interviewer seem interested?** If yes, include it.
 
-**Example**: Celebrity profile → cached at CDN, 1-minute TTL, serves 99% of requests
+**Do I have time?** If no, exclude it.
 
-### Strategy 2: Replication
+## Articulating Scope Clearly
 
-Replicate hot data across multiple nodes:
+Use explicit language:
 
-- Read replicas for read-heavy hot keys
-- Multiple copies of hot partition
-- Route requests across replicas
+**Positive scope (what's in):**
+- "I will design..."
+- "In scope for this design..."
+- "I'm focusing on..."
 
-### Strategy 3: Splitting
+**Negative scope (what's out):**
+- "I'm explicitly not designing..."
+- "Out of scope..."
+- "I'm assuming this exists..."
 
-Split hot keys into multiple virtual keys:
+**Scope rationale:**
+- "I'm excluding [X] because it's a separate concern that's well-understood."
+- "I'm including [Y] because that's where the interesting complexity is."
 
-- user_123 becomes user_123_0, user_123_1, user_123_2
-- Distribute across partitions
-- Aggregate at read time
+**Scope confirmation:**
+- "Does this scope match what you had in mind?"
+- "Should I include [X], or is my scope appropriate?"
 
-**Example**: Celebrity follower list split into 100 shards. Writes distribute. Reads aggregate.
+## Example: Notification System Scope
 
-### Strategy 4: Rate Limiting
+"For this notification system, my scope is:
 
-Accept that hot keys can only be served so fast:
+**In scope:**
+- Accepting notification requests from internal services
+- Storing notifications for later retrieval
+- Delivering notifications via push and email
+- Managing user preferences
+- Basic delivery tracking
 
-- Rate limit requests to hot keys
-- Queue excess requests
-- Return cached/stale data for overflow
+**Out of scope:**
+- Creating notification content (done by calling services)
+- Email and push infrastructure (using existing providers)
+- Rich analytics (separate analytics system)
+- A/B testing notification content (separate experimentation platform)
+- Admin UI (assuming CLI/API for now)
 
-### Strategy 5: Separate Infrastructure
+**Assumptions:**
+- Authentication/authorization is handled
+- We have existing push (FCM/APNs) and email (SendGrid) integrations
+- User data (names, emails, device tokens) is available from user service
 
-Route hot keys to dedicated infrastructure:
-
-- Separate cluster for celebrities
-- Dedicated cache layer for popular products
-- Specialized handling for known hot spots
-
-## Anticipating Hot Keys
-
-In an interview, proactively address hot keys:
-
-"I need to think about hot keys. In a social platform, celebrity accounts are hot keys—one user might have 50 million followers, all trying to see their latest post.
-
-My partitioning strategy puts user data on specific shards. A celebrity's data on one shard would overwhelm it.
-
-I'll handle this three ways:
-1. Heavy caching: Celebrity content cached at CDN with 10-second TTL
-2. Read replicas: Hot user profiles replicated to multiple read nodes
-3. Follower list sharding: Large follower lists split across multiple partitions
-
-For celebrities with over 1 million followers, I'll use the pull model for feed updates rather than push, which avoids the fan-out hot key problem entirely."
+Does this scope work?"
 
 ---
 
-# Part 8: Short-Term vs. Long-Term Growth Planning
+# Part 7: How Staff Engineers Avoid Feature Creep
 
-## The Growth Planning Dilemma
+## What Is Feature Creep?
 
-You can't design for current scale and ignore growth—you'll constantly be rebuilding. But you also can't design for 100x scale day one—you'll waste time and money on complexity you don't need.
+Feature creep is the gradual expansion of scope beyond original boundaries. It happens when:
+- You keep adding "just one more thing"
+- You design for hypothetical future needs
+- You can't say no to nice-to-have features
+- You don't distinguish core from supporting functionality
 
-Staff engineers find the balance: design for reasonable growth, with a migration path to higher scale.
+## Why Feature Creep Is Dangerous
 
-## Time Horizons
+In interviews:
+- You run out of time before covering the essentials
+- Your design becomes shallow and spread thin
+- You look unfocused and undisciplined
 
-### Immediate (Launch - 6 months)
+In real projects:
+- Timelines slip
+- Complexity increases
+- Quality suffers
+- The core product is delayed
 
-- Design for current expected scale
-- Include some headroom (2x)
-- Focus on shipping and learning
+## Staff-Level Discipline
 
-### Near-term (6 months - 2 years)
+Staff engineers avoid feature creep through:
 
-- Plan for 5-10x growth
-- Architecture should handle without major redesign
-- May need to add capacity, optimize, tune
+### 1. Ruthless Prioritization
 
-### Medium-term (2-5 years)
+"I only have 45 minutes. What matters most?"
 
-- Consider 10-50x growth
-- Major architectural decisions should support this
-- Accept that some components may need redesign
+Rank everything: must-have, should-have, could-have, won't-have. Design only the must-haves in detail.
 
-### Long-term (5+ years)
+### 2. Explicit "Not Now" Lists
 
-- Plan for 100x+ only if business trajectory supports it
-- Focus on extensibility, not specific solutions
-- Accept significant uncertainty
+Instead of vaguely deferring things, explicitly list what's excluded:
 
-## Growth-Aware Architecture
+"These features are valuable but out of scope for this design:
+- Message search
+- Message reactions  
+- Read receipts
 
-### Design Principles
+They can be added later without changing the core architecture."
 
-**Horizontal scaling**: Prefer architectures that scale by adding nodes, not by upgrading nodes.
+### 3. Scope Checkpoints
 
-**Stateless services**: Stateless components scale easily; state should be in dedicated stores.
+Periodically reassess scope:
 
-**Partition-ready data**: Choose partition keys that will work at 10x scale.
+"I've been designing for 15 minutes. Let me check: am I still focused on core functionality? Have I drifted into supporting features?"
 
-**Replaceable components**: Don't couple tightly to specific technologies.
+### 4. The "Do We Need This?" Question
 
-### Migration Paths
+For every feature, ask:
+- "Do we need this for the system to work?"
+- "Do we need this for the core use case?"
+- "Would users accept V1 without this?"
 
-For each component, know the migration path:
+If no, it's a candidate for exclusion.
 
-| Scale | Database Approach | Migration Path |
-|-------|-------------------|----------------|
-| 10K users | Single PostgreSQL | Add read replicas |
-| 100K users | PostgreSQL + replicas | Shard hot tables |
-| 1M users | Sharded PostgreSQL | Consider specialized stores |
-| 10M users | Distributed database | Evaluate Spanner/CockroachDB |
+### 5. Resisting the "While We're At It" Trap
 
-### Scale Indicators
+"While we're building notifications, we could also add..."
 
-Know what metrics signal it's time to evolve:
+This is where feature creep starts. The answer is usually: "We could, but we won't—let's stay focused."
 
-- Database CPU consistently > 70%
-- P99 latency degrading
-- Storage capacity > 60%
-- Write queue growing
-- Hot keys emerging
+## Feature Creep in Interviews
 
-## Articulating Growth in Interviews
+**Common pattern:**
 
-"Let me think about growth. We're launching with 1 million users, expecting to grow to 10 million in a year.
+Candidate is designing a messaging system. They cover:
+- Message sending ✓
+- Message delivery ✓
+- Message history ✓
 
-For V1, I'll use a single primary database with read replicas. That handles our launch scale with room to grow.
+Then they keep going:
+- "We should also add reactions..."
+- "And read receipts..."
+- "And typing indicators..."
+- "And message search..."
+- "And voice messages..."
+- "And video calling..."
 
-At 5 million users, we'll likely need to shard the messages table—I'll choose user_id as the partition key now so the schema supports this.
+They run out of time having shallowly covered many features, with none designed well.
 
-At 10+ million users, we might need a distributed database like Spanner for strong consistency at scale, or accept eventual consistency with a sharded MySQL setup.
+**Better pattern:**
 
-The key is: my initial design supports 10x growth with operational changes (adding capacity). Beyond 10x requires architectural evolution, which is expected."
+"For core functionality, I'm focusing on sending, delivery, and history. Those are the must-haves for a messaging system.
+
+Features like reactions, read receipts, and search are valuable but supporting. I'll note that the data model supports them, but I won't design them in detail.
+
+Voice and video are out of scope—they're really a different system that could integrate with messaging.
+
+Let me spend our time going deep on the core."
 
 ---
 
-# Part 9: Step-by-Step Scale Estimation Examples
+# Part 8: Functional Requirements for Common Systems
 
-Let me walk through complete scale estimations for common systems.
+Let me provide detailed functional requirements for several common system design problems.
 
-## Example 1: URL Shortener
+## Rate Limiter
 
-### Given Information
-"Design a URL shortener for a major tech company, similar to bit.ly."
+### Core Functional Requirements
 
-### Step 1: Establish User Scale
-- Assume 100 million monthly active users
-- 10 million daily active users (10% DAU/MAU ratio—utility service)
-- Most users only create URLs occasionally
+**F1: Rate Check**
+- Given a client identifier and request details, determine if the request should be allowed
+- Return allow/deny decision with remaining quota information
 
-### Step 2: Calculate Operations
+**F2: Rate Enforcement**
+- When a request is allowed, record it against the client's quota
+- When a request is denied, return appropriate error with retry-after information
 
-**URL Creation (Writes)**:
-- Average user creates 1 URL per month
-- 100M URLs created per month
-- 100M / 30 days / 86,400 seconds = ~40 URL creations per second
-- Peak (3x): ~120 creations per second
+**F3: Limit Configuration**
+- Allow limits to be configured per client, per endpoint, or per client-endpoint combination
+- Support different time windows (per second, per minute, per hour)
 
-**URL Resolution (Reads)**:
-- Each URL clicked average 100 times over lifetime
-- 100M URLs × 100 clicks = 10 billion clicks per month
-- 10B / 30 / 86,400 = ~4,000 clicks per second
-- Peak (5x): ~20,000 clicks per second
+### Supporting Functional Requirements
 
-**Read:Write Ratio**: 4,000:40 = 100:1 (heavily read-biased)
+**F4: Usage Query**
+- Allow clients to check their current usage without making a request
+- Allow operators to view usage across all clients
 
-### Step 3: Calculate Storage
+**F5: Manual Override**
+- Allow operators to temporarily increase/decrease limits for specific clients
+- Allow emergency block of specific clients
 
-**URL Storage**:
-- 100M new URLs per month
-- Average long URL: 200 bytes
-- Average short key: 7 bytes
-- Metadata: 100 bytes
-- Per URL: ~300 bytes
-- Monthly: 100M × 300 = 30 GB
-- Yearly: 360 GB
-- 5 years with growth: ~2-3 TB
+**F6: Limit Reset**
+- Automatically reset usage counters at window boundaries
+- Allow manual reset for specific clients
 
-**Click Analytics** (if included):
-- 10B clicks per month
-- 100 bytes per click event
-- Monthly: 1 TB
-- Much larger than URL storage
+### Edge Cases Addressed
 
-### Step 4: Design Implications
+- Unknown client: Apply default limits
+- Limit changed mid-window: New limit applies to new window
+- Counter overflow: Reset counter (with logging)
+- Distributed inconsistency: May allow slightly over limit (documented tolerance)
 
-- Read-heavy → caching is critical
-- URL resolution must be fast (<50ms)
-- Can use read replicas extensively
-- Creation latency less critical (can be 200-500ms)
-- Storage is modest for URLs, large for analytics
+### Out of Scope
 
-### Summary Statement
+- Quota management (billing based on usage)
+- Abuse detection beyond rate limiting
+- Historical usage analytics
 
-"For this URL shortener:
-- ~40 creates/second, ~4,000 resolves/second average
-- Peak: 120 creates/second, 20,000 resolves/second
-- 100:1 read:write ratio
-- ~2 TB storage for URLs over 5 years
-- Caching is essential; resolution path is the priority"
+## Notification System
 
-## Example 2: Notification System
+### Core Functional Requirements
 
-### Given Information
-"Design a notification system for a social media platform with 200 million DAU."
+**F1: Notification Ingestion**
+- Accept notification requests from internal services
+- Validate notification data (recipient, content, channel)
+- Queue notifications for processing
 
-### Step 1: Establish Scale
-- 200 million DAU
-- 500 million MAU
-- Global platform, 24/7 activity
+**F2: Notification Delivery**
+- Deliver notifications through specified channels (push, email, SMS)
+- Handle delivery confirmations and failures
+- Retry failed deliveries according to policy
 
-### Step 2: Calculate Notification Volume
+**F3: User Preferences**
+- Allow users to set notification preferences by type and channel
+- Respect preferences when delivering notifications
+- Allow users to mute specific sources
 
-**Notification Generation**:
-- Average user generates 5 notifications/day (likes, comments, follows)
-- But receives 20 notifications/day (from others' actions)
-- Total notifications: 200M × 20 = 4 billion notifications/day
-- Per second: 4B / 86,400 = ~46,000 notifications/second
-- Peak (3x): ~140,000 notifications/second
+**F4: Notification Storage**
+- Store notifications for later retrieval (inbox/history)
+- Allow users to view, read, and dismiss notifications
 
-**Delivery Operations**:
-- Each notification → 1 push delivery attempt
-- Each notification → possibly email, SMS
-- Average 1.5 deliveries per notification
-- 46K × 1.5 = ~70,000 delivery operations/second
+### Supporting Functional Requirements
 
-### Step 3: Consider Fan-Out
+**F5: Notification Aggregation**
+- Aggregate similar notifications ("5 people liked your post")
+- Prevent notification spam to users
 
-**Celebrity Problem**:
-- 1% of users have 100K+ followers
-- A celebrity post generates: 1 post → 100K+ notifications
-- 200M × 1% = 2M celebrities
-- If each posts once/day: 2M × 100K = 200 billion extra notifications
+**F6: Delivery Tracking**
+- Track delivery status (sent, delivered, read)
+- Provide delivery metrics to sending services
 
-This is infeasible with push. Must use pull model for celebrities.
+**F7: Channel Fallback**
+- If primary channel fails, attempt secondary channels
+- Respect user preferences in fallback decisions
 
-**Revised with hybrid**:
-- Regular users (99%): Push notifications
-- Celebrities (1%): Pull at read time
-- Manageable: ~46K/second push + pull aggregation
+### Edge Cases Addressed
 
-### Step 4: Calculate Storage
+- Recipient offline: Queue and deliver when online (push), send immediately (email)
+- Invalid recipient: Reject with error, notify sender
+- Preference changed mid-delivery: Apply new preference to future notifications
+- Very high volume (celebrity post): Rate limit fan-out, prioritize recent followers
 
-**Notification Storage**:
-- 4B notifications/day
-- Keep 30 days of history
-- 120B notifications
-- 500 bytes per notification
-- Storage: 60 TB
-- With celebrity posts stored once (not fanned out): ~10 TB
+### Out of Scope
 
-### Step 5: Design Implications
+- Notification content creation (done by sending services)
+- Push/email infrastructure (external providers)
+- Rich analytics and A/B testing
 
-- High throughput system
-- Fan-out is the key challenge
-- Hybrid push/pull for celebrities
-- Need efficient per-user storage
-- Delivery reliability matters (retry logic)
+## Feed System
 
-### Summary Statement
+### Core Functional Requirements
 
-"For this notification system:
-- 46K notifications/second generated, 140K/second peak
-- 70K delivery operations/second average
-- Must handle celebrity fan-out with hybrid push/pull
-- ~10-60 TB storage for 30-day history
-- Delivery latency target: <5 seconds
-- Critical path: ingestion → processing → delivery"
+**F1: Feed Generation**
+- Generate a personalized feed for a logged-in user
+- Include content from followed accounts
+- Rank content by relevance and recency
 
-## Example 3: Rate Limiter
+**F2: Feed Rendering**
+- Return feed content in paginated format
+- Support efficient infinite scroll
+- Handle mixed content types (posts, images, videos)
 
-### Given Information
-"Design a rate limiter for an API gateway handling 1 million requests per second."
+**F3: Feed Refresh**
+- Detect new content since last load
+- Allow user to refresh for new content
+- Merge new content without disrupting position
 
-### Step 1: Understand the Load
-- 1 million RPS to the API gateway
-- Every request needs rate limit check
-- Rate limit check must be extremely fast
+### Supporting Functional Requirements
 
-### Step 2: Calculate Rate Limiter Load
+**F4: Feed Personalization**
+- Apply user-specific ranking adjustments
+- Learn from user interactions (likes, time spent)
+- Support A/B testing of ranking algorithms
 
-**Check Operations**:
-- 1M checks per second (same as API RPS)
-- Each check: lookup client, check counter, maybe increment
-- Latency budget: <1ms (to not significantly impact API latency)
+**F5: Feed Controls**
+- Allow users to hide specific posts
+- Allow users to mute specific accounts
+- Allow users to snooze accounts temporarily
 
-**Counter Updates**:
-- 1M increments per second
-- Distributed across clients (maybe 100K active clients)
-- Average 10 RPS per client
-- But some clients much higher (power users, scrapers)
+**F6: Content Injection**
+- Inject ads into feed at appropriate intervals
+- Inject recommendations for new accounts to follow
 
-### Step 3: Identify Hot Keys
+### Edge Cases Addressed
 
-**Client Distribution**:
-- Likely power-law: top 1% of clients = 50% of traffic
-- Top 1% of 100K = 1K clients causing 500K RPS
-- Average: 500 RPS per power client
+- New user (no follows): Show trending content and recommendations
+- User follows 50,000 accounts: Limit content sources considered
+- User inactive for 1 year: Fall back to trending + recent from top follows
+- Content deleted after loaded: Show placeholder, filter on next load
 
-**Hot Client Risk**:
-- A single scrapy client might send 10K+ RPS
-- That's 10K increments/second on one counter
-- Potential hot key
+### Out of Scope
 
-### Step 4: Calculate Storage
+- Content storage and creation (separate content service)
+- Ad selection and targeting (separate ads platform)
+- Detailed engagement analytics
 
-**Counter Storage**:
-- 100K active clients
-- Per client: client_id (16 bytes) + counter (8 bytes) + window (8 bytes)
-- Per client: ~32 bytes
-- Total: 3.2 MB
-- Trivially fits in memory
+## URL Shortener
 
-**Configuration Storage**:
-- Rate limit rules
-- Client-specific overrides
-- Small: < 1 MB
+### Core Functional Requirements
 
-### Step 5: Design Implications
+**F1: URL Creation**
+- Accept a long URL and create a short URL
+- Generate unique, unpredictable short keys
+- Support optional custom short keys
 
-- Ultra-low latency required (<1ms)
-- Must be distributed (single node can't handle 1M/s)
-- In-memory storage (Redis or custom)
-- Hot key handling for power clients
-- Eventual consistency acceptable (slightly over limit OK)
+**F2: URL Resolution**
+- Given a short URL, return the corresponding long URL
+- Support fast redirects (low latency)
+- Handle expired or non-existent URLs gracefully
 
-### Summary Statement
+**F3: URL Management**
+- Allow users to list their created URLs
+- Allow users to delete/disable URLs
+- Support URL expiration policies
 
-"For this rate limiter:
-- 1M checks per second
-- <1ms latency budget
-- 100K clients, power-law distribution
-- 3 MB state—fits in memory
-- Distributed across nodes with eventual consistency
-- Hot key handling for power clients (maybe local counters with periodic sync)"
+### Supporting Functional Requirements
+
+**F4: Click Analytics**
+- Track click counts per URL
+- Capture click metadata (time, referrer, geography)
+- Provide analytics dashboard
+
+**F5: Custom Domains**
+- Support branded short domains
+- Map custom domains to URL namespaces
+
+### Edge Cases Addressed
+
+- Collision in short key generation: Retry with new key
+- URL already exists: Return existing short URL (optional deduplication)
+- Malicious long URL: Check against blocklist, reject known malware
+- Very long URL: Enforce reasonable limits (2048 characters)
+- Expired URL: Return 404 with helpful message
+
+### Out of Scope
+
+- Marketing automation (email campaigns, etc.)
+- QR code generation (separate utility)
+- Deep linking for mobile apps
 
 ---
 
-# Part 10: Common Scale-Related Mistakes
+# Part 9: Phrasing Requirements in Interviews
 
-## Mistake 1: Not Asking About Scale
+## The Requirement Statement Pattern
 
-**The problem**: Designing without establishing scale, leading to over- or under-engineering.
+A clear format for stating requirements:
 
-**Example**: Building a sharded database for a system that will never exceed 10,000 users.
+**[User/System] can [action] [object] [optional: conditions/constraints]**
 
-**The fix**: Always ask about scale first. "Before I design, I need to understand scale. How many users? How much data? What's the growth expectation?"
+Examples:
+- "Users can send text messages to other users"
+- "Services can submit notifications with recipient, content, and channel"
+- "Operators can configure rate limits per client, effective within 1 minute"
 
-## Mistake 2: Using Average Instead of Peak
+## Grouping Requirements
 
-**The problem**: Designing for average load and failing during peaks.
+Organize requirements for clarity:
 
-**Example**: "We have 10,000 QPS, so one database can handle it." But peak is 50,000 QPS.
+**By flow type:**
+- "For read operations: ... For write operations: ... For control operations: ..."
 
-**The fix**: Always calculate peak. "Average is 10K QPS, but peak during primetime is 3x, and during events is 10x. I need to design for 100K QPS capacity with graceful degradation beyond."
+**By user type:**
+- "For end users: ... For internal services: ... For operators: ..."
 
-## Mistake 3: Ignoring Fan-Out
+**By priority:**
+- "Core requirements: ... Supporting requirements: ... Nice-to-have: ..."
 
-**The problem**: Calculating direct operations without considering multiplication effects.
+## Checking Completeness
 
-**Example**: "1,000 posts per second—easy." But each post fans out to 1,000 followers = 1M operations.
+After listing requirements, verify:
 
-**The fix**: Always trace the full path. "1,000 posts/second × 1,000 followers = 1M feed updates. Plus microservice amplification..."
+"Let me check completeness:
+- Can users do all the things they need to do? [lists]
+- Can services integrate as needed? [lists]
+- Can operators manage the system? [lists]
 
-## Mistake 4: Assuming Uniform Distribution
+Is there functionality I'm missing?"
 
-**The problem**: Designing for average case when reality has hot keys and skew.
+## Confirming with the Interviewer
 
-**Example**: "100,000 clients × 10 RPS each = 1M RPS spread evenly." But actually 1% of clients generate 50% of traffic.
+Always confirm your requirements:
 
-**The fix**: Consider distribution. "Power-law distribution means top 1% generate 500K RPS. Some individual clients might send 10K+ RPS. I need hot key handling."
+"Based on my understanding, here are the functional requirements:
+[lists requirements]
 
-## Mistake 5: Round Numbers Without Derivation
+Does this capture what you had in mind? Is there anything you'd like me to add or remove?"
 
-**The problem**: Throwing out impressive numbers without showing how they're derived.
+## Example: Complete Requirements Statement
 
-**Example**: "Let's assume 1 billion QPS." Without explanation, this is meaningless.
+"For the notification system, here are the functional requirements:
 
-**The fix**: Show your work. "200M DAU × 50 actions/day = 10B actions/day = 115K actions/second. Peak at 3x = 350K/second."
+**Core (must design in detail):**
+1. Services can submit notifications with recipient, content, and channel
+2. System delivers notifications to users in near-real-time
+3. System respects user preferences when delivering
+4. Users can view their notification history
+5. Users can manage their notification preferences
 
-## Mistake 6: Over-Engineering for Hypothetical Scale
+**Supporting (will acknowledge in design):**
+6. System aggregates similar notifications
+7. System tracks delivery status
+8. System falls back to alternative channels on failure
 
-**The problem**: Building massive infrastructure for scale that may never materialize.
+**Out of scope:**
+- Notification content creation
+- Push/email infrastructure
+- Rich analytics
 
-**Example**: Designing for billion-user scale when building an internal tool for 500 people.
+Does this scope align with your expectations?"
 
-**The fix**: Design for current + reasonable growth. "We have 500 users now, expecting 5,000 in a year. I'll design for 10,000 with a migration path to 100,000 if needed."
+---
 
-## Mistake 7: Under-Engineering for Obvious Growth
+# Part 10: Common Pitfalls and How to Avoid Them
 
-**The problem**: Ignoring clear growth trajectory and being forced into emergency redesigns.
+## Pitfall 1: Requirements Too Vague
 
-**Example**: Using a single database for a rapidly growing startup, then scrambling when it can't scale.
+**The problem:**
+"System handles notifications" doesn't tell you what the system actually does.
 
-**The fix**: Acknowledge growth trajectory. "We're at 100K users but growing 20% monthly. In 18 months, we'll be at 1M. I need to design the schema to support sharding from day one."
+**Why it happens:**
+Candidates want to move quickly to architecture. They assume requirements are "obvious."
 
-## Mistake 8: Forgetting Data Scale
+**How to avoid:**
+Force yourself to be specific. Use the pattern: "[User] can [action] [object]." If you can't fill in the blanks, you're not specific enough.
 
-**The problem**: Focusing only on request rate, ignoring storage and data processing needs.
+**Example:**
+- ❌ "System handles messages"
+- ✅ "Users can send text messages to other users, who receive them in real-time"
 
-**Example**: "50K QPS—that's fine." But 50K QPS × 1 KB × 1 year = 1.5 PB of data.
+## Pitfall 2: Requirements Include Implementation
 
-**The fix**: Calculate all dimensions. "50K writes/second × 1 KB = 50 MB/second = 4 TB/day = 1.5 PB/year. Storage is actually the primary challenge."
+**The problem:**
+"Messages are stored in Cassandra and delivered via Kafka" is implementation, not requirements.
+
+**Why it happens:**
+Experienced engineers naturally jump to solutions. They conflate what with how.
+
+**How to avoid:**
+Ask yourself: "Am I describing observable behavior, or internal mechanism?" Requirements describe behavior; implementation describes mechanism.
+
+**Example:**
+- ❌ "Messages are published to Kafka for async delivery"
+- ✅ "Messages are delivered asynchronously with at-least-once guarantee"
+
+## Pitfall 3: No Prioritization
+
+**The problem:**
+Listing 15 requirements with no distinction between essential and nice-to-have.
+
+**Why it happens:**
+Candidates don't want to "miss" anything. Prioritization feels like excluding things.
+
+**How to avoid:**
+Explicitly categorize: core, supporting, out-of-scope. Announce what you're optimizing for.
+
+**Example:**
+- ❌ "The system should send notifications, track delivery, aggregate similar ones, support A/B testing, provide analytics..."
+- ✅ "Core: send and deliver notifications. Supporting: aggregation and tracking. Out of scope: A/B testing and analytics."
+
+## Pitfall 4: Missing Edge Cases
+
+**The problem:**
+Only describing the happy path. "Users send messages" but what about failures, limits, invalid inputs?
+
+**Why it happens:**
+Happy path is the obvious case. Edge cases require more thought.
+
+**How to avoid:**
+Systematically ask: "What if input is invalid? What if something fails? What about boundaries?"
+
+**Example:**
+- ❌ "Users can send messages to other users"
+- ✅ "Users can send messages to other users. If the recipient doesn't exist, return error. If message exceeds length limit, reject. If delivery fails, retry 3 times."
+
+## Pitfall 5: Scope Creep
+
+**The problem:**
+Starting with 3 requirements and ending with 15 as you keep adding "one more thing."
+
+**Why it happens:**
+Each addition seems small. "While we're at it" thinking.
+
+**How to avoid:**
+Set scope explicitly at the start. Use a "not now" list for things you think of later. Periodically check if you've drifted.
+
+**Example:**
+- ❌ [Keeps adding features throughout the interview]
+- ✅ "I defined 5 core requirements at the start. I've thought of 3 more nice-to-haves—I'll note them but not design them."
+
+## Pitfall 6: Not Confirming with Interviewer
+
+**The problem:**
+Assuming your understanding is correct without checking.
+
+**Why it happens:**
+Candidates want to seem confident. Checking feels like uncertainty.
+
+**How to avoid:**
+Confirmation is not weakness; it's collaboration. Always check: "Does this capture what you had in mind?"
+
+**Example:**
+- ❌ [States requirements and immediately moves to design]
+- ✅ "Here are my requirements. Does this match your expectations? Should I adjust the scope?"
+
+## Pitfall 7: Requirements Don't Enable Use Cases
+
+**The problem:**
+Your requirements don't actually support the use cases you identified.
+
+**Why it happens:**
+Requirements and use cases were defined separately without checking alignment.
+
+**How to avoid:**
+After defining requirements, trace each use case: "Can a user accomplish [use case] with these requirements?"
+
+**Example:**
+- Use case: "User views conversation history"
+- Required functionality: "System stores messages and allows retrieval by conversation"
+- Check: ✅ Use case is enabled by requirements
+
+## Pitfall 8: Ignoring Control/Admin Flows
+
+**The problem:**
+Focusing entirely on user-facing functionality, forgetting about system management.
+
+**Why it happens:**
+User flows are more interesting. Admin flows seem boring.
+
+**How to avoid:**
+Explicitly enumerate control flows: "What operations do administrators need? What configuration is required?"
+
+**Example:**
+- ❌ [Only describes user sending/receiving messages]
+- ✅ "Users send and receive messages. Operators can configure message retention, view delivery metrics, and block abusive users."
 
 ---
 
 # Quick Reference Card
 
-## Scale Estimation Checklist
+## Functional Requirements Checklist
 
-| Step | Question | Example Output |
-|------|----------|----------------|
-| **1. Anchor on users** | "How many DAU/MAU?" | "200M DAU, 500M MAU" |
-| **2. Derive activity** | "Actions per user per day?" | "20 actions/user = 4B/day" |
-| **3. Calculate rates** | "Divide by 86,400" | "4B / 86,400 = 46K QPS" |
-| **4. Account for peak** | "Peak = 2-5x average" | "Peak = 140K QPS" |
-| **5. Split read/write** | "What's the ratio?" | "100:1 read-heavy" |
-| **6. Check fan-out** | "What multiplies?" | "1K posts × 1K followers = 1M" |
-| **7. Identify hot keys** | "What's skewed?" | "Top 1% = 50% traffic" |
-| **8. Plan growth** | "What about 10x?" | "Schema supports sharding" |
+| Step | Question to Ask | Example Output |
+|------|-----------------|----------------|
+| **Define what, not how** | "What does the system do?" | "Users can send messages" (not "stores in Cassandra") |
+| **Identify core vs supporting** | "Is system useless without this?" | Core: send/receive. Supporting: reactions |
+| **Enumerate all flow types** | "What are read, write, control flows?" | Read: view history. Write: send. Control: configure |
+| **Handle edge cases** | "What if X fails/is extreme?" | "If offline, queue. If too long, reject." |
+| **Set scope boundaries** | "What's in? What's out?" | "In: delivery. Out: analytics" |
+| **Confirm with interviewer** | "Does this match your expectations?" | Get explicit agreement |
 
 ---
 
-## Read/Write Ratio Quick Reference
+## The Requirement Statement Pattern
 
-| System Type | Typical Ratio | Optimization Focus |
-|-------------|---------------|-------------------|
-| Social feed | 100:1 - 1000:1 | Caching, read replicas, CDN |
-| E-commerce catalog | 100:1 - 10,000:1 | Aggressive caching |
-| URL shortener | 100:1 - 1000:1 | Cache resolution path |
-| Messaging | 1:1 - 10:1 | Balance both paths |
-| Metrics/logging | 1:10 - 1:100 | Write optimization, batching |
-| User profiles | 50:1 - 500:1 | Cache hot profiles |
+**Format:** `[User/System] can [action] [object] [optional: conditions/constraints]`
 
----
-
-## Peak Multipliers Quick Reference
-
-| System Type | Normal Peak | Event Peak |
-|-------------|-------------|------------|
-| Messaging | 2-3x | 5-10x |
-| Social feeds | 3-5x | 10-20x |
-| E-commerce | 5-10x (holidays) | 20-50x (flash sales) |
-| Streaming video | 3-4x (primetime) | 10x (major releases) |
-| Sports/news | 10-50x (events) | 100x (breaking news) |
+| ❌ Too Vague | ✅ Just Right |
+|-------------|---------------|
+| "System handles messages" | "Users can send text messages to other users" |
+| "System does notifications" | "Services submit notifications; system delivers via push/email respecting preferences" |
+| "System limits requests" | "System checks client usage against configured limits; allows or rejects accordingly" |
 
 ---
 
-## Hot Key Mitigation Strategies
+## Quick Reference: Behavior Specification Pattern
 
-| Strategy | How It Works | Best For |
-|----------|-------------|----------|
-| **Caching** | Multi-layer caches with short TTL | Read-heavy hot keys |
-| **Replication** | Multiple copies of hot data | Read distribution |
-| **Splitting** | user_123 → user_123_0, user_123_1 | Large follower lists |
-| **Rate limiting** | Accept overflow to queue/stale | Burst protection |
-| **Dedicated infra** | Separate cluster for celebrities | Known hot spots |
+**When** [trigger] **the system** [action] **for** [affected entities] **according to** [rules]
 
----
-
-## Common Mistakes Quick Reference
-
-| Mistake | What Happens | Fix |
-|---------|-------------|-----|
-| **No scale question** | Over/under-engineer | "How many users? What growth?" |
-| **Average, not peak** | Fail during spikes | "Peak = 3-5x average" |
-| **Ignore fan-out** | 1K posts ≠ 1K operations | "× followers × services" |
-| **Assume uniform** | Hot keys crash partitions | "Power-law: top 1% = 50%" |
-| **Round without derivation** | Meaningless numbers | "Show your work" |
-| **Forget data scale** | Storage > request challenge | "50K × 1KB × 1 year = 1.5 PB" |
+**Examples:**
+- "When a message is sent, the system delivers it to the recipient in real-time and stores it for later retrieval."
+- "When a request arrives, the system checks the client's usage against limits and allows or rejects accordingly."
+- "When a user creates a short URL, the system generates a unique key and stores the mapping."
 
 ---
 
-## Self-Check: Did I Cover Scale?
+## Edge Case Quick Reference
+
+| Category | Questions to Ask | Example |
+|----------|-----------------|---------|
+| **Extreme inputs** | Empty? Max value? Very long? | "What if message is 100KB?" |
+| **Failures** | Service down? Timeout? Partial failure? | "What if push delivery fails?" |
+| **Timing** | Out of order? Concurrent? Stale? | "What if user updates preference mid-delivery?" |
+| **Unusual users** | New user? Power user? Inactive? | "What if user follows 50,000 accounts?" |
+
+---
+
+## Common Pitfalls Quick Reference
+
+| Pitfall | What It Looks Like | Fix |
+|---------|-------------------|-----|
+| **Too vague** | "System handles messages" | Use pattern: [User] can [action] [object] |
+| **Includes implementation** | "Store in Cassandra, publish to Kafka" | Describe behavior, not mechanism |
+| **No prioritization** | 15 requirements, all equal | "Core: X, Y. Supporting: Z. Out of scope: W" |
+| **Missing edge cases** | Only happy path | Ask: "What if fails? What if extreme?" |
+| **Scope creep** | Started with 3, ended with 15 | Set scope explicitly, use "not now" list |
+| **No confirmation** | Assumes understanding is correct | "Does this capture what you had in mind?" |
+| **Missing control flows** | Only user-facing features | "What do operators/admins need?" |
+
+---
+
+## Self-Check: Did I Cover Phase 2?
 
 | Signal | Weak | Strong | ✓ |
 |--------|------|--------|---|
-| **User scale** | "Lots of users" | "200M DAU, 500M MAU" | ☐ |
-| **Request rate** | "High traffic" | "46K QPS avg, 140K peak" | ☐ |
-| **Derivation** | Numbers from nowhere | "DAU × actions / 86,400" | ☐ |
-| **Peak handling** | Designed for average | "3x normal, 10x events" | ☐ |
-| **Read/write ratio** | Not mentioned | "100:1 → caching essential" | ☐ |
-| **Fan-out** | Ignored | "1K posts × 1K = 1M updates" | ☐ |
-| **Hot keys** | Assumed uniform | "Celebrity = separate handling" | ☐ |
-| **Growth** | Current only | "10x in 2 years, schema ready" | ☐ |
+| **Specificity** | "System handles X" | "[User] can [action] [object]" | ☐ |
+| **Core/Supporting** | All requirements equal | "Core: A, B. Supporting: C, D" | ☐ |
+| **Flow types** | Only obvious user flows | Read, Write, AND Control flows | ☐ |
+| **Edge cases** | Happy path only | 3-5 edge cases with handling decisions | ☐ |
+| **Scope** | Implicit | "In scope: X. Out of scope: Y" | ☐ |
+| **Confirmation** | Moved straight to design | "Does this match expectations?" | ☐ |
 
 ---
 
-# Part 11: Scale and Failure Modes — Staff-Level Thinking
+# Part 11: Failure Mode Requirements — Staff-Level Thinking
 
-Scale doesn't just affect performance—it fundamentally changes how systems fail. Staff engineers understand that failure modes transform as scale increases.
+A critical gap in most requirements gathering: candidates define what happens when things work, but not what happens when things fail. Staff engineers capture failure behavior as explicit functional requirements.
 
-## How Scale Changes Failure Behavior
+## Why Failure Requirements Matter
+
+Functional requirements that only describe the happy path leave critical questions unanswered:
+- What does the user see when delivery fails?
+- What happens to data when a write partially succeeds?
+- How does the system behave when a dependency is unavailable?
+
+Without explicit failure requirements, engineers make inconsistent ad-hoc decisions during implementation.
+
+## The Failure Requirements Pattern
+
+For each core functional requirement, define the failure behavior:
+
+**Format:**
+"When [normal behavior] fails due to [failure condition], the system [failure behavior] and [user/system notification]."
+
+**Examples:**
+
+| Normal Requirement | Failure Requirement |
+|-------------------|---------------------|
+| System delivers notifications in real-time | When delivery fails, system retries 3x with backoff, then queues for later delivery and marks as "pending" |
+| System resolves short URL to long URL | When URL not found, system returns 404 with helpful message; when service degraded, returns cached result if available |
+| System checks rate limit before allowing request | When rate limiter unavailable, system fails open (allows) for low-risk endpoints, fails closed (blocks) for high-risk |
+
+## Failure Requirements by Flow Type
+
+### Read Flow Failures
+
+| Failure Scenario | Requirement Pattern |
+|-----------------|---------------------|
+| Data not found | Return clear 404 with actionable message |
+| Data temporarily unavailable | Return cached/stale data with freshness indicator |
+| Timeout | Return partial result or graceful error with retry guidance |
+| Authorization failure | Return 403 with reason (not 404 to hide existence) |
+
+### Write Flow Failures
+
+| Failure Scenario | Requirement Pattern |
+|-----------------|---------------------|
+| Partial write success | Either full rollback or explicit partial success response |
+| Duplicate submission | Idempotent handling—return success for duplicate |
+| Validation failure | Return specific field errors, not generic rejection |
+| Downstream failure | Queue for retry or return explicit failure with recovery path |
+
+### Control Flow Failures
+
+| Failure Scenario | Requirement Pattern |
+|-----------------|---------------------|
+| Configuration change fails | Atomic change—either fully applied or fully rolled back |
+| Invalid configuration | Reject with validation errors before applying |
+| Propagation delay | Return success with "may take up to X to propagate" |
+
+## Example: Notification System Failure Requirements
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              HOW SCALE TRANSFORMS FAILURE MODES                             │
+│              NOTIFICATION SYSTEM FAILURE REQUIREMENTS                        │
 │                                                                             │
-│   SMALL SCALE (1K users)           LARGE SCALE (100M users)                 │
-│   ┌─────────────────────┐          ┌─────────────────────┐                  │
-│   │ Failure = Outage    │          │ Failure = Partial   │                  │
-│   │ Fix = Restart       │    →     │ Fix = Containment   │                  │
-│   │ Impact = Everyone   │          │ Impact = Some users │                  │
-│   │ Recovery = Fast     │          │ Recovery = Gradual  │                  │
-│   └─────────────────────┘          └─────────────────────┘                  │
+│   CORE REQUIREMENT: System delivers notifications to users                  │
 │                                                                             │
-│   KEY INSIGHT: At scale, you don't prevent all failures—you contain them    │
-│                                                                             │
-│   SCALE              DOMINANT FAILURE MODE        STRATEGY                  │
-│   ─────────────────────────────────────────────────────────────────────     │
-│   1K users           Single point fails           Restart, apologize        │
-│   100K users         Hot key overwhelms           Cache, replicate          │
-│   1M users           Partition overloaded         Shed load, degrade        │
-│   10M users          Cascading failures           Circuit break, isolate    │
-│   100M users         Partial availability normal  Design for it             │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Scale-Dependent Failure Scenarios
-
-| Scale | Likely Failure Mode | Why It Happens | Staff-Level Response |
-|-------|--------------------|-----------------|--------------------|
-| 10K QPS | Single DB overload | Queries pile up | Read replicas, query optimization |
-| 100K QPS | Cache miss storm | Cache node fails, DB hammered | Multiple cache layers, warm standby |
-| 1M QPS | Hot partition | Celebrity posts, viral content | Split hot keys, dedicated handling |
-| 10M QPS | Network saturation | Raw bandwidth limits | Edge caching, regional distribution |
-| 100M QPS | Cascading failure | One service slow → all slow | Circuit breakers, bulkheads, timeouts |
-
-## Blast Radius at Scale
-
-At small scale, a failure typically affects everyone equally. At large scale, failure containment becomes the primary concern.
-
-**Small Scale Blast Radius:**
-- Single database → All users affected
-- Recovery: Fix the one thing, everyone recovers
-
-**Large Scale Blast Radius:**
-- Sharded database → Only users on that shard affected
-- But: More things can fail → More partial failures
-- Recovery: Gradual, shard by shard
-
-**Staff-Level Insight:**
-"At 100M users, I expect partial failures to be normal, not exceptional. My design needs to tolerate shard-level failures, service-level degradation, and regional issues—while keeping most users unaffected. Complete outages should be almost impossible because no single component serves everyone."
-
-## Scale Thresholds That Force Architectural Decisions
-
-| Threshold | What Breaks | What You Must Do |
-|-----------|-------------|------------------|
-| >10K concurrent connections | Single server socket limits | Load balancer, connection pooling |
-| >50K QPS writes | Single database | Sharding or write-behind queuing |
-| >1M rows in hot table | Query performance degrades | Partitioning, indexing strategy |
-| >10 TB storage | Single disk/node limits | Distributed storage |
-| >100ms inter-service latency | User experience | Regional deployment, edge caching |
-| >1000 microservices | Coordination overhead | Service mesh, platform team |
-
-## Articulating Scale-Failure Relationship in Interviews
-
-**L5 Approach:** "The system should be highly available."
-
-**L6 Approach:** "At 10M users, failure modes change. I expect:
-- Partial failures are normal—some shards may be degraded
-- Hot keys during events will stress specific partitions
-- Network partitions between regions will occur
-- Cascading failures are the biggest risk
-
-My design accounts for this:
-- User-sharded data so failures are contained
-- Circuit breakers between services
-- Regional isolation with cross-region fallback
-- Explicit degradation modes per feature
-
-I'm not trying to prevent all failures—I'm trying to contain blast radius."
-
----
-
-# Part 12: Scale Estimation Under Uncertainty
-
-Real-world scale estimation involves uncertainty. Staff engineers communicate this uncertainty explicitly rather than hiding behind false precision.
-
-## The Problem with Point Estimates
-
-"We'll have 50,000 QPS" sounds precise but is almost certainly wrong. The actual number might be 30,000 or 80,000. Designs based on exactly 50,000 may fail at 60,000.
-
-## Range-Based Estimation
-
-Instead of point estimates, use ranges with confidence levels:
-
-**Format:** "I estimate [low] to [high] with [confidence]"
-
-**Example:**
-"Based on our 200M DAU assumption and typical action rates, I estimate:
-- Conservative: 30K QPS (if engagement is lower than expected)
-- Expected: 50K QPS (based on comparable platforms)
-- Aggressive: 100K QPS (if we hit viral growth or heavy engagement)
-
-I'll design for 100K sustained with burst to 200K. This covers the aggressive case with headroom."
-
-## Confidence Calibration
-
-| Confidence Level | What It Means | How to Handle |
-|-----------------|---------------|---------------|
-| High (80%+) | Based on real data or close analogies | Design to spec, small buffer |
-| Medium (50-80%) | Reasonable assumptions, some unknowns | Design for 2-3x, monitor closely |
-| Low (<50%) | Many unknowns, novel domain | Design for 5-10x, build flexibility |
-
-## When You Truly Don't Know
-
-Sometimes you can't estimate scale with any confidence. Staff engineers handle this explicitly:
-
-**Approach 1: Bound the problem**
-"I don't know exact numbers, but I can bound it:
-- Minimum: 1,000 users (we have this many beta signups)
-- Maximum: 10M users (total addressable market)
-- My architecture should work at 1,000 and scale to 10M with planned evolution"
-
-**Approach 2: Identify the decision points**
-"I'll design for 100K users. If we're at 50K and growing 20% monthly, I'll need to start the sharding migration. I'll build monitoring that tells me when we're approaching limits."
-
-**Approach 3: Make uncertainty explicit**
-"The interviewer hasn't specified scale, and this could be a startup MVP or Google-scale. Let me propose two designs:
-- MVP: Simple, single-region, single database
-- Scale: Distributed, multi-region, sharded
-
-The core abstractions are the same; the implementation differs."
-
-## Communicating Uncertainty in Interviews
-
-**L5 Approach:** "We'll have 100K QPS." (False precision)
-
-**L6 Approach:** "Based on 50M DAU and 20 actions per user, I derive roughly 10-15K QPS average. Peak might be 3-5x, so 30-75K QPS. Given uncertainty in our DAU assumption, I'll design for 100K QPS sustained capacity, with graceful degradation beyond that. This gives us buffer for estimation error and unexpected growth."
-
----
-
-# Part 13: Scale-Driven Trade-offs
-
-Scale forces trade-offs. Staff engineers articulate these trade-offs explicitly rather than making silent compromises.
-
-## The Trade-offs Scale Forces
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│              TRADE-OFFS THAT SCALE FORCES                                   │
-│                                                                             │
+│   FAILURE REQUIREMENTS:                                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  SIMPLICITY ◄─────────────────────────────────► SCALABILITY         │   │
-│   │                                                                     │   │
-│   │  At small scale: Simple monolith wins                               │   │
-│   │  At large scale: Distributed complexity unavoidable                 │   │
+│   │  F-1: Push delivery failure                                         │   │
+│   │       Retry 3x with exponential backoff (1s, 5s, 30s)               │   │
+│   │       If all retries fail → fall back to email if enabled           │   │
+│   │       If fallback fails → mark as "undelivered" in inbox            │   │
+│   │       Emit metric: notification_delivery_failure                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  CONSISTENCY ◄────────────────────────────────► PERFORMANCE         │   │
-│   │                                                                     │   │
-│   │  At small scale: Strong consistency cheap                           │   │
-│   │  At large scale: Eventual consistency often required                │   │
+│   │  F-2: User preference lookup failure                                │   │
+│   │       Use cached preferences if available (up to 1 hour stale)      │   │
+│   │       If no cache → use default preferences (all channels enabled)  │   │
+│   │       Never block delivery due to preference lookup failure         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  COST ◄───────────────────────────────────────► CAPABILITY          │   │
-│   │                                                                     │   │
-│   │  Scaling isn't free: 10x users ≈ 10x cost (or worse)                │   │
-│   │  Efficiency matters more at scale                                   │   │
+│   │  F-3: Notification storage failure                                  │   │
+│   │       Delivery proceeds even if storage fails (prefer delivery)     │   │
+│   │       Queue storage write for retry                                 │   │
+│   │       Emit metric: notification_storage_failure                     │   │
+│   │       User may not see in history temporarily                       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  LATENCY ◄────────────────────────────────────► THROUGHPUT          │   │
-│   │                                                                     │   │
-│   │  Batching increases throughput but adds latency                     │   │
-│   │  At scale, you often must batch                                     │   │
+│   │  F-4: Complete system overload                                      │   │
+│   │       Shed load by priority: marketing < social < transactional     │   │
+│   │       Queue shed notifications for later delivery                   │   │
+│   │       Never drop transactional notifications                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Scale Trade-off Decision Framework
+## Articulating Failure Requirements in Interviews
 
-For each scale-driven trade-off, Staff engineers reason through:
+**L5 Approach:** "System delivers notifications." (Happy path only)
 
-1. **What scale threshold triggers this trade-off?**
-2. **What are we giving up? What are we gaining?**
-3. **Is the trade-off reversible?**
-4. **What's the migration path?**
+**L6 Approach:** "System delivers notifications with these failure behaviors:
+- If push fails, retry with backoff then fall back to email
+- If preferences unavailable, use cached or defaults—never block delivery
+- If storage fails, still deliver—user sees notification even if history is delayed
+- Under overload, shed marketing first, never drop transactional
 
-### Example: Consistency vs. Performance at Scale
-
-**Threshold:** ~10K writes/second to single database
-
-**Trade-off:**
-- Give up: Strong consistency (all reads see latest write)
-- Gain: Higher throughput, lower latency, partition tolerance
-
-**Staff-Level Reasoning:**
-"At 10K writes/second, our single database becomes a bottleneck. I have options:
-- Vertical scaling: Buy bigger hardware (expensive, has limits)
-- Sharding: Distribute writes (complexity, cross-shard queries hard)
-- Eventual consistency: Async replication, accept stale reads
-
-For this use case (social feed), eventual consistency is acceptable—users don't need real-time consistency for seeing posts. The trade-off is that a user might not immediately see their own post reflected in their feed. I'll use read-your-own-writes consistency to mitigate this."
-
-### Example: Cost vs. Capability at Scale
-
-| Scale | Monthly Cost | Cost Trade-offs |
-|-------|-------------|-----------------|
-| 1K users | $100 | Can over-provision, doesn't matter |
-| 100K users | $10,000 | Efficiency starts to matter |
-| 10M users | $1,000,000 | Every 10% inefficiency = $100K/month |
-| 100M users | $10,000,000 | Efficiency is existential |
-
-**Staff-Level Insight:**
-"At 10M users, a 10% efficiency improvement saves $100K monthly. I'll invest in:
-- Right-sizing instances
-- Caching to reduce database load
-- Compression for storage and bandwidth
-- Batch processing instead of real-time where acceptable
-
-But I won't over-optimize for current scale—if we're growing 50% annually, the efficiency gains are temporary."
-
-## Articulating Scale Trade-offs in Interviews
-
-**L5 Approach:** "We'll use eventual consistency." (No rationale)
-
-**L6 Approach:** "At 50K writes/second, strong consistency across regions becomes expensive—we'd need synchronous cross-region replication adding 100-200ms latency. I'm trading strong consistency for performance:
-- Writes are locally consistent (same region sees immediately)
-- Cross-region replication is async (seconds of lag)
-- For this use case (social posts), this is acceptable
-
-The trade-off becomes problematic for financial transactions—there I'd accept the latency cost for strong consistency."
+These failure behaviors are requirements, not implementation details—they define what users experience when things go wrong."
 
 ---
 
-# Part 14: Operational Scale Considerations
+# Part 12: Operational Requirements as First-Class Citizens
 
-Scale affects not just the system, but how you operate it. Staff engineers think about operational scale from the start.
+Staff engineers explicitly define operational requirements—not as afterthoughts, but as first-class functional requirements.
 
-## How Scale Affects Operations
+## What Operational Requirements Cover
 
-| Operation | Small Scale | Large Scale |
-|-----------|-------------|-------------|
-| **Deployment** | Deploy everything, restart | Canary, rolling, traffic shifting |
-| **Monitoring** | A few dashboards | Thousands of metrics, automated alerting |
-| **Debugging** | Logs on one server | Distributed tracing, log aggregation |
-| **Incidents** | All-hands, fix it | Runbooks, automation, escalation |
-| **On-call** | Developer does everything | Dedicated SRE, tiered support |
+Operational requirements define what operators (SREs, on-call, platform teams) can do with the system:
 
-## Operational Requirements at Scale
+| Category | What It Covers | Example Requirements |
+|----------|---------------|---------------------|
+| **Observability** | What can be seen | "Operators can view delivery success rate per channel" |
+| **Debuggability** | What can be investigated | "Operators can trace a single notification through the system" |
+| **Controllability** | What can be changed | "Operators can disable a channel without deploy" |
+| **Recoverability** | What can be fixed | "Operators can replay failed notifications from the last 24h" |
 
-| Scale | Operational Requirement | Why |
-|-------|------------------------|-----|
-| 10K users | Basic monitoring | Know when it's down |
-| 100K users | Alerting, on-call rotation | Can't check manually |
-| 1M users | Runbooks, incident process | Too complex for ad-hoc |
-| 10M users | Automation, self-healing | Humans too slow |
-| 100M users | Platform team, dedicated SRE | Operational complexity is a full-time job |
+## Operational Requirements Pattern
 
-## Team Scale vs. System Scale
+**Format:** "Operators can [action] [scope] [timing/constraints]"
 
-**Rule of thumb:** One SRE per 10,000 "interesting" components.
+**Examples:**
 
-| System Scale | Typical Team Size | Roles |
-|-------------|------------------|-------|
-| 10K users | 2-5 engineers | Dev does ops |
-| 100K users | 5-10 engineers | Some ops specialization |
-| 1M users | 10-20 engineers | Dedicated on-call rotation |
-| 10M users | 20-50 engineers | SRE team, platform team |
-| 100M users | 100+ engineers | Multiple specialized teams |
+| Requirement | Why It Matters |
+|-------------|----------------|
+| Operators can view error rates by endpoint in real-time | Enables rapid incident detection |
+| Operators can trace any request through all services | Enables root cause analysis |
+| Operators can disable a feature flag without deploy | Enables rapid mitigation |
+| Operators can drain a server before maintenance | Enables zero-downtime deploys |
+| Operators can replay failed jobs from the last 7 days | Enables recovery from transient failures |
 
-## Designing for Operational Scale
+## Operational Requirements for Core Systems
 
-**L5 Approach:** "We'll add monitoring later."
+### Rate Limiter Operational Requirements
 
-**L6 Approach:** "At 10M users, I need to design for operational scale from day one:
-- Structured logging with correlation IDs (distributed debugging)
-- Metrics at every service boundary (SLO tracking)
-- Feature flags for every major feature (safe rollout)
-- Automated canary analysis (catch regressions)
-- Self-healing for common failures (reduced toil)
+| Requirement | Rationale |
+|-------------|-----------|
+| Operators can view current usage per client in real-time | Identify who's hitting limits |
+| Operators can override limits for specific clients immediately | Handle special cases |
+| Operators can disable rate limiting for an endpoint | Emergency bypass |
+| Operators can view rate of rejections by endpoint | Identify misconfigured limits |
+| Operators can export historical usage for capacity planning | Plan limit adjustments |
 
-These aren't nice-to-haves—at this scale, they're required for the system to be operable."
+### Notification System Operational Requirements
+
+| Requirement | Rationale |
+|-------------|-----------|
+| Operators can view delivery success rate per channel | Detect channel issues |
+| Operators can trace a notification from submission to delivery | Debug individual failures |
+| Operators can pause delivery to a specific channel | Isolate problematic channels |
+| Operators can replay failed notifications by time range | Recover from outages |
+| Operators can view queue depth and processing latency | Capacity monitoring |
+
+### Messaging System Operational Requirements
+
+| Requirement | Rationale |
+|-------------|-----------|
+| Operators can view message delivery latency percentiles | SLO monitoring |
+| Operators can trace a message through fan-out | Debug delivery issues |
+| Operators can throttle a specific sender | Handle abuse |
+| Operators can drain messages for a user (migration) | User-level operations |
+| Operators can view storage utilization per shard | Capacity planning |
+
+## Articulating Operational Requirements in Interviews
+
+**L5 Approach:** [Doesn't mention operational requirements]
+
+**L6 Approach:** "Beyond user-facing functionality, I have operational requirements:
+- Operators can view delivery success rate per channel—essential for SLO monitoring
+- Operators can trace any notification through the system—critical for debugging
+- Operators can pause a channel without deploy—needed for rapid incident response
+- Operators can replay failed deliveries—enables recovery from transient issues
+
+These shape my design: I need metrics emission at key points, trace context propagation, admin API with kill switches, and a dead-letter queue with replay capability."
 
 ---
 
-# Part 15: Interview Calibration for Scale (Phase 3)
+# Part 13: Requirements Dependencies and Critical Paths
 
-## What Interviewers Evaluate During Scale Discussion
+Staff engineers identify which requirements depend on others and where the critical path lies.
+
+## Why Dependencies Matter
+
+Some requirements are prerequisites for others. Understanding these dependencies:
+- Reveals what must be built first
+- Identifies shared infrastructure needs
+- Exposes critical paths that block multiple features
+
+## Requirements Dependency Analysis
+
+### Dependency Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Data dependency** | One requirement needs data from another | "View history" depends on "Store messages" |
+| **State dependency** | One requirement changes state another reads | "Enforce limit" depends on "Track usage" |
+| **Infrastructure dependency** | Multiple requirements share infrastructure | "Send push" and "Send email" both depend on "Queue for delivery" |
+
+### Dependency Mapping Example: Notification System
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              NOTIFICATION SYSTEM REQUIREMENTS DEPENDENCIES                  │
+│                                                                             │
+│   F1: Accept notification ─────┐                                            │
+│          │                     │                                            │
+│          ▼                     │                                            │
+│   F2: Validate recipient ◄─────┘                                            │
+│          │                                                                  │
+│          ├──────────────────────────┐                                       │
+│          │                          │                                       │
+│          ▼                          ▼                                       │
+│   F3: Queue for delivery     F4: Store in inbox                             │
+│          │                          │                                       │
+│          ▼                          │                                       │
+│   F5: Lookup preferences            │                                       │
+│          │                          │                                       │
+│          ├──────────────────────────┤                                       │
+│          │                          │                                       │
+│          ▼                          ▼                                       │
+│   F6: Deliver via channel    F7: View notification history                  │
+│          │                                                                  │
+│          ▼                                                                  │
+│   F8: Track delivery status                                                 │
+│          │                                                                  │
+│          ▼                                                                  │
+│   F9: Report metrics to sender                                              │
+│                                                                             │
+│   CRITICAL PATH: F1 → F2 → F3 → F5 → F6 (delivery)                          │
+│   SECONDARY PATH: F1 → F2 → F4 → F7 (history)                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Identifying Critical Path
+
+The critical path is the sequence of requirements that:
+- Must all work for the core use case to succeed
+- Determines end-to-end latency
+- Is where you invest most in reliability
+
+**Rate Limiter Critical Path:**
+1. Receive request → 2. Identify client → 3. Lookup current usage → 4. Check against limit → 5. Return decision
+
+Every step must work. Failure anywhere breaks the core use case.
+
+**Messaging System Critical Path:**
+1. Receive message → 2. Validate sender/recipient → 3. Store message → 4. Notify recipient → 5. Deliver to client
+
+Supporting features (reactions, search) are off the critical path—they can fail without breaking messaging.
+
+## Using Dependencies in Design
+
+**L5 Approach:** Lists requirements flat, designs them independently.
+
+**L6 Approach:** "Let me map the dependencies:
+- Delivery depends on preference lookup—if preferences fail, I need a fallback
+- History depends on storage—but storage shouldn't block delivery
+- Metrics depend on delivery status—can be eventually consistent
+
+My critical path is: accept → validate → queue → lookup → deliver. I'll design this path for maximum reliability. Supporting features fork off the critical path and can have lower guarantees."
+
+---
+
+# Part 14: Requirements Conflicts and Trade-offs
+
+When requirements conflict, Staff engineers reason through the trade-off explicitly rather than making arbitrary choices.
+
+## Common Requirement Conflicts
+
+### Speed vs. Durability
+
+**Conflict:** "Deliver notifications in real-time" vs. "Never lose a notification"
+
+**Trade-off analysis:**
+- Real-time delivery → acknowledge before durable storage → risk of loss on failure
+- Never lose → acknowledge after durable storage → added latency
+
+**Resolution:** "I'll prioritize perceived speed with eventual durability. Acknowledge to sender after primary write, async replication for durability. Rare loss (<0.0001%) is acceptable for the latency gain."
+
+### Consistency vs. Availability
+
+**Conflict:** "Rate limits are accurate" vs. "Rate limiting is always available"
+
+**Trade-off analysis:**
+- Accurate limits → synchronous distributed counter → reduced availability
+- Always available → local counters with async sync → limits may be slightly off
+
+**Resolution:** "For most APIs, slight over/under limiting (±5%) is acceptable. I'll use local counters with eventual sync. For critical APIs (payments), I'll use synchronous coordination accepting the availability trade-off."
+
+### Simplicity vs. Flexibility
+
+**Conflict:** "Easy to configure rate limits" vs. "Support complex rate limiting rules"
+
+**Trade-off analysis:**
+- Simple configuration → limited expressiveness → may not handle edge cases
+- Flexible rules → complex configuration → harder to understand and debug
+
+**Resolution:** "I'll provide simple defaults (X requests per minute per client) with optional advanced rules for power users. 90% of cases use defaults; 10% need complexity."
+
+## Requirements Trade-off Framework
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              REQUIREMENTS TRADE-OFF DECISION FRAMEWORK                      │
+│                                                                             │
+│   1. IDENTIFY THE CONFLICT                                                  │
+│      "Requirement A says X. Requirement B says Y. X and Y are incompatible."│
+│                                                                             │
+│   2. UNDERSTAND THE STAKES                                                  │
+│      "What happens if we favor A? What happens if we favor B?"              │
+│      "What's the blast radius of each choice?"                              │
+│                                                                             │
+│   3. FIND THE DOMINANT REQUIREMENT                                          │
+│      "Which requirement is core? Which is supporting?"                      │
+│      "Which aligns with primary user needs?"                                │
+│                                                                             │
+│   4. LOOK FOR CREATIVE SOLUTIONS                                            │
+│      "Can we serve both with different paths?"                              │
+│      "Can we make the trade-off configurable?"                              │
+│      "Can we time-slice (favor A now, B later)?"                            │
+│                                                                             │
+│   5. DOCUMENT THE DECISION                                                  │
+│      "I'm prioritizing A because [rationale]."                              │
+│      "The impact on B is [specific degradation]."                           │
+│      "This is acceptable because [justification]."                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Example: Messaging System Requirements Conflict
+
+**Conflict:**
+- F1: "Messages are delivered in real-time" (user expectation)
+- F2: "Messages are never lost" (business requirement)
+- F3: "System handles 10M concurrent users" (scale requirement)
+
+At scale, real-time + never-lost + massive scale creates tension.
+
+**L5 Resolution:** Picks one arbitrarily or doesn't acknowledge the conflict.
+
+**L6 Resolution:**
+"These requirements create tension at scale. Let me reason through it:
+
+- Real-time delivery is the primary user expectation—I won't compromise on perceived latency
+- Never-lost is a business requirement—I can tolerate rare loss if we have recovery mechanisms
+- Scale is a constraint—I need an architecture that handles the load
+
+My resolution:
+- Acknowledge to sender after primary storage (fast)
+- Async replication for durability (eventual)
+- If primary fails before replication, message is in sender's sent history—they can resend
+- Provide receipt confirmation to give users confidence
+
+This accepts rare loss (estimated 0.001%) for real-time feel. Users can verify delivery via receipts. Business accepts this trade-off in SLA."
+
+---
+
+# Part 15: Requirements Evolution at Scale
+
+Staff engineers anticipate how requirements change as systems scale.
+
+## How Requirements Evolve
+
+| Scale Stage | What Changes | Example |
+|-------------|--------------|---------|
+| **V1 (MVP)** | Core requirements only, simple solutions acceptable | "Messages are delivered" (no SLA) |
+| **V2 (Growth)** | Quality requirements tighten, supporting features become core | "Messages delivered in <1s" (SLA added) |
+| **V3 (Scale)** | Operational requirements become critical, edge cases can't be ignored | "Messages delivered in <1s at p99 across regions" |
+
+## Requirements That Intensify at Scale
+
+### Reliability Requirements
+
+| V1 | V2 | V3 |
+|----|----|----|
+| "System is usually available" | "99.9% availability" | "99.99% availability with graceful degradation" |
+| "Retry on failure" | "Retry with backoff, dead letter after N attempts" | "Configurable retry policies, automatic replay, no data loss" |
+
+### Operational Requirements
+
+| V1 | V2 | V3 |
+|----|----|----|
+| "Logs exist" | "Structured logs with correlation IDs" | "Distributed tracing, real-time alerting, automated remediation" |
+| "Can redeploy to fix issues" | "Feature flags for quick rollback" | "Canary deployments, traffic shifting, instant rollback" |
+
+### Performance Requirements
+
+| V1 | V2 | V3 |
+|----|----|----|
+| "Fast enough" | "p50 < 100ms, p99 < 500ms" | "p50 < 50ms, p99 < 200ms, p999 < 1s with graceful degradation" |
+| "Handles current load" | "Handles 10x current load" | "Auto-scales to demand, handles 100x spikes" |
+
+## Anticipating Evolution in Requirements
+
+**L5 Approach:** Defines requirements for current state only.
+
+**L6 Approach:** "Let me define requirements for V1, but note what intensifies at scale:
+
+V1 Requirements:
+- Messages delivered with best effort (no SLA)
+- Basic logging for debugging
+- Manual scaling
+
+What changes at V2/V3:
+- Delivery SLA tightens to 99.9% within 1s
+- Distributed tracing becomes mandatory
+- Auto-scaling becomes critical
+- Operational requirements become core, not supporting
+
+I'll design V1 to not block these evolutions. For example, I'll include correlation IDs from day one even if we don't have distributed tracing yet."
+
+---
+
+# Part 16: Interview Calibration for Phase 2 (Functional Requirements)
+
+## What Interviewers Evaluate During Phase 2
 
 | Signal | What They're Looking For | L6 Demonstration |
 |--------|-------------------------|------------------|
-| **Derivation** | Can you calculate, not just guess? | "200M DAU × 20 actions ÷ 86,400 = 46K QPS" |
-| **Peak awareness** | Do you think beyond average? | "Average 46K, peak 3x = 140K, events 10x" |
-| **Multiplier awareness** | Do you see fan-out and amplification? | "1K posts × 1K followers = 1M feed updates" |
-| **Skew awareness** | Do you anticipate hot keys? | "Top 1% = 50% of traffic, need special handling" |
-| **Growth thinking** | Do you plan for evolution? | "Schema supports sharding from day one" |
-| **Uncertainty handling** | Do you communicate confidence? | "Estimate 30-100K QPS, designing for 100K" |
-| **Trade-off articulation** | Do you explain scale-driven trade-offs? | "At this scale, eventual consistency is required because..." |
+| **Precision** | Are requirements specific enough to implement? | "[User] can [action] [object]" pattern |
+| **Prioritization** | Do you distinguish core from supporting? | Explicit "Core: X. Supporting: Y" |
+| **Completeness** | Did you cover read, write, AND control? | All flow types enumerated |
+| **Failure thinking** | Do you define failure behaviors? | Explicit failure requirements |
+| **Operational awareness** | Did you include operator needs? | Observability/debuggability requirements |
+| **Scope discipline** | Did you set boundaries? | "In scope: X. Out of scope: Y" |
 
-## L6 Phrases That Signal Staff-Level Scale Thinking
+## L6 Phrases That Signal Staff-Level Thinking
 
-### For Derivation
+### For Requirements Precision
 
-**L5 says:** "We need to handle a lot of traffic."
+**L5 says:** "The system handles notifications."
 
-**L6 says:** "Let me derive the numbers. With 200M DAU and 20 actions per user per day, that's 4 billion actions daily. Dividing by 86,400 seconds gives us about 46K QPS average. Peak at 3x is 140K QPS. During major events, we might see 10x, so burst capacity for 500K QPS."
+**L6 says:** "Services can submit notifications with recipient ID, content, and channel preference. System delivers via the specified channel within the user's preference constraints. Delivery is confirmed or queued for retry on failure."
 
-### For Fan-Out
+### For Core vs Supporting
 
-**L5 says:** "We can handle 1,000 posts per second."
+**L5 says:** "We need to support all these features."
 
-**L6 says:** "1,000 posts per second sounds manageable, but the fan-out is the challenge. If average users have 500 followers, that's 500K feed updates per second. And we have celebrities with millions of followers—a single celebrity post could generate 10M updates. I'll use push for regular users and pull for celebrities to manage this."
+**L6 says:** "Core requirements—system is useless without these: submit, deliver, preferences. Supporting requirements—enhance but not essential: aggregation, history, analytics. I'll design core in detail; supporting informs data model but won't be fully designed."
 
-### For Hot Keys
+### For Failure Requirements
 
-**L5 says:** "We'll partition by user ID."
+**L5 says:** [Doesn't mention failure behavior]
 
-**L6 says:** "Partitioning by user ID distributes data evenly, but not load. Celebrity accounts are hot keys—one partition could get 100x the traffic of others. I'll handle this with aggressive caching, read replicas for hot partitions, and potentially splitting follower lists for very large accounts."
+**L6 says:** "For each core requirement, here's the failure behavior:
+- If delivery fails: retry 3x, then fall back to email
+- If preferences unavailable: use cached or defaults
+- If storage fails: deliver anyway, queue storage retry
+These are requirements, not implementation—they define user experience under failure."
 
-### For Uncertainty
+### For Operational Requirements
 
-**L5 says:** "We'll have 50K QPS."
+**L5 says:** [Doesn't mention operational needs]
 
-**L6 says:** "Based on comparable platforms, I estimate 30-80K QPS average, with peak 3-5x that. Given this uncertainty, I'll design for 100K sustained with graceful degradation at higher loads. I'd rather over-provision slightly than fail during growth or events."
+**L6 says:** "Beyond user-facing requirements, I have operational requirements:
+- Operators can view delivery success rate per channel
+- Operators can trace any notification end-to-end
+- Operators can disable a channel without deploy
+These shape my architecture—I need metrics, tracing, and admin APIs."
 
-### For Scale Trade-offs
+### For Requirements Trade-offs
 
-**L5 says:** "We need strong consistency."
+**L5 says:** "We need real-time and never-lost."
 
-**L6 says:** "Strong consistency is ideal, but at 100K writes/second across regions, it adds 100-200ms per write for synchronous replication. For social posts, that latency isn't acceptable. I'm choosing eventual consistency with read-your-own-writes—users see their own posts immediately, others see them within seconds. For financial transactions, I'd make the opposite trade-off."
+**L6 says:** "There's tension between real-time delivery and zero-loss. I'm resolving it by:
+- Acknowledge after primary write (real-time feel)
+- Async replication (eventual durability)
+- Accept rare loss (~0.001%) for latency
+- Provide delivery confirmation so users know message arrived
+This trade-off is acceptable because [rationale]."
 
-## Common L5 Mistakes in Scale Thinking
+## Common L5 Mistakes in Phase 2
 
 | Mistake | How It Manifests | L6 Correction |
 |---------|------------------|---------------|
-| **Round number without derivation** | "Assume 1 million QPS" | "Let me derive: DAU × actions ÷ seconds = X QPS" |
-| **Forget peak** | Design for average | "Average is X, peak is 3-5x, events 10x" |
-| **Ignore fan-out** | "1K writes/second is fine" | "1K writes × 1K followers = 1M operations" |
-| **Assume uniform distribution** | "Partition evenly" | "Power law: top 1% = 50% traffic" |
-| **No growth consideration** | Current scale only | "10x in 2 years, schema supports sharding now" |
-| **False precision** | "Exactly 47,342 QPS" | "Estimate 30-80K, designing for 100K" |
-| **Scale without trade-offs** | "We'll have everything" | "At this scale, we trade X for Y because..." |
-| **Forget operational scale** | System only | "At 10M users, need dedicated SRE, automated deploy" |
+| **Vague requirements** | "System handles messages" | "[User] can [action] [object] [constraints]" |
+| **No prioritization** | All requirements equal | "Core: X, Y. Supporting: Z, W." |
+| **Happy path only** | No failure behavior | "When X fails, system does Y" |
+| **Missing control flows** | Only user-facing features | "Operators can configure/view/adjust..." |
+| **No operational requirements** | Observability as afterthought | Explicit observability/debuggability requirements |
+| **Implementation in requirements** | "Store in Cassandra" | Describe behavior, not mechanism |
+| **Ignoring conflicts** | Contradictory requirements | "These requirements conflict. Here's my resolution..." |
+| **Static requirements** | No scale consideration | "At V2/V3, this requirement intensifies to..." |
 
-## Interviewer's Mental Checklist for Scale
+## Interviewer's Mental Checklist for Phase 2
 
-As you work through scale, imagine the interviewer asking:
+As you work through Phase 2, imagine the interviewer asking:
 
-☐ "Did they derive numbers, not just guess?"
-☐ "Did they consider peak, not just average?"
-☐ "Did they identify fan-out and amplification?"
-☐ "Did they think about hot keys and skew?"
-☐ "Did they plan for growth?"
-☐ "Did they communicate uncertainty appropriately?"
-☐ "Did they articulate scale-driven trade-offs?"
-☐ "Did they consider operational scale?"
+☐ "Are requirements specific enough to implement?"
+☐ "Did they distinguish core from supporting?"
+☐ "Did they cover all flow types (read, write, control)?"
+☐ "Did they think about failure behavior?"
+☐ "Did they include operational requirements?"
+☐ "Did they handle edge cases explicitly?"
+☐ "Did they set scope boundaries?"
+☐ "Did they check alignment with me?"
 
-Hit all of these, and you've demonstrated Staff-level scale thinking.
+Hit all of these, and you've demonstrated Staff-level Phase 2 thinking.
 
 ---
 
-# Part 16: Final Verification — L6 Readiness Checklist
+# Part 17: Final Verification — L6 Readiness Checklist
 
 ## Does This Section Meet L6 Expectations?
 
 | L6 Criterion | Coverage | Notes |
 |-------------|----------|-------|
-| **Judgment & Decision-Making** | ✅ Strong | Scale thresholds, trade-off frameworks, decision points |
-| **Failure & Degradation Thinking** | ✅ Strong | Scale-failure relationship, blast radius, containment |
-| **Scale & Evolution** | ✅ Strong | Growth planning, scale thresholds, migration paths |
+| **Judgment & Decision-Making** | ✅ Strong | Core vs supporting, requirements conflicts, trade-off framework |
+| **Failure & Degradation Thinking** | ✅ Strong | Explicit failure requirements, failure by flow type |
+| **Scale & Evolution** | ✅ Strong | Requirements evolution V1 → V2 → V3 |
 | **Staff-Level Signals** | ✅ Strong | L6 phrases, interviewer evaluation, L5 mistakes |
-| **Real-World Grounding** | ✅ Strong | URL shortener, notification, rate limiter examples |
+| **Real-World Grounding** | ✅ Strong | Rate limiter, notification, messaging examples throughout |
 | **Interview Calibration** | ✅ Strong | Explicit signals, phrases, mental checklist |
 
 ## Staff-Level Signals Covered
 
-✅ Deriving scale from first principles (not guessing)
-✅ Considering peak load, not just average
-✅ Identifying fan-out and amplification effects
-✅ Anticipating hot keys and skew
-✅ Planning for growth with migration paths
-✅ Understanding scale-failure relationship
-✅ Communicating uncertainty in estimates
-✅ Articulating scale-driven trade-offs
-✅ Considering operational scale implications
-✅ Knowing when scale thresholds force architectural changes
+✅ Requirements specific enough to implement (pattern-based)
+✅ Clear core vs supporting distinction with rationale
+✅ Complete flow enumeration (read, write, control)
+✅ Explicit failure requirements for each core requirement
+✅ Operational requirements as first-class citizens
+✅ Requirements dependencies and critical path identification
+✅ Trade-off resolution when requirements conflict
+✅ Requirements evolution anticipation for scale
+✅ Edge case handling with explicit decisions
+✅ Scope boundaries with confirmation
 
 ## Remaining Gaps (Acceptable)
 
-- **Specific technology benchmarks**: Intentionally abstracted—varies by implementation
-- **Cost modeling details**: Would require specific pricing information
-- **Regional/global distribution**: Covered in later architecture discussions
+- **Quantitative requirements**: Covered in Phase 4 (NFRs)
+- **Technology choices**: Intentionally abstracted—requirements should be technology-agnostic
+- **Detailed component design**: Covered in later phases
 
 ---
 
 # Brainstorming Questions
 
-## Understanding Scale
+## Understanding Requirements
 
-1. For a system you've built, what was the actual scale vs. what you designed for? Were you over or under?
+1. For a system you've built, can you list 5 core and 5 supporting functional requirements? What made them core vs. supporting?
 
-2. Can you identify a system where scale forced a fundamental architecture change? What was the trigger?
+2. Think of a project where requirements were unclear. How did that affect the design? What would clearer requirements have changed?
 
-3. Think of a hot key incident you've experienced or heard about. What caused it? How was it handled?
+3. When have you seen a system fail because edge cases weren't considered? What was missed?
 
-4. What's the read/write ratio of systems you work with? How does it affect the architecture?
+4. How do you distinguish functional requirements from non-functional requirements? Where's the line?
 
-5. When have you seen fan-out cause problems? How was it addressed?
+5. Take a feature you've built. What was the observable behavior (functional) vs. the quality targets (non-functional)?
 
-## Estimation Practice
+## Scope and Prioritization
 
-6. Estimate the QPS for Gmail. For Google Search. For YouTube. How do they differ?
+6. When have you successfully cut scope on a project? What enabled you to do that?
 
-7. How much storage does Instagram need for photos? What assumptions are you making?
+7. When have you experienced feature creep? What caused it and how could it have been prevented?
 
-8. What's the bandwidth requirement for Netflix streaming? For Zoom video calls?
+8. How do you decide what's in V1 vs. V2? What's your mental model?
 
-9. How many messages per second does WhatsApp need to handle? Show your derivation.
+9. Think of a system with too many features. Which would you remove to simplify it?
 
-10. What's the fan-out factor for Twitter when a celebrity tweets?
+10. How do you say "no" to stakeholders who want more features?
 
-## Growth and Planning
+## Flow Analysis
 
-11. For a system you know, what would break first if load increased 10x?
+11. Take a familiar system. What are its read, write, and control flows? Is the balance what you'd expect?
 
-12. How do you decide when to invest in scaling vs. accepting limitations?
+12. Which flow type is typically the bottleneck: read, write, or control? Why?
 
-13. What's the cost of over-provisioning vs. under-provisioning? How do you balance?
+13. For a system you know, what's the ratio of reads to writes? How does that affect the design?
 
-14. How far ahead should you design? 2x? 10x? 100x? What factors influence this?
+14. What control flows do people often forget to design? Why are they overlooked?
 
-15. What metrics would tell you it's time to scale before users notice problems?
+15. How do you ensure control flows are secure? What's the threat model?
 
 ---
 
@@ -1655,149 +1884,145 @@ Hit all of these, and you've demonstrated Staff-level scale thinking.
 
 Set aside 15-20 minutes for each of these reflection exercises.
 
-## Reflection 1: Your Scale Estimation Accuracy
+## Reflection 1: Your Requirements Precision
 
-Think about your track record with scale estimation.
+Think about how you specify functional requirements.
 
-- What's the largest scale system you've designed? What was the actual vs. estimated load?
-- Which scale dimensions (QPS, storage, connections) do you estimate accurately?
-- What assumptions in your estimates have been wrong?
-- Do you show your math in interviews, or just state numbers?
+- Do you use precise, verifiable language or vague descriptions?
+- Can your requirements be tested? How would you know if they're met?
+- Do you distinguish between "the system must" vs. "the system should"?
+- How often do your requirements change after you start designing?
 
-Practice one complete scale derivation and check it against reality for a known system.
+Take one of your recent design docs and rewrite the requirements using the format: "[Actor] can [action] [object] [constraints]."
 
-## Reflection 2: Your Growth Planning
+## Reflection 2: Your Core vs. Supporting Judgment
 
-Consider how you think about system evolution.
+Consider how you prioritize requirements.
 
-- How far ahead do you typically design? 2x? 10x? 100x?
-- What factors determine how much headroom to build in?
-- Have you experienced systems that broke at scale? What broke first?
-- How do you balance over-engineering vs. under-engineering?
+- What criteria do you use to determine if something is core vs. supporting?
+- Have you ever built supporting features before core ones? What happened?
+- How do you communicate priority to stakeholders who want everything?
+- What's your process for cutting scope when timeline pressure hits?
 
-Map out when your current system would hit scaling walls at 2x, 5x, and 10x current load.
+List 10 features of a system you know well. Categorize each as core, supporting, or nice-to-have.
 
-## Reflection 3: Your Hot Key Awareness
+## Reflection 3: Your Edge Case Coverage
 
-Examine how you identify and handle hotspots.
+Examine how you handle edge cases.
 
-- Can you identify potential hot keys in systems you've designed?
-- What strategies do you use to mitigate hot keys?
-- Have you experienced hot key incidents? How were they resolved?
-- Do you design for uniform load distribution or explicitly handle skew?
+- Do you systematically identify edge cases, or do they surprise you?
+- What categories of edge cases do you tend to miss (concurrency, failure, boundary)?
+- How do you decide between handling fully vs. graceful degradation vs. exclusion?
+- Have edge cases caused production issues for you? Which ones?
 
-For a system you know well, identify 3 potential hot keys and mitigation strategies for each.
+For a familiar system, enumerate at least 15 edge cases across all categories.
 
 ---
 
 # Homework Exercises
 
-## Exercise 1: Scale Estimation Practice
+## Exercise 1: Requirements Specification
 
-For each system, estimate:
-- DAU/MAU
-- QPS (read and write separately)
-- Storage requirements
-- Peak load factors
+Take three system prompts:
+1. "Design a rate limiter"
+2. "Design a notification system"
+3. "Design a URL shortener"
 
-Systems:
-1. Uber (rides only, not Uber Eats)
-2. Slack (for a 10,000-person company)
-3. A major bank's mobile app
-4. A news website (like BBC or CNN)
+For each, write:
+- 5 core functional requirements
+- 3 supporting functional requirements
+- 3 explicit exclusions (out of scope)
+- 3 edge cases and how to handle them
 
-Show your derivations.
+Use the format: "[User/System] can [action] [object] [constraints]"
 
-## Exercise 2: Hot Key Analysis
+## Exercise 2: Core vs. Supporting Analysis
 
-Take a system you know (or choose: Twitter, DoorDash, Airbnb).
+Take a product you use daily (e.g., Slack, Uber, Instagram).
 
-Identify:
-- At least 3 potential hot keys
-- What causes each to become hot
-- How you would handle each
+List 10 features. For each, classify as:
+- Core: Product is useless without it
+- Supporting: Enhances but not essential
+- Nice-to-have: Could remove without much impact
 
-Create a mitigation strategy document.
+Now imagine you're building V1 with 50% of the features. Which 5 do you build?
 
-## Exercise 3: Fan-Out Calculation
+## Exercise 3: Flow Enumeration
 
-For a social media platform:
+Pick a system (or use: Stripe, Dropbox, Spotify).
 
-Calculate the actual operation count for:
-- 1,000 posts/second
-- Average 500 followers
-- 1% of users are "celebrities" with 1M+ followers
-- Each post generates 3 notifications (post, like, comment)
+Enumerate all the flows you can identify:
+- At least 5 read flows
+- At least 5 write flows
+- At least 3 control flows
 
-Then design a hybrid push/pull strategy with specific thresholds.
+For each flow, note:
+- Who initiates it
+- What data is involved
+- What the expected outcome is
 
-## Exercise 4: Read/Write Optimization
+## Exercise 4: Edge Case Catalog
 
-For each system, determine:
-- Read/write ratio
-- Which path is more critical
-- Key optimization strategies
+For a messaging system, enumerate edge cases across these categories:
+- Invalid inputs (at least 5)
+- Failure conditions (at least 5)
+- Boundary conditions (at least 3)
+- Timing/concurrency issues (at least 3)
 
-Systems:
-1. A banking transaction system
-2. A social media feed
-3. An IoT sensor data platform
-4. A multiplayer game leaderboard
+For each, decide: handle fully, handle gracefully, or exclude?
 
-## Exercise 5: Growth Modeling
+## Exercise 5: Scope Negotiation
 
-Take a hypothetical startup:
-- Launching with 10,000 users
-- Growing 15% month-over-month
-- Average user creates 50 MB of data per month
+Practice scope negotiation with a partner.
 
-Model:
-- User count at 6, 12, 24, 36 months
-- Storage requirements at each milestone
-- When single-database architecture breaks
-- When you'd need to migrate to distributed storage
+Partner gives you an intentionally broad prompt:
+"Design a complete social media platform."
 
-## Exercise 6: Complete Scale Analysis
+Your task: negotiate it down to something designable in 45 minutes.
 
-Pick a system design prompt (notification system, chat app, etc.).
+Practice:
+- Asking clarifying questions to narrow scope
+- Proposing boundaries and getting agreement
+- Explicitly listing exclusions
+- Confirming the scope before designing
 
-Produce a complete scale analysis document including:
-- User scale derivation
-- Request rate calculations (read/write/peak)
-- Storage calculations
-- Fan-out analysis
-- Hot key identification
-- Growth projections (1 year, 3 years)
-- Architecture implications
+## Exercise 6: Requirements-to-Use-Case Mapping
 
-Present this as you would in an interview (5-10 minutes).
+Take your requirements from Exercise 1.
+
+For each use case you identified in Phase 1 (users & use cases), trace:
+- Which requirements enable this use case?
+- Are any use cases unsupported by requirements?
+- Are any requirements not linked to use cases?
+
+This validates that your requirements and use cases are aligned.
 
 ---
 
 # Conclusion
 
-Scale is not a number—it's a lens for understanding your system.
+Functional requirements are the bridge between understanding your users (Phase 1) and designing your system (later phases). They define what you're building.
 
-Staff engineers approach scale systematically:
+Staff-level precision in functional requirements means:
 
-**They quantify before designing.** Before drawing any boxes, they establish: How many users? How many requests? How much data? What's the growth trajectory?
+**Being specific enough** to drive design decisions—not vague hand-waving like "system handles messages"
 
-**They derive, not guess.** Numbers come from first principles: users × actions × multipliers. They show their work so it can be validated and adjusted.
+**Being abstract enough** to avoid implementation details—not premature commitment to technologies
 
-**They think in peaks, not averages.** Systems fail at peak, not average. Peak during normal operation, peak during events, peak during failures.
+**Distinguishing core from supporting**—knowing what's essential vs. what's nice-to-have
 
-**They consider the hidden multipliers.** Fan-out turns one operation into millions. Microservices turn one external call into dozens of internal calls. Read/write ratios change everything about optimization.
+**Covering all flow types**—read, write, and control, not just the obvious user flows
 
-**They anticipate hot keys.** Skew is real. Power users, celebrity accounts, viral content—they all concentrate load. Designs must handle this.
+**Handling edge cases explicitly**—not just the happy path
 
-**They plan for growth.** Not infinite growth, but reasonable growth. They know where the current design breaks and what the migration path looks like.
+**Managing scope actively**—saying no to feature creep, being explicit about exclusions
 
-In interviews, scale estimation demonstrates maturity. It shows you've operated real systems at real scale. It shows you understand that the whiteboard design must survive contact with production reality.
+**Confirming alignment**—checking with the interviewer that your requirements match their expectations
 
-Take the time to get scale right. It's the foundation for everything that follows.
+The functional requirements you define in this phase become the contract for your design. Every architectural decision should trace back to a requirement. If you find yourself designing something that isn't required, question whether you need it.
+
+Get the requirements right, and the design becomes clearer. Get them wrong, and you'll build the wrong system—no matter how elegant your architecture.
+
+Take the time to be precise. It's a Staff-level habit.
 
 ---
-
-*End of Volume 2, Section 4*
-
-*Next: Volume 2, Section 5 – "Phase 4: Non-Functional Requirements — Quality Attributes at Staff Level"*

@@ -1,2134 +1,3777 @@
-# Chapter 16: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
+# Chapter 14: Leader Election, Coordination, and Distributed Locks
+
+## When Your System Needs a Boss—And When It Doesn't
 
 ---
 
-# Introduction
-
-Synchronous systems are simple: a client sends a request, waits for a response, and moves on. But at scale, synchronous patterns break down. What happens when the downstream service is slower than your ingestion rate? What happens when you need to process a million events per second but your consumer can only handle ten thousand? What happens when a spike in traffic would otherwise bring down your entire system?
-
-The answer is asynchronous communication—and the tools of async are queues, logs, and streams.
-
-Yet these three concepts are often confused. Engineers say "queue" when they mean "stream." They pick Kafka when RabbitMQ would suffice. They use SQS when they need event replay. Staff Engineers must understand the fundamental differences, because choosing the wrong async model creates architectural debt that's expensive to fix.
-
-This section demystifies async communication patterns. We'll understand *why* async exists, the precise differences between queues, logs, and streams, and how to choose the right model for different use cases. We'll apply this thinking to real systems—notification services, metrics pipelines, and feed fan-out—and see what breaks when we choose wrong.
-
-By the end, you'll have clear decision frameworks for async model selection and the vocabulary to explain these choices in Staff-level interviews.
-
----
-
-## Quick Visual: The Three Async Models at a Glance
+# Quick Visual: The Coordination Landscape
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUES, LOGS, AND STREAMS                                │
+│                    COORDINATION: WHEN DO YOU NEED IT?                       │
 │                                                                             │
-│   QUEUE (Traditional Message Queue)                                         │
-│   ────────────────────────────────                                          │
-│   [Producer] → [ M M M M M ] → [Consumer]                                   │
-│                     ↓                                                       │
-│              (Message consumed = deleted)                                   │
-│   • One consumer gets each message                                          │
-│   • Messages disappear after processing                                     │
-│   • No replay, no rewind                                                    │
-│   • Examples: RabbitMQ, SQS, ActiveMQ                                       │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  PREFER NO COORDINATION (Best)                                       │  │
+│   │  • Idempotent operations                                             │  │
+│   │  • CRDTs (conflict-free replicated data types)                       │  │
+│   │  • Partition data so each node owns its subset                       │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  IF YOU MUST: LEADER ELECTION                                        │  │
+│   │  • Single coordinator for consistency                                │  │
+│   │  • Database primary, job scheduler, metadata service                 │  │
+│   │  • Use: Raft, ZooKeeper, etcd                                        │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │  IF YOU MUST: DISTRIBUTED LOCKS                                      │  │
+│   │  • Short-term mutual exclusion                                       │  │
+│   │  • Protect critical sections                                         │  │
+│   │  • ALWAYS use fencing tokens!                                        │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
 │                                                                             │
-│   LOG (Append-Only Log)                                                     │
-│   ────────────────────                                                      │
-│   [Producer] → [ 0 | 1 | 2 | 3 | 4 | 5 ] → [Consumer A at offset 3]         │
-│                                          → [Consumer B at offset 1]         │
-│   • Messages persist after consumption                                      │
-│   • Multiple consumers track their own position                             │
-│   • Can replay from any point                                               │
-│   • Examples: Kafka, Pulsar, Kinesis                                        │
-│                                                                             │
-│   STREAM (Continuous Event Flow)                                            │
-│   ──────────────────────────────                                            │
-│   [Producers] → ∿∿∿∿∿∿∿∿∿ → [Real-time processors]                          │
-│                    ↓                                                        │
-│              (Continuous flow, often unbounded)                             │
-│   • Focus on real-time processing                                           │
-│   • Time-windowed operations                                                │
-│   • Often built ON logs                                                     │
-│   • Examples: Kafka Streams, Flink, Spark Streaming                         │
+│   RULE: Coordination is expensive. Minimize it. Plan for its failure.       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Simple Example: L5 vs L6 Async Model Decisions
+# Simple Example: L5 vs L6 Coordination Thinking
 
 | Scenario | L5 Approach | L6 Approach |
-|----------|-------------|-------------|
-| **Email notifications** | "Use Kafka - it's what we use for everything" | "Use SQS - we don't need replay, want auto-deletion, and need competing consumers to drain the queue fast" |
-| **Metrics pipeline** | "Use RabbitMQ - it's simple" | "Use Kafka - we need to replay metrics for backfill, multiple consumers read same data, and ordering within a service matters" |
-| **Feed fan-out** | "Use a queue to distribute work" | "Use a log - we need ordering per user, ability to replay if ranking changes, and multiple consumers (feeds, search indexing, analytics)" |
-| **Order processing** | "Use Kafka everywhere" | "Use SQS for the work queue - each order processed once, delete on success, competing consumers scale horizontally" |
-| **Audit logging** | "Use a queue to send to the audit service" | "Use a log - audit trails must be immutable, replayable, and retained long-term. Queue semantics would lose data." |
-
-**Key Difference:** L6 engineers match the async model to the specific requirements: replay needs, consumer patterns, ordering guarantees, and retention requirements. They don't default to one technology for everything.
+|----------|------------|-------------|
+| **Job scheduler** | "Use a distributed lock" | "First, can we partition jobs by ID? If not, use leader election with degraded mode" |
+| **Rate limiter** | "Use Redis for global counters" | "Per-node limits + async sync. Accept approximate. Plan for Redis failure." |
+| **Config updates** | "Lock the config during update" | "Versioned configs. Readers use stale with TTL. No lock needed." |
+| **Lock failure** | "Retry until success" | "Timeout + graceful degradation. What if lock service is down?" |
+| **Duplicate prevention** | "Distributed lock per request" | "Idempotency keys. No coordination needed." |
 
 ---
 
-# Part 1: Why Asynchronous Systems Exist
+# Key Numbers to Remember
 
-Before diving into queues vs logs vs streams, let's understand why we need async communication at all.
+| Metric | Typical Value | Why It Matters |
+|--------|---------------|----------------|
+| **NTP clock skew** | 10-100ms | Can't use timestamps for coordination |
+| **TrueTime uncertainty** | ~7ms | Spanner waits this long for external consistency |
+| **Leader election time** | 10-30 seconds | This is your failover window |
+| **Lock TTL** | 10-30 seconds | Balance: too short = constant renewal, too long = slow recovery |
+| **Raft heartbeat** | 50-150ms | Lower = faster detection, higher = less network overhead |
+| **Raft election timeout** | 150-300ms | Must be > heartbeat interval |
 
-## The Problem with Synchronous Communication
+---
 
-In a synchronous world:
+## Table of Contents
+
+1. [Introduction: The Coordination Tax](#introduction)
+2. [Why Coordination Is Hard](#why-coordination-is-hard)
+3. [Leader Election: Crowning a King in a Democracy](#leader-election)
+4. [Distributed Locks: The Double-Edged Sword](#distributed-locks)
+5. [Consensus: The Foundation (High-Level)](#consensus)
+6. [Failure Scenarios That Will Ruin Your Week](#failure-scenarios)
+7. [Case Study: Job Scheduler](#case-study-job-scheduler)
+8. [Case Study: Rate Limiter Coordination](#case-study-rate-limiter)
+9. [Case Study: Metadata Service](#case-study-metadata-service)
+10. [Anti-Patterns: How Good Intentions Go Wrong](#anti-patterns)
+11. [When NOT to Use Locks](#when-not-to-use-locks)
+12. [Graceful Degradation: What Happens When Coordination Fails](#graceful-degradation)
+13. [Interview Explanations](#interview-explanations)
+14. [Brainstorming Questions](#brainstorming-questions)
+15. [Homework: Remove Coordination and Re-Architect](#homework)
+
+---
+
+<a name="introduction"></a>
+## 1. Introduction: The Coordination Tax
+
+There's a moment in every distributed systems engineer's career when they realize a terrifying truth: **the hardest problems aren't about moving data—they're about getting machines to agree on anything.**
+
+You want five servers to agree on who's the leader? Prepare for edge cases that will haunt your dreams.
+
+You want a distributed lock so only one worker processes a job? Get ready for the lock to become a bottleneck, a single point of failure, or—worst of all—something that *looks* like it's working but isn't.
+
+**Coordination is the dark matter of distributed systems.** It's invisible when it works and catastrophic when it fails. This section is about understanding when you need it, when you don't, and how to survive when it breaks.
+
+### The Fundamental Problem
+
+In a distributed system, there is no global clock, no shared memory, and no guaranteed message delivery. Yet we often need exactly these things:
+
+| What We Want | Why It's Hard |
+|--------------|---------------|
+| One leader at a time | Network partitions can create two "leaders" |
+| Exactly-once processing | Failures can cause zero or duplicate processing |
+| Mutual exclusion | Locks can be held by dead processes |
+| Consistent ordering | Different nodes see events in different orders |
+| Atomic operations | Partial failures leave inconsistent state |
+
+Every coordination mechanism is a bet against the universe—a bet that the network will behave, that clocks won't drift too far, that processes will fail cleanly. Sometimes you win. Sometimes at 3 AM, you don't.
+
+---
+
+<a name="why-coordination-is-hard"></a>
+## 2. Why Coordination Is Hard
+
+### 2.1 The Two Generals Problem
+
+Imagine two generals on opposite sides of a valley. They need to attack simultaneously or the attack fails. They can only communicate by messenger, but messengers might be captured.
 
 ```
-User Request → Service A → Service B → Service C → Response to User
-                  ↓            ↓            ↓
-               (waits)      (waits)      (processes)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        THE TWO GENERALS PROBLEM                         │
+│                                                                         │
+│     General A                                              General B    │
+│     ┌───────┐                                              ┌───────┐    │
+│     │       │         "Attack at dawn!"                    │       │    │
+│     │   A   │ ────────────────────────────────────────────▶│   B   │    │
+│     │       │                                              │       │    │
+│     └───────┘                                              └───────┘    │
+│                                                                         │
+│     A doesn't know if B received the message.                           │
+│                                                                         │
+│     ┌───────┐                                              ┌───────┐    │
+│     │       │            "Got it, I'll attack!"            │       │    │
+│     │   A   │ ◀────────────────────────────────────────────│   B   │    │
+│     │       │                                              │       │    │
+│     └───────┘                                              └───────┘    │
+│                                                                         │
+│     Now B doesn't know if A knows that B will attack.                   │
+│     This loops infinitely. Neither can ever be certain.                 │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Problems:**
+**Lesson:** In an unreliable network, **you cannot achieve guaranteed agreement with just message passing.** This isn't a limitation of your code—it's mathematically proven.
 
-1. **Latency accumulates**: Total latency = A + B + C. If C is slow, everything is slow.
+### 2.2 The FLP Impossibility Result
 
-2. **Failures cascade**: If C is down, B fails, A fails, user gets an error.
+In 1985, Fischer, Lynch, and Paterson proved that **no deterministic consensus protocol can guarantee progress in an asynchronous system if even one process can fail.**
 
-3. **Scaling is coupled**: C must scale to handle A's peak load synchronously.
+Translation for engineers:
+- You cannot build a perfect consensus system
+- Any system you build will either sacrifice availability (block forever) or consistency (give wrong answer)
+- This is fundamental, not a bug in your implementation
 
-4. **Bursts overwhelm**: A sudden spike can exceed C's capacity, causing failures.
+**What this means practically:** All real coordination systems make trade-offs. They use timeouts, probabilistic guarantees, or stronger assumptions (like partially synchronous networks).
 
-5. **Resources waste**: A and B hold connections while waiting for C.
-
-## What Async Communication Solves
+### 2.3 The Three Impossibilities You'll Fight
 
 ```
-User Request → Service A → [Message Buffer] → Service C (eventually)
-                  ↓
-              Response to User (immediately)
+┌────────────────────────────────────────────────────────────────────────-─┐
+│                     THE COORDINATION TRILEMMA                            │
+│                                                                          │
+│                           CORRECTNESS                                    │
+│                          (Agreement)                                     │
+│                               ▲                                          │
+│                              ╱ ╲                                         │
+│                             ╱   ╲                                        │
+│                            ╱     ╲                                       │
+│                           ╱  ???  ╲                                      │
+│                          ╱         ╲                                     │
+│                         ▼───────────▼                                    │
+│                   LIVENESS        FAULT                                  │
+│                  (Progress)     TOLERANCE                                │
+│                                                                          │
+│     You can have two strongly, the third weakly.                         │
+│                                                                          │
+│     Correctness + Liveness = Works until any failure (fragile)           │
+│     Correctness + Fault Tolerance = May block forever (unavailable)      │
+│     Liveness + Fault Tolerance = May give wrong answer (inconsistent)    │
+│                                                                          │
+└───────────────────────────────────────────────────────────────────────-──┘
+```
+
+### 2.4 Why Clocks Don't Help
+
+"Just use timestamps to decide who wins!" — Famous last words
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          CLOCK SKEW DISASTER                            │
+│                                                                         │
+│   Server A clock: 10:00:00.000                                          │
+│   Server B clock: 10:00:00.150 (150ms ahead)                            │
+│                                                                         │
+│   Timeline (real time):                                                 │
+│   ─────────────────────────────────────────────────────────────▶        │
+│                                                                         │
+│   T=0ms:     A writes X=1 (timestamp 10:00:00.000)                      │
+│   T=50ms:    B writes X=2 (timestamp 10:00:00.200) ← APPEARS LATER!     │
+│                                                                         │
+│   If using last-write-wins by timestamp:                                │
+│   B's write wins, even though A wrote later in real time.               │
+│                                                                         │
+│   Result: Your "consistent" system just lost data.                      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Clock skew in practice:**
+- NTP can drift 10-100ms between syncs
+- Cloud VMs can have sudden clock jumps (especially on VM migration)
+- Leap seconds cause chaos
+- Even Google's TrueTime has 7ms uncertainty bounds
+
+**Lesson:** Clocks are useful for *ordering* but not for *coordination*. Never use timestamps as the sole arbitration mechanism for critical decisions.
+
+### 2.5 Logical Clocks and Time in Distributed Systems
+
+Since physical clocks can't be trusted, distributed systems use **logical clocks** to establish ordering.
+
+#### 2.5.1 Lamport Clocks
+
+```
+LAMPORT CLOCK (Pseudo-code)
+═══════════════════════════
+
+Rules:
+  1. Before each event: clock++
+  2. When sending: clock++, attach clock to message
+  3. When receiving: clock = max(local, received) + 1
+
+Property: If A happened-before B, then L(A) < L(B)
+Warning:  L(A) < L(B) does NOT imply A happened-before B
+
+Example:
+  Node A: tick() → clock=1, send() → clock=2 (message carries 2)
+  Node B: receive(2) → clock = max(0, 2) + 1 = 3
+  
+  Conclusion: A's event (2) happened-before B's event (3)
+```
+
+#### 2.5.2 Vector Clocks
+
+```
+VECTOR CLOCK (Pseudo-code)
+══════════════════════════
+
+Unlike Lamport clocks, vector clocks detect concurrent events.
+Each node maintains: VC[i] = "events I know about from node i"
+
+Operations:
+  tick():     VC[self]++
+  send():     VC[self]++, attach VC to message
+  receive(R): for each i: VC[i] = max(VC[i], R[i]), then VC[self]++
+
+Compare(VC1, VC2):
+  - If all VC1[i] ≤ VC2[i] and at least one <  → VC1 happened-before VC2
+  - If all VC1[i] ≥ VC2[i] and at least one >  → VC2 happened-before VC1
+  - If some VC1[i] < VC2[i] AND some VC1[j] > VC2[j] → CONCURRENT!
+
+Example:
+  A.tick() → {A:1, B:0, C:0}
+  B.tick() → {A:0, B:1, C:0}   (no communication)
+  
+  Compare: A has A>0 but B<1, B has B>0 but A<1 → CONCURRENT
+  Result: Need conflict resolution (LWW, merge, etc.)
+```
+
+#### 2.5.3 Hybrid Logical Clocks (HLC)
+
+```
+HYBRID LOGICAL CLOCK (Pseudo-code)
+══════════════════════════════════
+
+Format: (physical_time, logical_counter)
+Used by: CockroachDB, MongoDB, TiDB
+
+now():
+  wall = get_wall_time()
+  if wall > physical:
+    physical = wall, logical = 0
+  else:
+    logical++
+  return (physical, logical)
+
+receive(recv_physical, recv_logical):
+  wall = get_wall_time()
+  if wall > max(physical, recv_physical):
+    physical = wall, logical = 0
+  elif physical > recv_physical:
+    logical++
+  elif recv_physical > physical:
+    physical = recv_physical, logical = recv_logical + 1
+  else:
+    logical = max(logical, recv_logical) + 1
+
+Example:
+  ts1 = now() → (1642000000000, 0)
+  ts2 = now() → (1642000000000, 1)  ← same ms, logical incremented
+  [wait 1ms]
+  ts3 = now() → (1642000000001, 0)  ← new ms, logical reset
+
+Benefit: Orderable timestamps that track real time
+```
+
+#### 2.5.4 Google TrueTime
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          GOOGLE TRUETIME                                │
+│                                                                         │
+│   TrueTime doesn't give you a single timestamp.                         │
+│   It gives you an INTERVAL: [earliest, latest]                          │
+│                                                                         │
+│   API:                                                                  │
+│   - TT.now() → returns TTinterval [earliest, latest]                    │
+│   - TT.after(t) → true if t is definitely in the past                   │
+│   - TT.before(t) → true if t is definitely in the future                │
+│                                                                         │
+│   Implementation:                                                       │
+│   - GPS receivers in every datacenter                                   │
+│   - Atomic clocks as backup                                             │
+│   - Uncertainty bound: typically 1-7ms                                  │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                                                                 │   │
+│   │   Real time:      ─────────────────────────────────────▶        │   │
+│   │                              │                                  │   │
+│   │   TT.now():        [earliest│───────│latest]                    │   │
+│   │                             │       │                           │   │
+│   │                             │◀─────▶│                           │   │
+│   │                             uncertainty                         │   │
+│   │                             (ε ≈ 7ms)                           │   │
+│   │                                                                 │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   SPANNER'S COMMIT WAIT:                                                │
+│   ─────────────────────                                                 │
+│   After committing, Spanner waits until TT.after(commit_time) is true.  │
+│   This guarantees the commit timestamp is definitely in the past.       │
+│   Cost: ~7ms added to every write.                                      │
+│   Benefit: External consistency (linearizability) without locks!        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+TRUETIME API (Pseudo-code)
+══════════════════════════
+
+TT.now()      → returns interval [earliest, latest]
+TT.after(t)   → true if t is DEFINITELY in the past
+TT.before(t)  → true if t is DEFINITELY in the future
+
+SPANNER COMMIT WAIT:
+  1. commit_ts = TT.now().latest
+  2. apply_writes(commit_ts)
+  3. wait until TT.after(commit_ts)  // ~7ms wait
+  4. return commit_ts
+
+Guarantee: Any future transaction sees our writes,
+           any past transaction does not.
+           = External consistency (linearizability) without locks!
+```
+
+### 2.6 Clock Synchronization Protocols
+
+| Protocol | Accuracy | Use Case |
+|----------|----------|----------|
+| **NTP** | 10-100ms | General purpose |
+| **PTP (IEEE 1588)** | 1μs-1ms | Financial, telecom |
+| **GPS** | ~10ns | Spanner, TrueTime |
+| **Atomic Clocks** | ~1ns | Backup for GPS |
+
+**Staff-Level Insight:** The choice of clock synchronization affects your entire system design:
+- **NTP-only:** Use logical clocks, assume 100ms+ skew
+- **PTP:** Can use physical timestamps with ~1ms uncertainty
+- **TrueTime:** Can achieve external consistency with commit-wait
+
+---
+
+<a name="leader-election"></a>
+## 3. Leader Election: Crowning a King in a Democracy
+
+### 3.1 What Leader Election Solves
+
+Many distributed systems need a single authoritative node:
+
+| Use Case | Why One Leader? |
+|----------|-----------------|
+| Database primary | Single source of truth for writes |
+| Job scheduler | Avoid duplicate job execution |
+| Metadata service | Consistent view of cluster state |
+| Distributed lock service | Coordinate lock ownership |
+| Message queue coordinator | Assign partitions to consumers |
+
+Without leader election, you have two unpalatable options:
+1. **No coordination:** Everyone acts independently (chaos, duplication, conflicts)
+2. **Static configuration:** Hardcode the leader (single point of failure, manual intervention)
+
+Leader election gives you **dynamic, automatic failover** with **exactly one leader** at any time.
+
+### 3.2 How Leader Election Works (Conceptually)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      LEADER ELECTION LIFECYCLE                          │
+│                                                                         │
+│   PHASE 1: ELECTION                                                     │
+│   ─────────────────                                                     │
+│                                                                         │
+│     ┌─────┐    ┌─────┐    ┌─────┐                                       │
+│     │  A  │    │  B  │    │  C  │    All nodes: "I want to be leader!"  │
+│     │ 🗳️  |     │ 🗳️  │    │ 🗳️  │                                       │
+│     └─────┘    └─────┘    └─────┘                                       │
+│                                                                         │
+│   PHASE 2: VOTING / CONSENSUS                                           │
+│   ──────────────────────────                                            │
+│                                                                         │
+│     Nodes exchange votes based on:                                      │
+│     - Who has the most up-to-date data?                                 │
+│     - Who has the highest ID? (tie-breaker)                             │
+│     - Who can reach majority of nodes?                                  │
+│                                                                         │
+│   PHASE 3: LEADERSHIP                                                   │
+│   ───────────────────                                                   │
+│                                                                         │
+│     ┌─────┐    ┌─────┐    ┌─────┐                                       │
+│     │  A  │    │  B  │    │  C  │                                       │
+│     │ 👑  │───▶│     │───▶│     │    A is leader, B and C are followers │
+│     │LEAD │    │FOLL │    │FOLL │                                       │
+│     └─────┘    └─────┘    └─────┘                                       │
+│                                                                         │
+│   PHASE 4: HEARTBEAT                                                    │
+│   ──────────────────                                                    │
+│                                                                         │
+│     Leader sends periodic heartbeats                                    │
+│     Followers reset election timer on each heartbeat                    │
+│     If no heartbeat for timeout period → back to Phase 1                │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 Leader Election Mechanisms
+
+#### Mechanism 1: Lease-Based Leadership
+
+```
+LEASE-BASED LEADERSHIP (Pseudo-code)
+════════════════════════════════════
+
+Constants: LEASE_TTL = 10s, RENEWAL_INTERVAL = 3s
+
+try_become_leader():
+  acquired = store.SET_IF_NOT_EXISTS("leader", node_id, TTL=10s)
+        if acquired:
+    is_leader = true
+    start renewal_loop
+
+renewal_loop:
+  while is_leader:
+    sleep(RENEWAL_INTERVAL)
+    renewed = store.SET_IF_EQUALS("leader", node_id, TTL=10s)
+            if not renewed:
+      is_leader = false
+      on_leadership_lost()  // STOP ALL LEADER ACTIVITIES
+
+on_leadership_lost():
+  // CRITICAL: Immediately stop processing, close connections
+  // Do NOT assume you're still the leader
+```
+
+**Key Properties:**
+- Leader must actively renew lease
+- If network partitions leader from lease store, leadership is lost automatically
+- No split-brain: old leader's lease expires before new leader can acquire
+
+#### Mechanism 2: Quorum-Based Election
+
+```
+QUORUM-BASED ELECTION (Pseudo-code)
+═══════════════════════════════════
+
+quorum_size = (num_peers / 2) + 1
+
+start_election():
+  term++
+  votes = 1  // vote for self
+  
+  for each peer:
+    response = peer.request_vote(candidate=self, term)
+    if response.granted: votes++
+  
+  if votes >= quorum_size:
+    become_leader()
+        else:
+    wait_random_timeout()
+    maybe retry
+
+heartbeat_loop():
+  while i_am_leader:
+            acks = 0
+    for each peer:
+      if peer.heartbeat(leader=self, term): acks++
+    
+    if acks < quorum_size - 1:
+      step_down()  // lost quorum
+    
+    sleep(HEARTBEAT_INTERVAL)
+```
+
+### 3.4 What Leader Election Introduces (The Costs)
+
+Leader election solves problems but creates new ones:
+
+| Cost | Description |
+|------|-------------|
+| **Unavailability during election** | No leader = no progress for leader-dependent operations |
+| **Election storms** | Under network instability, repeated elections waste resources |
+| **Split-brain risk** | Improper implementation can lead to two leaders |
+| **Leader bottleneck** | All coordination through one node limits throughput |
+| **Failover latency** | Time between leader death and new leader = downtime |
+
+**Real Example: ZooKeeper Election Storm**
+
+```
+Timeline of an actual incident:
+─────────────────────────────────────────────────────────────────────────
+00:00 - Leader dies (hardware failure)
+00:01 - Followers detect missing heartbeat
+00:02 - Election starts, Node B wins
+00:03 - Node B dies (same hardware issue, shared rack)
+00:04 - Another election, Node C wins
+00:05 - Network glitch, C appears dead
+00:06 - Election again, Node A (recovered) wins
+00:07 - Cluster finally stable
+
+7 minutes of instability, 3 elections, 0 progress on actual work.
+─────────────────────────────────────────────────────────────────────────
+```
+
+**Lesson:** Leader election is not free. Design for fast elections, but also design your system to tolerate brief periods without a leader.
+
+---
+
+<a name="distributed-locks"></a>
+## 4. Distributed Locks: The Double-Edged Sword
+
+### 4.1 What Distributed Locks Promise
+
+A distributed lock is supposed to provide **mutual exclusion** across multiple machines:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      DISTRIBUTED LOCK CONCEPT                           │
+│                                                                         │
+│   Goal: Only ONE process executes the critical section at a time        │
+│                                                                         │
+│   Process A        Lock Service        Process B                        │
+│   ─────────        ────────────        ─────────                        │
+│       │                 │                  │                            │
+│       │──acquire()─────▶│                  │                            │
+│       │◀────granted─────│                  │                            │
+│       │                 │◀──acquire()──────│                            │
+│       │    [critical    │────blocked──────▶│                            │
+│       │     section]    │                  │                            │
+│       │──release()─────▶│                  │                            │
+│       │                 │◀──────────────-──│                            │
+│       │                 │────granted──────▶│                            │
+│       │                 │                  │   [critical section]       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 The Redlock Controversy: Why This Is Harder Than It Looks
+
+Redis's Redlock algorithm was proposed as a distributed lock. Martin Kleppmann (author of "Designing Data-Intensive Applications") famously critiqued it. The debate reveals fundamental issues:
+
+**The Problem:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    THE DISTRIBUTED LOCK RACE CONDITION                  │
+│                                                                         │
+│   Timeline:                                                             │
+│   ─────────────────────────────────────────────────────────────▶        │
+│                                                                         │
+│   T1: Client A acquires lock (TTL = 10 seconds)                         │
+│   T2: Client A starts long GC pause (or network issue)                  │
+│   T3: Lock expires (A doesn't know, still paused)                       │
+│   T4: Client B acquires lock (valid!)                                   │
+│   T5: Client A wakes up, thinks it still has lock                       │
+│   T6: Both A and B execute critical section simultaneously!             │
+│                                                                         │
+│   ┌──────────┐                              ┌──────────┐                │
+│   │ Client A │ ←── Thinks it has lock ──→   │ Client B │                │
+│   │          │                              │          │                │
+│   │ [writes] │                              │ [writes] │                │
+│   └──────────┘                              └──────────┘                │
+│                         ⚠️ DATA CORRUPTION ⚠️                            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**This happens because:**
+1. Clocks can drift (TTL expires sooner/later than expected)
+2. GC pauses can freeze a process for seconds
+3. Network delays can make a process appear dead when it's not
+4. The lock holder has no way to know the lock has expired
+
+### 4.3 Fencing Tokens: The Solution
+
+```
+FENCING TOKENS (Pseudo-code)
+════════════════════════════
+
+LOCK SERVICE:
+  acquire(client_id, ttl):
+    if lock_free or lock_expired:
+      token++
+      holder = client_id
+      expiry = now + ttl
+      return {acquired: true, fencing_token: token}
+    return {acquired: false}
+
+PROTECTED RESOURCE:
+  write(data, fencing_token):
+    if fencing_token < highest_token_seen:
+      REJECT("stale token")
+    highest_token_seen = fencing_token
+    do_write(data)
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    FENCING TOKENS IN ACTION                             │
+│                                                                         │
+│   T1: Client A acquires lock, gets token=33                             │
+│   T2: Client A pauses (GC)                                              │
+│   T3: Lock expires                                                      │
+│   T4: Client B acquires lock, gets token=34                             │
+│   T5: Client B writes to storage with token=34                          │
+│   T6: Storage records highest_token = 34                                │
+│   T7: Client A wakes up, tries to write with token=33                   │
+│   T8: Storage REJECTS write: 33 < 34                                    │
+│                                                                         │
+│   Result: Data integrity preserved!                                     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Critical Insight:** Fencing tokens only work if the downstream resource checks them. If you're writing to a legacy database that doesn't understand fencing tokens, you're not protected.
+
+### 4.4 Implementing Distributed Locks Correctly
+
+```
+REDIS DISTRIBUTED LOCK (Pseudo-code)
+════════════════════════════════════
+
+acquire(timeout):
+  lock_id = uuid()
+  deadline = now + timeout
+  
+  while now < deadline:
+    // Atomic: SET if not exists + increment fencing token
+    result = redis.EVAL("""
+      if not EXISTS(lock_key) then
+        token = INCR(token_key)
+        SET(lock_key, lock_id, EX=ttl)
+                    return token
+                return nil
+    """)
+    
+    if result != nil:
+      return result  // fencing token
+    
+    sleep(100ms)
+  
+  raise Timeout
+
+release():
+  // Atomic: DELETE only if we still own it
+  redis.EVAL("""
+    if GET(lock_key) == lock_id then
+      DEL(lock_key)
+  """)
+
+Usage:
+  token = lock.acquire()
+  process_job(token)  // pass fencing token to storage
+    lock.release()
+```
+
+### 4.5 The Hidden Costs of Distributed Locks
+
+| Cost | Impact |
+|------|--------|
+| **Lock service is SPOF** | If lock service is down, all locked operations fail |
+| **Latency** | Every lock operation adds network round-trip |
+| **Deadlocks** | Complex lock hierarchies can deadlock |
+| **Starvation** | Busy locks may starve some clients |
+| **Reduced throughput** | Serialization limits parallelism |
+| **Debugging difficulty** | "Who holds the lock?" is hard to answer |
+
+### 4.6 Advanced Locking Patterns
+
+#### 4.6.1 Read-Write Locks
+
+```
+READ-WRITE LOCK (Pseudo-code)
+═════════════════════════════
+
+Rules:
+  • Multiple readers can hold lock simultaneously
+  • Writer needs exclusive access
+  • Writer waits for all readers to finish
+
+acquire_read():
+  while timeout not expired:
+    if no writer waiting:
+      add self to readers
+      reader_count++
+      if still no writer: return success
+      else: release and retry
+  raise Timeout
+
+acquire_write():
+  if SET write_lock (NX): // claim writer slot
+    while timeout not expired:
+      if reader_count == 0:
+        return success
+    release and raise Timeout
+  else:
+    raise Contention
+
+release_read(): reader_count--
+release_write(): DEL write_lock (only if we own it)
+```
+
+#### 4.6.2 Hierarchical Locks (Lock Ordering)
+
+```
+HIERARCHICAL LOCKS (Pseudo-code)
+════════════════════════════════
+
+Hierarchy: database (0) → table (1) → row (2)
+Rule: Acquire parent before child. Release child before parent.
+
+acquire(resource_type, resource_id):
+  my_level = HIERARCHY[resource_type]
+  
+  for each held_lock:
+    if held_lock.level > my_level:
+      raise HierarchyViolation  // can't acquire parent while holding child
+  
+  acquire_actual_lock(resource_type, resource_id)
+
+release(resource_type, resource_id):
+  my_level = HIERARCHY[resource_type]
+  
+  for each held_lock:
+    if held_lock.level > my_level:
+      raise HierarchyViolation  // can't release parent while holding child
+  
+  release_actual_lock(resource_type, resource_id)
+
+Example:
+  ✓ acquire(database) → acquire(table) → acquire(row)
+  ✓ release(row) → release(table) → release(database)
+  ✗ acquire(row) → acquire(table)  // VIOLATION!
+```
+
+#### 4.6.3 Try-Lock with Deadlock Detection
+
+```
+DEADLOCK DETECTION (Pseudo-code)
+════════════════════════════════
+
+Uses wait-for graph: Process A waits for Process B → edge A→B
+
+register_wait(waiter, holder):
+  add_edge(waiter → holder)
+  if has_cycle(waiter):
+    remove_edge(waiter)
+    return DeadlockDetected
+  return null
+
+has_cycle(start):
+  visited = {}
+  current = start
+  while current != null:
+    if current in visited: return true  // CYCLE!
+    visited.add(current)
+    current = graph.get_next(current)
+  return false
+
+DEADLOCK-AWARE LOCK:
+  acquire(resource):
+    while timeout not expired:
+      if try_acquire(): return success
+      
+      holder = get_current_holder()
+      if register_wait(self, holder) == Deadlock:
+        raise DeadlockAbort  // victim chosen
+      
+      sleep(10ms)
+    raise Timeout
+```
+
+#### 4.6.4 Intention Locks (Multi-Granularity Locking)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    INTENTION LOCK HIERARCHY                             │
+│                                                                         │
+│   Lock Modes:                                                           │
+│   - IS (Intention Shared): Intend to acquire S locks on descendants     │
+│   - IX (Intention Exclusive): Intend to acquire X locks on descendants  │
+│   - S (Shared): Read lock                                               │
+│   - X (Exclusive): Write lock                                           │
+│   - SIX (S + IX): Read this, intend to write descendants                │
+│                                                                         │
+│   Compatibility Matrix:                                                 │
+│   ┌────────┬────┬────┬────┬────┬─────┐                                  │
+│   │        │ IS │ IX │  S │  X │ SIX │                                  │
+│   ├────────┼────┼────┼────┼────┼─────┤                                  │
+│   │   IS   │ ✓  │ ✓  │ ✓  │ ✗  │  ✓  │                                  │
+│   │   IX   │ ✓  │ ✓  │ ✗  │ ✗  │  ✗  │                                  │
+│   │    S   │ ✓  │ ✗  │ ✓  │ ✗  │  ✗  │                                  │
+│   │    X   │ ✗  │ ✗  │ ✗  │ ✗  │  ✗  │                                  │
+│   │  SIX   │ ✓  │ ✗  │ ✗  │ ✗  │  ✗  │                                  │
+│   └────────┴────┴────┴────┴────┴─────┘                                  │
+│                                                                         │
+│   Example: Read table T1, write row R1                                  │
+│   ─────────────────────────────────────                                 │
+│   1. Acquire IS on Database                                             │
+│   2. Acquire IX on Table T1                                             │
+│   3. Acquire S on Table T1 (read whole table)                           │
+│   4. Acquire X on Row R1 (write specific row)                           │
+│                                                                         │
+│   This allows other transactions to:                                    │
+│   - Read other tables (compatible with IS on Database)                  │
+│   - Write other rows in T1 (compatible with IX on Table)                │
+│                                                                         │
+│   But blocks:                                                           │
+│   - Exclusive lock on T1 (our S lock blocks it)                         │
+│   - Any lock on R1 (our X lock blocks it)                               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+INTENTION LOCKS (Pseudo-code)
+═════════════════════════════
+
+Lock modes: IS (intention shared), IX (intention exclusive),
+            S (shared), X (exclusive), SIX (S + IX)
+
+acquire(txn, resource_path, mode):
+  // resource_path = ["database", "table:users", "row:123"]
+  
+  intention = IS if mode == S else IX
+  
+  // Acquire intention locks on ancestors
+  for ancestor in resource_path[:-1]:
+    acquire_lock(txn, ancestor, intention)
+  
+  // Acquire actual lock on target
+  acquire_lock(txn, resource_path[-1], mode)
+
+acquire_lock(txn, resource, mode):
+  for each (holder, holder_mode) on resource:
+    if not COMPATIBLE[mode, holder_mode]:
+      raise Conflict
+  grant_lock(txn, resource, mode)
+```
+
+---
+
+<a name="consensus"></a>
+## 5. Consensus: The Foundation (High-Level)
+
+### 5.1 What Consensus Actually Means
+
+Consensus is getting a group of nodes to **agree on a single value**, even when:
+- Some nodes may fail
+- Messages may be lost or delayed
+- There is no global clock
+
+**The Consensus Guarantees:**
+
+| Property | Meaning |
+|----------|---------|
+| **Agreement** | All non-faulty nodes decide on the same value |
+| **Validity** | The decided value was proposed by some node |
+| **Termination** | All non-faulty nodes eventually decide |
+
+### 5.2 Why You Need Consensus (Without Knowing It)
+
+Every time you use these, you're using consensus under the hood:
+
+- **etcd, ZooKeeper, Consul:** Configuration stores using Raft/Paxos
+- **Kafka:** Leader election for partition leadership
+- **CockroachDB, TiDB:** Distributed transactions
+- **Kubernetes:** etcd-backed cluster state
+
+### 5.3 Consensus Trade-offs (No Algorithms, Just Intuition)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    CONSENSUS COST MODEL                                 │
+│                                                                         │
+│   For a write to be committed, it must be replicated to a QUORUM        │
+│   (majority) of nodes.                                                  │
+│                                                                         │
+│   3-node cluster: quorum = 2 (survives 1 failure)                       │
+│   5-node cluster: quorum = 3 (survives 2 failures)                      │
+│   7-node cluster: quorum = 4 (survives 3 failures)                      │
+│                                                                         │
+│   Write latency = time to reach quorum (slowest of the fast majority)   │
+│                                                                         │
+│   ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐                   │
+│   │ 5ms │    │ 8ms │    │12ms │    │45ms │    │200ms│                   │
+│   │Node1│    │Node2│    │Node3│    │Node4│    │Node5│                   │
+│   └─────┘    └─────┘    └─────┘    └─────┘    └─────┘                   │
+│   ──────────────────────▲                                               │
+│                         │                                               │
+│              Write commits after Node3 acks (12ms)                      │
+│              (quorum of 3 reached)                                      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Intuitions:**
+
+1. **Odd numbers are better:** 3 nodes and 4 nodes both survive 1 failure, but 4 nodes need more communication.
+
+2. **Quorum overlap guarantees consistency:** Any two quorums share at least one node, so no two conflicting decisions can both succeed.
+
+3. **Leader bottleneck:** Most consensus protocols route all writes through a leader.
+
+4. **Read optimization:** Reads can go to any node (with some consistency trade-offs) or only to leader (for strongest consistency).
+
+### 5.4 When You Need Consensus
+
+| Situation | Need Consensus? | Why |
+|-----------|-----------------|-----|
+| Picking a leader | ✅ Yes | Must agree on exactly one |
+| Committing a transaction | ✅ Yes | All or nothing across nodes |
+| Updating cluster configuration | ✅ Yes | All nodes must see same config |
+| Incrementing a counter | ⚠️ Maybe | Depends on accuracy requirements |
+| Logging events | ❌ Usually no | Ordering often not critical |
+| Caching | ❌ No | Eventual consistency is fine |
+
+### 5.5 Raft Consensus Deep Dive
+
+Understanding Raft is essential for Staff-level engineers. It's the consensus algorithm behind etcd, Consul, CockroachDB, and TiDB.
+
+#### 5.5.1 Raft Core Components
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           RAFT ARCHITECTURE                             │
+│                                                                         │
+│   ┌──────────────────────────────────────────────────────────────────┐  │
+│   │                         REPLICATED LOG                           │  │
+│   │                                                                  │  │
+│   │   Index:  1       2       3       4       5       6              │  │
+│   │         ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐            │  │
+│   │  Term:  │ 1 │   │ 1 │   │ 2 │   │ 2 │   │ 2 │   │ 3 │            │  │
+│   │         ├───┤   ├───┤   ├───┤   ├───┤   ├───┤   ├───┤            │  │
+│   │  Cmd:   │x=1│   │y=2│   │x=3│   │z=4│   │y=5│   │x=6│            │  │
+│   │         └───┘   └───┘   └───┘   └───┘   └───┘   └───┘            │  │
+│   │                                   ▲                              │  │
+│   │                             commitIndex                          │  │
+│   └──────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│   Leader replicates log entries to followers.                           │
+│   Entry is committed when replicated to majority.                       │
+│   Committed entries are applied to state machine.                       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.5.2 Raft State Machine
+
+```
+RAFT CORE (Pseudo-code)
+═══════════════════════
+
+States: FOLLOWER, CANDIDATE, LEADER
+
+Persistent state (survives restart):
+  current_term, voted_for, log[]
+
+Volatile state:
+  commit_index, last_applied, state
+
+Leader-only:
+  next_index[peer], match_index[peer]
+
+─────────────────────────────────────────────
+
+ELECTION (on timeout):
+  state = CANDIDATE
+  term++
+  voted_for = self
+  votes = 1
+  
+  for each peer:
+    if peer.request_vote(term, my_log_info).granted:
+      votes++
+  
+  if votes > majority: become_leader()
+  else: state = FOLLOWER
+
+─────────────────────────────────────────────
+
+VOTE REQUEST HANDLER:
+  if request.term > my_term:
+    my_term = request.term
+    state = FOLLOWER
+  
+  grant = (haven't voted OR voted for this candidate)
+          AND candidate_log >= my_log
+  
+  if grant: voted_for = candidate
+  return grant
+
+─────────────────────────────────────────────
+
+LOG COMPARISON (who's more up-to-date):
+  compare last_term first, then last_index
+  higher term wins; if equal, longer log wins
+
+─────────────────────────────────────────────
+
+CLIENT REQUEST (leader only):
+  append entry to local log
+  replicate to followers (AppendEntries RPC)
+  wait until majority acks → committed
+  apply to state machine
+
+─────────────────────────────────────────────
+
+APPEND_ENTRIES (heartbeat + log replication):
+  send: term, prev_log_index, prev_log_term, entries, commit_index
+  follower: reject if log doesn't match, accept and append if it does
+  leader: on reject, decrement next_index and retry
+
+─────────────────────────────────────────────
+
+COMMIT:
+  entry committed when replicated to majority
+  only commit entries from current term
+```
+
+#### 5.5.3 Raft Safety Properties
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        RAFT SAFETY GUARANTEES                           │
+│                                                                         │
+│   PROPERTY 1: Election Safety                                           │
+│   ─────────────────────────────                                         │
+│   At most one leader can be elected in a given term.                    │
+│                                                                         │
+│   Why: Each node votes once per term. Leader needs majority.            │
+│        Two majorities always overlap, so only one can get majority.     │
+│                                                                         │
+│   PROPERTY 2: Leader Append-Only                                        │
+│   ──────────────────────────────                                        │
+│   A leader never overwrites or deletes entries in its log.              │
+│   It only appends new entries.                                          │
+│                                                                         │
+│   PROPERTY 3: Log Matching                                              │
+│   ────────────────────────────                                          │
+│   If two logs contain an entry with the same index and term,            │
+│   then the logs are identical in all entries up to that index.          │
+│                                                                         │
+│   Why: AppendEntries includes prev_log_index and prev_log_term.         │
+│        Follower rejects if they don't match, forcing backtrack.         │
+│                                                                         │
+│   PROPERTY 4: Leader Completeness                                       │
+│   ───────────────────────────────                                       │
+│   If a log entry is committed in a given term, that entry will be       │
+│   present in the logs of all leaders for higher terms.                  │
+│                                                                         │
+│   Why: Leader election requires up-to-date log. Committed entries       │
+│        are on majority. New leader must have received votes from        │
+│        at least one node with the committed entry.                      │
+│                                                                         │
+│   PROPERTY 5: State Machine Safety                                      │
+│   ─────────────────────────────────                                     │
+│   If a server has applied a log entry at a given index,                 │
+│   no other server will ever apply a different entry for that index.     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.5.4 Raft Optimizations for Production
+
+```
+RAFT PRODUCTION OPTIMIZATIONS
+═════════════════════════════
+
+1. PRE-VOTE
+   Before starting election, ask "would you vote for me?"
+   If can't win, stay follower. Prevents term inflation from partitioned nodes.
+
+2. PIPELINING
+   Send multiple AppendEntries batches without waiting for each ack.
+   Dramatically improves throughput.
+
+3. LEARNER NODES
+   Add new node as non-voting learner first.
+   Replicate log to catch up. Then promote to voter.
+   Prevents cluster disruption during scaling.
+
+4. BATCHING
+   Collect multiple client requests (e.g., 100 or wait 1ms).
+   Single consensus round for the batch.
+   Amortizes consensus cost.
+
+5. READ LEASES
+   Leader maintains lease (refreshed by heartbeats).
+   If lease valid: serve read locally (no consensus).
+   If expired: confirm leadership with quorum first.
+```
+
+#### 5.5.5 Raft vs Paxos Comparison
+
+| Aspect | Raft | Multi-Paxos |
+|--------|------|-------------|
+| **Understandability** | Designed for clarity | Notoriously complex |
+| **Leader** | Always required | Can be leaderless (basic Paxos) |
+| **Log ordering** | Strictly ordered | Gaps allowed, fill later |
+| **Membership change** | Joint consensus | Separate Paxos instance |
+| **Performance** | 2 RTTs for writes | 2 RTTs (with stable leader) |
+| **Implementations** | etcd, Consul, TiKV | Chubby (internal), Spanner |
+
+### 5.6 Advanced Consensus Variants
+
+#### 5.6.1 EPaxos (Egalitarian Paxos)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           EPAXOS OVERVIEW                                │
+│                                                                          │
+│   Unlike Raft/Multi-Paxos, EPaxos is LEADERLESS.                        │
+│   Any node can propose commands directly.                               │
+│                                                                          │
+│   FAST PATH (no conflicts):                                             │
+│   ─────────────────────────                                             │
+│   Proposer ──propose──▶ Fast Quorum (F+1 nodes)                        │
+│                              │                                           │
+│                              ▼                                           │
+│                         COMMITTED in 1 RTT!                             │
+│                                                                          │
+│   SLOW PATH (conflicts detected):                                       │
+│   ────────────────────────────────                                      │
+│   Proposer ──propose──▶ Fast Quorum                                    │
+│                         │                                                │
+│                    conflicts!                                            │
+│                         │                                                │
+│            ◀─────────────                                               │
+│   Proposer ──accept───▶ Classic Quorum (majority)                      │
+│                              │                                           │
+│                              ▼                                           │
+│                         COMMITTED in 2 RTTs                             │
+│                                                                          │
+│   BENEFITS:                                                              │
+│   - Lower latency for non-conflicting commands                         │
+│   - No leader bottleneck                                                │
+│   - Better geo-distribution (closest replica handles request)          │
+│                                                                          │
+│   DRAWBACKS:                                                            │
+│   - Complex implementation                                              │
+│   - Command interference detection overhead                            │
+│   - Execution order requires dependency tracking                        │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.6.2 Flexible Paxos
+
+```
+FLEXIBLE PAXOS (Concept)
+════════════════════════
+
+Key insight: Only quorum INTERSECTION matters, not quorum SIZE.
+
+Traditional (5 nodes): Write=3, Read=3 (must overlap)
+Flexible (5 nodes):    Write=4, Read=2 (still overlap! 4+2 > 5)
+
+Use cases:
+  • Read-heavy: smaller read quorum, larger write quorum
+  • Write-heavy: smaller write quorum, larger read quorum
+
+Invariant: write_quorum + read_quorum > num_nodes
+```
+
+### 5.7 Consistency Models Deep Dive
+
+Understanding consistency models is essential for staff-level engineers. The choice of consistency model affects correctness, performance, and user experience.
+
+#### 5.7.1 The Consistency Spectrum
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    CONSISTENCY MODEL SPECTRUM                           │
+│                                                                         │
+│   Strongest                                              Weakest        │
+│   ◀──────────────────────────────────────────────────────────────▶      │
+│                                                                         │
+│   ┌────────────┐ ┌───────────┐ ┌─────────-─┐ ┌─────────┐ ┌────--─────┐  │
+│   │Lineariza-  │ │Sequential │ │ Causal    │ │Read-your│ │Eventual   │  │
+│   │bility      │ │Consistency│ │Consistency│ │-writes  │ │Consistency│  │
+│   └────────────┘ └───────────┘ └──────────-┘ └─────────┘ └────────--─┘  │
+│                                                                         │
+│   "Real-time     "All see      "Causally    "See own   "Eventually      │
+│    ordering"      same order"   related      writes"    converge"       │
+│                                 ordered"                                │
+│                                                                         │
+│   PERFORMANCE COST:                                                     │
+│   High ←─────────────────────────────────────────────────────────→ Low  │
+│                                                                         │
+│   AVAILABILITY:                                                         │
+│   Low ←──────────────────────────────────────────────────────────→ High │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.7.2 Linearizability (Strong Consistency)
+
+```
+LINEARIZABILITY EXPLAINED
+═════════════════════════
+
+Definition: Every operation takes effect instantaneously at some point
+            between invocation and response.
+
+Key properties:
+  1. Real-time ordering: If A completes before B starts → A before B
+  2. Single-copy semantics: Behaves as if there's one copy
+
+Example (IS linearizable):
+  Client A:  |--write(x=1)--|
+  Client B:             |--read()→0--|    (write hasn't "taken effect" yet)
+  Client C:                    |--read()→1--|
+
+Example (NOT linearizable):
+  Client A:  |--write(x=1)--|
+  Client B:                      |--read()→1--|
+  Client C:                               |--read()→0--|  ← VIOLATION!
+  
+  Once B sees 1, C cannot see 0. Values can't "un-happen".
+
+─────────────────────────────────────────────────────────
+
+IMPLEMENTING LINEARIZABLE READS:
+
+Option 1 - ReadIndex (leader-based):
+  1. Confirm still leader (heartbeat quorum)
+  2. Wait for commit index to advance
+  3. Read from state machine
+
+Option 2 - Quorum read:
+  1. Read from majority of nodes
+  2. Return value with highest log index
+```
+
+#### 5.7.3 Sequential Consistency
+
+```
+SEQUENTIAL CONSISTENCY
+══════════════════════
+
+Definition: All processes see operations in the SAME order,
+            and each process's ops appear in program order.
+
+Difference from linearizability: No real-time ordering required.
+
+Example (sequentially consistent, NOT linearizable):
+
+  Real time:
+  Process 1:  write(x=1) ..................  read(y)→0
+  Process 2:  .........  write(y=1) .......  read(x)→0
+
+  Both read 0! Both writes completed before reads (in real time).
+  NOT linearizable.
+
+  BUT sequentially consistent with order:
+    read(x)→0, read(y)→0, write(x=1), write(y=1)
+
+  Both see same order, each process's ops in program order. ✓
+```
+
+#### 5.7.4 Causal Consistency
+
+```
+CAUSAL CONSISTENCY
+══════════════════
+
+Definition: Only causally-related operations must be ordered.
+  • If A depends on B → all processes see B before A
+  • Concurrent ops → can appear in any order
+
+Used by: MongoDB (default), Cassandra, DynamoDB
+
+Implementation: Track dependencies with vector clocks
+
+write(key, value):
+  vector_clock.tick()
+  store value with current vector_clock and dependencies
+  
+receive_write(write):
+  if all dependencies satisfied:
+    apply_write()
+  else:
+    buffer until dependencies arrive
+
+Example:
+  User A posts: "I'm getting married!"
+  User B likes the post
+  User C comments: "Congratulations!"
+
+  Causal order: Post → Like, Post → Comment
+  
+  All replicas must show:
+    • Like after Post ✓
+    • Comment after Post ✓
+    • Like vs Comment? Any order OK (concurrent)
+```
+
+#### 5.7.5 Consistency Model Comparison
+
+| Model | Real-time Order | Total Order | Causal Order | Use Case |
+|-------|-----------------|-------------|--------------|----------|
+| **Linearizability** | ✅ Yes | ✅ Yes | ✅ Yes | Locks, counters, leader election |
+| **Sequential** | ❌ No | ✅ Yes | ✅ Yes | Shared memory, caches |
+| **Causal** | ❌ No | ❌ No | ✅ Yes | Social feeds, collaborative editing |
+| **Eventual** | ❌ No | ❌ No | ❌ No | DNS, session stores |
+
+#### 5.7.6 CAP Theorem and Consistency
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    CAP THEOREM PRACTICAL GUIDE                          │
+│                                                                         │
+│   During a network partition, you must choose:                          │
+│                                                                         │
+│   CP (Consistency + Partition tolerance):                               │
+│   ─────────────────────────────────────────                             │
+│   - Sacrifice availability                                              │
+│   - Minority partition cannot serve requests                            │
+│   - Examples: etcd, ZooKeeper, Spanner                                  │
+│                                                                         │
+│   AP (Availability + Partition tolerance):                              │
+│   ─────────────────────────────────────────                             │
+│   - Sacrifice consistency                                               │
+│   - All partitions can serve requests (may diverge)                     │
+│   - Examples: Cassandra, DynamoDB, Riak                                 │
+│                                                                         │
+│   MODERN UNDERSTANDING:                                                 │
+│   ──────────────────────                                                │
+│   - CAP is about the partition state, not normal operation              │
+│   - During normal operation, you can have both C and A                  │
+│   - The real question: "What happens during partition?"                 │
+│                                                                         │
+│   PACELC (more nuanced):                                                │
+│   ───────────────────────                                               │
+│   If Partition: choose Availability or Consistency                      │
+│   Else (normal): choose Latency or Consistency                          │
+│                                                                         │
+│   Examples:                                                             │
+│   - Spanner: PC/EC (Consistent always, sacrifice latency)               │
+│   - Cassandra: PA/EL (Available in partition, low latency normally)     │
+│   - MongoDB: PA/EC (Available in partition, consistent normally)        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+<a name="failure-scenarios"></a>
+## 6. Failure Scenarios That Will Ruin Your Week
+
+### 6.1 Split Brain
+
+The most dangerous failure mode in distributed coordination.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        SPLIT BRAIN SCENARIO                             │
+│                                                                         │
+│   Normal Operation:                                                     │
+│   ────────────────                                                      │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                    CLUSTER (5 nodes)                            │   │
+│   │                                                                 │   │
+│   │      ┌───┐    ┌───┐    ┌───┐    ┌───┐    ┌───┐                  │   │
+│   │      │ A │────│ B │────│ C │────│ D │────│ E │                  │   │
+│   │      │ 👑 │   │   │    │   │    │   │    │   │                   │   │
+│   │      └───┘    └───┘    └───┘    └───┘    └───┘                  │   │
+│   │                                                                 │   │
+│   │      A is the leader. All is well.                              │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   Network Partition:                                                    │
+│   ──────────────────                                                    │
+│                                                                         │
+│   ┌─────────────────────┐  ║  ┌─────────────────────────────────────┐   │
+│   │    PARTITION 1      │  ║  │         PARTITION 2                 │   │
+│   │                     │  ║  │                                     │   │
+│   │   ┌───┐    ┌───┐    │  ║  │   ┌───┐    ┌───┐    ┌───┐           │   │
+│   │   │ A │────│ B │    │  ║  │   │ C │────│ D │────│ E │           │   │
+│   │   │ 👑 │   │    │    │  ║  │   │👑 │    │   │    │   │           │   │
+│   │   └───┘    └───┘    │  ║  │   └───┘    └───┘    └───┘           │   │
+│   │                     │  ║  │                                     │   │
+│   │   A thinks it's     │  ║  │   C,D,E elect C as new leader       │   │
+│   │   still leader      │  ║  │   (they have quorum!)               │   │
+│   └─────────────────────┘  ║  └─────────────────────────────────────┘   │
+│                            ║                                            │
+│                      NETWORK PARTITION                                  │
+│                                                                         │
+│   TWO LEADERS! Both accepting writes! DATA DIVERGENCE!                  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why This Happens:**
+1. Network partition isolates minority (A, B) from majority (C, D, E)
+2. A doesn't know it's partitioned—from its view, C, D, E just stopped responding
+3. C, D, E have quorum (3/5) and elect new leader
+4. A continues accepting writes (unless it checks for quorum)
+
+**Prevention:**
+
+```python
+class SplitBrainSafeLeader:
+    """Leader that steps down if it loses quorum."""
+    
+    def heartbeat_loop(self):
+        while self.is_leader:
+            reachable = 0
+            for peer in self.peers:
+                try:
+                    peer.heartbeat()
+                    reachable += 1
+                except Unreachable:
+                    pass
+            
+            # Include self in count
+            if (reachable + 1) < self.quorum_size:
+                logging.critical(
+                    "Lost quorum! Stepping down to prevent split-brain"
+                )
+                self.is_leader = False
+                self.stop_accepting_writes()
+            
+            time.sleep(self.heartbeat_interval)
+```
+
+### 6.2 Partial Failure
+
+In distributed systems, operations can half-succeed—the worst possible outcome.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        PARTIAL FAILURE SCENARIO                         │
+│                                                                         │
+│   Operation: Transfer $100 from Account A to Account B                  │
+│   Step 1: Deduct from A  →  SUCCESS                                     │
+│   Step 2: Add to B       →  NETWORK TIMEOUT (??)                        │
+│                                                                         │
+│   What actually happened?                                               │
+│                                                                         │
+│   Option 1: The add failed (B has no money, A has less)                 │
+│   Option 2: The add succeeded but ack was lost (both correct)           │
+│   Option 3: The add is still in flight (will succeed later)             │
+│                                                                         │
+│   You cannot tell which happened!                                       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Solutions:**
 
-1. **Latency decoupling**: User gets response when A finishes; C processes later.
-
-2. **Failure isolation**: If C is down, messages buffer; C catches up when healthy.
-
-3. **Independent scaling**: A and C scale independently based on their own needs.
-
-4. **Burst absorption**: Buffer absorbs traffic spikes; C processes at steady rate.
-
-5. **Resource efficiency**: No held connections; services process at their own pace.
-
-## When Async Makes Sense
-
-### Quick Visual: Sync vs Async Decision
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    WHEN TO GO ASYNC                                         │
-│                                                                             │
-│   ASK: "Does the user need to wait for this operation to complete?"         │
-│                                                                             │
-│   YES, USER MUST WAIT                    NO, USER DOESN'T NEED RESULT       │
-│   ─────────────────────                  ────────────────────────────       │
-│   • Account balance check                • Sending email notification       │
-│   • Product search                       • Updating analytics               │
-│   • Authentication                       • Processing uploaded video        │
-│   • Payment processing*                  • Generating reports               │
-│   → USE SYNC                             → USE ASYNC                        │
-│                                                                             │
-│   *Payment: Initiate sync, but confirmation can be async                    │
-│                                                                             │
-│   ALSO GO ASYNC WHEN:                                                       │
-│   • Producer rate >> Consumer capacity                                      │
-│   • Operation is expensive (video transcoding, ML inference)                │
-│   • Multiple downstream systems need the same event                         │
-│   • You need to retry failed operations                                     │
-│   • You need to smooth out traffic spikes                                   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## The Cost of Async
-
-Async isn't free. Trade-offs include:
-
-| Benefit | Cost |
-|---------|------|
-| Decoupled latency | Eventual consistency (results aren't immediate) |
-| Failure isolation | Operational complexity (monitoring queues, lag) |
-| Independent scaling | Debugging difficulty (distributed traces harder) |
-| Burst absorption | Delivery guarantees complexity (at-least-once, etc.) |
-| Resource efficiency | Additional infrastructure (message brokers) |
-
-**Staff-level insight**: Async is a tool, not a default. Use it when the benefits outweigh the complexity costs.
-
----
-
----
-
-# Part 2: Queues vs Logs vs Streams — The Fundamental Differences
-
-These three terms are often conflated. Let's define them precisely.
-
-## Queues: Work Distribution
-
-### Mental Model
-
-A queue is a *work distribution system*. Think of a call center: calls arrive, wait in a queue, and the next available agent takes the next call. Once handled, the call is "consumed"—it's gone.
-
-### Key Characteristics
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUE CHARACTERISTICS                                    │
-│                                                                             │
-│   1. COMPETING CONSUMERS                                                    │
-│      ─────────────────────                                                  │
-│      Message → [ Queue ] → Consumer 1 OR Consumer 2 OR Consumer 3           │
-│                     ↓                                                       │
-│              (Each message goes to ONE consumer)                            │
-│                                                                             │
-│   2. CONSUME = DELETE                                                       │
-│      ────────────────────                                                   │
-│      Before: [ A | B | C | D | E ]                                          │
-│      Consumer takes 'A'                                                     │
-│      After:  [ B | C | D | E ]  (A is gone forever)                         │
-│                                                                             │
-│   3. NO ORDERING GUARANTEE (usually)                                        │
-│      ─────────────────────────────                                          │
-│      Messages delivered in approximate FIFO order                           │
-│      But with competing consumers, no global order guaranteed               │
-│                                                                             │
-│   4. ACKNOWLEDGMENT-BASED                                                   │
-│      ─────────────────────                                                  │
-│      Consumer: "Got message A"                                              │
-│      Queue: Marks A as delivered                                            │
-│      Consumer: "Processing complete"                                        │
-│      Queue: Deletes A                                                       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Queue Examples
-
-- **Amazon SQS**: Managed queue service, scales automatically
-- **RabbitMQ**: Feature-rich, supports complex routing
-- **ActiveMQ**: Enterprise messaging, JMS compliant
-- **Redis Lists**: Simple queue with LPUSH/RPOP
-
-### Best Use Cases for Queues
-
-- **Task distribution**: Image resizing, email sending, report generation
-- **Load leveling**: Absorbing traffic spikes
-- **Work queues**: Background job processing
-- **Request buffering**: Protecting slow downstream services
-
----
-
-## Logs: Event History
-
-### Mental Model
-
-A log is an *append-only sequence of records*. Think of a transaction ledger: every event is written to the end, nothing is ever deleted (until configured retention expires), and anyone can read from any point in history.
-
-### Key Characteristics
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    LOG CHARACTERISTICS                                      │
-│                                                                             │
-│   1. APPEND-ONLY                                                            │
-│      ─────────────                                                          │
-│      New events → [ 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | ... ] → (forever)       │
-│                        ↑                                                    │
-│                   (Never modified, only appended)                           │
-│                                                                             │
-│   2. CONSUMER OFFSET TRACKING                                               │
-│      ────────────────────────                                               │
-│      Consumer A: "I'm at offset 3"                                          │
-│      Consumer B: "I'm at offset 7"                                          │
-│      (Each consumer tracks its own position)                                │
-│                                                                             │
-│   3. CONSUME ≠ DELETE                                                       │
-│      ────────────────────                                                   │
-│      Consumer reads offset 3                                                │
-│      Message still there at offset 3                                        │
-│      Other consumers can also read offset 3                                 │
-│                                                                             │
-│   4. REPLAY CAPABILITY                                                      │
-│      ──────────────────                                                     │
-│      Consumer: "Something went wrong, replaying from offset 0"              │
-│      Log: Still has all messages, consumer re-reads from beginning          │
-│                                                                             │
-│   5. PARTITIONED FOR PARALLELISM                                            │
-│      ───────────────────────────                                            │
-│      Partition 0: [ A | D | G ]   ← Consumer 0                              │
-│      Partition 1: [ B | E | H ]   ← Consumer 1                              │
-│      Partition 2: [ C | F | I ]   ← Consumer 2                              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Log Examples
-
-- **Apache Kafka**: The canonical distributed log
-- **Apache Pulsar**: Multi-tenant, tiered storage
-- **Amazon Kinesis**: Managed streaming service
-- **Redpanda**: Kafka-compatible, C++ implementation
-
-### Best Use Cases for Logs
-
-- **Event sourcing**: Complete history of state changes
-- **Data integration**: Multiple consumers reading same data
-- **Replay scenarios**: Rebuilding state, backfilling systems
-- **Audit trails**: Immutable record of what happened
-- **Stream processing**: Foundation for real-time analytics
-
----
-
-## Streams: Continuous Processing
-
-### Mental Model
-
-A stream is a *continuous, unbounded flow of events* with *time-aware processing*. While a log is storage, a stream is about processing—aggregations over time windows, joins between event flows, and real-time transformations.
-
-### Key Characteristics
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    STREAM CHARACTERISTICS                                   │
-│                                                                             │
-│   1. UNBOUNDED DATA                                                         │
-│      ──────────────                                                         │
-│      Events flow forever: ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿→ (no end)                  │
-│      (Contrast with batch: finite dataset, clear beginning and end)         │
-│                                                                             │
-│   2. TIME-AWARE PROCESSING                                                  │
-│      ──────────────────────                                                 │
-│      "Count events in last 5 minutes"                                       │
-│      "Alert if no heartbeat for 30 seconds"                                 │
-│      "Join clicks with impressions within 1 hour"                           │
-│                                                                             │
-│   3. WINDOWED OPERATIONS                                                    │
-│      ──────────────────────                                                 │
-│      |----Window 1----|----Window 2----|----Window 3----|                   │
-│      Events: A B C D E | F G H I J     | K L M N O      |                   │
-│      Result: Count=5   | Count=5       | Count=5        |                   │
-│                                                                             │
-│   4. BUILT ON LOGS (usually)                                                │
-│      ──────────────────────                                                 │
-│      Stream processing reads from log, writes to log                        │
-│      Kafka topic → Stream Processor → Kafka topic                           │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Stream Processing Examples
-
-- **Kafka Streams**: Library for stream processing on Kafka
-- **Apache Flink**: Full-featured stream processing framework
-- **Apache Spark Structured Streaming**: Unified batch/stream
-- **Amazon Kinesis Data Analytics**: Managed stream processing
-
-### Best Use Cases for Streams
-
-- **Real-time analytics**: Dashboards, monitoring, alerting
-- **Event-time processing**: Late event handling, out-of-order data
-- **Continuous aggregations**: Rolling counts, moving averages
-- **Complex event processing**: Pattern detection across events
-- **Data enrichment**: Joining real-time events with lookup data
-
----
-
-## The Critical Comparison
-
-### Quick Visual: Feature Comparison Matrix
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUE vs LOG vs STREAM                                   │
-│                                                                             │
-│                      QUEUE          LOG            STREAM                   │
-│   ───────────────────────────────────────────────────────────               │
-│   Primary use       Work            Event          Real-time                │
-│                     distribution    history        processing               │
-│                                                                             │
-│   Message fate      Deleted on      Retained       Flows through            │
-│                     consume         until TTL                               │
-│                                                                             │
-│   Consumer model    Competing       Independent    Continuous               │
-│                     (one gets it)   (each reads)   processing               │
-│                                                                             │
-│   Replay possible?  No              Yes            Depends on source        │
-│                                                                             │
-│   Ordering          Best-effort     Per-partition  Event-time aware         │
-│                     FIFO            guaranteed                              │
-│                                                                             │
-│   Scaling           Add consumers   Add partitions Parallel instances       │
-│                     (compete)       + consumers                             │
-│                                                                             │
-│   Typical latency   ms to seconds   ms to seconds  ms (continuous)          │
-│                                                                             │
-│   Example tech      SQS, RabbitMQ   Kafka, Kinesis Flink, Kafka Streams     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Detailed Comparison Table
-
-| Aspect | Queue | Log | Stream |
-|--------|-------|-----|--------|
-| **Data retention** | Until consumed | Configurable (hours to forever) | Based on source log |
-| **Consumer independence** | Consumers compete | Consumers independent | Operators compose |
-| **Replay** | Not possible | From any offset | From source offset |
-| **Multiple consumers** | Share the load | Each gets full copy | Each processes full flow |
-| **Ordering** | Approximate FIFO | Strict per-partition | Event-time semantics |
-| **Backpressure** | Queue grows | Consumers fall behind | Framework-dependent |
-| **State management** | Stateless | Offset only | Rich state (windows, joins) |
-| **Typical scale** | Millions/day | Billions/day | Continuous throughput |
-
-**Key Difference:**
-- **Queue**: Message goes to ONE consumer, then deleted
-- **Log**: ALL consumers read the same messages independently  
-- **Stream**: Continuous processing with time-aware operations
-
----
-
-# Part 3: Ordering Guarantees — What They Mean in Practice
-
-Ordering is subtle. "FIFO" means different things in different contexts.
-
-## Queue Ordering: Best-Effort FIFO
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUE ORDERING REALITY                                   │
-│                                                                             │
-│   SINGLE CONSUMER:                                                          │
-│   ─────────────────                                                         │
-│   Produce: A → B → C → D                                                    │
-│   Consume: A → B → C → D  (perfect FIFO)                                    │
-│                                                                             │
-│   MULTIPLE COMPETING CONSUMERS:                                             │
-│   ──────────────────────────────                                            │
-│   Produce: A → B → C → D → E → F                                            │
-│                                                                             │
-│   Consumer 1 takes A, starts processing (slow)                              │
-│   Consumer 2 takes B, finishes quickly                                      │
-│   Consumer 3 takes C, finishes quickly                                      │
-│   Consumer 1 still processing A                                             │
-│                                                                             │
-│   Completion order: B, C, A, ...  (NOT FIFO!)                               │
-│                                                                             │
-│   WITH FAILURES:                                                            │
-│   ──────────────                                                            │
-│   Consumer takes A, crashes                                                 │
-│   Consumer takes B, succeeds                                                │
-│   A becomes visible again (visibility timeout)                              │
-│   Consumer takes A again                                                    │
-│                                                                             │
-│   Process order: B, then A  (NOT FIFO!)                                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Queue FIFO Variants
-
-**Standard Queue (SQS Standard):**
-- Best-effort ordering
-- Occasional duplicates
-- Higher throughput
-- Use when order doesn't matter
-
-**FIFO Queue (SQS FIFO):**
-- Strict ordering within message groups
-- Exactly-once processing
-- Lower throughput (300 TPS without batching)
-- Use when order matters
-
----
-
-## Log Ordering: Per-Partition Guarantee
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    LOG ORDERING REALITY                                     │
-│                                                                             │
-│   WITHIN A PARTITION: STRICT ORDER                                          │
-│   ────────────────────────────────────                                      │
-│   Partition 0: [ A | C | E | G ]                                            │
-│                  ↓   ↓   ↓   ↓                                              │
-│                 Always read in order A → C → E → G                          │
-│                                                                             │
-│   ACROSS PARTITIONS: NO ORDER                                               │
-│   ──────────────────────────────                                            │
-│   Partition 0: [ A | C | E | G ]                                            │
-│   Partition 1: [ B | D | F | H ]                                            │
-│                                                                             │
-│   Consumer might see: A, B, C, D, E, F, G, H                                │
-│                   or: B, A, D, C, F, E, H, G                                │
-│                   or: A, B, D, C, E, G, F, H                                │
-│                                                                             │
-│   PARTITIONING STRATEGY MATTERS:                                            │
-│   ─────────────────────────────────                                         │
-│   Key-based partitioning: hash(user_id) → partition                         │
-│   Same user_id → same partition → ordered events for that user              │
-│                                                                             │
-│   User 123's events: partition 2 → always in order                          │
-│   User 456's events: partition 7 → always in order                          │
-│   User 123 vs 456: no ordering guarantee                                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Practical Implication
-
-If you need events for a specific entity (user, order, account) to be ordered, partition by that entity's ID. All events for user_123 go to the same partition, processed in order.
-
-If you need *global* ordering across all events, you have only one partition—which means only one consumer—which limits throughput severely.
-
----
-
-## Stream Ordering: Event Time vs. Processing Time
-
-Streams add another dimension: *when did the event happen* vs. *when did we receive it*?
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    EVENT TIME vs PROCESSING TIME                            │
-│                                                                             │
-│   THE PROBLEM:                                                              │
-│   ────────────                                                              │
-│   Event A happens at T=0, arrives at T=5                                    │
-│   Event B happens at T=1, arrives at T=2                                    │
-│   Event C happens at T=2, arrives at T=3                                    │
-│                                                                             │
-│   PROCESSING TIME ORDER: B, C, A  (arrival order)                           │
-│   EVENT TIME ORDER:      A, B, C  (actual order)                            │
-│                                                                             │
-│   WHY DOES THIS HAPPEN?                                                     │
-│   ──────────────────────                                                    │
-│   • Network latency varies                                                  │
-│   • Mobile devices go offline, send batches later                           │
-│   • Upstream retries cause delays                                           │
-│   • Data center routing varies                                              │
-│                                                                             │
-│   EXAMPLE: Click Attribution                                                │
-│   ─────────────────────────                                                 │
-│   "Count clicks per minute"                                                 │
-│                                                                             │
-│   User clicks at 12:00:59, event arrives at 12:01:05                        │
-│                                                                             │
-│   Processing time: counts in 12:01 window                                   │
-│   Event time:      counts in 12:00 window (correct!)                        │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Watermarks and Late Events
-
-Stream processors use *watermarks* to handle late events:
-
-```
-Watermark: "I believe I've seen all events up to time T"
-
-Events:     [T=1] [T=4] [T=2] [T=7] [T=3] [T=8]
-Watermarks:  W=1   W=2   W=2   W=5   W=5   W=7
-
-When watermark passes window end:
-  - Window 0-5: can now be finalized
-  - Late event [T=3] after W=5: discarded OR side-output
-```
-
-**Staff-level insight**: If your use case has late-arriving data, you need stream processing with event-time semantics. Pure log consumption with processing-time ordering will give wrong results.
-
----
-
-# Part 4: Consumer Scaling and Lag
-
-How do you add more consumers without breaking things?
-
-## Queue Scaling: Competing Consumers
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUE CONSUMER SCALING                                   │
-│                                                                             │
-│   SIMPLE MODEL:                                                             │
-│   ─────────────                                                             │
-│   Queue → Consumer 1                                                        │
-│        → Consumer 2       (all compete for messages)                        │
-│        → Consumer 3                                                         │
-│        → ...                                                                │
-│        → Consumer N                                                         │
-│                                                                             │
-│   THROUGHPUT: Scales linearly with consumers (approximately)                │
-│                                                                             │
-│   TRADE-OFF: Ordering suffers with more consumers                           │
-│                                                                             │
-│   AUTO-SCALING:                                                             │
-│   ─────────────                                                             │
-│   Queue depth > threshold → add consumers                                   │
-│   Queue depth < threshold → remove consumers                                │
-│                                                                             │
-│   SQS + Lambda example:                                                     │
-│   - Queue grows                                                             │
-│   - Lambda scales automatically (up to 1000 concurrent)                     │
-│   - Queue drains                                                            │
-│   - Lambda scales down                                                      │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Queue Lag Metrics
-
-- **Queue depth**: Messages waiting to be processed
-- **Age of oldest message**: How long the oldest message has been waiting
-- **Ingestion rate**: Messages entering per second
-- **Consumption rate**: Messages processed per second
-
-**Healthy state**: Consumption rate >= Ingestion rate, queue depth stable or decreasing
-
----
-
-## Log Scaling: Partitions and Consumer Groups
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    LOG CONSUMER SCALING                                     │
-│                                                                             │
-│   KAFKA MODEL:                                                              │
-│   ────────────                                                              │
-│   Topic with 6 partitions                                                   │
-│                                                                             │
-│   Partition 0 ──┐                                                           │
-│   Partition 1 ──┼── Consumer Group A ──┬── Consumer A1 (P0, P1)             │
-│   Partition 2 ──┤                      ├── Consumer A2 (P2, P3)             │
-│   Partition 3 ──┤                      └── Consumer A3 (P4, P5)             │
-│   Partition 4 ──┤                                                           │
-│   Partition 5 ──┘                                                           │
-│                                                                             │
-│   SCALING LIMIT: max_consumers = num_partitions                             │
-│                                                                             │
-│   If you have 6 partitions:                                                 │
-│   - 3 consumers → 2 partitions each                                         │
-│   - 6 consumers → 1 partition each                                          │
-│   - 12 consumers → 6 active, 6 idle (wasted!)                               │
-│                                                                             │
-│   IMPLICATION: Plan partitions based on max parallelism needed              │
-│                                                                             │
-│   CONSUMER GROUPS:                                                          │
-│   ─────────────────                                                         │
-│   Group A: Feeds service (reads all events)                                 │
-│   Group B: Analytics service (reads all events, independent)                │
-│   Group C: Search indexer (reads all events, independent)                   │
-│                                                                             │
-│   Each group maintains its own offsets. All groups get all messages.        │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Log Lag Metrics
-
-- **Consumer lag**: Offset behind the latest message
-- **Time lag**: How old the oldest unprocessed message is
-- **Per-partition lag**: Lag broken down by partition (identifies hot partitions)
-
-```
-Example lag calculation:
-
-Partition 0: latest offset 1,000,000 | consumer offset 990,000 | lag: 10,000
-Partition 1: latest offset 1,000,000 | consumer offset 999,000 | lag: 1,000
-Partition 2: latest offset 1,000,000 | consumer offset 950,000 | lag: 50,000  ← HOT!
-
-Total lag: 61,000 messages
-Partition 2 is causing most of the lag → investigate
-```
-
-## Consumer Group Coordination (Kafka)
-
-Understanding consumer group behavior is essential for Staff Engineers operating Kafka-based systems.
-
-### Rebalancing Triggers
-
-| Trigger | Cause | Impact |
-|---------|-------|--------|
-| Consumer joins | New instance starts | All consumers pause |
-| Consumer leaves | Graceful shutdown | Mild pause |
-| Consumer crashes | Heartbeat timeout | Longer pause (session timeout) |
-| Partition change | Topic partition added | All consumers pause |
-
-### Minimizing Rebalance Impact
+1. **Idempotency Keys:** Make operations safe to retry
 
 ```python
-# PATTERN 1: Cooperative Sticky Assignor (Kafka 2.4+)
-# Only moves partitions that need to move
-consumer = KafkaConsumer(
-    partition_assignment_strategy=[CooperativeStickyAssignor]
-)
-
-# PATTERN 2: Static Membership (Kafka 2.3+)
-# Consumer restarts don't trigger rebalance
-consumer = KafkaConsumer(
-    group_instance_id="worker-1"  # Static identity
-)
-
-# PATTERN 3: Incremental Rebalancing
-# Process continues on non-affected partitions
-consumer = KafkaConsumer(
-    partition_assignment_strategy=[CooperativeStickyAssignor],
-    group_instance_id="worker-1"
-)
-```
-
-### Staff-Level Insight
-
-> "In high-throughput systems, consumer rebalancing can cause significant processing gaps. Use static membership and cooperative rebalancing to minimize impact. Always monitor rebalance frequency as a key operational metric."
-
----
-
-## Stream Processing Scaling
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    STREAM PROCESSING SCALING                                │
-│                                                                             │
-│   PARALLEL INSTANCES:                                                       │
-│   ───────────────────                                                       │
-│   Source (Kafka) → [Flink Instance 1] → Sink                                │
-│                  → [Flink Instance 2] → Sink                                │
-│                  → [Flink Instance 3] → Sink                                │
-│                                                                             │
-│   Each instance handles a subset of partitions                              │
-│                                                                             │
-│   STATEFUL OPERATIONS:                                                      │
-│   ─────────────────────                                                     │
-│   State is partitioned (like the data)                                      │
-│                                                                             │
-│   Counting by user_id:                                                      │
-│   - Instance 1: maintains counts for users hashing to its partitions        │
-│   - Instance 2: maintains counts for other users                            │
-│   - etc.                                                                    │
-│                                                                             │
-│   RESCALING REQUIRES STATE MIGRATION:                                       │
-│   ─────────────────────────────────────                                     │
-│   3 instances → 6 instances                                                 │
-│   State must be redistributed                                               │
-│   Checkpoints/savepoints enable this                                        │
-│   Brief pause in processing                                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-# Part 5: Delivery Semantics — At-Least-Once and Exactly-Once
-
-This is where most confusion happens. Let's be precise.
-
-## At-Most-Once: Fire and Forget
-
-```
-Producer sends message → Broker might receive it (or not) → Consumer might process (or not)
-
-Guarantee: Message processed 0 or 1 times
-Risk: Data loss
-Use case: Metrics where some loss is acceptable
-```
-
-**How it happens:**
-- Producer doesn't wait for acknowledgment
-- Consumer acknowledges before processing
-- No retries on failure
-
-**Example**: UDP packet transmission. Fast, but lossy.
-
----
-
-## At-Least-Once: Guaranteed Delivery with Possible Duplicates
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    AT-LEAST-ONCE DELIVERY                                   │
-│                                                                             │
-│   THE PATTERN:                                                              │
-│   ────────────                                                              │
-│   1. Producer sends message                                                 │
-│   2. Broker acknowledges receipt                                            │
-│   3. Consumer fetches message                                               │
-│   4. Consumer processes message                                             │
-│   5. Consumer commits offset / acknowledges                                 │
-│                                                                             │
-│   IF ANYTHING FAILS, RETRY:                                                 │
-│   ──────────────────────────                                                │
-│   Producer timeout? → Retry send (maybe duplicate)                          │
-│   Consumer crashes before commit? → Message redelivered (duplicate)         │
-│                                                                             │
-│   DUPLICATE SCENARIO:                                                       │
-│   ───────────────────                                                       │
-│   Consumer: Process message A                                               │
-│   Consumer: Start committing offset                                         │
-│   Consumer: *crashes*                                                       │
-│   Broker: No commit received, message A still outstanding                   │
-│   Consumer (restarted): Fetch message A again                               │
-│   Consumer: Process message A (DUPLICATE!)                                  │
-│                                                                             │
-│   RESULT: Message processed 1 or more times                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Handling duplicates (idempotency):**
-
-```python
-# BAD: Not idempotent
-def process_payment(payment):
-    account.balance -= payment.amount  # Will subtract twice on duplicate!
-
-# GOOD: Idempotent with unique ID
-def process_payment(payment):
-    if payment.id in processed_payments:
-        return  # Already handled
-    account.balance -= payment.amount
-    processed_payments.add(payment.id)
-```
-
-**Most systems use at-least-once because:**
-- Simpler than exactly-once
-- Data loss is usually worse than duplicates
-- Idempotency is application's responsibility anyway
-
----
-
-## Exactly-Once: The Holy Grail (and Its Reality)
-
-### Quick Visual: Exactly-Once Reality Check
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    EXACTLY-ONCE: WHAT IT REALLY MEANS                       │
-│                                                                             │
-│   THE MYTH:                                                                 │
-│   ──────────                                                                │
-│   "Each message is delivered exactly one time, no matter what"              │
-│                                                                             │
-│   THE REALITY:                                                              │
-│   ────────────                                                              │
-│   Exactly-once = At-least-once delivery + Idempotent processing             │
-│                                                                             │
-│   Messages might be sent multiple times                                     │
-│   But the EFFECT is as if processed once                                    │
-│                                                                             │
-│   HOW IT'S ACHIEVED:                                                        │
-│   ──────────────────                                                        │
-│                                                                             │
-│   Option 1: Transactional Processing                                        │
-│   ─────────────────────────────────────                                     │
-│   [ Read message ] + [ Process ] + [ Write result ] + [ Commit offset ]     │
-│                         ALL IN ONE TRANSACTION                              │
-│   If anything fails, entire transaction rolls back                          │
-│                                                                             │
-│   Option 2: Deduplication                                                   │
-│   ───────────────────────                                                   │
-│   Message has unique ID                                                     │
-│   Before processing: "Have I seen ID=xyz?"                                  │
-│   If yes: skip (it's a duplicate)                                           │
-│   If no: process, record ID                                                 │
-│                                                                             │
-│   Option 3: Idempotent Operations                                           │
-│   ────────────────────────────────                                          │
-│   Operation is naturally idempotent                                         │
-│   SET balance = 100 (same result if run twice)                              │
-│   vs INCREMENT balance (different result if run twice!)                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Kafka's Exactly-Once
-
-Kafka offers exactly-once semantics (EOS) through:
-
-1. **Idempotent producers**: Same message won't be written twice
-2. **Transactional writes**: Atomic writes across partitions
-3. **Read-process-write transactions**: Consume, process, produce as atomic unit
-
-```
-# Kafka exactly-once pattern
-with transaction:
-    messages = consumer.poll()
-    for msg in messages:
-        result = process(msg)
-        producer.send(output_topic, result)
-    consumer.commit_offsets()
-# All-or-nothing: if crash, no partial updates
-```
-
-**Limitation**: This is exactly-once within Kafka. Once you write to an external database, you're back to at-least-once unless that database also participates in the transaction.
-
-### The External System Problem
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    THE EXTERNAL SYSTEM BOUNDARY                             │
-│                                                                             │
-│   KAFKA-TO-KAFKA: Exactly-once possible                                     │
-│   ────────────────────────────────────────                                  │
-│   Topic A → Process → Topic B                                               │
-│   (Both in Kafka, transactional)                                            │
-│                                                                             │
-│   KAFKA-TO-DATABASE: At-least-once + Dedup                                  │
-│   ───────────────────────────────────────────                               │
-│   Topic A → Process → PostgreSQL                                            │
-│                                                                             │
-│   Can't do distributed transaction across Kafka + Postgres                  │
-│   Must use idempotency key in database                                      │
-│                                                                             │
-│   INSERT INTO orders (id, amount)                                           │
-│   VALUES (msg.order_id, msg.amount)                                         │
-│   ON CONFLICT (id) DO NOTHING;  -- Idempotent!                              │
-│                                                                             │
-│   KAFKA-TO-HTTP-API: At-least-once, pray for idempotency                    │
-│   ────────────────────────────────────────────────────────                  │
-│   Topic A → Process → POST /api/orders                                      │
-│                                                                             │
-│   Hope the API is idempotent                                                │
-│   Or use idempotency keys in request header                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Practical Exactly-Once Patterns
-
-| Pattern | How It Works | Best For |
-|---------|--------------|----------|
-| **Idempotency key** | Include unique ID, check before processing | API calls, database writes |
-| **Upsert** | INSERT ON CONFLICT UPDATE | Database aggregations |
-| **Version check** | Only apply if version matches | Optimistic concurrency |
-| **Transactional outbox** | Write to same DB as business data | Database + messaging |
-| **Deduplication window** | Cache recent IDs, reject duplicates | Short-term deduplication |
-
----
-
-# Part 6: Application to Real Systems
-
-Let's apply this understanding to three systems: notification service, metrics pipeline, and feed fan-out.
-
-## System 1: Notification Service
-
-### Requirements
-
-- Send push notifications, emails, SMS to users
-- 100M notifications per day
-- Must not lose notifications
-- Duplicate notifications are annoying but not catastrophic
-- Each notification should be sent once (ideally)
-
-### Analysis: Queue vs Log vs Stream
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    NOTIFICATION SERVICE ANALYSIS                            │
-│                                                                             │
-│   QUESTION                          ANSWER                                  │
-│   ─────────────────────────────────────────────────────────                 │
-│   Do we need replay?                No - once sent, it's sent               │
-│   Multiple consumers same data?     No - each notification sent once        │
-│   Ordering critical?                Not really - within reason              │
-│   High throughput?                  Medium - 100M/day = 1K/sec              │
-│   Scale horizontally?               Yes - more senders for throughput       │
-│                                                                             │
-│   VERDICT: QUEUE (SQS, RabbitMQ)                                            │
-│                                                                             │
-│   WHY NOT LOG?                                                              │
-│   ─────────────                                                             │
-│   - We don't need replay (notification is a one-time event)                 │
-│   - We don't need multiple consumers reading same notifications             │
-│   - Log retention wastes storage for no benefit                             │
-│   - Queue auto-deletes on success → cleaner                                 │
-│                                                                             │
-│   WHY NOT STREAM?                                                           │
-│   ────────────────                                                          │
-│   - No time-window aggregations needed                                      │
-│   - No complex event processing                                             │
-│   - Overkill for "take notification, send it"                               │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    NOTIFICATION SERVICE ARCHITECTURE                        │
-│                                                                             │
-│   [App Servers] → [SQS Queue: notifications] → [Notification Workers]       │
-│                         │                              │                    │
-│                         │                              ├→ Push (APNs/FCM)   │
-│                         │                              ├→ Email (SES)       │
-│                         │                              └→ SMS (Twilio)      │
-│                         │                                                   │
-│                    [Dead Letter Queue]                                      │
-│                         │                                                   │
-│                    [DLQ Processor] → Alerts, Manual retry                   │
-│                                                                             │
-│   Delivery: At-least-once                                                   │
-│   Dedup: idempotency key in notification_id                                 │
-│   Retry: SQS visibility timeout, max 3 retries                              │
-│   Failure: Move to DLQ after max retries                                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Handling Duplicates
-
-```python
-def send_notification(message):
-    notification_id = message['notification_id']
+def transfer(from_account, to_account, amount, idempotency_key):
+    # Check if already processed
+    if db.exists(f"transfer:{idempotency_key}"):
+        return db.get(f"transfer:{idempotency_key}")  # Return cached result
     
-    # Check if already sent (using Redis or database)
-    if redis.get(f"sent:{notification_id}"):
-        return  # Duplicate, skip
+    # Process transfer
+    result = do_transfer(from_account, to_account, amount)
     
-    # Send the notification
-    result = send_to_provider(message)
+    # Record result
+    db.set(f"transfer:{idempotency_key}", result, ttl=86400)
     
-    # Mark as sent BEFORE acknowledging queue
-    redis.setex(f"sent:{notification_id}", 86400, "1")  # 24h TTL
+    return result
+```
+
+2. **Saga Pattern:** Compensating transactions (covered in Part 2)
+
+3. **Two-Phase Commit:** Prepare all parties before committing
+
+### 6.3 Clock Skew
+
+Clocks lie. Plan accordingly.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     CLOCK SKEW DISASTER SCENARIOS                       │
+│                                                                         │
+│   SCENARIO 1: Lease Expires Early                                       │
+│   ─────────────────────────────                                         │
+│                                                                         │
+│   Real time:    |-------- 10 seconds --------|                          │
+│   Node A clock: |---- 8 seconds ----|                                   │
+│                                     ↑                                   │
+│                         Node A thinks lease expired!                    │
+│                         Stops working, but lease is actually valid.     │
+│                                                                         │
+│   SCENARIO 2: Lock Appears Available When It's Not                      │
+│   ─────────────────────────────────────────────────                     │
+│                                                                         │
+│   Node A acquires lock at T=0 with TTL=10s                              │
+│   Node B's clock is 15 seconds ahead                                    │
+│   Node B thinks lock expired at T=0 (B's time shows T=15)               │
+│   Node B takes lock while A still holds it!                             │
+│                                                                         │
+│   SCENARIO 3: Out-of-Order Events                                       │
+│   ────────────────────────────                                          │
+│                                                                         │
+│   Node A: Event at timestamp 100                                        │
+│   Node B: Event at timestamp 95 (clock was behind)                      │
+│   Log shows B happened before A, but A actually happened first!         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Mitigations:**
+
+| Approach | Description | Trade-off |
+|----------|-------------|-----------|
+| **Logical clocks** | Vector clocks, Lamport timestamps | No wall-clock time, complex |
+| **Hybrid clocks** | Physical + logical (HLC) | Still needs bounded skew |
+| **TrueTime (Google)** | GPS + atomic clocks, bounded uncertainty | Expensive hardware |
+| **Conservative TTLs** | Account for worst-case skew | Longer lock durations |
+
+```
+CLOCK-SKEW-SAFE LOCK (Pseudo-code)
+══════════════════════════════════
+
+MAX_CLOCK_SKEW = 5 seconds (conservative)
+
+acquire(ttl=30):
+  // Use longer TTL to handle skew
+  effective_ttl = ttl + MAX_CLOCK_SKEW
+  lock_service.acquire(effective_ttl)
+  
+  // But locally, assume shorter validity (pessimistic)
+  local_expiry = now + ttl - MAX_CLOCK_SKEW
+
+is_still_valid():
+  return now < local_expiry
+
+Key: Be generous to others, conservative for yourself.
+```
+
+### 6.4 Failure Detection: How Do You Know a Node Is Dead?
+
+In distributed systems, you can't distinguish between a dead node and a slow/partitioned one. Failure detection is about **probabilistic suspicion**, not certainty.
+
+#### 6.4.1 The Phi Accrual Failure Detector
+
+```
+PHI ACCRUAL FAILURE DETECTOR
+════════════════════════════
+
+Used by: Akka, Cassandra
+
+Key idea: Instead of binary alive/dead, output a "suspicion level" (phi).
+          Higher phi = more likely dead.
+
+phi = -log10(P(heartbeat would arrive by now))
+
+Interpretation:
+  phi = 1  →  10% chance alive
+  phi = 2  →   1% chance alive
+  phi = 3  →  0.1% chance alive
+  phi = 8  →  Threshold for "dead" (configurable)
+
+Benefits:
+  • Adapts to network conditions automatically
+  • Uses historical heartbeat distribution
+  • Configurable threshold per use case
+
+Algorithm:
+  1. Track heartbeat intervals in sliding window
+  2. Calculate mean and std_dev of intervals
+  3. When checking: how likely is current gap given history?
+  4. If phi > threshold → consider node dead
+```
+
+#### 6.4.2 SWIM Protocol (Scalable Weakly-consistent Infection-style Membership)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          SWIM PROTOCOL                                  │
+│                                                                         │
+│   Used by: Consul, Serf, HashiCorp Memberlist                           │
+│                                                                         │
+│   PROBLEM: Traditional heartbeat to all nodes = O(n²) messages          │
+│   SWIM: Achieves O(n) message complexity                                │
+│                                                                         │
+│   MECHANISM:                                                            │
+│   ──────────                                                            │
+│                                                                         │
+│   1. DIRECT PROBE: Each period, pick random member, send ping           │
+│                                                                         │
+│      ┌───┐          ping           ┌───┐                                │
+│      │ A │ ─────────────────────▶  │ B │                                │
+│      │   │ ◀─────────────────────  │   │                                │
+│      └───┘          ack            └───┘                                │
+│                                                                         │
+│   2. INDIRECT PROBE: If no ack, ask K random members to probe           │
+│                                                                         │
+│      ┌───┐   ping-req    ┌───┐    ping     ┌───┐                        │
+│      │ A │ ────────────▶ │ C │ ──────────▶ │ B │                        │
+│      │   │               │   │ ◀────────── │   │                        │
+│      │   │ ◀──────────── │   │    ack      │   │                        │
+│      └───┘     ack       └───┘             └───┘                        │
+│                                                                         │
+│   3. SUSPECT: If still no response, mark as SUSPECT (not dead yet)      │
+│                                                                         │
+│   4. CONFIRM DEAD: After timeout, mark as DEAD and disseminate          │
+│                                                                         │
+│   DISSEMINATION (Infection-style):                                      │
+│   ─────────────────────────────────                                     │
+│   Membership updates piggybacked on protocol messages                   │
+│   Spreads like gossip: log(n) rounds to reach all members               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+SWIM PROTOCOL (Pseudo-code)
+═══════════════════════════
+
+State: alive{}, suspected{}, dead{}
+
+protocol_round():
+  target = pick_random_member()
+  
+  // Step 1: Direct probe
+  if ping(target).success:
+    mark_alive(target)
+    return
+  
+  // Step 2: Indirect probe (ask K others to ping target)
+  for prober in random_k_members(3):
+    if prober.ping(target).success:
+      mark_alive(target)
+      return
+  
+  // Step 3: Mark as suspect (not dead yet!)
+  mark_suspect(target)
+
+check_suspect_timeout():
+  for each suspected member:
+    if now - suspect_time > TIMEOUT:
+      mark_dead(member)
+
+refute_suspicion():
+  // If I'm suspected, increment my incarnation to prove I'm alive
+  incarnation++
+  broadcast("ALIVE", self, incarnation)
+
+Key insight: Incarnation numbers let you refute suspicion.
+             Higher incarnation = more recent state.
+```
+
+#### 6.4.3 Failure Detection Trade-offs
+
+| Detector Type | Detection Time | False Positive Rate | Network Cost |
+|---------------|----------------|--------------------| -------------|
+| **Fixed timeout** | Fast | High when network varies | Low |
+| **Phi Accrual** | Adaptive | Low (self-tuning) | Low |
+| **SWIM** | Medium | Low | O(n) total |
+| **All-to-all heartbeat** | Fast | Low | O(n²) |
+
+**Staff-Level Insight:** The choice of failure detector affects your SLOs:
+- **Fast detection (1s):** More false positives, more failovers, more disruption
+- **Slow detection (30s):** Fewer false positives, but longer outages
+- **Phi Accrual:** Self-tuning, but complex to operate
+- **SWIM:** Scales well, but membership changes are eventually consistent
+
+---
+
+<a name="case-study-job-scheduler"></a>
+## 7. Case Study: Job Scheduler
+
+### 7.1 The Problem
+
+Design a distributed job scheduler that:
+- Runs jobs at scheduled times
+- Ensures each job runs **exactly once**
+- Handles worker failures
+- Scales horizontally
+
+### 7.2 Naive Approach (And Why It Fails)
+
+```
+BROKEN JOB SCHEDULER
+════════════════════
+
+poll_and_run():
+  while true:
+    job = db.query("SELECT ... WHERE status='pending' LIMIT 1")
+            if job:
+      db.execute("UPDATE ... SET status='running' WHERE id=?", job.id)
+      run_job(job)
+      db.execute("UPDATE ... SET status='completed' WHERE id=?", job.id)
+    sleep(1)
+
+PROBLEMS:
+  1. Two workers see same job → duplicate execution!
+  2. Worker crashes after claiming → job stuck in 'running'
+  3. Race between SELECT and UPDATE → lost updates
+```
+
+**Failure Modes:**
+1. Two workers grab the same job (duplicate execution)
+2. Worker crashes after claiming job (job stuck in 'running')
+3. No coordination on which jobs to prioritize
+
+### 7.3 Correct Approach: Leader-Based Scheduler
+
+```
+COORDINATED JOB SCHEDULER (Pseudo-code)
+═══════════════════════════════════════
+
+LEADER (assigns jobs):
+  jobs = get_pending_jobs()
+  workers = get_active_workers()
+  
+  for job in jobs:
+    assign to next worker (round-robin)
+    push job_id to worker's queue
+
+WORKER (executes jobs):
+  register_as_active()
+  job_id = pop_from_my_queue()
+        
+        if job_id:
+    lock = acquire_lock(job_id)
+    try:
+      // Double-check still assigned to me
+      if job.worker_id != me: return
+      
+      set_status('running')
+      result = run_job(job)
+      set_status('completed', fencing_token=lock.token)
+    except:
+      set_status('failed', error)
+        finally:
+      release_lock()
+```
+
+### 7.4 What Happens When Coordination Fails
+
+| Failure | Impact | Mitigation |
+|---------|--------|------------|
+| Leader dies | New jobs not assigned until new leader | Fast election (< 10s), job queue buffers |
+| Redis down | No locks, no queues | Graceful degradation, local queue fallback |
+| Worker dies mid-job | Job stuck in 'running' | Timeout-based job reclamation |
+| Network partition | Workers can't reach leader | Local job buffering, eventual sync |
+
+```
+JOB RECLAIMER (Pseudo-code)
+═══════════════════════════
+
+run():
+  every 60 seconds:
+    stuck = find_jobs(status='running', updated_at < 5_min_ago)
     
-    # Now safe to acknowledge
-    sqs.delete_message(message)
-```
-
-### What Breaks with Wrong Choice
-
-**If we used Kafka instead of SQS:**
-
-```
-PROBLEM 1: Wasted storage
-- Notifications retained for 7 days (Kafka default)
-- Never replayed, never needed
-- 100M × 1KB × 7 days = 700GB wasted
-
-PROBLEM 2: Offset management complexity
-- Consumer must commit offsets correctly
-- Queue auto-deletes on ack → simpler
-
-PROBLEM 3: Partition scaling
-- Adding consumers limited by partitions
-- Must pre-plan partition count
-- SQS: just add more Lambda functions
-
-CONCLUSION: Kafka is over-engineering for this use case
+    for job in stuck:
+      if not is_worker_alive(job.worker_id):
+        reset_job(status='pending', worker=NULL, attempts++)
+        log("Reclaimed stuck job from dead worker")
 ```
 
 ---
 
-## System 2: Metrics Pipeline
+<a name="case-study-rate-limiter"></a>
+## 8. Case Study: Rate Limiter Coordination
 
-### Requirements
+### 8.1 The Problem
 
-- Collect metrics from 10,000 services
-- 1M metrics per second
-- Multiple consumers: real-time dashboards, long-term storage, alerting
-- Need to replay for backfill if consumer has bugs
-- Ordering within a service matters (time-series)
+Implement a rate limiter that:
+- Limits requests per user per time window
+- Works across multiple servers
+- Has sub-millisecond latency
+- Is reasonably accurate (not perfect)
 
-### Analysis: Queue vs Log vs Stream
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    METRICS PIPELINE ANALYSIS                                │
-│                                                                             │
-│   QUESTION                          ANSWER                                  │
-│   ─────────────────────────────────────────────────────────                 │
-│   Do we need replay?                YES - backfill when bugs fixed          │
-│   Multiple consumers same data?     YES - dashboards, storage, alerting     │
-│   Ordering critical?                YES - per service (time-series)         │
-│   High throughput?                  YES - 1M/sec                            │
-│   Time-window operations?           YES - aggregations, alerting windows    │
-│                                                                             │
-│   VERDICT: LOG (Kafka) + STREAM PROCESSING (Flink)                          │
-│                                                                             │
-│   WHY NOT QUEUE?                                                            │
-│   ──────────────                                                            │
-│   - Queue consumes = deletes. Can't replay.                                 │
-│   - Queue can't fan out to multiple independent consumers                   │
-│   - Would need separate queues per consumer → complex                       │
-│                                                                             │
-│   WHY LOG + STREAM?                                                         │
-│   ──────────────────                                                        │
-│   - Kafka provides durable log, replay capability                           │
-│   - Consumer groups for independent consumers                               │
-│   - Flink provides time-window aggregations for alerting                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Architecture
+### 8.2 The Coordination Spectrum
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    METRICS PIPELINE ARCHITECTURE                            │
-│                                                                             │
-│   [Services] → [Kafka: metrics-raw]                                         │
-│                       │                                                     │
-│                       ├── Consumer Group: dashboard                         │
-│                       │      └→ Real-time dashboards (Grafana)              │
-│                       │                                                     │
-│                       ├── Consumer Group: storage                           │
-│                       │      └→ Time-series DB (InfluxDB/TimescaleDB)       │
-│                       │                                                     │
-│                       ├── Consumer Group: alerting                          │
-│                       │      └→ [Flink] → Window aggregates → Alerting      │
-│                       │                                                     │
-│                       └── Consumer Group: analytics                         │
-│                              └→ Data warehouse (BigQuery)                   │
-│                                                                             │
-│   Partitioning: By service_id (ordering per service)                        │
-│   Retention: 7 days (enough for replay scenarios)                           │
-│   Delivery: At-least-once (dedup in downstream systems)                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    RATE LIMITER COORDINATION SPECTRUM                   │
+│                                                                         │
+│   ← Less Coordination                    More Coordination →            │
+│                                                                         │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────┐   │
+│   │   Local      │  │   Periodic   │  │   Real-time  │  │  Central  │   │
+│   │   Counters   │  │   Sync       │  │   Sync       │  │  Counter  │   │
+│   └──────────────┘  └──────────────┘  └──────────────┘  └───────────┘   │
+│                                                                         │
+│   Accuracy:  ⭐          ⭐⭐⭐          ⭐⭐⭐⭐⭐       ⭐⭐⭐⭐⭐         │
+│   Latency:   ⭐⭐⭐⭐⭐     ⭐⭐⭐⭐         ⭐⭐⭐          ⭐⭐            │
+│   Complexity: ⭐          ⭐⭐           ⭐⭐⭐⭐        ⭐⭐⭐             │
+│   Fault Tol: ⭐⭐⭐⭐⭐     ⭐⭐⭐⭐         ⭐⭐           ⭐              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Ordering Matters
+### 8.3 Approach 1: Local Counters (No Coordination)
 
-```python
-# Metrics for service X must stay ordered for proper time-series
+```
+LOCAL RATE LIMITER (Pseudo-code)
+════════════════════════════════
 
-# Producer: partition by service_id
-producer.send(
-    topic="metrics-raw",
-    key=metric.service_id,  # Partitioning key
-    value=metric.serialize()
-)
+is_allowed(user_id):
+  if counters[user_id] >= limit:
+    return false
+  counters[user_id]++
+  return true
 
-# All metrics for same service → same partition → ordered
+PROBLEMS:
+  • Same server → get 1/N of limit
+  • Spread across servers → get N× limit
+  • Load balancer changes → unpredictable limits
+```
 
-# Consumer: process in order
-for message in consumer:
-    service_id = message.key
-    metric = deserialize(message.value)
+**Problems:**
+- If user hits same server, they get 1/N of actual limit
+- If user spreads across servers, they get N× actual limit
+- Load balancer changes can drastically change effective limit
+
+### 8.4 Approach 2: Periodic Sync (Light Coordination)
+
+```
+PERIODIC SYNC RATE LIMITER (Pseudo-code)
+════════════════════════════════════════
+
+FAST PATH (every request):
+  is_allowed(user_id):
+    if local_counts[user_id] >= local_limits[user_id]:
+      return false
+    local_counts[user_id]++
+    return true
+
+BACKGROUND SYNC (every 1 second):
+  sync():
+    // Push local counts to Redis
+    for user_id, count in local_counts:
+      redis.INCRBY(f"rate:{user_id}:{window}", count)
+    local_counts.clear()
     
-    # These will be in timestamp order for each service
-    timeseries_db.write(service_id, metric.timestamp, metric.value)
+    // Get updated global counts, recalculate local limits
+    for user_id:
+      global_count = redis.GET(...)
+      remaining = global_limit - global_count
+      local_limits[user_id] = remaining / num_servers
 ```
 
-### Replay Scenario
+### 8.5 What Happens When Coordination Fails
 
 ```
-SCENARIO: Bug in alerting consumer caused alerts to not fire for 24 hours
-
-WITHOUT KAFKA (queue-based):
-- Data is gone, consumed and deleted
-- Cannot fix the bug and replay
-- 24 hours of alerts permanently lost
-
-WITH KAFKA (log-based):
-- Reset alerting consumer offset to 24 hours ago
-- Consumer replays all metrics
-- Alerts fire (possibly late, but better than never)
-- No data loss
-
-This is why metrics pipelines use logs, not queues.
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  RATE LIMITER DEGRADATION MODES                         │
+│                                                                         │
+│   REDIS DOWN:                                                           │
+│   ────────────                                                          │
+│                                                                         │
+│   Option A: Fail Open (allow all requests)                              │
+│     - Risk: No rate limiting, system may be overwhelmed                 │
+│     - Use when: Rate limiting is best-effort                            │
+│                                                                         │
+│   Option B: Fail Closed (deny all requests)                             │
+│     - Risk: Legitimate traffic blocked                                  │
+│     - Use when: Protecting critical resources                           │
+│                                                                         │
+│   Option C: Local-only mode (fall back to local counters)               │
+│     - Risk: Inaccurate limits, but still some protection                │
+│     - Use when: "Best effort is good enough"                            │
+│                                                                         │
+│   NETWORK PARTITION:                                                    │
+│   ──────────────────                                                    │
+│                                                                         │
+│   Servers can't sync with each other.                                   │
+│   Each server uses own local view.                                      │
+│   Effective limit = local_limit × num_partitioned_servers               │
+│                                                                         │
+│   Example: 3 servers, limit 100/min, partition isolates 2               │
+│   Group 1 (1 server): allows 33/min                                     │
+│   Group 2 (2 servers): allows 66/min                                    │
+│   Total possible: 99/min (close enough!)                                │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### What Breaks with Wrong Choice
-
-**If we used SQS instead of Kafka:**
-
 ```
-PROBLEM 1: Can't fan out to multiple consumers
-- Need separate queue per consumer
-- Either duplicate at producer (complex) or SNS→SQS fan-out (latency)
+RESILIENT RATE LIMITER (Pseudo-code)
+════════════════════════════════════
 
-PROBLEM 2: Can't replay
-- Bug in storage consumer loses data
-- No way to re-process historical metrics
+is_allowed(user_id):
+  try:
+    return check_distributed(user_id)
+  catch RedisError:
+    log("Redis down, using local mode")
+    return check_local(user_id)
 
-PROBLEM 3: No ordering guarantee
-- Time-series out of order → incorrect graphs
-- Standard SQS doesn't guarantee FIFO
-
-PROBLEM 4: No multiple consumer groups
-- Each "read" consumes the message
-- Can't have both dashboards and storage reading same data
-
-CONCLUSION: SQS fundamentally wrong for this use case
-```
-
----
-
-## System 3: Feed Fan-Out
-
-### Requirements
-
-- User posts content
-- Post appears in all followers' feeds
-- Users have 1 to 50M followers
-- Need to handle celebrity accounts (50M followers)
-- Search indexer needs to index all posts
-- Analytics needs to track all posts
-- Might need to replay if ranking algorithm changes
-
-**Why Hybrid?**
-- **Kafka (Log)**: Source of truth for posts - replayable, multiple consumers
-- **SQS (Queue)**: Work distribution for fan-out - competing consumers, auto-delete
-
-### Analysis: Queue vs Log vs Stream
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FEED FAN-OUT ANALYSIS                                    │
-│                                                                             │
-│   QUESTION                          ANSWER                                  │
-│   ─────────────────────────────────────────────────────────                 │
-│   Do we need replay?                YES - re-rank on algorithm change       │
-│   Multiple consumers same data?     YES - feeds, search, analytics          │
-│   Ordering critical?                YES - per user's posts                  │
-│   High throughput?                  Varies - celebrities are spiky          │
-│   Fan-out pattern?                  Write to many feeds per post            │
-│                                                                             │
-│   VERDICT: LOG (Kafka) for posts + QUEUE for fan-out tasks                  │
-│                                                                             │
-│   HYBRID APPROACH:                                                          │
-│   ─────────────────                                                         │
-│   1. Post events → Kafka (log)                                              │
-│      - Multiple consumers (search, analytics)                               │
-│      - Replayable                                                           │
-│      - Ordered per user                                                     │
-│                                                                             │
-│   2. Fan-out tasks → SQS (queue)                                            │
-│      - One task per follower batch                                          │
-│      - Competing consumers drain work                                       │
-│      - Delete on completion                                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FEED FAN-OUT ARCHITECTURE                                │
-│                                                                             │
-│   [Post Service]                                                            │
-│        │                                                                    │
-│        ▼                                                                    │
-│   [Kafka: posts]                                                            │
-│        │                                                                    │
-│        ├── Consumer Group: fan-out                                          │
-│        │      │                                                             │
-│        │      ▼                                                             │
-│        │   [Fan-out Service]                                                │
-│        │      │                                                             │
-│        │      ├── Small accounts (< 1000 followers)                         │
-│        │      │      └→ Direct write to feed caches                         │
-│        │      │                                                             │
-│        │      └── Large accounts (> 1000 followers)                         │
-│        │             └→ [SQS: fan-out-tasks]                                │
-│        │                    │                                               │
-│        │                    ▼                                               │
-│        │             [Fan-out Workers] → Feed caches                        │
-│        │                                                                    │
-│        ├── Consumer Group: search                                           │
-│        │      └→ Search Indexer → Elasticsearch                             │
-│        │                                                                    │
-│        └── Consumer Group: analytics                                        │
-│               └→ Analytics → Data Warehouse                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Why Hybrid?
-
-```
-POST EVENT (use Kafka log):
-- Need replay capability
-- Multiple independent consumers
-- Ordered per author
-
-FAN-OUT WORK (use SQS queue):
-- Each task processed once
-- Competing consumers for parallelism
-- Auto-delete on success
-- Burst handling for celebrities
-
-ANALOGY:
-- Kafka is the "source of truth" for what happened
-- SQS is the "work queue" for distributing tasks
-```
-
-### Celebrity Handling
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CELEBRITY FAN-OUT PROBLEM                                │
-│                                                                             │
-│   CELEBRITY POSTS:                                                          │
-│   ─────────────────                                                         │
-│   - 50M followers                                                           │
-│   - Naive approach: 50M writes to 50M feed caches                           │
-│   - At 1ms per write = 50,000 seconds = 14 hours                            │
-│                                                                             │
-│   SOLUTION: PULL-BASED FOR CELEBRITIES                                      │
-│   ───────────────────────────────────────                                   │
-│                                                                             │
-│   Regular users: Push to feed cache (fan-out on write)                      │
-│   Celebrity posts: Store separately, merge on read (fan-out on read)        │
-│                                                                             │
-│   User opens feed:                                                          │
-│   1. Fetch from feed cache (regular posts)                                  │
-│   2. Fetch from celebrity posts (followed celebrities)                      │
-│   3. Merge and rank                                                         │
-│                                                                             │
-│   This is why Instagram/Twitter use hybrid fan-out models                   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### What Breaks with Wrong Choice
-
-**If we used only SQS (queue) for everything:**
-
-```
-PROBLEM 1: Can't replay
-- Algorithm change requires re-ranking all posts
-- Posts consumed = deleted → can't replay
-
-PROBLEM 2: Can't have multiple consumers
-- Search indexer and analytics both need posts
-- Would need separate queues, duplicated messages
-
-PROBLEM 3: No ordering
-- User's posts might appear out of order
-- "I posted X, then Y" but Y appears first
-
-PROBLEM 4: No independent offsets
-- If search indexer is slow, it blocks analytics
-- With Kafka, each consumer group is independent
-```
-
-**If we used only Kafka (log) for fan-out tasks:**
-
-```
-PROBLEM 1: Partition ceiling
-- Can't have more consumers than partitions
-- Fan-out needs 1000s of workers for spike
-
-PROBLEM 2: Message lingers after processing
-- Fan-out task sits in log for retention period
-- Wastes storage
-
-PROBLEM 3: Offset complexity
-- Must track which fan-out tasks are done
-- Queue auto-deletes on ack → simpler
-
-CONCLUSION: Use the right tool for each job
+check_local(user_id):
+  local_limit = global_limit / expected_server_count
+  return local_counter.check(user_id, local_limit)
 ```
 
 ---
 
-# Part 6B: Advanced Staff-Level Topics
+<a name="case-study-metadata-service"></a>
+## 9. Case Study: Metadata Service
 
-## Backpressure Handling
+### 9.1 The Problem
 
-Backpressure occurs when producers generate data faster than consumers can process it. Staff Engineers must design systems that handle this gracefully.
+Design a metadata service that:
+- Stores cluster configuration (shard mappings, feature flags, etc.)
+- Must be strongly consistent (all nodes see same config)
+- Must be highly available
+- Used by hundreds of services for every request
 
-### Backpressure by System Type
+This is essentially what etcd, ZooKeeper, and Consul do.
 
-| System | Strategy | Trade-off |
-|--------|----------|-----------|
-| **Queue (SQS)** | Buffer grows, eventually reject | Lag increases, may hit limits |
-| **Log (Kafka)** | Consumers fall behind (lag) | Data loss if lag > retention |
-| **Stream (Flink)** | Backpressure propagates to source | Can stall entire pipeline |
+### 9.2 The Architecture
 
-### Handling Backpressure in Practice
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    METADATA SERVICE ARCHITECTURE                        │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                     METADATA CLUSTER (3-5 nodes)                │   │
+│   │                                                                 │   │
+│   │    ┌─────────┐    ┌─────────┐    ┌─────────┐                    │   │
+│   │    │  Node 1 │◀──▶│  Node 2 │◀──▶│  Node 3 │                    │   │
+│   │    │   👑    │    │         │    │         │                    │   │
+│   │    │ LEADER  │    │FOLLOWER │    │FOLLOWER │                    │   │
+│   │    └────┬────┘    └────┬────┘    └────┬────┘                    │   │
+│   │         │              │              │                         │   │
+│   │         └──────────────┼──────────────┘                         │   │
+│   │                        │                                        │   │
+│   │                   RAFT CONSENSUS                                │   │
+│   │              (Writes go through leader,                         │   │
+│   │               replicated to quorum)                             │   │
+│   │                                                                 │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                          │
+│              ┌───────────────┼───────────────┐                          │
+│              ▼               ▼               ▼                          │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│   │   Service A  │  │   Service B  │  │   Service C  │                  │
+│   │              │  │              │  │              │                  │
+│   │  ┌────────┐  │  │  ┌────────┐  │  │  ┌────────┐  │                  │
+│   │  │ LOCAL  │  │  │  │ LOCAL  │  │  │  │ LOCAL  │  │                  │
+│   │  │ CACHE  │  │  │  │ CACHE  │  │  │  │ CACHE  │  │                  │
+│   │  └────────┘  │  │  └────────┘  │  │  └────────┘  │                  │
+│   └──────────────┘  └──────────────┘  └──────────────┘                  │
+│                                                                         │
+│   Services cache metadata locally, subscribe to updates via WATCH       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-```python
-# PATTERN 1: Circuit Breaker with Fallback
-class MetricsProducer:
-    def send(self, metric):
-        if self.queue_depth > THRESHOLD:
-            # Circuit open: sample or drop
-            if random.random() < 0.1:  # Sample 10%
-                self._send(metric)
-            # else: drop
-        else:
-            self._send(metric)
+### 9.3 Coordination Patterns in Metadata Service
 
-# PATTERN 2: Adaptive Rate Limiting
-class AdaptiveProducer:
-    def __init__(self):
-        self.rate_limit = 10000  # msgs/sec
+#### Pattern 1: Leader Election via Metadata Service
+
+```
+LEADER ELECTION VIA ETCD (Pseudo-code)
+══════════════════════════════════════
+
+campaign():
+  lease = etcd.create_lease(TTL=10s)
+  
+  success = etcd.transaction(
+    compare: key doesn't exist (version == 0)
+    success: PUT key=node_id with lease
+    failure: []
+        )
+        
+        if success:
+    start_keep_alive_loop()
+    return true
+  return false
+
+keep_alive():
+  while is_leader:
+    lease.refresh()
+    sleep(3s)  // well before 10s TTL
+```
+
+#### Pattern 2: Distributed Lock via Metadata Service
+
+```
+DISTRIBUTED LOCK VIA ETCD (Pseudo-code)
+═══════════════════════════════════════
+
+acquire(timeout):
+  while not timed_out:
+    lease = etcd.create_lease(10s)
     
-    def adjust_rate(self, consumer_lag):
-        if consumer_lag > HIGH_THRESHOLD:
-            self.rate_limit *= 0.8  # Slow down
-        elif consumer_lag < LOW_THRESHOLD:
-            self.rate_limit *= 1.2  # Speed up
+    success = etcd.transaction(
+      compare: key doesn't exist
+      success: PUT key="locked" with lease
+      failure: GET key (see who has it)
+    )
+    
+    if success: return true
+    
+    // Wait for lock release
+    etcd.watch(key).wait_for_delete()
+  
+  raise Timeout
+
+release():
+  lease.revoke()  // automatically deletes key
 ```
 
-### Staff-Level Insight
+### 9.4 What Happens When Metadata Service Fails
 
-> "The right backpressure strategy depends on data criticality. Metrics can be sampled. Financial transactions cannot be dropped—throttle the producer instead."
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                METADATA SERVICE FAILURE SCENARIOS                       │
+│                                                                         │
+│   SCENARIO 1: Leader Failure                                            │
+│   ─────────────────────────────                                         │
+│                                                                         │
+│   Impact:                                                               │
+│   - Writes blocked for 1-10 seconds (election time)                     │
+│   - Reads can continue from followers                                   │
+│   - Watches may miss events during transition                           │
+│                                                                         │
+│   Mitigation:                                                           │
+│   - Clients retry with backoff                                          │
+│   - Clients cache last known good config                                │
+│   - Fast election (sub-second with good config)                         │
+│                                                                         │
+│   SCENARIO 2: Loss of Quorum                                            │
+│   ──────────────────────────                                            │
+│                                                                         │
+│   Impact:                                                               │
+│   - ALL operations blocked (reads and writes)                           │
+│   - Service completely unavailable                                      │
+│   - All dependent services affected                                     │
+│                                                                         │
+│   Mitigation:                                                           │
+│   - 5-node cluster (survives 2 failures) instead of 3                   │
+│   - Cross-AZ deployment                                                 │
+│   - Clients use cached config with degraded mode                        │
+│                                                                         │
+│   SCENARIO 3: Network Partition                                         │
+│   ─────────────────────────────                                         │
+│                                                                         │
+│   Impact:                                                               │
+│   - Minority partition: can't read or write                             │
+│   - Majority partition: continues operating                             │
+│   - Clients in minority partition lose access                           │
+│                                                                         │
+│   Mitigation:                                                           │
+│   - Clients should cache and operate in degraded mode                   │
+│   - Alert on partition immediately                                      │
+│   - Have runbook for manual partition resolution                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+RESILIENT METADATA CLIENT (Pseudo-code)
+═══════════════════════════════════════
+
+get(key):
+  try:
+    value = etcd.get(key)
+    cache[key] = value  // update cache on success
+            return value
+  catch EtcdException:
+    if key in cache:
+      log("Using cached value")
+      return cache[key]
+    raise Unavailable
+
+watch(key, callback):
+  while true:
+    try:
+      for event in etcd.watch(key):
+        callback(event)
+    catch EtcdException:
+      log("Watch disconnected, reconnecting...")
+      sleep(1s)
+```
 
 ---
 
-## Schema Evolution
+## 9.5 Coordination Services Deep Dive
 
-As systems evolve, message schemas change. Staff Engineers must design for backward and forward compatibility.
+Understanding the internals of coordination services helps you choose the right one and operate it effectively.
 
-### Schema Evolution Best Practices
+### 9.5.1 Service Comparison
 
-| Rule | Why |
-|------|-----|
-| **Always add optional fields** | Old consumers ignore unknown fields |
-| **Never remove required fields** | Old consumers will fail |
-| **Use default values** | New consumers can read old messages |
-| **Version your schemas** | Track what's deployed where |
-| **Use Schema Registry** | Central schema management (Confluent, AWS Glue) |
-
-### Schema Evolution Example
-
-```protobuf
-// Version 1
-message UserEvent {
-    string user_id = 1;
-    string action = 2;
-}
-
-// Version 2 (BACKWARD COMPATIBLE)
-message UserEvent {
-    string user_id = 1;
-    string action = 2;
-    optional string device_type = 3;  // NEW: optional field
-    string session_id = 4 [default = "unknown"];  // NEW: with default
-}
-
-// Version 3 (BREAKING - DON'T DO THIS)
-message UserEvent {
-    string user_id = 1;
-    // string action = 2;  // REMOVED - breaks old consumers!
-    int32 action_code = 2;  // TYPE CHANGE - breaks everything!
-}
+```
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                    COORDINATION SERVICE COMPARISON                             │
+│                                                                                │
+│   Feature           │ ZooKeeper    │ etcd         │ Consul       │ Chubby      │
+│   ──────────────────┼──────────────┼──────────────┼──────────────┼─────────────│
+│   Consensus         │ ZAB          │ Raft         │ Raft         │ Paxos       │
+│   Data Model        │ Hierarchical │ Flat KV      │ Flat KV      │ Hierarchical│
+│   Language          │ Java         │ Go           │ Go           │ C++         │
+│   Watch Model       │ One-shot     │ Streaming    │ Blocking     │ Callback    │
+│   Transactions      │ Multi-op     │ Mini-txn     │ Check-set    │ Sequences   │
+│   Max Data Size     │ 1MB/znode    │ 1.5MB/key    │ 512KB/key    │ 256KB/file  │
+│   Session/Lease     │ Session      │ Lease        │ Session      │ Lock delay  │
+│   Typical Use       │ Hadoop, Kafka│ Kubernetes   │ Service mesh │ Google only │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Staff-Level Insight
+### 9.5.2 ZooKeeper Internals
 
-> "In a system with multiple consumer groups at different versions, the producer schema must be compatible with ALL active consumers. Use a Schema Registry to enforce compatibility checks before deployment."
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        ZOOKEEPER ARCHITECTURE                           │
+│                                                                         │
+│   ZAB (ZooKeeper Atomic Broadcast) Protocol:                            │
+│   ──────────────────────────────────────────                            │
+│                                                                         │
+│   PHASE 1: LEADER ELECTION                                              │
+│   ┌────────────────────────────────────────────────────────────────┐    │
+│   │  Nodes exchange votes: (proposed_leader, zxid, epoch)          │    │
+│   │  Winner: highest epoch, then highest zxid, then highest id     │    │
+│   └────────────────────────────────────────────────────────────────┘    │
+│                                                                         │
+│   PHASE 2: DISCOVERY                                                    │
+│   ┌────────────────────────────────────────────────────────────────┐    │
+│   │  Leader collects last zxid from each follower                  │    │
+│   │  Establishes new epoch (higher than any seen)                  │    │
+│   └────────────────────────────────────────────────────────────────┘    │
+│                                                                         │
+│   PHASE 3: SYNCHRONIZATION                                              │
+│   ┌────────────────────────────────────────────────────────────────┐    │
+│   │  Leader syncs followers to same state                          │    │
+│   │  Methods: DIFF, TRUNC, SNAP depending on lag                   │    │
+│   └────────────────────────────────────────────────────────────────┘    │
+│                                                                         │
+│   PHASE 4: BROADCAST                                                    │
+│   ┌────────────────────────────────────────────────────────────────┐    │
+│   │  Normal operation: 2-phase commit for writes                   │    │
+│   │  Leader: PROPOSE → followers ACK → Leader: COMMIT              │    │
+│   └────────────────────────────────────────────────────────────────┘    │
+│                                                                         │
+│   DATA MODEL:                                                           │
+│   ────────────                                                          │
+│   /                                                                     │
+│   ├── /app                                                              │
+│   │   ├── /app/leader              (ephemeral)                          │
+│   │   ├── /app/config                                                   │
+│   │   └── /app/workers                                                  │
+│   │       ├── /app/workers/worker-001  (ephemeral, sequential)          │
+│   │       └── /app/workers/worker-002  (ephemeral, sequential)          │
+│   └── /locks                                                            │
+│       └── /locks/resource-x        (ephemeral)                          │
+│                                                                         │
+│   Node Types:                                                           │
+│   - Persistent: survives client disconnect                              │
+│   - Ephemeral: deleted when session ends                                │
+│   - Sequential: ZK appends monotonic counter to name                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+ZOOKEEPER PATTERNS (Pseudo-code)
+════════════════════════════════
+
+PATTERN 1: Leader Election (Sequential Nodes)
+  1. Create sequential ephemeral node: /election/candidate-000001
+  2. Get all children, sort by sequence
+  3. If I'm lowest → I'm leader
+  4. Else watch node just before me (efficient: only 1 watch)
+  5. When predecessor deleted → check again
+
+PATTERN 2: Distributed Lock
+  1. Create sequential ephemeral node: /locks/lock-000001
+  2. If I'm lowest → I hold lock
+  3. Else watch predecessor
+  4. On timeout: delete my node, raise error
+
+PATTERN 3: Group Membership
+  join: create ephemeral node /groups/mygroup/member-id
+  leave: node auto-deleted when session ends
+  get_members: list children of /groups/mygroup
+  watch: ChildrenWatch for membership changes
+```
+
+### 9.5.3 etcd Internals
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         ETCD ARCHITECTURE                               │
+│                                                                         │
+│   Built on Raft consensus with MVCC storage.                            │
+│                                                                         │
+│   KEY FEATURES:                                                         │
+│   ──────────────                                                        │
+│                                                                         │
+│   1. MVCC (Multi-Version Concurrency Control)                           │
+│      - Every key has revision history                                   │
+│      - Enables watch from any revision                                  │
+│      - Compaction removes old revisions                                 │
+│                                                                         │
+│   2. LEASE SYSTEM                                                       │
+│      - TTL-based key expiration                                         │
+│      - Multiple keys can attach to one lease                            │
+│      - Efficient for ephemeral data                                     │
+│                                                                         │
+│   3. WATCH                                                              │
+│      - Streaming watches (not one-shot)                                 │
+│      - Watch from specific revision                                     │
+│      - Prefix watches                                                   │
+│                                                                         │
+│   4. TRANSACTIONS                                                       │
+│      - Compare-and-swap style                                           │
+│      - If (conditions) Then (ops) Else (ops)                            │
+│      - Atomic across multiple keys                                      │
+│                                                                         │
+│   STORAGE LAYOUT:                                                       │
+│   ────────────────                                                      │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  Raft Log (append-only)                                         │   │
+│   │  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐                             │   │
+│   │  │ 1  │ │ 2  │ │ 3  │ │ 4  │ │ 5  │ ...                         │   │
+│   │  └────┘ └────┘ └────┘ └────┘ └────┘                             │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                           │                                             │
+│                           ▼                                             │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  BoltDB (MVCC storage)                                          │   │
+│   │                                                                 │   │
+│   │  Key Index:     key → [(rev1, val1), (rev2, val2), ...]         │   │
+│   │  Revision Map:  rev → (key, value, create_rev, mod_rev)         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+ETCD PATTERNS (Pseudo-code)
+═══════════════════════════
+
+PATTERN 1: Leader Election
+  election = etcd.election(name)
+  lease = etcd.lease(15s)
+  election.campaign(node_id, lease)  // blocks until leader
+  // Lease auto-renewed
+
+PATTERN 2: Lock with Fencing Token
+  lock = etcd.lock(name, ttl=30s)
+  lock.acquire()
+  fencing_token = lock.revision  // monotonically increasing!
+
+PATTERN 3: Reliable Watch
+  while true:
+    try:
+      for event in etcd.watch(prefix, start_revision):
+                    callback(event)
+        revision = event.mod_revision + 1  // resume point
+    catch Disconnect:
+      sleep(1s), reconnect
+
+PATTERN 4: Compare-and-Swap
+  etcd.transaction(
+    compare: value(key) == expected
+    success: put(key, new_value)
+    failure: get(key)  // return current value
+  )
+
+PATTERN 5: Atomic Batch
+  etcd.transaction(
+    compare: []  // no preconditions
+    success: [put(k1,v1), put(k2,v2), ...]
+  )
+  // All updates get same revision
+```
+
+### 9.5.4 Google Chubby (For Reference)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    GOOGLE CHUBBY OVERVIEW                               │
+│                                                                         │
+│   Chubby is Google's distributed lock service. Not open source,         │
+│   but its design influenced ZooKeeper and others.                       │
+│                                                                         │
+│   KEY INNOVATIONS:                                                      │
+│   ─────────────────                                                     │
+│                                                                         │
+│   1. COARSE-GRAINED LOCKS                                               │
+│      - Designed for locks held for hours/days, not milliseconds         │
+│      - Small number of clients per lock (< 100s)                        │
+│      - Advisory locks (clients must cooperate)                          │
+│                                                                         │
+│   2. LOCK DELAY                                                         │
+│      - When lock holder dies, lock is not immediately available         │
+│      - Delay (e.g., 60 seconds) prevents rapid lock churn               │
+│      - Allows old lock holder to complete in-flight work                │
+│                                                                         │
+│   3. SEQUENCER (Fencing Token)                                          │
+│      - Lock acquisition returns sequencer                               │
+│      - Clients pass sequencer to resources                              │
+│      - Resources verify sequencer is valid and current                  │
+│                                                                         │
+│   4. CACHING                                                            │
+│      - Aggressive client-side caching                                   │
+│      - Chubby sends invalidations on changes                            │
+│      - Reduces read load on Chubby masters                              │
+│                                                                         │
+│   5. CELL DESIGN                                                        │
+│      - Each Chubby cell: 5 replicas using Paxos                         │
+│      - One cell per datacenter                                          │
+│      - Cross-datacenter uses proxy                                      │
+│                                                                         │
+│   DESIGN CHOICES (Trade-offs):                                          │
+│   ─────────────────────────────                                         │
+│                                                                         │
+│   Why files/directories (not pure KV)?                                  │
+│   → Familiar API, natural hierarchy, ACLs                               │
+│                                                                         │
+│   Why coarse-grained locks?                                             │
+│   → Simple to reason about, fewer lock operations                       │
+│                                                                         │
+│   Why lock delay?                                                       │
+│   → Prevents thundering herd, gives holder time to finish               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.5.5 Choosing a Coordination Service
+
+| Use Case | Recommendation | Why |
+|----------|----------------|-----|
+| **Kubernetes deployments** | etcd | Native integration, well-tested |
+| **Hadoop/Kafka ecosystem** | ZooKeeper | Mature, ecosystem integration |
+| **Service mesh/discovery** | Consul | Built-in service discovery, health checks |
+| **Simple leader election** | etcd or Consul | Simpler API than ZooKeeper |
+| **Complex hierarchical data** | ZooKeeper | Native tree structure |
+| **Need for watches** | etcd | Streaming watches, no one-shot |
+| **Multi-datacenter** | Consul | Built-in WAN federation |
+
+### 9.6 Multi-Region Coordination Patterns
+
+Multi-region coordination is one of the hardest problems in distributed systems. Cross-region latency (50-200ms) makes traditional coordination approaches impractical.
+
+#### 9.6.1 The Multi-Region Challenge
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    MULTI-REGION LATENCY REALITY                         │
+│                                                                         │
+│   Intra-region RTT:  0.5 - 2ms                                          │
+│   Cross-region RTT:  50 - 200ms (US-East ↔ EU, etc.)                    │
+│   Cross-continent:   150 - 300ms (US ↔ Asia)                            │
+│                                                                         │
+│   IMPACT ON COORDINATION:                                               │
+│   ───────────────────────                                               │
+│                                                                         │
+│   Single global leader (Raft/Paxos):                                    │
+│   - Write latency = cross-region RTT × 2 (propose + commit)             │
+│   - 5 regions → some writes take 300-600ms                              │
+│                                                                         │
+│   Distributed lock across regions:                                      │
+│   - Acquire: 50-200ms (best case)                                       │
+│   - Lease renewal must account for cross-region latency                 │
+│                                                                         │
+│   Leader election across regions:                                       │
+│   - Election timeout must be >> cross-region RTT                        │
+│   - Longer timeout = longer unavailability during failover              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 9.6.2 Pattern 1: Regional Leaders with Global Coordination
+
+```
+REGIONAL LEADER PATTERN (Pseudo-code)
+═════════════════════════════════════
+
+Used by: Spanner, CockroachDB
+
+local_read(key):   → regional leader serves (fast!)
+local_write(key):  → regional consensus only (fast!)
+
+cross_region_write(key):
+  if key not owned by this region:
+    forward to owning region
+
+global_transaction(operations):
+  // Phase 1: Prepare
+  for each region in operations:
+    prepare_results[region] = region.prepare(ops)
+  
+  if all prepared:
+    // Phase 2: Commit with synchronized timestamp
+    commit_ts = get_global_timestamp()
+    for each region: region.commit(commit_ts)
+    commit_wait(commit_ts)  // TrueTime wait
+    return committed
+  else:
+    for each region: region.abort()
+    return aborted
+```
+
+#### 9.6.3 Pattern 2: Witness Replicas
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    WITNESS REPLICA PATTERN                              │
+│                                                                         │
+│   Problem: 3 replicas across 3 regions = cross-region RTT for quorum    │
+│   Solution: Use lightweight "witness" replicas to reduce latency        │
+│                                                                         │
+│   Traditional 3-region setup:                                           │
+│   ──────────────────────────                                            │
+│                                                                         │
+│      US-East          EU-West          US-West                          │
+│      ┌─────┐          ┌─────┐          ┌─────┐                          │
+│      │Full │          │Full │          │Full │                          │
+│      │ Rep │◀────────▶│ Rep │◀────────▶│ Rep │                          │
+│      └─────┘   100ms  └─────┘   150ms  └─────┘                          │
+│                                                                         │
+│   Quorum needs 2/3 → minimum 100ms write latency                        │
+│                                                                         │
+│   With witness:                                                         │
+│   ──────────────                                                        │
+│                                                                         │
+│      US-East                           US-West                          │
+│      ┌─────┐                          ┌─────┐                           │
+│      │Full │◀─────────────────────────│Full │                           │
+│      │ Rep │            40ms          │ Rep │                           │
+│      └─────┘                          └─────┘                           │
+│         │                                │                              │
+│         │              ┌───────┐         │                              │
+│         └─────────────▶│Witness│◀────────┘                              │
+│                        │(logs  │                                        │
+│                        │ only) │                                        │
+│                        └───────┘                                        │
+│                        US-Central                                       │
+│                                                                         │
+│   Witness only stores Raft log, not full data.                          │
+│   Can vote but not serve reads.                                         │
+│   Placed to minimize quorum latency.                                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+WITNESS REPLICA (Concept)
+═════════════════════════
+
+Purpose: Lightweight replica that votes but doesn't store data.
+
+What it stores:
+  ✓ Raft log (for voting)
+  ✓ Current term, voted_for
+  ✗ State machine (no data)
+
+What it does:
+  ✓ handle_append_entries → acknowledge
+  ✓ handle_vote_request → vote
+  ✗ handle_read → CANNOT serve reads
+
+Benefit: Reduces quorum latency without storing full data.
+```
+
+#### 9.6.4 Pattern 3: Hierarchical Coordination
+
+```
+HIERARCHICAL COORDINATION (Pseudo-code)
+═══════════════════════════════════════
+
+Two levels: Regional (fast) vs Global (slow)
+
+local_lock(resource):     → regional coordinator only (fast)
+global_lock(resource):    → regional intent lock, then global lock
+
+regional_leader_election: → within-region consensus (fast)
+global_leader_election:   → cross-region consensus (slow, avoid if possible)
+```
+
+#### 9.6.5 Multi-Region Consensus Options
+
+| Approach | Write Latency | Consistency | Use Case |
+|----------|---------------|-------------|----------|
+| **Single global leader** | High (cross-region) | Strong | Config store, metadata |
+| **Regional leaders (CRDTs)** | Low (local) | Eventual | Counters, sets |
+| **Regional leaders (2PC)** | Medium | Strong for cross-region txn | Databases |
+| **Spanner (TrueTime)** | Medium + commit-wait | External | Financial, critical |
+| **Leaderless (EPaxos)** | Low (nearest replica) | Strong | Geo-distributed KV |
+
+#### 9.6.6 Handling Region Failures
+
+```
+MULTI-REGION FAILOVER (Pseudo-code)
+═══════════════════════════════════
+
+handle_region_failure(failed_region):
+  1. Confirm failure (require 2+ signals: heartbeat, health, network)
+  2. Remove failed nodes from cluster membership
+  3. Check quorum (if lost → manual intervention)
+  4. Force election if leader was in failed region
+  5. Update routing to exclude failed region
+  6. Schedule data recovery
+
+is_region_failure_confirmed():
+  checks = [heartbeats, health_endpoints, network_reachability]
+  failures = count(check for check in checks if failed)
+  return failures >= 2  // avoid false positives
+```
 
 ---
 
-## Transactional Outbox Pattern
+<a name="anti-patterns"></a>
+## 10. Anti-Patterns: How Good Intentions Go Wrong
 
-When you need to update a database AND publish an event atomically, use the Transactional Outbox pattern.
+### Anti-Pattern 1: The God Lock
 
-### Why Transactional Outbox?
+```
+BAD:  with god_lock:         // One lock for everything
+        do_anything()
 
-**The Problem:**
+GOOD: with lock(f"user:{user_id}"):   // Lock per resource
+        update_user()
+      with lock(f"order:{order_id}"): // Different resource = different lock
+        update_order()
+```
+
+**Why it's bad:** Serializes all operations, SPOF, any slow op blocks everything
+
+### Anti-Pattern 2: The Chatty Coordinator
+
+```
+BAD:  handle_request():
+        am_i_leader()        // network
+        acquire_lock()       // network
+        get_config()         // network
+        get_peers()          // network
+        do_work()
+        release_lock()       // network
+        // 5 coordination calls for 1 operation!
+
+GOOD: handle_request():
+        if cache_stale: refresh_cached_state()  // rare
+        do_work(cached_config)  // no coordination on hot path
+```
+
+**Why it's bad:** 5× latency, coordination service = bottleneck
+
+### Anti-Pattern 3: Unbounded Lock Hold Time
+
+```
+BAD:  with lock(job_id):
+        download_10gb_file()    // minutes
+        ml_inference()          // hours
+        save_result()           // Lock held entire time!
+
+GOOD: with lock(job_id, ttl=5s):
+        claim_job()             // fast
+      
+      download_10gb_file()      // NO LOCK
+      ml_inference()            // NO LOCK
+      
+      with lock(job_id, ttl=5s):
+        save_result()           // fast
+```
+
+**Why it's bad:** TTL expires, others starve, throughput tanks
+
+### Anti-Pattern 4: Ignoring Lock Timeout
+
+```
+BAD:  lock.acquire(ttl=10s)
+      do_slow_work()           // takes 30s, lock expired at 10s!
+      write_critical_data()    // DANGEROUS: lock expired!
+      lock.release()           // releasing lock we don't own!
+
+GOOD: token = lock.acquire(ttl=10s)
+      do_slow_work()
+      if not lock.is_still_valid():
+        raise LockExpired()
+      write_critical_data(fencing_token=token)  // storage rejects stale token
+            lock.release()
+```
+
+### Anti-Pattern 5: Coordination for Read-Only Operations
+
+```
+BAD:  get_user():
+        with lock(user_id):        // WHY? Reads don't need locks!
+          return db.query(...)
+
+GOOD: get_user():
+        return db.query(...)       // No lock for reads
+      
+      update_user():
+        with lock(user_id):        // Lock only for writes
+          db.execute(...)
+```
+
+**Why it's bad:** Reads don't need mutual exclusion → massive perf penalty for nothing
+
+---
+
+<a name="when-not-to-use-locks"></a>
+## 11. When NOT to Use Locks
+
+### Rule 1: If You Can Use Idempotent Operations Instead
+
+```
+LOCK:   with lock("counter"):
+    value = db.get("counter")
+    db.set("counter", value + 1)
+
+BETTER: db.increment("counter", 1)  // Atomic, no lock needed
+```
+
+### Rule 2: If You Can Partition the Work
+
+```
+LOCK:   with lock("job-queue"):
+    job = queue.pop()
+
+BETTER: my_partition = hash(worker_id) % num_partitions
+        job = queue.pop(partition=my_partition)  // Each worker owns partition
+```
+
+### Rule 3: If Eventual Consistency Is Acceptable
+
+```
+LOCK:   with lock("page-view-counter"):
+    views = db.get("page:123:views")
+    db.set("page:123:views", views + 1)
+
+BETTER: local_buffer[page_id] += 1  // fast, in-memory
+        
+        // Background job every second:
+        for page_id, count in local_buffer:
+          db.increment(page_id, count)
+local_buffer.clear()
+```
+
+### Rule 4: If CRDTs Can Model Your Data
+
+```
+LOCK:   with lock(cart_id):
+          cart = db.get(cart_id)
+    cart.add(item)
+          db.set(cart_id, cart)
+
+BETTER: Use Add-Wins Set CRDT (no lock needed):
+        
+        add(item):    adds[item].add((timestamp, replica_id))
+        remove(item): removes[item].add((timestamp, replica_id))
+        
+        get_items(): return items where latest_add > latest_remove
+        merge(other): union all adds and removes (conflict-free!)
+```
+
+### Rule 5: If You Can Use Optimistic Concurrency Control
+
+```
+PESSIMISTIC (Lock):
+  with lock(account_id):
+    account = db.get(account_id)
+    account.balance -= amount
+    db.set(account_id, account)
+
+OPTIMISTIC (CAS - no lock):
+  for attempt in retries:
+    account, version = db.get_with_version(account_id)
+    account.balance -= amount
+    
+    if db.set_if_version(account_id, account, expected=version):
+      return success
+    
+    // Version changed, retry
+  raise TooManyConflicts
+```
+
+### Decision Matrix: Lock vs. Alternatives
+
+| Situation | Use Lock? | Better Alternative |
+|-----------|-----------|-------------------|
+| Increment counter | ❌ No | Atomic increment |
+| Update user profile | ⚠️ Maybe | Optimistic concurrency |
+| Transfer money between accounts | ✅ Yes | Or Saga pattern |
+| Process exactly one job | ✅ Yes | Or claim with CAS |
+| Update shopping cart | ❌ No | CRDT |
+| Track page views | ❌ No | Eventual consistency |
+| Leader election | ✅ Yes | Built-in consensus |
+| Distributed cache invalidation | ❌ No | TTL + eventual |
+
+---
+
+<a name="graceful-degradation"></a>
+## 12. Graceful Degradation: What Happens When Coordination Fails
+
+### 12.1 The Degradation Spectrum
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     DEGRADATION STRATEGIES                              │
+│                                                                         │
+│   Most Restrictive                              Least Restrictive       │
+│   ──────────────────────────────────────────────────────────────▶       │
+│                                                                         │
+│   ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐           │
+│   │    FAIL    │ │   DEGRADE  │ │   CACHE    │ │    FAIL    │           │
+│   │   CLOSED   │ │    MODE    │ │  FALLBACK  │ │    OPEN    │           │
+│   └────────────┘ └────────────┘ └────────────┘ └────────────┘           │
+│                                                                         │
+│   Reject all     Reduce         Use cached      Allow all               │
+│   requests       functionality   values          requests               │
+│                                                                         │
+│   Safety: ⭐⭐⭐⭐⭐  ⭐⭐⭐⭐         ⭐⭐⭐           ⭐             │
+│   Availability: ⭐   ⭐⭐⭐          ⭐⭐⭐⭐         ⭐⭐⭐⭐⭐       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 12.2 Building Resilient Coordination Clients
+
+```
+RESILIENT COORDINATION CLIENT (Pseudo-code)
+═══════════════════════════════════════════
+
+Principles:
+  1. Always have a fallback
+  2. Prefer availability over strict consistency in degraded mode
+  3. Make degradation observable (metrics, logs, alerts)
+  4. Auto-recover when coordination becomes available
+
+get_config(key):
+  try:
+    value = coordination.get(key)
+    cache[key] = value
+    exit_degraded_mode()
+    return value
+  catch Unavailable:
+    enter_degraded_mode()
+    if key in cache: return cache[key]      // Fallback 1
+    if default: return default               // Fallback 2
+    raise ConfigUnavailable                  // Fail if critical
+
+acquire_lock(resource):
+  try:
+    return coordination.lock(resource)
+  catch Unavailable:
+    enter_degraded_mode()
+    switch(degraded_strategy):
+      "local":   return LocalLock(resource)  // Process-level only
+      "fail":    raise LockUnavailable       // Fail closed
+      "proceed": return NoOpLock             // Fail open (dangerous!)
+```
+
+### 12.3 Circuit Breaker for Coordination
+
+```
+CIRCUIT BREAKER (Pseudo-code)
+═════════════════════════════
+
+States: CLOSED → OPEN → HALF_OPEN → CLOSED
+
+Constants:
+  FAILURE_THRESHOLD = 5    // failures before opening
+  RESET_TIMEOUT = 30s      // wait before trying again
+  SUCCESS_THRESHOLD = 3    // successes to close
+
+call(operation):
+  if state == OPEN:
+    if should_attempt_reset(): state = HALF_OPEN
+    else: raise CircuitOpen  // fast-fail
+  
+  try:
+    result = operation()
+    on_success()
+    return result
+  catch:
+    on_failure()
+    raise
+
+on_success():
+  if state == HALF_OPEN and success_count >= 3:
+    state = CLOSED  // recovered!
+
+on_failure():
+  failure_count++
+  if failure_count >= 5:
+    state = OPEN
+```
+
+### 12.4 Degradation Patterns by Service Type
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              DEGRADATION PATTERNS BY SERVICE TYPE                       │
+│                                                                         │
+│   SERVICE TYPE          COORDINATION FAILURE → DEGRADATION STRATEGY     │
+│   ────────────────────────────────────────────────────────────────      │
+│                                                                         │
+│   Job Scheduler         Leader dies → Followers buffer jobs locally     │
+│                         Resume when new leader elected                  │
+│                         Risk: Duplicate execution if not idempotent     │
+│                                                                         │
+│   Rate Limiter          Redis down → Local rate limiting only           │
+│                         Effective limit = global_limit / server_count   │
+│                         Risk: Over-limit by factor of server_count      │
+│                                                                         │
+│   Feature Flags         etcd down → Use cached flags                    │
+│                         Cache TTL = 5 minutes (configurable)            │
+│                         Risk: Delayed flag updates during outage        │
+│                                                                         │
+│   Distributed Lock      Lock service down → ???                         │
+│                         Option A: Fail closed (reject operations)       │
+│                         Option B: Proceed (risk duplicates)             │
+│                         Decision depends on cost of duplicates          │
+│                                                                         │
+│   Configuration         Metadata unavailable → Use last known config    │
+│                         Alert if config age > threshold                 │
+│                         Risk: Operating with stale config               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 12.5 Testing Degraded Mode
+
+```
+DEGRADED MODE TESTS (What to Test)
+══════════════════════════════════
+
+test_coordination_unavailable:
+  with mock_failure():
+    response = service.handle_request()
+    assert response.status != 500
+    assert response.headers["X-Degraded-Mode"] == "true"
+
+test_cache_fallback:
+  service.get_config("flag_x")              // prime cache
+  with mock_failure():
+    value = service.get_config("flag_x")    // should use cache
+    assert value is not None
+
+test_degraded_mode_metrics:
+  with mock_failure(): service.handle_request()
+  assert metrics["degraded_mode.entered"] == 1
+  
+  // Restore
+  service.handle_request()
+  assert metrics["degraded_mode.duration"] > 0
+
+test_circuit_breaker_opens:
+  with mock_failure():
+    for 10 times: service.coordinate()  // trigger failures
+  assert circuit_breaker.state == "OPEN"
+  assert_no_network_calls { service.coordinate() }  // fast-fail
+```
+
+---
+
+<a name="interview-explanations"></a>
+## 13. Interview Explanations
+
+### 13.1 "Explain distributed locks and when you'd use them"
+
+**Strong Answer:**
+
+> "A distributed lock provides mutual exclusion across multiple machines—ensuring only one process can access a shared resource at a time.
+>
+> **When to use them:**
+> - Exactly-once job execution (like processing a payment)
+> - Preventing concurrent modifications to the same entity
+> - Coordinating access to external resources with no built-in concurrency control
+>
+> **Key implementation concerns:**
+> 1. **Lock expiration:** Use TTLs to prevent deadlocks from crashed holders
+> 2. **Unique identifiers:** Prevent accidentally releasing someone else's lock
+> 3. **Fencing tokens:** Monotonically increasing tokens to detect stale lock holders
+>
+> **When NOT to use them:**
+> - If atomic operations exist (use INCR instead of lock → read → write → unlock)
+> - If work can be partitioned (each worker handles its own subset)
+> - If eventual consistency is acceptable (use CRDTs)
+>
+> **The fundamental problem** is that distributed locks aren't foolproof—a process can pause after acquiring the lock (GC, network delay), the lock expires, another process acquires it, and now you have two holders. Fencing tokens protect against this by having downstream resources reject operations from stale holders."
+
+### 13.2 "How does leader election work in distributed systems?"
+
+**Strong Answer:**
+
+> "Leader election ensures exactly one node acts as the authoritative coordinator at any time, with automatic failover when the leader fails.
+>
+> **Two main approaches:**
+>
+> 1. **Lease-based:** Leader holds a time-limited lease. Must renew before expiry. If the leader is partitioned from the lease store, the lease expires and someone else can take over.
+>
+> 2. **Quorum-based:** Leader must maintain support from a majority of nodes through heartbeats. If it can't reach quorum, it steps down.
+>
+> **The critical safety property** is that at any time, at most one node believes it's the leader. This is achieved through:
+> - Lease TTLs (old leader's lease expires before new leader can acquire)
+> - Epoch/term numbers (operations include term number; stale terms are rejected)
+> - Quorum overlap (any two majorities share at least one node)
+>
+> **What happens during leader failure:**
+> 1. Leader stops sending heartbeats (or lease expires)
+> 2. Followers detect missing heartbeats after timeout
+> 3. Election triggers—nodes vote for new leader
+> 4. Winner starts acting as leader
+>
+> **This creates unavailability during election (typically 1-10 seconds)**. Systems must be designed to buffer operations during this window or fail gracefully."
+
+### 13.3 "What is split-brain and how do you prevent it?"
+
+**Strong Answer:**
+
+> "Split-brain occurs when a network partition causes two groups of nodes to independently elect their own leaders, resulting in two nodes both believing they're the authoritative leader.
+>
+> **Why it's dangerous:** Both leaders accept writes, data diverges, and when the partition heals, you have conflicting states that may be impossible to reconcile.
+>
+> **Prevention mechanisms:**
+>
+> 1. **Quorum requirement:** Leader must maintain support from majority of nodes. In a 5-node cluster, each partition needs 3 nodes to elect a leader. Since there's only 5 total, only one partition can have 3.
+>
+> 2. **Fencing:** When a new leader is elected, it 'fences' the old leader—prevents it from making changes. This can be done through:
+>    - Revoking storage access (STONITH - 'Shoot The Other Node In The Head')
+>    - Epoch numbers where resources reject old epochs
+>
+> 3. **Leader step-down:** Leaders that lose quorum must stop accepting writes immediately, even if they don't know a new leader exists.
+>
+> **The key insight** is that it's safe for there to be NO leader temporarily, but never safe to have TWO leaders. Systems prefer unavailability over inconsistency during partitions."
+
+### 13.4 "How would you design a distributed job scheduler?"
+
+**Strong Answer:**
+
+> "I'd design it with these components:
+>
+> **1. Job Storage:** A database holding jobs with status (pending, running, completed, failed), scheduled time, and worker assignment. Partitioned by job_id for scale.
+>
+> **2. Leader/Coordinator:** Single leader (elected via etcd/ZooKeeper lease) that:
+> - Scans for ready jobs
+> - Assigns jobs to workers
+> - Monitors job progress
+> - Reclaims jobs from dead workers
+>
+> **3. Workers:** Register with leader, receive assignments, process jobs.
+>
+> **Key mechanisms for exactly-once execution:**
+>
+> 1. **Claim with lock:** Worker acquires distributed lock before processing. Prevents two workers from processing the same job.
+>
+> 2. **Idempotency keys:** Each job execution has unique ID. If job already completed with that ID, skip it.
+>
+> 3. **Fencing tokens:** Include token when writing results. Database rejects writes with stale tokens.
+>
+> **Handling failures:**
+>
+> - **Worker dies:** Job stays 'running' too long. Reclaimer process detects this, moves job back to 'pending'.
+> 
+> - **Leader dies:** Workers buffer jobs locally. New leader elected in seconds.
+>
+> - **Network partition:** Workers can't reach leader. They pause (if strict) or continue processing local queue (if available).
+>
+> **Trade-off:** Strictly exactly-once adds latency (lock acquisition). At-least-once is simpler and fine if jobs are idempotent."
+
+### 13.5 "When would you NOT use coordination?"
+
+**Strong Answer:**
+
+> "I'd avoid coordination whenever possible because it adds latency, creates bottlenecks, and introduces failure modes. Specifically:
+>
+> **1. When atomic operations exist:**
+> - Don't lock to increment counter—use atomic INCREMENT
+> - Don't lock for append-only operations—just append
+>
+> **2. When work is naturally partitioned:**
+> - Each worker handles specific shard—no contention
+> - Message queue partitions assigned to consumers—no shared queue lock
+>
+> **3. When eventual consistency is acceptable:**
+> - Analytics counters—approximate is fine
+> - Page view tracking—don't need real-time accuracy
+> - Session storage—rarely contested
+>
+> **4. When CRDTs can model the data:**
+> - Shopping carts (Add-Wins Set)
+> - Counters (G-Counter, PN-Counter)
+> - Sets with concurrent adds/removes (OR-Set)
+>
+> **5. When optimistic concurrency works:**
+> - Low-contention updates—version checks are cheaper than locks
+> - Read-heavy workloads—no need to lock reads
+>
+> **The decision framework:**
+> 1. What happens if two processes do this simultaneously?
+> 2. Can we make the operation commutative?
+> 3. Can we detect and retry conflicts?
+> 4. Is 'last write wins' acceptable?
+>
+> If any of these work, avoid distributed locks."
+
+---
+
+<a name="brainstorming-questions"></a>
+## 14. Brainstorming Questions
+
+### Architecture Design Questions
+
+1. **You're building a payment processing system. Each payment must be processed exactly once. How do you ensure this without making the lock service a single point of failure?**
+
+2. **Your distributed cache invalidation is causing thundering herd problems—when a popular key expires, hundreds of requests simultaneously try to rebuild it. How do you coordinate this?**
+
+3. **You have 1000 workers processing jobs from a queue. Using a single lock on the queue would be a bottleneck. How do you scale this?**
+
+4. **Your leader election is using a 10-second lease TTL. During a 5-second network blip, the leader loses its lease and a new leader is elected. Now both think they're leader. How do you prevent data corruption?**
+
+5. **You're designing a distributed rate limiter for 100 million users. Coordinating every request is too expensive. What's your approach?**
+
+### Trade-off Analysis Questions
+
+6. **Compare lease-based vs. quorum-based leader election. When would you prefer each?**
+
+7. **Your coordination service (etcd) is down. You have three options: fail all requests, proceed without coordination, or use cached state. Walk through the trade-offs for a job scheduler.**
+
+8. **You're seeing frequent election storms—leaders getting elected and deposed rapidly. What could cause this and how would you diagnose/fix it?**
+
+9. **Your distributed lock implementation uses Redis. Someone suggests using a "safer" Redlock algorithm with 5 Redis instances. What are the trade-offs?**
+
+10. **You have the choice between using ZooKeeper (strong consistency, lower throughput) vs. Redis (higher throughput, weaker guarantees) for your distributed locks. How do you decide?**
+
+### Debugging and Operations Questions
+
+11. **Your job scheduler is occasionally processing jobs twice. The lock implementation looks correct. What could be happening?**
+
+12. **After a network partition healed, you discovered that some configuration changes were lost. Your metadata service uses Raft for consensus. How is this possible?**
+
+13. **Workers report that lock acquisition is taking 10+ seconds, up from the usual milliseconds. Debugging shows the lock service is healthy. What's happening?**
+
+14. **Your 5-node consensus cluster lost quorum when 2 nodes died. You need to restore service immediately but can't recover the dead nodes. What are your options?**
+
+15. **You're seeing "stale fencing token" errors in production, but your lock service shows only one active holder. How do you investigate this?**
+
+### System Evolution Questions
+
+16. **Your service currently uses leader election for coordination. Traffic has grown 100x and the leader is a bottleneck. How do you evolve the architecture?**
+
+17. **You started with Redis for distributed locks. Now you need stronger consistency guarantees. What's your migration strategy?**
+
+18. **Your multi-region deployment needs a global leader. Cross-region latency makes lease renewal slow and unreliable. How do you adapt your design?**
+
+19. **Your coordination system is causing cascading failures—when it goes down, all services fail. How do you add resilience?**
+
+20. **You're moving from a monolith to microservices. The monolith used database locks for coordination. How do you handle coordination in the distributed version?**
+
+---
+
+<a name="homework"></a>
+## 15. Homework: Remove Coordination and Re-Architect
+
+### The Challenge
+
+You've inherited a system with excessive coordination. Your mission: **remove or reduce coordination while maintaining correctness.**
+
+### The Existing System
+
 ```python
-# WRONG: Not atomic - can fail between steps
-def create_order(order):
-    db.insert(order)           # Step 1: DB write
-    kafka.publish(order_event) # Step 2: Kafka publish
-    # If step 2 fails, order exists but event never published!
+class OverlyCoordinatedSystem:
+    """
+    A system that uses distributed locks for EVERYTHING.
+    Your job: identify what can be removed or optimized.
+    """
+    
+    def __init__(self, redis_client):
+        self.redis = redis_client
+    
+    def increment_page_views(self, page_id):
+        """Lock on page to increment view counter."""
+        with DistributedLock(self.redis, f"page:{page_id}"):
+            views = self.redis.get(f"page:{page_id}:views") or 0
+            self.redis.set(f"page:{page_id}:views", int(views) + 1)
+    
+    def add_item_to_cart(self, user_id, item_id, quantity):
+        """Lock on cart to add item."""
+        with DistributedLock(self.redis, f"cart:{user_id}"):
+            cart = json.loads(self.redis.get(f"cart:{user_id}") or "{}")
+            cart[item_id] = cart.get(item_id, 0) + quantity
+            self.redis.set(f"cart:{user_id}", json.dumps(cart))
+    
+    def get_user_profile(self, user_id):
+        """Lock on user to read profile (!)."""
+        with DistributedLock(self.redis, f"user:{user_id}"):
+            return db.query("SELECT * FROM users WHERE id = ?", user_id)
+    
+    def update_user_profile(self, user_id, updates):
+        """Lock on user to update profile."""
+        with DistributedLock(self.redis, f"user:{user_id}"):
+            db.execute(
+                "UPDATE users SET name=?, email=? WHERE id = ?",
+                [updates['name'], updates['email'], user_id]
+            )
+    
+    def process_order(self, order_id):
+        """Global lock to process any order (!!)."""
+        with DistributedLock(self.redis, "order-processing"):
+            order = db.query("SELECT * FROM orders WHERE id = ?", order_id)
+            self.charge_payment(order)
+            self.update_inventory(order)
+            self.send_confirmation(order)
+            db.execute("UPDATE orders SET status='completed' WHERE id = ?", order_id)
+    
+    def get_feature_flag(self, flag_name):
+        """Lock to read feature flag (!!)."""
+        with DistributedLock(self.redis, f"flag:{flag_name}"):
+            return self.redis.get(f"feature:{flag_name}") == "true"
+    
+    def submit_job(self, job_data):
+        """Global lock on job queue (!!!)."""
+        with DistributedLock(self.redis, "job-queue"):
+            job_id = str(uuid.uuid4())
+            self.redis.lpush("jobs", json.dumps({
+                "id": job_id,
+                **job_data
+            }))
+            return job_id
+    
+    def claim_job(self):
+        """Global lock on job queue to claim job."""
+        with DistributedLock(self.redis, "job-queue"):
+            job_data = self.redis.rpop("jobs")
+            if job_data:
+                job = json.loads(job_data)
+                return job
+            return None
 ```
 
-**The Solution:**
+### Part 1: Identify the Problems (Analysis)
+
+For each method, answer:
+1. Is coordination necessary at all?
+2. If yes, is this the right level of granularity?
+3. What's the performance impact?
+4. What's a better alternative?
+
+**Fill in this table:**
+
+| Method | Necessary? | Problem | Better Alternative |
+|--------|------------|---------|-------------------|
+| increment_page_views | | | |
+| add_item_to_cart | | | |
+| get_user_profile | | | |
+| update_user_profile | | | |
+| process_order | | | |
+| get_feature_flag | | | |
+| submit_job | | | |
+| claim_job | | | |
+
+### Part 2: Re-Architecture (Implementation)
+
+Rewrite the system with minimal coordination. For each method:
+- Remove lock if not needed
+- Use finer-grained lock if needed
+- Use alternative pattern (atomic ops, CRDTs, optimistic concurrency)
+
+**Starter template:**
+
 ```python
-# RIGHT: Transactional Outbox
-def create_order(order):
-    with db.transaction():
-        db.insert(order)
-        db.insert_outbox(OrderCreatedEvent(order))
-    # Both succeed or both fail - atomic!
-
-# Separate process polls outbox and publishes
-def outbox_relay():
-    while True:
-        events = db.get_unpublished_events()
-        for event in events:
-            kafka.publish(event)
-            db.mark_published(event.id)
+class OptimizedSystem:
+    """
+    Refactored system with minimal coordination.
+    """
+    
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self.feature_cache = TTLCache(maxsize=1000, ttl=60)
+    
+    def increment_page_views(self, page_id):
+        # TODO: Remove lock, use atomic increment
+        pass
+    
+    def add_item_to_cart(self, user_id, item_id, quantity):
+        # TODO: Use Redis HINCRBY for atomic hash increment
+        # Or: Use CRDT pattern for concurrent carts
+        pass
+    
+    def get_user_profile(self, user_id):
+        # TODO: Remove lock entirely
+        pass
+    
+    def update_user_profile(self, user_id, updates):
+        # TODO: Use optimistic concurrency with version check
+        pass
+    
+    def process_order(self, order_id):
+        # TODO: Use order-level lock (not global)
+        # TODO: Consider saga pattern for multi-step process
+        pass
+    
+    def get_feature_flag(self, flag_name):
+        # TODO: Use local cache with background refresh
+        pass
+    
+    def submit_job(self, job_data):
+        # TODO: Remove lock, use atomic LPUSH
+        pass
+    
+    def claim_job(self, worker_id):
+        # TODO: Use BRPOPLPUSH for atomic claim
+        # Or: Partition queue by worker
+        pass
 ```
 
-### Outbox Table Schema
+### Part 3: Failure Mode Analysis
 
-```sql
-CREATE TABLE outbox (
-    id UUID PRIMARY KEY,
-    aggregate_type VARCHAR(255),  -- e.g., "Order"
-    aggregate_id VARCHAR(255),    -- e.g., order_id
-    event_type VARCHAR(255),      -- e.g., "OrderCreated"
-    payload JSONB,
-    created_at TIMESTAMP,
-    published_at TIMESTAMP NULL   -- NULL = not yet published
-);
+For your refactored system, document:
 
--- Index for efficient polling
-CREATE INDEX idx_outbox_unpublished 
-ON outbox(created_at) 
-WHERE published_at IS NULL;
-```
+1. **What happens if Redis is unavailable?**
+   - Which operations fail?
+   - Which can proceed with degraded functionality?
 
-### Staff-Level Insight
+2. **What happens if a worker crashes mid-operation?**
+   - Order processing halfway done
+   - Job claimed but not completed
 
-> "The Transactional Outbox pattern guarantees at-least-once delivery from database to message broker. The relay process must be idempotent—use message IDs for deduplication downstream."
+3. **What happens under high contention?**
+   - Many concurrent cart updates
+   - Many workers claiming jobs
+
+### Part 4: Metrics and Observability
+
+Design monitoring for your coordination:
+
+1. **What metrics would you collect?**
+   - Lock acquisition time
+   - Lock contention rate
+   - Optimistic concurrency retry rate
+
+2. **What alerts would you set?**
+   - Lock acquisition p99 > 100ms
+   - Retry rate > 10%
+
+3. **How would you trace a "slow request" caused by coordination?**
+
+### Deliverables
+
+1. **Completed analysis table** (Part 1)
+2. **Refactored code** with comments explaining decisions (Part 2)
+3. **Failure mode documentation** (Part 3)
+4. **Monitoring design** (Part 4)
+
+### Bonus Challenges
+
+1. **Multi-region:** How would your design change for a system spanning 3 regions?
+
+2. **Hybrid Consistency:** Some operations need strong consistency (order processing), others don't (page views). Design a system that handles both efficiently.
+
+3. **Coordination-Free Claims:** Design a job processing system where workers claim jobs without any distributed coordination. (Hint: consistent hashing, deterministic assignment)
 
 ---
 
-## Capacity Planning for Async Systems
+## 16. Operational Excellence: Running Coordination Services in Production
 
-Staff Engineers must size async infrastructure correctly. Under-provisioning causes lag and data loss; over-provisioning wastes money.
-
-### Capacity Planning Checklist
-
-| Dimension | Question | Rule of Thumb |
-|-----------|----------|---------------|
-| **Partitions** | How many parallel consumers? | partitions = 2x expected peak parallelism |
-| **Retention** | How long to keep data? | retention > max expected consumer downtime |
-| **Throughput** | Peak message rate? | Provision for 3x normal to handle spikes |
-| **Storage** | Total data size? | msg_size × msgs/sec × retention × replication |
-| **Consumer Lag** | How behind is acceptable? | Alert at 50% of retention window |
-
-### Capacity Example: Metrics Pipeline
+### 16.1 Capacity Planning for Coordination Services
 
 ```
-GIVEN:
-- 10,000 services
-- 100 metrics per service per second
-- 1KB average message size
-- 7-day retention
-- 3x replication
-
-CALCULATION:
-- Messages/sec: 10,000 × 100 = 1,000,000 msg/sec
-- Bytes/sec: 1,000,000 × 1KB = 1 GB/sec
-- Daily storage: 1 GB/sec × 86,400 = 86 TB/day
-- With retention: 86 TB × 7 days = 602 TB
-- With replication: 602 TB × 3 = 1.8 PB total storage
-
-PARTITIONS:
-- If each consumer handles 50K msg/sec
-- Need: 1,000,000 / 50,000 = 20 consumers
-- Partitions: 20 × 2 (growth) = 40 partitions minimum
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  COORDINATION SERVICE SIZING GUIDE                      │
+│                                                                         │
+│   ETCD SIZING:                                                          │
+│   ────────────                                                          │
+│                                                                         │
+│   Cluster Size:                                                         │
+│   - 3 nodes: Survives 1 failure (most common)                           │
+│   - 5 nodes: Survives 2 failures (high availability)                    │
+│   - 7 nodes: Survives 3 failures (rarely needed)                        │
+│                                                                         │
+│   Hardware per node:                                                    │
+│   ┌────────────────┬──────────┬──────────┬──────────────┐               │
+│   │ Load           │ CPU      │ Memory   │ Disk         │               │
+│   ├────────────────┼──────────┼──────────┼──────────────┤               │
+│   │ Light (<500 QPS)│ 2 cores │ 8 GB     │ 50 GB SSD    │               │
+│   │ Medium (5K QPS) │ 4 cores │ 16 GB    │ 100 GB SSD   │               │
+│   │ Heavy (15K QPS) │ 8 cores │ 32 GB    │ 200 GB NVMe  │               │
+│   └────────────────┴──────────┴──────────┴──────────────┘               │
+│                                                                         │
+│   ZOOKEEPER SIZING:                                                     │
+│   ─────────────────                                                     │
+│                                                                         │
+│   Key metrics to monitor:                                               │
+│   - Outstanding requests (should be < 10)                               │
+│   - Average latency (should be < 10ms)                                  │
+│   - znode count (impacts snapshot time)                                 │
+│   - Watch count (impacts notification overhead)                         │
+│                                                                         │
+│   Warning signs:                                                        │
+│   - Snapshot taking > 30 seconds                                        │
+│   - JVM heap > 80% utilized                                             │
+│   - Log directory filling up                                            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Staff-Level Insight
+### 16.2 Production Runbooks
 
-> "Always plan partitions for your 2-year growth target. Adding partitions later requires rebalancing and can cause ordering issues if keys move between partitions."
-
----
-
-# Part 7: Decision Frameworks
-
-## The Async Model Decision Tree
+#### Runbook 1: Leader Election Storm
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CHOOSING QUEUE vs LOG vs STREAM                          │
-│                                                                             │
-│   START: "What are my async requirements?"                                  │
-│                          │                                                  │
-│                          ▼                                                  │
-│              ┌───────────────────────┐                                      │
-│              │ Do you need to replay │                                      │
-│              │ historical events?    │                                      │
-│              └───────────┬───────────┘                                      │
-│                     YES  │  NO                                              │
-│                      ▼   └─────────────────────┐                            │
-│               [LOG or STREAM]                  │                            │
-│                      │                         ▼                            │
-│                      │         ┌───────────────────────────┐                │
-│                      │         │ One consumer per message  │                │
-│                      │         │ (work distribution)?      │                │
-│                      │         └───────────┬───────────────┘                │
-│                      │                YES  │  NO                            │
-│                      │                 ▼   └─────────┐                      │
-│                      │            [QUEUE]            │                      │
-│                      │                               ▼                      │
-│                      │              ┌─────────────────────────────┐         │
-│                      │              │ Multiple independent        │         │
-│                      │              │ consumers need same data?   │         │
-│                      │              └───────────┬─────────────────┘         │
-│                      │                     YES  │  NO                       │
-│                      │                      ▼   └→ [QUEUE]                  │
-│                      │                 [LOG]                                │
-│                      │                                                      │
-│                      ▼                                                      │
-│         ┌───────────────────────────┐                                       │
-│         │ Need time-window          │                                       │
-│         │ aggregations or complex   │                                       │
-│         │ event processing?         │                                       │
-│         └───────────┬───────────────┘                                       │
-│                YES  │  NO                                                   │
-│                 ▼   └→ [LOG (Kafka, Kinesis)]                               │
-│            [STREAM PROCESSING]                                              │
-│            (Flink, Kafka Streams)                                           │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    RUNBOOK: LEADER ELECTION STORM                       │
+│                                                                         │
+│   SYMPTOMS:                                                             │
+│   - Frequent leader changes (> 1/minute)                                │
+│   - High CPU on consensus nodes                                         │
+│   - Increased latency for coordination operations                       │
+│   - "leadership transfer" or "new leader elected" log spam              │
+│                                                                         │
+│   DIAGNOSIS:                                                            │
+│   ──────────                                                            │
+│   1. Check network latency between nodes                                │
+│      $ ping <peer_ip>                                                   │
+│      Expected: < 2ms within datacenter                                  │
+│                                                                         │
+│   2. Check for CPU throttling                                           │
+│      $ cat /sys/fs/cgroup/cpu/cpu.stat                                  │
+│      nr_throttled should be 0                                           │
+│                                                                         │
+│   3. Check disk latency                                                 │
+│      $ iostat -x 1                                                      │
+│      await should be < 5ms for SSD                                      │
+│                                                                         │
+│   4. Check for clock skew                                               │
+│      $ ntpstat or chronyc tracking                                      │
+│      Offset should be < 100ms                                           │
+│                                                                         │
+│   RESOLUTION:                                                           │
+│   ───────────                                                           │
+│   1. If network issues: Fix network, consider increasing heartbeat      │
+│      interval temporarily                                               │
+│                                                                         │
+│   2. If CPU throttling: Increase CPU limits or move to dedicated host   │
+│                                                                         │
+│   3. If disk latency: Move to faster storage (NVMe)                     │
+│                                                                         │
+│   4. If clock skew: Restart NTP, check for VM time drift                │
+│                                                                         │
+│   5. Temporary mitigation: Increase election timeout                    │
+│      etcd: --election-timeout=5000 (5 seconds)                          │
+│      ZK: tickTime * initLimit                                           │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Reference: When to Use What
-
-| If you need... | Use | Example |
-|----------------|-----|---------|
-| Work distribution among competing consumers | Queue | Background jobs, notifications |
-| Message deleted after processing | Queue | Task queues, job processors |
-| Multiple consumers reading same data | Log | Metrics to dashboard + storage + alerting |
-| Replay historical events | Log | Backfill after bug fix |
-| Strict ordering per key | Log (partitioned by key) | User events, time-series |
-| Time-window aggregations | Stream processing | Real-time analytics, alerting |
-| Late event handling | Stream processing | Ad click attribution |
-| Complex event patterns | Stream processing | Fraud detection |
-| Simple fire-and-forget | Queue | Async HTTP calls |
-| Event sourcing | Log | Audit trails, state reconstruction |
-
-## The Questions to Ask
-
-Before choosing an async model, answer these:
+#### Runbook 2: etcd Database Size Growing
 
 ```
-1. REPLAY: "Will I ever need to reprocess historical messages?"
-   YES → Log
-   NO  → Queue is simpler
+ETCD DATABASE SIZE RUNBOOK
+══════════════════════════
 
-2. CONSUMERS: "How many independent consumers need this data?"
-   One → Queue
-   Multiple → Log with consumer groups
+DIAGNOSE:
+  etcdctl endpoint status --write-out=table    // check size
+  etcdctl get '' --prefix --keys-only | ...    // count keys by prefix
 
-3. CONSUMPTION: "What happens after processing?"
-   Delete the message → Queue
-   Keep for others/replay → Log
+COMPACT + DEFRAG (one node at a time!):
+  REVISION=$(etcdctl endpoint status ... | jq '.revision')
+  etcdctl compact $((REVISION - 10000))        // keep last 10K revisions
+  etcdctl defrag --endpoints=$endpoint         // ⚠️ brief unavailability
 
-4. ORDERING: "Does order matter? At what granularity?"
-   No ordering → Standard queue
-   Per-key ordering → Log partitioned by key
-   Global ordering → Single partition (throughput limit!)
-
-5. WINDOWS: "Do I need to aggregate over time windows?"
-   YES → Stream processing
-   NO  → Plain log consumption is enough
-
-6. LATE DATA: "Can events arrive out of order or late?"
-   YES → Stream processing with event-time semantics
-   NO  → Processing-time is fine
+AUTO-COMPACTION (etcd config):
+  auto-compaction-mode: periodic
+  auto-compaction-retention: "1h"
 ```
 
----
-
-# Part 7B: Observability and Monitoring
-
-Staff Engineers must design async systems that are observable. When something breaks at 3 AM, you need to diagnose quickly.
-
-## Key Metrics by System Type
-
-### Queue Metrics (SQS, RabbitMQ)
-
-| Metric | Alert Threshold | Action |
-|--------|-----------------|--------|
-| **Queue depth** | > 10,000 messages | Scale consumers |
-| **Age of oldest message** | > 5 minutes | Investigate slow consumers |
-| **DLQ depth** | > 0 | Investigate poison messages |
-| **Consumer error rate** | > 1% | Check consumer logs |
-| **Messages received** | 50% drop | Check producers |
-
-### Log Metrics (Kafka)
-
-| Metric | Alert Threshold | Action |
-|--------|-----------------|--------|
-| **Consumer lag (messages)** | > 100,000 | Scale consumers |
-| **Consumer lag (time)** | > 50% of retention | URGENT: risk of data loss |
-| **Per-partition lag variance** | 10x difference | Investigate hot partition |
-| **Consumer rebalances** | > 1/hour | Stabilize consumer group |
-| **Producer errors** | > 0.1% | Check broker health |
-
-### Stream Processing Metrics (Flink)
-
-| Metric | Alert Threshold | Action |
-|--------|-----------------|--------|
-| **Checkpoint duration** | > 1 minute | Reduce state size |
-| **Checkpoint failures** | > 0 | Check state backend |
-| **Backpressure** | > 50% | Scale operators |
-| **Late events dropped** | > 1% | Increase allowed lateness |
-| **Heap usage** | > 80% | Increase memory or optimize |
-
-## Monitoring Dashboard Layout
+#### Runbook 3: ZooKeeper Session Expiration Storm
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    ASYNC SYSTEM HEALTH DASHBOARD                            │
-│                                                                             │
-│   TOP ROW: Overall Health                                                   │
-│   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
-│   │ Queue Depth │ │ Kafka Lag   │ │ Error Rate  │ │ DLQ Count   │           │
-│   │    142      │ │   1.2K      │ │    0.01%    │ │     0       │           │
-│   │     ✓       │ │     ✓       │ │     ✓       │ │     ✓       │           │
-│   └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
-│                                                                             │
-│   MIDDLE ROW: Throughput Over Time                                          │
-│   ┌─────────────────────────────────────────────────────────────┐           │
-│   │  Messages/sec: ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆▇█▇▆▅▄▃▂▁                │           │
-│   │  Produced: ━━━  Consumed: ━━━                               │           │
-│   └─────────────────────────────────────────────────────────────┘           │
-│                                                                             │
-│   BOTTOM ROW: Per-Consumer/Partition Details                                │
-│   ┌──────────────────────────┐ ┌──────────────────────────────┐             │
-│   │ Consumer Group Lag       │ │ Partition Lag Distribution   │             │
-│   │ dashboard:     120       │ │ P0: ▓▓░░░░░ 1.2K             │             │
-│   │ storage:       1,542     │ │ P1: ▓░░░░░░ 800              │             │
-│   │ alerting:      89        │ │ P2: ▓▓▓▓▓▓▓ 5.2K ⚠️          │             │
-│   │ analytics:     12,301 ⚠️ │ │ P3: ▓▓░░░░░ 1.1K             │             │
-│   └──────────────────────────┘ └──────────────────────────────┘             │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                RUNBOOK: ZOOKEEPER SESSION EXPIRATION STORM              │
+│                                                                         │
+│   SYMPTOMS:                                                             │
+│   - Mass client disconnections                                          │
+│   - "Session expired" errors across many services                       │
+│   - Ephemeral nodes disappearing unexpectedly                           │
+│   - Leader election churn in dependent services                         │
+│                                                                         │
+│   LIKELY CAUSES:                                                        │
+│   ───────────────                                                       │
+│   1. ZooKeeper overloaded (long GC pauses)                              │
+│   2. Network partition between clients and ZK                           │
+│   3. Session timeout too aggressive                                     │
+│   4. Too many watches or ephemeral nodes                                │
+│                                                                         │
+│   DIAGNOSIS:                                                            │
+│   ──────────                                                            │
+│   1. Check ZK server logs for GC pauses:                                │
+│      grep "long gc" /var/log/zookeeper/zookeeper.log                    │
+│                                                                         │
+│   2. Check outstanding requests:                                        │
+│      echo "stat" | nc localhost 2181 | grep Outstanding                 │
+│                                                                         │
+│   3. Check watch count:                                                 │
+│      echo "wchs" | nc localhost 2181                                    │
+│                                                                         │
+│   4. Check ephemeral node count:                                        │
+│      echo "stat" | nc localhost 2181 | grep Ephemeral                   │
+│                                                                         │
+│   RESOLUTION:                                                           │
+│   ───────────                                                           │
+│   1. If GC pauses:                                                      │
+│      - Increase heap size                                               │
+│      - Tune GC settings (use G1GC)                                      │
+│      - Reduce znode data size                                           │
+│                                                                         │
+│   2. If too many watches:                                               │
+│      - Clients should use single watch per path                         │
+│      - Consider moving to etcd (streaming watches)                      │
+│                                                                         │
+│   3. If session timeout too aggressive:                                 │
+│      - Increase client session timeout                                  │
+│      - Default 30s is often too short for production                    │
+│                                                                         │
+│   4. Emergency: Rolling restart of ZK ensemble                          │
+│      - Restart followers first, leader last                             │
+│      - Wait for full sync between restarts                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Alerting Rules
-
-```yaml
-# Example alerting configuration
-alerts:
-  # Queue alerts
-  - name: queue_depth_high
-    condition: sqs_queue_depth > 10000
-    duration: 5m
-    severity: warning
-    action: page_oncall
-
-  - name: dlq_has_messages
-    condition: sqs_dlq_depth > 0
-    duration: 1m
-    severity: critical
-    action: page_oncall
-
-  # Kafka alerts
-  - name: consumer_lag_critical
-    condition: kafka_consumer_lag_seconds > (retention_seconds * 0.5)
-    duration: 5m
-    severity: critical
-    action: page_oncall
-    message: "Consumer may lose data before catching up!"
-
-  - name: hot_partition
-    condition: max(partition_lag) > 10 * avg(partition_lag)
-    duration: 10m
-    severity: warning
-    action: notify_team
-
-  # Stream processing alerts
-  - name: checkpoint_failing
-    condition: flink_checkpoint_failures > 0
-    duration: 5m
-    severity: critical
-    action: page_oncall
-```
-
-## Staff-Level Insight
-
-> "The most important metric is **time lag** (how old is unprocessed data), not message count lag. A consumer 1M messages behind on a topic doing 100K/sec is only 10 seconds behind—healthy. A consumer 10K messages behind on a topic doing 100/sec is 100 seconds behind—concerning."
-
----
-
-# Part 8: Failure Modes
-
-Understanding how each system fails helps you choose and operate them correctly.
-
-## Queue Failure Modes
+### 16.3 Disaster Recovery for Coordination Services
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUEUE FAILURE MODES                                      │
-│                                                                             │
-│   FAILURE 1: Message Loss                                                   │
-│   ─────────────────────────                                                 │
-│   Cause: Consumer acks before processing completes, then crashes            │
-│   Result: Message gone, work not done                                       │
-│   Prevention: Ack AFTER processing, use at-least-once                       │
-│                                                                             │
-│   FAILURE 2: Duplicate Processing                                           │
-│   ───────────────────────────────                                           │
-│   Cause: Consumer processes, crashes before ack, message redelivered        │
-│   Result: Work done twice                                                   │
-│   Prevention: Idempotent processing, deduplication                          │
-│                                                                             │
-│   FAILURE 3: Stuck Messages                                                 │
-│   ─────────────────────────                                                 │
-│   Cause: Consumer crashes repeatedly on same message (poison pill)          │
-│   Result: Message blocks queue, retried forever                             │
-│   Prevention: Dead letter queue after N retries                             │
-│                                                                             │
-│   FAILURE 4: Queue Overflow                                                 │
-│   ─────────────────────────                                                 │
-│   Cause: Producers faster than consumers for extended period                │
-│   Result: Queue fills up, new messages rejected or dropped                  │
-│   Prevention: Scaling, backpressure, capacity planning                      │
-│                                                                             │
-│   FAILURE 5: Out-of-Order Processing                                        │
-│   ──────────────────────────────────                                        │
-│   Cause: Multiple consumers, varying processing times                       │
-│   Result: Messages processed out of order                                   │
-│   Prevention: FIFO queue (lower throughput) or accept disorder              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     ETCD BACKUP PROCEDURE                               │
+│                     (Run every 1-6 hours)                               │
+│                                                                         │
+│   1. CREATE SNAPSHOT:                                                   │
+│      etcdctl snapshot save /var/backups/etcd/snapshot_$(date).db        │
+│                                                                         │
+│   2. VERIFY SNAPSHOT:                                                   │
+│      etcdctl snapshot status <snapshot_file>                            │
+│                                                                         │
+│   3. UPLOAD TO REMOTE STORAGE:                                          │
+│      aws s3 cp <snapshot_file> s3://my-backups/etcd/                    │
+│                                                                         │
+│   4. CLEANUP:                                                           │
+│      Keep last 24 local backups, delete older ones                      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  ETCD RESTORE FROM BACKUP                               │
+│         ⚠️  WARNING: Creates new cluster. Old data is lost!             │
+│                                                                         │
+│   STEP 1: Stop all etcd members                                         │
+│           systemctl stop etcd (on each host)                            │
+│                                                                         │
+│   STEP 2: Download backup from remote storage                           │
+│           aws s3 cp s3://my-backups/etcd/snapshot.db /tmp/              │
+│                                                                         │
+│   STEP 3: On each member, restore with new cluster config               │
+│           rm -rf /var/lib/etcd/*                                        │
+│           etcdctl snapshot restore /tmp/snapshot.db \                   │
+│               --name=$HOSTNAME \                                        │
+│               --data-dir=/var/lib/etcd \                                │
+│               --initial-cluster=$NEW_CLUSTER_CONFIG                     │
+│                                                                         │
+│   STEP 4: Start all members                                             │
+│           systemctl start etcd (on each host)                           │
+│                                                                         │
+│   STEP 5: Verify cluster health                                         │
+│           etcdctl endpoint health --cluster                             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     QUORUM LOSS RECOVERY                                │
+│              ⚠️  LAST RESORT - May result in data loss!                 │
+│                                                                         │
+│   OPTION 1: Force new cluster from surviving member                     │
+│   ─────────────────────────────────────────────────────                 │
+│   1. Stop all etcd processes                                            │
+│   2. On surviving member:                                               │
+│      etcd --force-new-cluster --data-dir=/var/lib/etcd                  │
+│   3. This creates single-node cluster with existing data                │
+│   4. Add new members normally                                           │
+│                                                                         │
+│   OPTION 2: Restore from backup                                         │
+│   ─────────────────────────────                                         │
+│   1. Follow restore procedure above                                     │
+│   2. Accept that data since last backup is lost                         │
+│                                                                         │
+│   PREVENTION:                                                           │
+│   ───────────                                                           │
+│   • Use 5 nodes instead of 3 for critical services                      │
+│   • Spread across failure domains (racks, AZs)                          │
+│   • Regular backup testing                                              │
+│   • Monitoring for member health                                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Log Failure Modes
+### 16.4 Performance Tuning
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    LOG FAILURE MODES                                        │
-│                                                                             │
-│   FAILURE 1: Consumer Lag                                                   │
-│   ───────────────────────                                                   │
-│   Cause: Consumer slower than producer                                      │
-│   Result: Consumer falls behind, data gets old                              │
-│   Danger: If lag > retention, data lost forever                             │
-│   Prevention: Monitor lag, scale consumers, adjust retention                │
-│                                                                             │
-│   FAILURE 2: Partition Hot Spots                                            │
-│   ────────────────────────────                                              │
-│   Cause: Skewed key distribution (celebrity user)                           │
-│   Result: One partition overloaded, others idle                             │
-│   Prevention: Better partitioning key, subpartitioning                      │
-│                                                                             │
-│   FAILURE 3: Consumer Rebalancing Storms                                    │
-│   ─────────────────────────────────────                                     │
-│   Cause: Consumer joins/leaves too frequently                               │
-│   Result: Constant rebalancing, no progress                                 │
-│   Prevention: Stable consumer count, static partition assignment            │
-│                                                                             │
-│   FAILURE 4: Offset Commit Failures                                         │
-│   ───────────────────────────────                                           │
-│   Cause: Consumer processes but fails to commit offset                      │
-│   Result: Message reprocessed on restart (duplicate)                        │
-│   Prevention: Idempotent processing                                         │
-│                                                                             │
-│   FAILURE 5: Producer Backpressure                                          │
-│   ───────────────────────────────                                           │
-│   Cause: Kafka can't keep up with producer rate                             │
-│   Result: Producers block or fail                                           │
-│   Prevention: Capacity planning, partitioning, batching                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│              COORDINATION SERVICE PERFORMANCE TUNING                    │
+│                                                                         │
+│   ETCD TUNING:                                                          │
+│   ────────────                                                          │
+│                                                                         │
+│   # Key performance settings                                            │
+│   heartbeat-interval: 100ms    # Default, increase for WAN              │
+│   election-timeout: 1000ms     # Must be > 5x heartbeat                 │
+│   snapshot-count: 100000       # Increase if write-heavy                │
+│   max-wals: 5                  # WAL file retention                     │
+│                                                                         │
+│   # Client-side tuning                                                  │
+│   - Use connection pooling                                              │
+│   - Batch reads with txn                                                │
+│   - Use lease for multiple ephemeral keys                               │
+│   - Avoid hot keys (shard if needed)                                    │
+│                                                                         │
+│   ZOOKEEPER TUNING:                                                     │
+│   ─────────────────                                                     │
+│                                                                         │
+│   # zoo.cfg key settings                                                │
+│   tickTime=2000              # Base time unit (ms)                      │
+│   initLimit=10               # Ticks to initial sync                    │
+│   syncLimit=5                # Ticks for sync                           │
+│   maxClientCnxns=60          # Per-IP connection limit                  │
+│   autopurge.snapRetainCount=3                                           │
+│   autopurge.purgeInterval=1                                             │
+│                                                                         │
+│   # JVM settings for ZK                                                 │
+│   -Xms4g -Xmx4g              # Fixed heap size                          │
+│   -XX:+UseG1GC               # G1 for lower pause times                 │
+│   -XX:MaxGCPauseMillis=50    # Target GC pause                          │
+│                                                                         │
+│   DISTRIBUTED LOCK TUNING:                                              │
+│   ────────────────────────                                              │
+│                                                                         │
+│   - TTL: Balance between                                                │
+│     - Too short: False lock expiration during GC                        │
+│     - Too long: Slow recovery from crashes                              │
+│     - Recommendation: 30-60 seconds for most use cases                  │
+│                                                                         │
+│   - Renewal interval: TTL / 3                                           │
+│     - Renew well before expiry                                          │
+│     - Account for network latency                                       │
+│                                                                         │
+│   - Retry backoff: Exponential with jitter                              │
+│     - Prevents thundering herd                                          │
+│     - Max backoff: 1-5 seconds                                          │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Stream Processing Failure Modes
+### 16.5 Monitoring Dashboards
+
+**Essential Metrics to Monitor:**
+
+| Service | Metric | What It Tells You |
+|---------|--------|-------------------|
+| **etcd** | `etcd_server_has_leader` | 1 = healthy, 0 = no leader |
+| | `etcd_server_leader_changes_seen_total` | Election frequency |
+| | `etcd_disk_wal_fsync_duration_seconds` | Write latency |
+| | `etcd_network_peer_round_trip_time_seconds` | Cluster communication |
+| | `etcd_mvcc_db_total_size_in_bytes` | Database size |
+| | `etcd_server_proposals_failed_total` | Consensus failures |
+| **ZooKeeper** | `zk_outstanding_requests` | Queued requests |
+| | `zk_avg_latency` | Average request latency |
+| | `zk_num_alive_connections` | Active clients |
+| | `zk_ephemerals_count` | Ephemeral nodes |
+| | `zk_watch_count` | Active watches |
+| | `jvm_gc_pause_seconds` | GC pause duration |
+
+**Critical Alerts:**
+
+| Alert | Condition | Severity | Action |
+|-------|-----------|----------|--------|
+| **NoLeader** | `has_leader == 0` for 30s | 🔴 Critical | Cluster can't accept writes. Check node health. |
+| **HighLatency** | `wal_fsync_p99 > 100ms` | 🟡 Warning | Disk latency high. Check for noisy neighbors. |
+| **DatabaseFull** | `db_size > 6GB` | 🔴 Critical | etcd limit is 8GB. Compact and defrag now. |
+| **FrequentElections** | `elections > 0.1/min` | 🟡 Warning | Check network stability between nodes. |
+| **SessionExpiration** | `expirations > 1/min` | 🟡 Warning | Clients losing sessions. Check ZK load. |
+
+**Essential Dashboard Panels:**
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    STREAM PROCESSING FAILURE MODES                          │
-│                                                                             │
-│   FAILURE 1: State Loss                                                     │
-│   ──────────────────                                                        │
-│   Cause: Crash without checkpoint, state not persisted                      │
-│   Result: Window aggregations incorrect, processing restarts from scratch   │
-│   Prevention: Frequent checkpoints, durable state backend                   │
-│                                                                             │
-│   FAILURE 2: Late Data Dropped                                              │
-│   ────────────────────────────                                              │
-│   Cause: Event arrives after watermark passed window                        │
-│   Result: Event silently dropped, aggregation incomplete                    │
-│   Prevention: Late arrival allowance, side outputs for late data            │
-│                                                                             │
-│   FAILURE 3: Backpressure Cascade                                           │
-│   ───────────────────────────────                                           │
-│   Cause: Downstream operator slow, backpressure propagates                  │
-│   Result: Entire pipeline slows, lag increases                              │
-│   Prevention: Async operators, proper parallelism                           │
-│                                                                             │
-│   FAILURE 4: Out-of-Memory (State Explosion)                                │
-│   ───────────────────────────────────────────                               │
-│   Cause: Unbounded state (e.g., count per user, forever)                    │
-│   Result: OOM crash                                                         │
-│   Prevention: State TTL, windowed aggregations                              │
-│                                                                             │
-│   FAILURE 5: Checkpoint Timeouts                                            │
-│   ────────────────────────────────                                          │
-│   Cause: Checkpoint takes too long (large state)                            │
-│   Result: Pipeline restarts, state rollback, duplicates                     │
-│   Prevention: Incremental checkpoints, RocksDB backend                      │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-# Part 9: Interview Phrasing
-
-## Demonstrating Staff-Level Understanding
-
-### Strong (L6) vs Weak (L5) Phrasing
-
-| Topic | L5 Approach | L6 Approach |
-|-------|-------------|-------------|
-| **Model selection** | "Let's use Kafka, it's industry standard" | "Let me analyze: do we need replay? Multiple consumers? Based on requirements, a queue is simpler and sufficient here." |
-| **Ordering** | "We need ordering so we'll use Kafka" | "We need ordering per user. I'll partition by user_id. Global ordering would limit us to one partition." |
-| **Exactly-once** | "We need exactly-once delivery" | "True exactly-once is expensive. I'll use at-least-once with idempotent processing—same effect, simpler." |
-| **Consumer lag** | "We'll monitor Kafka lag" | "I'll set up per-partition lag alerts. If lag exceeds retention, we lose data. Consumer scaling trigger at 10K lag." |
-| **Failure handling** | "We'll have retries" | "After 3 retries, move to DLQ. Alert on DLQ depth. Poison messages can't block the queue." |
-
-### Interview Answer Structure
-
-**Question**: "How would you design the messaging layer for this system?"
-
-**Strong Answer Structure:**
-
-```
-1. STATE REQUIREMENTS
-   "First, let me understand the async requirements..."
-   - Do we need replay?
-   - How many consumers?
-   - What ordering guarantees?
-   - What throughput?
-
-2. CHOOSE MODEL
-   "Based on these requirements, I'd use [queue/log/stream] because..."
-   - Match model to requirements
-   - Explicitly say what we DON'T need
-
-3. EXPLAIN TRADE-OFFS
-   "This means we accept [trade-off] in exchange for [benefit]..."
-   - Ordering implications
-   - Delivery semantics
-   - Operational complexity
-
-4. HANDLE FAILURES
-   "For failure scenarios..."
-   - Consumer crashes
-   - Message processing failures
-   - Lag/overflow
-
-5. SPECIFY METRICS
-   "I'd monitor..."
-   - Lag, throughput, error rates
-   - Alert thresholds
-```
-
-### Example Answer
-
-**Question**: "How would you design the async messaging for a payment notification system?"
-
-**Answer**: 
-
-"For payment notifications, I'd use a queue like SQS rather than a log like Kafka. Here's my reasoning:
-
-**Requirements analysis:**
-- Each notification should be sent once—no need for multiple consumers reading the same notification
-- We don't need replay—once a notification is sent, it's done
-- Ordering doesn't matter—notifications are independent
-- We need at-least-once delivery—can't lose payment confirmations
-
-**Why queue over log:**
-- Queue auto-deletes on successful processing—cleaner than log retention
-- Queue supports competing consumers for easy scaling—just add workers
-- Simpler operationally—no offset management
-- Kafka would be overkill—we don't use any log-specific features
-
-**Delivery semantics:**
-- I'll use at-least-once with idempotent processing
-- Each notification has a unique ID
-- Before sending, check if ID was already processed
-- Duplicate sends to email/push providers are harmless or prevented by provider
-
-**Failure handling:**
-- Consumer processes, then acks—never ack before processing
-- 3 retries with exponential backoff
-- After 3 failures, move to dead letter queue
-- Alert when DLQ has messages—these need investigation
-
-**Monitoring:**
-- Queue depth (should stay near zero)
-- Age of oldest message (latency SLA)
-- DLQ depth (failures)
-- Consumer success/failure rate
-
-This gives us reliable delivery without the complexity of a log-based system that we don't need."
-
----
-
-# Part 9B: Technology Deep Dive — Choosing Between Implementations
-
-## Log-Based Systems: Kafka vs Pulsar vs Kinesis
-
-### Detailed Technology Comparison
-
-| Feature | Kafka | Pulsar | Kinesis |
-|---------|-------|--------|---------|
-| **Deployment** | Self-managed or Confluent | Self-managed or StreamNative | AWS Managed |
-| **Max partitions** | ~200K per cluster | Millions (segments) | 500 per stream |
-| **Storage** | Broker-attached | Tiered (BookKeeper) | AWS managed |
-| **Multi-tenancy** | Cluster per tenant | Native | Account isolation |
-| **Geo-replication** | MirrorMaker (complex) | Built-in | Cross-region manual |
-| **Exactly-once** | Yes (Kafka 0.11+) | Yes | At-least-once |
-| **Retention** | Time or size based | Tiered (cheap long-term) | 7 days max (default 24h) |
-| **Stream processing** | Kafka Streams, ksqlDB | Pulsar Functions | Kinesis Analytics |
-| **Throughput** | ~1M msg/sec/broker | ~1M msg/sec/broker | ~1K msg/sec/shard |
-| **Latency** | Sub-10ms | Sub-10ms | 200ms - 1s |
-| **Cost at scale** | $$$ (self-managed) | $$$ (storage efficient) | $$$$ (per-shard pricing) |
-
-### When to Choose Each
-
-**Choose Kafka when:**
-- You need highest throughput
-- You want mature ecosystem (Kafka Streams, Connect, ksqlDB)
-- You have operational expertise
-- You need exactly-once semantics
-
-**Choose Pulsar when:**
-- You need multi-tenancy (multiple teams, one cluster)
-- Long-term storage is important (tiered storage is cheaper)
-- You need built-in geo-replication
-- You're starting fresh (no Kafka legacy)
-
-**Choose Kinesis when:**
-- You're all-in on AWS
-- You want zero operational overhead
-- Throughput needs are moderate (< 100K msg/sec)
-- Integration with AWS services is priority (Lambda, S3, Redshift)
-
-## Queue-Based Systems: SQS vs RabbitMQ vs Redis
-
-| Feature | SQS | RabbitMQ | Redis (Lists/Streams) |
-|---------|-----|----------|----------------------|
-| **Deployment** | AWS Managed | Self-managed | Self-managed |
-| **Throughput** | ~3K msg/sec/queue | ~50K msg/sec | ~100K msg/sec |
-| **FIFO** | Yes (SQS FIFO) | Yes | Yes |
-| **Delayed messages** | Yes (up to 15 min) | Yes (plugins) | Limited |
-| **Dead letter queue** | Built-in | Manual setup | Manual |
-| **Durability** | High (AWS) | Configurable | Configurable |
-| **Latency** | 20-50ms | 1-5ms | Sub-1ms |
-| **Best for** | Serverless, AWS | Complex routing | Speed-critical |
-
-### Staff-Level Insight
-
-> "Technology choice matters less than understanding the fundamentals. I've seen teams succeed with SQS and fail with Kafka—and vice versa. The difference is understanding the guarantees, failure modes, and operational requirements of whichever tool you choose."
-
----
-
-# Part 10: Common Mistakes and Anti-Patterns
-
-## Mistake 1: Using Kafka for Everything
-
-**The Pattern**: "Kafka is our standard, we'll use it for all async."
-
-**The Problem**:
-- Notification sends: Don't need replay, consuming = delete is fine → Queue is simpler
-- Background jobs: Competing consumers, delete on success → Queue is simpler
-- Using Kafka adds: Offset management, partition planning, retention costs
-
-**The Fix**: Match the tool to the requirements. Queue for work distribution, log for event history.
-
----
-
-## Mistake 2: Expecting Global Ordering from Partitioned Logs
-
-**The Pattern**: "We're using Kafka so everything is ordered."
-
-**The Problem**:
-```
-Partition 0: [A, C, E]
-Partition 1: [B, D, F]
-
-Consumer sees: A, B, C, D, E, F (interleaved, not globally ordered)
-```
-
-**The Fix**: 
-- If you need entity ordering (all events for user X in order): partition by entity
-- If you need global ordering: single partition (throughput limit)
-- Accept that cross-partition ordering is undefined
-
----
-
-## Mistake 3: Ignoring Consumer Lag Until Data Loss
-
-**The Pattern**: "Lag is just a number, consumers will catch up."
-
-**The Problem**:
-```
-Lag: 1M messages, growing
-Retention: 7 days
-Time to consume 1M at current rate: 8 days
-
-Result: Oldest messages expire before consumed → DATA LOSS
-```
-
-**The Fix**:
-- Alert when lag exceeds threshold
-- Alert when lag growth rate suggests catch-up impossible before retention
-- Scale consumers proactively
-
----
-
-## Mistake 4: At-Least-Once Without Idempotency
-
-**The Pattern**: "We have at-least-once, we're good."
-
-**The Problem**:
-```python
-def process_order(order):
-    charge_customer(order.amount)  # Charged twice on duplicate!
-    send_to_warehouse(order)       # Shipped twice!
-```
-
-**The Fix**:
-```python
-def process_order(order):
-    if order.id in processed_orders:
-        return  # Already done
-    charge_customer(order.amount)
-    send_to_warehouse(order)
-    processed_orders.add(order.id)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   COORDINATION DASHBOARD LAYOUT                         │
+│                                                                         │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│   │ Leader Status│  │ Elections/hr │  │ Error Rate   │                  │
+│   │   [STAT]     │  │   [GRAPH]    │  │   [GRAPH]    │                  │
+│   │    ✓ / ✗     │  │   ~~~~~~~~   │  │   ~~~~~~~~   │                  │
+│   └──────────────┘  └──────────────┘  └──────────────┘                  │
+│                                                                         │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │
+│   │ Latency p99  │  │ Database Size│  │ Connections  │                  │
+│   │   [GRAPH]    │  │   [GAUGE]    │  │   [STAT]     │                  │
+│   │   ~~~~~~~~   │  │   [####--]   │  │    1,234     │                  │
+│   └──────────────┘  └──────────────┘  └──────────────┘                  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Mistake 5: Queue Without Dead Letter Queue
+## Self-Check: Did I Cover Coordination Properly?
 
-**The Pattern**: "Messages will eventually succeed."
-
-**The Problem**:
-```
-Message X causes consumer crash (e.g., malformed data)
-Retry 1: crash
-Retry 2: crash
-Retry 3: crash
-...
-Message X blocks processing forever
-```
-
-**The Fix**:
-- Configure max retries
-- Move to DLQ after max retries
-- Monitor DLQ
-- Have process to investigate and reprocess DLQ messages
+| Signal | Weak | Strong | ✓ |
+|--------|------|--------|---|
+| **Need for coordination** | Assumed it's needed | "First, can we avoid coordination entirely?" | ☐ |
+| **Leader election** | "We need a leader" | "Leader with lease-based election, 30s failover, degraded mode when no leader" | ☐ |
+| **Distributed locks** | "Lock before write" | "Lock with TTL, fencing tokens, what if lock service fails?" | ☐ |
+| **Failure handling** | Not addressed | "If ZooKeeper down, we use local counts and sync later" | ☐ |
+| **Clock assumptions** | "Use timestamps" | "Can't trust clocks; use logical clocks or fencing tokens" | ☐ |
+| **Trade-offs** | Correctness always | "Accepting approximate limits for availability" | ☐ |
 
 ---
 
-## Mistake 6: Stream Processing Without State Management
+## Common Interview Questions & Staff-Level Answers
 
-**The Pattern**: "Just read from Kafka and aggregate in memory."
-
-**The Problem**:
-```
-Counting events in memory
-Container crashes
-All counts lost
-Restart from offset 0
-Re-count everything (slow, possibly wrong due to retention)
-```
-
-**The Fix**:
-- Use proper stream processing framework (Flink, Kafka Streams)
-- Enable checkpointing
-- Use durable state backend (RocksDB)
-- State survives restarts
+| Question | Senior Answer | Staff Answer |
+|----------|--------------|--------------|
+| **"How would you prevent duplicate job execution?"** | "Use a distributed lock" | "First, can we make jobs idempotent? If not, use leader election for the scheduler with a claims table for at-most-once semantics" |
+| **"How do you handle the rate limiter's Redis going down?"** | "Retry connection" | "Fail open with local limits. Accept over-limit requests temporarily. Log for analysis. Alert on-call." |
+| **"What happens if two nodes both think they're leader?"** | "Shouldn't happen" | "Split-brain is possible. Use fencing tokens. New leader's token > old leader's. Resources reject stale tokens." |
+| **"Why not just use timestamps?"** | "That works" | "Clock skew can be 100ms+. Use logical clocks for ordering. Never use timestamps alone for coordination." |
 
 ---
 
+## Quick Reference Card
 
-# Part 11: Interview Calibration for Async Model Topics
+### When to Use Each Coordination Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    COORDINATION PATTERN DECISION TREE                   │
+│                                                                         │
+│   Need mutual exclusion?                                                │
+│   │                                                                     │
+│   ├── YES: Can you use atomic operations?                               │
+│   │   ├── YES → Use atomic ops (INCR, CAS)                              │
+│   │   └── NO: Is contention low?                                        │
+│   │       ├── YES → Use optimistic concurrency                          │
+│   │       └── NO: Is the critical section short?                        │
+│   │           ├── YES → Use distributed lock                            │
+│   │           └── NO → Redesign to minimize lock scope                  │
+│   │                                                                     │
+│   └── NO: Need a single coordinator?                                    │
+│       │                                                                 │
+│       ├── YES → Use leader election                                     │
+│       └── NO: Need agreed-upon value?                                   │
+│           │                                                             │
+│           ├── YES → Use consensus (etcd, ZK)                            │
+│           └── NO → No coordination needed!                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Lock Implementation Checklist
+
+```
+□ Unique lock identifier (prevent releasing others' locks)
+□ TTL to prevent deadlocks
+□ Fencing tokens for downstream protection
+□ Graceful handling of lock service failure
+□ Metrics for acquisition time and contention
+□ Timeout for acquisition attempts
+□ Safe release (only if still owner)
+□ Renewal mechanism for long operations (if needed)
+```
+
+### Leader Election Checklist
+
+```
+□ Single leader guarantee (quorum-based or lease-based)
+□ Fast failover (< 10 seconds typically)
+□ Leader step-down on quorum loss
+□ Epoch/term numbers to fence old leaders
+□ Heartbeat mechanism
+□ Client redirection when leader changes
+□ Degraded mode when no leader
+□ Metrics for election frequency and duration
+```
+
+### Failure Response Matrix
+
+| Failure | Rate Limiter | Job Scheduler | Config Service |
+|---------|-------------|---------------|----------------|
+| Leader down | Local counts | Queue jobs | Use cache |
+| Lock service down | Fail open | Pause processing | Stale config |
+| Network partition | Per-partition limits | Risk duplicates | Stale reads |
+| Clock skew | Inaccurate windows | Lease issues | TTL problems |
+
+### Key Metrics to Monitor
+
+| Metric | Warning Threshold | Critical Threshold |
+|--------|-------------------|-------------------|
+| Lock acquisition p99 | > 50ms | > 200ms |
+| Lock contention rate | > 10% | > 50% |
+| Election frequency | > 1/hour | > 1/minute |
+| Election duration | > 5s | > 30s |
+| Coordination errors | > 0.1% | > 1% |
+| Fencing token rejections | > 0 | > 0.01% |
+
+---
+
+## Further Reading
+
+1. **"How to do distributed locking"** - Martin Kleppmann
+   - The famous Redlock analysis
+   - https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
+
+2. **"Distributed Systems for Fun and Profit"** - Mikito Takada
+   - Free online book covering consensus fundamentals
+   - http://book.mixu.net/distsys/
+
+3. **"The Raft Consensus Algorithm"** - Diego Ongaro
+   - Understandable consensus
+   - https://raft.github.io/
+
+4. **"Designing Data-Intensive Applications"** - Martin Kleppmann
+   - Chapters 8 (Distributed Systems) and 9 (Consistency & Consensus)
+
+5. **"Time, Clocks, and the Ordering of Events"** - Leslie Lamport
+   - The foundational paper on logical clocks
+   - https://lamport.azurewebsites.net/pubs/time-clocks.pdf
+
+---
+
+*"The first rule of distributed systems: Don't distribute. The second rule: If you must distribute, don't coordinate. The third rule: If you must coordinate, make it as rare as possible."*
+
+---
+
+# Part 17: Interview Calibration for Coordination Topics
 
 ## What Interviewers Are Evaluating
+
+When a candidate discusses coordination in system design, interviewers assess:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2137,32 +3780,20 @@ Re-count everything (slow, possibly wrong due to retention)
 │   QUESTION IN INTERVIEWER'S MIND          L5 SIGNAL           L6 SIGNAL     │
 │   ───────────────────────────────────────────────────────────────────────── │
 │                                                                             │
-│   "Did they match model to                                                  │
-│    requirements?"                       "Use Kafka"          "Based on      │
-│                                                              replay need,   │
-│                                                              consumer       │
-│                                                              pattern..."    │
+│   "Did they question whether                                                │
+│    coordination is needed?"             Assumed needed    "Can we avoid it?"│
 │                                                                             │
-│   "Do they understand                                                       │
-│    ordering nuances?"                   "Kafka is ordered"   "Per-partition │
-│                                                              ordering;      │
-│                                                              partition by   │
-│                                                              entity"        │
+│   "Do they understand the costs?"       Lists benefits    Discusses costs   │
+│                                                           AND benefits      │
 │                                                                             │
-│   "Do they know delivery                                                    │
-│    semantics?"                          "Exactly-once"       "At-least-once │
-│                                                              + idempotent   │
-│                                                              processing"    │
+│   "Do they know failure modes?"         "It should work"  Split-brain,      │
+│                                                           election storms   │
 │                                                                             │
-│   "Do they consider                                                         │
-│    operational aspects?"                Not mentioned        Lag monitoring,│
-│                                                              DLQ handling,  │
-│                                                              retention      │
+│   "Can they size timeouts?"             Uses defaults     Calculates based  │
+│                                                           on latency/skew   │
 │                                                                             │
-│   "Do they understand                                                       │
-│    scaling limits?"                     "Add consumers"      "Max consumers │
-│                                                              = partitions;  │
-│                                                              plan for peak" │
+│   "Do they consider operations?"        Not mentioned     Backup, restore,  │
+│                                                           runbooks          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2171,75 +3802,65 @@ Re-count everything (slow, possibly wrong due to retention)
 
 | Topic | L5 Answer (Competent) | L6 Answer (Staff-Level) |
 |-------|----------------------|------------------------|
-| **Model selection** | "We'll use Kafka, it's industry standard" | "Let me analyze: Do we need replay? Multiple consumers? Ordering? Based on these needs, I'd choose [model] because..." |
-| **Ordering** | "Kafka maintains order" | "Kafka orders per partition. I'll partition by user_id so all events for a user are ordered. Cross-user ordering isn't needed." |
-| **Delivery semantics** | "We need exactly-once" | "I'll use at-least-once with idempotent processing. Simpler implementation, same end result. True exactly-once across system boundaries is extremely complex." |
-| **Consumer scaling** | "We'll add more consumers" | "Max consumers = partitions. I'll provision 32 partitions based on 2x peak parallelism needs, leaving room for growth." |
-| **Failure handling** | "We'll retry on failure" | "3 retries with backoff, then DLQ. Alert on DLQ depth > 100. Poison message handling with separate investigation queue." |
-| **Consumer lag** | Not discussed | "Alert when lag > 1 hour. If lag growth rate means we'll exceed retention, page on-call. Scale consumers proactively." |
+| **Need for coordination** | "We'll use a distributed lock" | "First, can we avoid coordination? Can we partition the work or use idempotency instead?" |
+| **Leader election** | "We'll use ZooKeeper for leader election" | "Leader election with 30s lease, stepping down on quorum loss, and degraded mode when no leader available" |
+| **Lock implementation** | "Use Redis SETNX with TTL" | "SETNX with TTL, fencing tokens passed to downstream, and fallback behavior when Redis is unavailable" |
+| **Split-brain** | "We prevent it with proper design" | "Split-brain is possible. We use epoch numbers; resources reject stale epochs. If it happens, we have reconciliation procedures." |
+| **Failure detection** | "Heartbeat timeout" | "Phi accrual detector that adapts to network conditions. 30s timeout balances false positives against detection speed." |
+| **Clock assumptions** | "We use timestamps" | "Clocks can drift 100ms+. We use logical clocks for ordering and never rely on timestamps alone for coordination decisions." |
+| **Degradation** | Not discussed | "When coordination is unavailable, we fail closed for writes but allow cached reads for 5 minutes." |
 
 ## Common L5 Mistakes That Cost the Level
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    L5 MISTAKES IN ASYNC MODEL DISCUSSIONS                   │
+│                    L5 MISTAKES IN COORDINATION DISCUSSIONS                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   MISTAKE 1: Using Kafka for simple work distribution                       │
-│   ──────────────────────────────────────────────────                        │
-│   "We'll use Kafka for sending emails."                                     │
+│   MISTAKE 1: "We'll use Kafka for coordination"                             │
+│   ─────────────────────────────────────────────                             │
+│   Kafka is a log, not a coordination service. Using it for leader           │
+│   election or distributed locks requires building consensus on top,         │
+│   which is complex and error-prone.                                         │
 │                                                                             │
-│   PROBLEM: Email sending doesn't need replay, multiple consumers, or        │
-│   retention. Queue is simpler with auto-delete on consume.                  │
+│   L6 CORRECTION: "Kafka is for event streaming. For coordination, I'd       │
+│   use etcd or ZooKeeper which provide consensus primitives."                │
 │                                                                             │
-│   L6 CORRECTION: "For email sends, I'd use SQS. Each message consumed       │
-│   once then deleted, which matches queue semantics. Kafka would add         │
-│   unnecessary offset management and retention costs."                       │
-│                                                                             │
-│   MISTAKE 2: Expecting global ordering from partitioned logs                │
-│   ─────────────────────────────────────────────────────────                 │
-│   "Kafka maintains message order, so events are processed in order."        │
-│                                                                             │
-│   PROBLEM: With 8 partitions and 8 consumers, each consumer sees            │
-│   only its partition. Cross-partition ordering is undefined.                │
-│                                                                             │
-│   L6 CORRECTION: "Kafka orders within partitions. If order matters          │
-│   for a user, all that user's events go to one partition via key-based      │
-│   partitioning. Global ordering requires single partition = single          │
-│   consumer = throughput limit."                                             │
-│                                                                             │
-│   MISTAKE 3: Ignoring consumer lag until data loss                          │
+│   MISTAKE 2: "The lock prevents duplicate processing"                       │
 │   ─────────────────────────────────────────────────                         │
-│   "Consumers will catch up eventually."                                     │
+│   Locks expire. GC pauses can cause a process to continue after losing      │
+│   its lock. Without fencing tokens, duplicates are still possible.          │
 │                                                                             │
-│   PROBLEM: If lag exceeds retention, oldest messages are deleted            │
-│   before consumption. Silent data loss.                                     │
+│   L6 CORRECTION: "The lock provides mutual exclusion, but we also           │
+│   need fencing tokens. The downstream resource checks the token and         │
+│   rejects stale holders."                                                   │
 │                                                                             │
-│   L6 CORRECTION: "I'd alert on lag > 4 hours with 7-day retention.          │
-│   If lag growth rate suggests catch-up impossible before retention,         │
-│   page immediately and scale consumers or reduce producer rate."            │
+│   MISTAKE 3: "We'll set timeout to 5 seconds"                               │
+│   ────────────────────────────────────────────                              │
+│   No justification. Timeouts should be calculated based on network          │
+│   latency, clock skew, and acceptable detection delay.                      │
 │                                                                             │
-│   MISTAKE 4: At-least-once without idempotent processing                    │
-│   ──────────────────────────────────────────────────────                    │
-│   "We have at-least-once delivery, we're reliable."                         │
+│   L6 CORRECTION: "Given cross-AZ latency of 2ms P99 and 50ms clock          │
+│   skew worst case, I'd set heartbeat at 500ms, timeout at 2 seconds,        │
+│   and lease TTL at 10 seconds to account for GC pauses."                    │
 │                                                                             │
-│   PROBLEM: At-least-once means duplicates are possible. Without             │
-│   idempotent processing, you charge customers twice.                        │
+│   MISTAKE 4: "We use 3-node cluster for high availability"                  │
+│   ─────────────────────────────────────────────────────────                 │
+│   3 nodes survives 1 failure. But what if you need to do rolling            │
+│   updates? Or if 2 nodes are in the same failure domain?                    │
 │                                                                             │
-│   L6 CORRECTION: "At-least-once requires idempotent consumers. I'd          │
-│   track processed message IDs and skip duplicates. For payments,            │
-│   the idempotency key from the original request carries through."           │
+│   L6 CORRECTION: "3 nodes survives 1 failure. For a critical service,       │
+│   I'd use 5 nodes across 3 AZs. This allows 2 failures and enables          │
+│   rolling updates without risking quorum."                                  │
 │                                                                             │
-│   MISTAKE 5: No dead letter queue strategy                                  │
-│   ───────────────────────────────────────                                   │
-│   "Messages retry until they succeed."                                      │
+│   MISTAKE 5: Not mentioning what happens when coordination fails            │
+│   ─────────────────────────────────────────────────────────────────         │
+│   This is the Staff-level differentiator. L5s design for the happy          │
+│   path. L6s design for failure.                                             │
 │                                                                             │
-│   PROBLEM: Poison messages (bad format, missing data) retry forever,        │
-│   blocking the queue.                                                       │
-│                                                                             │
-│   L6 CORRECTION: "After 3 retries, messages go to DLQ. Alert on DLQ         │
-│   depth. Separate process investigates poison messages without              │
-│   blocking main processing."                                                │
+│   L6 CORRECTION: "When etcd is unavailable, the job scheduler buffers       │
+│   jobs locally and stops leader election. Jobs continue processing at       │
+│   reduced capacity until coordination recovers."                            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2247,72 +3868,57 @@ Re-count everything (slow, possibly wrong due to retention)
 ## Example Interview Exchange
 
 ```
-INTERVIEWER: "Design the async messaging for a notification system."
+INTERVIEWER: "How would you coordinate job scheduling across multiple workers?"
 
 L5 ANSWER:
-"I'd use Kafka. When a notification needs to be sent, publish to Kafka.
-Consumers read from the topic and send notifications. Kafka handles 
-scaling and reliability."
+"I'd use a distributed lock. Before processing a job, the worker acquires 
+a lock on the job ID. This prevents duplicates. I'd use Redis for the lock 
+service."
 
 L6 ANSWER:
-"Let me analyze the requirements first.
+"Let me first check if we need coordination at all. 
 
-REQUIREMENTS ANALYSIS:
-- Does notification need replay? No, once sent is sent.
-- Multiple consumers? Each notification sent once, not to multiple systems.
-- Ordering? Notifications for same user should be ordered.
-- Retention after consume? No, delete when done.
+If jobs can be partitioned by ID, each worker handles a specific partition 
+and we avoid coordination entirely. That's the best approach.
 
-MODEL SELECTION:
-These requirements match QUEUE semantics, not log. I'd use SQS:
-- Auto-delete on consume (no offset management)
-- FIFO queue with MessageGroupId = user_id for per-user ordering
-- Dead letter queue after 3 retries
-- Visibility timeout of 60 seconds for send + retry
+If we can't partition, I'd use leader election rather than per-job locks. 
+The leader assigns jobs to workers. Benefits: one coordination point, not 
+one per job. I'd implement this with etcd leases.
 
-SCALING:
-- FIFO queues: 300 TPS per message group, 3000 with batching
-- For 10K notifications/minute, FIFO is sufficient
-- Standard queue if order doesn't matter (unlimited TPS)
+For failure handling:
+- Leader dies: 10-30 second election window. Workers buffer jobs locally.
+- Worker dies mid-job: Heartbeat-based detection. Leader reassigns after 
+  timeout. Job must be idempotent or we use fencing tokens.
+- etcd cluster down: Workers continue processing assigned jobs. No new 
+  assignments until etcd recovers. We accept reduced throughput.
 
-FAILURE HANDLING:
-- Consumer crash: Message becomes visible again after timeout
-- Poison message: 3 retries, then DLQ
-- Provider down: Exponential backoff, circuit breaker after 5 failures
-- DLQ monitoring: Alert on depth > 100, investigate daily
-
-TRADE-OFF ACKNOWLEDGED:
-Using queue means no replay. If we later need 'resend all notifications 
-from last week,' we can't. If that becomes a requirement, we'd need a 
-log for the event, queue for the work.
-
-WHY NOT KAFKA:
-Kafka adds complexity we don't need: offset management, partition 
-planning, retention costs. For work distribution (send once, delete), 
-queue is the right abstraction."
+I'd also add:
+- Retry budget: max 10% of requests as retries to prevent storms
+- Circuit breaker on etcd calls: fail fast if etcd is struggling
+- Metrics on election frequency, lock acquisition latency, queue depth"
 ```
 
 ## Staff-Level Reasoning Visibility
 
-When discussing async models, make your reasoning visible:
+When discussing coordination, make your reasoning visible:
 
 ```
-"I'm choosing a queue over a log because..."
-   └─── Shows you understand the fundamental difference
+"I'm choosing leader election over per-job locks because..."
+   └─── Shows you considered alternatives
 
-"Per-partition ordering means I need to partition by..."
-   └─── Shows you understand ordering semantics
+"The timeout needs to be longer than network P99 plus clock skew..."
+   └─── Shows you understand the mathematics
 
-"At-least-once requires idempotent consumers, so I'll..."
-   └─── Shows you understand delivery guarantees
+"When the lock service fails, we..."
+   └─── Shows you plan for failure
 
-"If consumer lag exceeds retention, we'll..."
-   └─── Shows you plan for operational failure
+"The trade-off is availability for consistency during the election window..."
+   └─── Shows you understand trade-offs
 ```
 
 ---
 
-# Part 12: Final Verification
+# Part 18: Final Verification
 
 ## Does This Section Meet L6 Expectations?
 
@@ -2322,33 +3928,33 @@ When discussing async models, make your reasoning visible:
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │   JUDGMENT & DECISION-MAKING                                                │
-│   ☑ Queue vs Log vs Stream selection criteria                               │
-│   ☑ Matching model to specific requirements                                 │
-│   ☑ Ordering guarantee understanding (per-partition vs global)              │
-│   ☑ Delivery semantics (at-most-once, at-least-once, exactly-once)          │
+│   ☑ When to use coordination vs. alternatives (idempotency, partitioning)   │
+│   ☑ Choosing between leader election, locks, and consensus                  │
+│   ☑ Timeout and TTL sizing with justification                               │
+│   ☑ Trade-off between availability and consistency during failures          │
 │                                                                             │
 │   FAILURE & DEGRADATION THINKING                                            │
-│   ☑ Consumer lag → data loss scenario                                       │
-│   ☑ Dead letter queue strategy                                              │
-│   ☑ Poison message handling                                                 │
-│   ☑ Hot partition mitigation                                                │
-│   ☑ Rebalance impact during failure                                         │
+│   ☑ Split-brain prevention and detection                                    │
+│   ☑ Election storms: causes and mitigations                                 │
+│   ☑ Graceful degradation when coordination unavailable                      │
+│   ☑ Fencing tokens for stale lock holders                                   │
+│   ☑ Clock skew handling                                                     │
 │                                                                             │
 │   SCALE & EVOLUTION                                                         │
-│   ☑ Partition count planning for parallelism                                │
-│   ☑ Consumer scaling limits (consumers ≤ partitions)                        │
-│   ☑ Hybrid architectures (log for history, queue for work)                  │
+│   ☑ Multi-region coordination patterns                                      │
+│   ☑ Scaling beyond leader bottleneck                                        │
+│   ☑ Migration strategies (Redis to etcd, etc.)                              │
 │                                                                             │
 │   STAFF-LEVEL SIGNALS                                                       │
-│   ☑ Questions requirements before choosing technology                       │
-│   ☑ Explains trade-offs of chosen model                                     │
-│   ☑ Acknowledges what's lost by not choosing alternatives                   │
-│   ☑ Discusses operational concerns (lag, DLQ, retention)                    │
+│   ☑ Questions coordination necessity first                                  │
+│   ☑ Understands operational costs (runbooks, backup, restore)               │
+│   ☑ Makes reasoning visible                                                 │
+│   ☑ Acknowledges uncertainty and trade-offs                                 │
 │                                                                             │
 │   REAL-WORLD APPLICATION                                                    │
-│   ☑ Notification system design                                              │
-│   ☑ Metrics pipeline architecture                                           │
-│   ☑ Feed fan-out hybrid approach                                            │
+│   ☑ Job scheduler case study                                                │
+│   ☑ Rate limiter coordination                                               │
+│   ☑ Metadata service architecture                                           │
 │                                                                             │
 │   INTERVIEW CALIBRATION                                                     │
 │   ☑ L5 vs L6 phrase comparisons                                             │
@@ -2358,67 +3964,70 @@ When discussing async models, make your reasoning visible:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Remaining Gaps (Acceptable for Scope)
+
+| Gap | Reason Acceptable |
+|-----|-------------------|
+| Byzantine fault tolerance | Rarely needed in practice; covered conceptually |
+| Paxos algorithm details | Raft is preferred; Paxos covered at intuition level |
+| Vendor-specific tuning | General principles apply; ops teams handle specifics |
+
 ## Self-Check Questions Before Interview
 
-```
-□ Can I explain when to use queue vs log vs stream processing?
-□ Can I design partitioning for per-entity ordering?
-□ Do I understand why "exactly-once" is really at-least-once + idempotency?
-□ Can I calculate if consumer lag will exceed retention?
-□ Do I know the scaling limits (consumers ≤ partitions)?
-□ Can I design a dead letter queue strategy?
-□ Can I explain the trade-offs of my async model choice?
-```
+Use these to verify your understanding:
 
-## Key Numbers to Cite in Interviews
-
-| Metric | Typical Value | Interview Context |
-|--------|---------------|-------------------|
-| Kafka partition limit | Consumers ≤ Partitions | "I'd provision 32 partitions for 16 peak consumers with room to grow" |
-| SQS FIFO throughput | 300 TPS per group | "For 10K/min notifications, FIFO is sufficient" |
-| Consumer rebalance | Seconds to minutes | "During rebalance, processing pauses. We'd alert on rebalance > 30s" |
-| Retention default | 7 days | "Lag exceeding 6 days would lose data. Alert at 4 hours." |
+```
+□ Can I explain why coordination should be avoided when possible?
+□ Can I differentiate leader election, locks, and consensus use cases?
+□ Can I design a system that degrades gracefully when coordination fails?
+□ Can I size timeouts based on network and clock characteristics?
+□ Can I explain fencing tokens and why locks alone aren't sufficient?
+□ Can I discuss multi-region coordination trade-offs?
+□ Can I identify the failure modes of my coordination design?
+```
 
 ---
 
+*"The best coordination is no coordination. The second best is coordination that fails gracefully."*
+---
 
 # Brainstorming Questions
 
-## Understanding Async Models
+## Understanding Coordination
 
-1. A team is using Kafka for a job queue (process image, delete message). What's wrong with this choice? What would you recommend?
+1. Think of a system that uses distributed coordination. Could it be redesigned to avoid coordination? What would be the trade-offs?
 
-2. You need to send the same event to five different services. How does your choice of queue vs log affect the architecture?
+2. When have you seen leader election cause problems? What was the failure mode?
 
-3. A system requires that events for each user are processed in order, but events for different users can be parallel. How do you achieve this with Kafka? With SQS?
+3. How do you size timeouts for distributed locks? What's your mental model?
 
-4. Explain the difference between "at-least-once delivery" and "exactly-once processing." Why is the distinction important?
+4. What's the difference between a lock and a lease? When would you choose one over the other?
 
-5. A stream processor counts events in 5-minute windows. An event arrives 6 minutes late. What happens? How do you handle this?
+5. How do you explain fencing tokens to someone who hasn't heard of them?
 
-## Reasoning About Trade-offs
+## Failure Modes
 
-6. Your metrics pipeline uses Kafka with 7-day retention. A consumer was down for 8 days. What happened? How do you prevent this?
+6. You have a distributed lock using Redis. What happens if Redis restarts during lock hold?
 
-7. A notification system sends duplicate notifications occasionally. Is this acceptable? How do you minimize it?
+7. Design a system where leader election failure causes minimal impact. What patterns do you use?
 
-8. You're processing 1M events/second. Would you use a single Kafka partition? Why or why not?
+8. How do you detect and recover from split-brain in a leader-based system?
 
-9. A team proposes using SQS for an audit log. What are the problems with this approach?
+9. What's an election storm? How do you prevent it?
 
-10. When would you use stream processing (Flink) vs simple log consumption (Kafka consumer)?
+10. Your lock service is experiencing high latency. What are the implications for lock holders?
 
-## System-Specific
+## Applied Scenarios
 
-11. Design the async architecture for a ride-sharing app. What events? What model for each?
+11. Design leader election for a job scheduler. What's your availability vs. consistency trade-off?
 
-12. An e-commerce site needs order events for: inventory, shipping, email, analytics. Queue or log? Why?
+12. You need a rate limiter across 100 servers. Do you need coordination? What are the alternatives?
 
-13. A gaming company needs to detect cheating patterns across player events. Queue, log, or stream processing?
+13. How would you implement a lease-based cache invalidation system?
 
-14. How would you migrate from a queue-based architecture to a log-based architecture without downtime?
+14. Design a metadata service where consistency is critical but availability is also important.
 
-15. A system uses exactly-once Kafka transactions internally but writes to an external database. Is the external write exactly-once? How do you handle this?
+15. What's your go-to technology for coordination? When would you choose something different?
 
 ---
 
@@ -2426,348 +4035,139 @@ When discussing async models, make your reasoning visible:
 
 Set aside 15-20 minutes for each of these reflection exercises.
 
-## Reflection 1: Your Async Model Defaults
+## Reflection 1: Your Coordination Instincts
 
-Think about how you choose asynchronous communication patterns.
+Think about how you approach problems that seem to need coordination.
 
-- Do you default to a specific technology (Kafka, SQS) without analyzing requirements?
-- When was the last time you chose a queue over a log (or vice versa) with explicit reasoning?
-- Do you consider replay requirements when designing async systems?
-- How well do you understand the ordering guarantees of your chosen technology?
+- Do you reach for locks and leader election by default?
+- When was the last time you avoided coordination by redesigning the problem?
+- Can you list three alternatives to distributed locks for a given problem?
+- Do you consider the operational cost of coordination infrastructure?
 
-For a recent async system you designed, revisit the requirements and confirm your choice was justified.
+For a system you've built that uses coordination, redesign it to minimize coordination.
 
-## Reflection 2: Your Delivery Semantics Understanding
+## Reflection 2: Your Failure Mode Coverage
 
-Consider how you think about message delivery guarantees.
+Consider how you think about coordination failures.
 
-- Can you explain why exactly-once is "a lie" in distributed systems?
-- Do you design idempotent consumers as a default practice?
-- Have you debugged message loss or duplication issues? What was the root cause?
-- Do you understand the difference between at-least-once delivery and at-least-once processing?
+- Do you design for the case where the lock service itself fails?
+- Have you ever debugged a fencing token issue?
+- Can you explain what happens during leader election to a non-expert?
+- Do you test coordination failure scenarios in your systems?
 
-For a system you know, trace what happens when a consumer crashes mid-processing.
+Write a failure mode analysis for coordination in a system you know well.
 
-## Reflection 3: Your Failure Mode Coverage
+## Reflection 3: Your Technology Choices
 
-Examine how you handle async system failures.
+Examine how you choose coordination technologies.
 
-- Do you have dead letter queues with monitoring for all your async systems?
-- What's your strategy for poison messages?
-- Do you monitor consumer lag as a critical metric?
-- Have you designed for the scenario where lag exceeds retention?
+- Why do you choose one coordination technology over another?
+- Do you understand the consistency guarantees of your chosen tools?
+- Have you ever migrated between coordination technologies? What triggered it?
+- Can you explain the trade-offs of ZooKeeper vs. etcd vs. Redis for locks?
 
-For a system you know, write down what happens during each failure mode and how it's detected.
+Research a coordination technology you haven't used and compare it to your default choice.
 
 ---
 
 # Homework Exercises
 
-## Exercise 1: Replace Queue with Stream (and Vice Versa)
+## Exercise 1: Coordination Avoidance
 
-### Part A: Queue → Stream
+Take these problems that seem to require coordination. For each, design a solution that avoids centralized coordination:
 
-Take the notification system designed with SQS.
+1. **Sequential ID generation** across 10 services
+2. **Rate limiting** across 50 servers
+3. **Cache invalidation** across multiple regions
+4. **Task assignment** to workers without double-processing
+5. **Configuration updates** that must be atomic across services
 
-Redesign it using Kafka (log) instead.
+For each:
+- Describe the no-coordination approach
+- What's the trade-off compared to coordinated approach?
+- When would coordination still be necessary?
 
-Address:
-- How do you handle "consume = delete" semantics?
-- How do multiple notification workers consume without duplicating?
-- What happens to processed notifications? How do you clean up?
-- Is there any benefit to this approach? Any use case where it makes sense?
+## Exercise 2: Leader Election Design
 
-### Part B: Stream → Queue
+Design a leader election system for:
 
-Take the metrics pipeline designed with Kafka.
+**Scenario: Multi-region job scheduler**
+- 3 regions, one active leader needed
+- Jobs must not be duplicated or lost
+- Switchover time < 30 seconds
 
-Redesign it using only SQS.
+Include:
+- Technology choice with justification
+- Timeout values with reasoning
+- Fencing mechanism
+- Fallback behavior during election
+- Monitoring and alerting
 
-Address:
-- How do you fan out to multiple consumers (dashboard, storage, alerting)?
-- How do you handle replay for backfill?
-- What ordering guarantees can you maintain?
-- What functionality is lost? Is it acceptable for some use cases?
+## Exercise 3: Failure Scenario Runbooks
 
-Write a 2-page comparison documenting the trade-offs.
+Create runbooks for these coordination failure scenarios:
 
----
+1. **Lock service completely unavailable**
+   - Detection, immediate response, recovery
 
-## Exercise 2: Failure Mode Analysis
+2. **Leader election taking > 5 minutes**
+   - Investigation steps, manual intervention options
 
-For each failure scenario, explain what happens and how to prevent it:
+3. **Split-brain detected** (two leaders active)
+   - Immediate actions, damage assessment, resolution
 
-### Scenario A: Notification System (Queue)
-1. Consumer crashes mid-processing
-2. Message causes consumer to crash repeatedly
-3. 10x traffic spike for 1 hour
+4. **Lock holder crashed without releasing**
+   - Detection, automatic vs. manual resolution
 
-### Scenario B: Metrics Pipeline (Log)
-1. Storage consumer is down for 3 days, retention is 2 days
-2. 80% of events come from one service (hot partition)
-3. Consumer commits offset but database write fails
+5. **Clock skew causing lock issues**
+   - Detection, mitigation, prevention
 
-### Scenario C: Feed Fan-Out (Hybrid)
-1. Celebrity with 50M followers posts during Super Bowl
-2. Search indexer bug corrupts index, needs replay
-3. Fan-out worker processes same batch twice
+## Exercise 4: Technology Comparison
 
-For each scenario, provide:
-- What breaks
-- User impact
-- Detection method
-- Prevention/recovery
+Compare these coordination approaches for a distributed cache invalidation system:
 
----
+1. **Redis-based**: SETNX for locks
+2. **ZooKeeper/etcd**: Proper consensus-based locks
+3. **Kafka-based**: Event-driven invalidation
+4. **No coordination**: Version-based invalidation
 
-## Exercise 3: Technology Selection
-
-For each system, recommend queue, log, or stream processing. Justify your choice.
-
-1. **Email marketing**: Send promotional emails to 10M users daily
-2. **IoT sensor data**: 100K devices reporting temperature every second
-3. **Fraud detection**: Analyze transactions for suspicious patterns in real-time
-4. **Video transcoding**: Convert uploaded videos to multiple formats
-5. **Ad click tracking**: Attribute clicks to impressions for billing
-6. **Game leaderboard**: Update player rankings based on game results
-7. **Log aggregation**: Collect logs from 10K servers for analysis
-8. **Password reset**: Send password reset emails on request
-
-Create a table with: System, Recommended Model, Key Requirements, Why Not Others
-
----
-
-## Exercise 4: Ordering Deep Dive
-
-Design a system where:
-- User actions must be ordered per user
-- But actions for different users can be parallel
-- Some actions (payment) must be globally ordered
-- Scale: 100K actions per second
-
-Address:
-1. How do you partition?
-2. How do you handle globally ordered actions?
-3. What's the maximum parallelism?
-4. What happens if the globally ordered partition can't keep up?
-
-Create an architecture diagram and explain the trade-offs.
-
----
+Create a comparison matrix with:
+- Consistency guarantees
+- Latency characteristics
+- Failure modes
+- Operational complexity
+- Scalability limits
 
 ## Exercise 5: Interview Practice
 
-Practice answering these interview questions out loud (3 minutes each):
+Practice explaining these concepts (3 minutes each):
 
-1. "We're deciding between Kafka and SQS for our new service. How would you approach this decision?"
+1. "Why shouldn't you use distributed locks in most cases?"
+2. "Explain fencing tokens and why they're necessary"
+3. "How does leader election work and what are its failure modes?"
+4. "When would you choose ZooKeeper vs. Redis for coordination?"
+5. "Design a job scheduler that's resilient to coordination failures"
 
-2. "Explain exactly-once delivery. Is it really possible?"
-
-3. "Our Kafka consumer lag keeps growing. How would you diagnose and fix this?"
-
-4. "We have a queue-based system that occasionally sends duplicate messages. How would you fix this?"
-
-5. "Design the async messaging for a ride-sharing app—what events, what model, why?"
-
-Record yourself or practice with a partner. Focus on:
-- Starting with requirements analysis
-- Justifying your model choice
-- Acknowledging trade-offs
-- Addressing failure modes
+Record yourself and evaluate for clarity and trade-off acknowledgment.
 
 ---
 
 # Conclusion
 
-Asynchronous communication is fundamental to building scalable, resilient systems. The three models—queues, logs, and streams—serve different purposes:
+Coordination is one of the hardest problems in distributed systems. The key insights from this section:
 
-**Queues** are for work distribution. Messages go to one consumer and are deleted on completion. Use them for background jobs, notifications, and task processing.
+1. **Avoid coordination when possible.** Redesign problems to use idempotency, partitioning, or CRDTs instead.
 
-**Logs** are for event history. Messages persist, multiple consumers can read independently, and replay is possible. Use them for event sourcing, data integration, metrics pipelines, and any system that needs historical replay.
+2. **When coordination is needed, understand the failure modes.** Leader election can stall, locks can deadlock, consensus can partition.
 
-**Streams** are for continuous processing. Built on logs, they add time-aware semantics, windowed aggregations, and complex event processing. Use them for real-time analytics, alerting, and pattern detection.
+3. **Timeouts and TTLs require careful tuning.** Too short causes false positives; too long causes availability issues.
 
-The key insights from this section:
+4. **Fencing tokens are essential for correctness.** Locks alone are not sufficient in distributed systems.
 
-1. **Match the model to requirements.** Don't default to one technology. Ask: Do I need replay? Multiple consumers? Ordering? Time windows?
+5. **Graceful degradation matters.** What happens when coordination is unavailable? Design for this.
 
-2. **Exactly-once is a lie (sort of).** True exactly-once delivery is impossible in distributed systems. What we achieve is at-least-once delivery with idempotent processing—the effect is the same.
+6. **Operational complexity is high.** Coordination infrastructure (ZooKeeper, etcd) requires expertise to run well.
 
-3. **Ordering has scope.** Kafka provides per-partition ordering, not global ordering. Design your partitioning strategy based on what entities need ordered processing.
-
-4. **Consumer lag is critical.** If lag exceeds retention, you lose data. Monitor lag aggressively and scale consumers proactively.
-
-5. **Failure handling is the hard part.** Dead letter queues, idempotency, checkpointing, and proper acknowledgment patterns are what separate production systems from demos.
-
-6. **Hybrid architectures are common.** Real systems often use logs for event storage and queues for work distribution. The feed fan-out example shows this pattern.
-
-In interviews, demonstrate this nuanced understanding. Don't just pick a technology—explain why you picked it, what alternatives you considered, and what trade-offs you're accepting. That's Staff-level thinking.
-
----
-
-## Quick Reference Card
-
-### Async Model Selection Cheat Sheet
-
-| If You Need... | Use | Technology Examples |
-|----------------|-----|---------------------|
-| Work distribution (one consumer per message) | Queue | SQS, RabbitMQ |
-| Multiple consumers reading same data | Log | Kafka, Kinesis, Pulsar |
-| Replay historical events | Log | Kafka, Kinesis |
-| Strict per-entity ordering | Log (partition by entity) | Kafka |
-| Time-window aggregations | Stream Processing | Flink, Kafka Streams |
-| Late event handling | Stream Processing | Flink, Spark Streaming |
-| Simple task queue with auto-delete | Queue | SQS, RabbitMQ |
-| Event sourcing / audit trail | Log | Kafka |
-| Background job processing | Queue | SQS + Lambda, Celery |
-
-### The 5 Key Questions
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    BEFORE CHOOSING AN ASYNC MODEL                           │
-│                                                                             │
-│   1. REPLAY: "Will I ever need to reprocess historical messages?"           │
-│      YES → Log    NO → Queue is simpler                                     │
-│                                                                             │
-│   2. CONSUMERS: "How many independent consumers need this data?"            │
-│      One → Queue    Multiple → Log with consumer groups                     │
-│                                                                             │
-│   3. CONSUMPTION: "What happens after processing?"                          │
-│      Delete → Queue    Keep for others → Log                                │
-│                                                                             │
-│   4. ORDERING: "Does order matter? At what granularity?"                    │
-│      No → Standard queue    Per-entity → Log partitioned by entity          │
-│                                                                             │
-│   5. TIME WINDOWS: "Do I need aggregations over time?"                      │
-│      YES → Stream processing    NO → Plain consumption                      │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Delivery Semantics Summary
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    DELIVERY SEMANTICS                                       │
-│                                                                             │
-│   AT-MOST-ONCE                                                              │
-│   ─────────────                                                             │
-│   • Fire and forget                                                         │
-│   • Fastest, simplest                                                       │
-│   • Risk: message loss                                                      │
-│   • Use: metrics where loss is OK                                           │
-│                                                                             │
-│   AT-LEAST-ONCE                                                             │
-│   ──────────────                                                            │
-│   • Guaranteed delivery, possible duplicates                                │
-│   • Most common choice                                                      │
-│   • Requires idempotent processing                                          │
-│   • Use: most production systems                                            │
-│                                                                             │
-│   EXACTLY-ONCE                                                              │
-│   ─────────────                                                             │
-│   • At-least-once + deduplication                                           │
-│   • Most complex, highest overhead                                          │
-│   • True E2E exactly-once is very hard                                      │
-│   • Use: financial transactions, billing                                    │
-│                                                                             │
-│   PRACTICAL PATTERN:                                                        │
-│   Use at-least-once delivery + idempotent processing                        │
-│   Same effect as exactly-once, simpler to implement                         │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Interview Phrases: Strong vs Weak
-
-| Weak (L5) | Strong (L6) |
-|-----------|-------------|
-| "Let's use Kafka, it's industry standard" | "Let me analyze: replay, consumers, ordering. Based on needs, [choice] because..." |
-| "We need exactly-once" | "I'll use at-least-once with idempotent processing—simpler, same effect" |
-| "Kafka maintains order" | "Kafka orders per partition. I'll partition by [key] to maintain [entity] ordering" |
-| "We'll retry on failure" | "3 retries with backoff, then DLQ. Alert on DLQ depth. Investigate poison messages." |
-| "We'll scale consumers" | "Max consumers = partitions. I'll set partitions based on peak parallelism needs." |
-
-### Critical Numbers to Remember
-
-| Metric | Typical Value | Why It Matters |
-|--------|---------------|----------------|
-| Kafka partition limit per consumer | 1 partition = 1 consumer max | Sets parallelism ceiling |
-| SQS Standard throughput | Nearly unlimited | Good for burst absorption |
-| SQS FIFO throughput | 300 TPS (3000 with batching) | Order has a cost |
-| Kafka retention | 7 days default | Lag exceeding this = data loss |
-| Consumer rebalance time | Seconds to minutes | Processing pauses during rebalance |
-| Checkpoint interval (Flink) | 1-10 minutes typical | Recovery point for failures |
-| Message visibility timeout (SQS) | 30 seconds default | Time to process before redeliver |
-
-### Common Mistakes Checklist
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  ✗ MISTAKES                          │  ✓ CORRECT APPROACH                  │
-│──────────────────────────────────────┼──────────────────────────────────────│
-│  Using Kafka for everything          │  Match model to requirements         │
-│  Expecting global ordering           │  Design partitioning for entity order│
-│  Ignoring consumer lag               │  Alert when lag risks data loss      │
-│  At-least-once without idempotency   │  Always handle duplicates            │
-│  No dead letter queue                │  DLQ after N retries, monitor it     │
-│  Ack before processing               │  Process first, ack after            │
-│  In-memory state in stream processor │  Use checkpointed state backends     │
-│  Over-partitioning                   │  Partition for expected parallelism  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Quick Decision Flowchart
-
-```
-START: What async model do I need?
-          │
-          ▼
-   ┌──────────────────┐
-   │ Need replay?     │
-   └────────┬─────────┘
-       YES  │  NO
-        ▼   └──────────────────┐
-   [LOG-BASED]                 │
-        │                      ▼
-        │           ┌──────────────────────┐
-        │           │ One consumer per msg?│
-        │           └────────┬─────────────┘
-        │               YES  │  NO
-        │                ▼   └──────┐
-        │           [QUEUE]         │
-        │                           ▼
-        │                 ┌─────────────────────┐
-        │                 │ Multiple consumers  │
-        │                 │ need same data?     │
-        │                 └────────┬────────────┘
-        │                     YES  │  NO
-        │                      ▼   └→ [QUEUE]
-        │                 [LOG-BASED]
-        │                      │
-        ▼                      ▼
-   ┌──────────────────────────────────────┐
-   │ Time-window aggregations needed?     │
-   └────────────────┬─────────────────────┘
-               YES  │  NO
-                ▼   └→ [LOG with simple consumers]
-        [STREAM PROCESSING]
-        (Flink, Kafka Streams)
-```
-
----
-
-## Final Thought
-
-The goal is not to memorize which technology to use. The goal is to understand the fundamental differences between work distribution (queues), event history (logs), and continuous processing (streams), and then match the model to your requirements.
-
-When an interviewer asks about your async architecture choice, they want to hear:
-1. What requirements drove your decision
-2. What alternatives you considered
-3. What trade-offs you're accepting
-4. How you'll handle failures
-
-Master these concepts, and you'll make better architectural decisions—in interviews and in production.
+In interviews, demonstrate that you think about coordination critically. Don't reach for it by default—question whether it's necessary. When it is, address failure modes proactively. That's Staff-level thinking.
 
 ---

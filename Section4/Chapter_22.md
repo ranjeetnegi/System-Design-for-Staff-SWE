@@ -1,4 +1,4 @@
-# Chapter 20: Caching at Scale — Redis, CDN, and Edge Systems
+# Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
 
 ---
 

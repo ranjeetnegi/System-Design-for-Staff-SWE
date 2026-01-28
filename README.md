@@ -142,58 +142,58 @@ You have more experience and capability than you might feel right now. Preparati
 
 Let's begin.
 
-Section 1 — Staff Engineer Mindset & Evaluation
-# Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
-# Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
-# Chapter 3: Designing Systems That Scale Across Teams (Staff Perspective)   ← MOVED
-# Chapter 4: Staff Engineer Mindset — Designing Under Ambiguity
-# Chapter 5: Trade-offs, Constraints, and Decision-Making at Staff Level
-# Chapter 6: Communication and Interview Leadership for Google Staff Engineers
+# Section 1 — Staff Engineer Mindset & Evaluation
+Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
+Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
+Chapter 3: Designing Systems That Scale Across Teams (Staff Perspective)   ← MOVED
+Chapter 4: Staff Engineer Mindset — Designing Under Ambiguity
+Chapter 5: Trade-offs, Constraints, and Decision-Making at Staff Level
+Chapter 6: Communication and Interview Leadership for Google Staff Engineers
 
 
-Section 2 — System Design Framework (5 Phases)
-# Chapter 7: The Staff-Level System Design Framework
-# Chapter 8: Phase 1 — Users & Use Cases
-# Chapter 9: Phase 2 — Functional Requirements
-# Chapter 10: Phase 3 — Scale: Capacity Planning and Growth
-# Chapter 11: Cost, Efficiency, and Sustainable Design (NEW POSITION)  ← MOVED
-# Chapter 12: Phase 4 & Phase 5 — NFRs, Assumptions, Constraints
-# Chapter 13: End-to-End System Design Using the 5-Phase Framework
+# Section 2 — System Design Framework (5 Phases)
+Chapter 7: The Staff-Level System Design Framework
+Chapter 8: Phase 1 — Users & Use Cases
+Chapter 9: Phase 2 — Functional Requirements
+Chapter 10: Phase 3 — Scale: Capacity Planning and Growth
+Chapter 11: Cost, Efficiency, and Sustainable Design (NEW POSITION)  ← MOVED
+Chapter 12: Phase 4 & Phase 5 — NFRs, Assumptions, Constraints
+Chapter 13: End-to-End System Design Using the 5-Phase Framework
 
-Section 3 — Distributed Systems
-# Chapter 14: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
-# Chapter 15: Replication and Sharding — Scaling Without Losing Control
-# Chapter 16: Leader Election, Coordination, and Distributed Locks
-# Chapter 17: Backpressure, Retries, and Idempotency
-# Chapter 18: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
-# Chapter 19: Failure Models and Partial Failures — Designing for Reality at Staff Level
-# Chapter 20: CAP Theorem — Behavior Under Partition (Applied Case Studies)
+# Section 3 — Distributed Systems
+Chapter 14: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
+Chapter 15: Replication and Sharding — Scaling Without Losing Control
+Chapter 16: Leader Election, Coordination, and Distributed Locks
+Chapter 17: Backpressure, Retries, and Idempotency
+Chapter 18: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
+Chapter 19: Failure Models and Partial Failures — Designing for Reality at Staff Level
+Chapter 20: CAP Theorem — Behavior Under Partition (Applied Case Studies)
 
-Section 4 — Data Systems & Global Scale
-# Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
-# Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
-# Chapter 23: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
-# Chapter 24: Multi-Region Systems — Geo-Replication, Latency, and Failure
-# Chapter 25: Data Locality, Compliance, and System Evolution
-# Chapter 26: Cost, Efficiency, and Sustainable System Design at Staff Level [TODO]
-# Chapter 27: System Evolution, Migration, and Risk Management at Staff Level [TODO]
+# Section 4 — Data Systems & Global Scale
+Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
+Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
+Chapter 23: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
+Chapter 24: Multi-Region Systems — Geo-Replication, Latency, and Failure
+Chapter 25: Data Locality, Compliance, and System Evolution
+Chapter 26: Cost, Efficiency, and Sustainable System Design at Staff Level [TODO]
+Chapter 27: System Evolution, Migration, and Risk Management at Staff Level [TODO]
 
 
-Section 5 — Staff-Level Design Problems [TODO]
-# Chapter 28. Global rate limiter
-# Chapter 29. Distributed cache
-# Chapter 30. News feed
-# Chapter 31. Real-time collaboration
-# Chapter 32. Messaging platform
-# Chapter 33. Metrics / observability system
-# Chapter 34. Configuration / Feature Flag System
-# Chapter 35. API Gateway / Edge Request Routing System
-# Chapter 36. Search / Indexing System (Read-heavy, Latency-sensitive)
-# Chapter 37. Recommendation / Ranking System (Simplified)
-# Chapter 38. Notification Delivery System (Fan-out at Scale)
-# Chapter 39. Authentication & Authorization System
-# Chapter 40. Distributed Scheduler / Job Orchestration System
-# Chapter 41. Feature Experimentation / A/B Testing Platform
-# Chapter 42. Log Aggregation & Query System
-# Chapter 43. Payment / Transaction Processing System
-# Chapter 44. Distributed Configuration / Secrets Management System
+# Section 5 — Staff-Level Design Problems [TODO]
+Chapter 28. Global rate limiter
+Chapter 29. Distributed cache
+Chapter 30. News feed
+Chapter 31. Real-time collaboration
+Chapter 32. Messaging platform
+Chapter 33. Metrics / observability system
+Chapter 34. Configuration / Feature Flag System
+Chapter 35. API Gateway / Edge Request Routing System
+Chapter 36. Search / Indexing System (Read-heavy, Latency-sensitive)
+Chapter 37. Recommendation / Ranking System (Simplified)
+Chapter 38. Notification Delivery System (Fan-out at Scale)
+Chapter 39. Authentication & Authorization System
+Chapter 40. Distributed Scheduler / Job Orchestration System
+Chapter 41. Feature Experimentation / A/B Testing Platform
+Chapter 42. Log Aggregation & Query System
+Chapter 43. Payment / Transaction Processing System
+Chapter 44. Distributed Configuration / Secrets Management System
