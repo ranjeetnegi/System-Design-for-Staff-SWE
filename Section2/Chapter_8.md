@@ -1,4 +1,4 @@
-# Chapter 6: Phase 2 — Functional Requirements: Staff-Level Precision
+# Chapter 8: Phase 2 — Functional Requirements: Staff-Level Precision
 
 ---
 

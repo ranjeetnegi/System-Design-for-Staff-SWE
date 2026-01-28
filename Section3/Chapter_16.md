@@ -1,6 +1,4 @@
-# System Design Interview Preparation for Google Staff Engineer (L6)
-
-## Volume 3, Part 5: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
+# Chapter 16: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
 
 ---
 

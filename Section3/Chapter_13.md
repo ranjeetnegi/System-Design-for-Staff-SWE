@@ -1,4 +1,4 @@
-# Volume 3, Part 2: Replication and Sharding — Scaling Without Losing Control
+# Chapter 13: Replication and Sharding — Scaling Without Losing Control
 
 ---
 

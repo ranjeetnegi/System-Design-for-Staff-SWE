@@ -1,4 +1,4 @@
-# Chepter 1: How Google Evaluates Staff Engineers in System Design Interviews
+# Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
 
 ---
 

@@ -1,6 +1,4 @@
-# System Design Interview Preparation for Google Staff Engineer (L6)
-
-## Volume 1, Section 4: Trade-offs, Constraints, and Decision-Making at Staff Level
+# Chapter 4: Trade-offs, Constraints, and Decision-Making at Staff Level
 
 ---
 

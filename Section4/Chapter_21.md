@@ -21,7 +21,7 @@ This section teaches event-driven architecture as Staff Engineers practice it: w
 │               EVENT-DRIVEN ARCHITECTURE: THE STAFF ENGINEER VIEW            │
 │                                                                             │
 │   WRONG Framing: "Events make systems more scalable and decoupled"          │
-│   RIGHT Framing: "Events trade consistency and debuggability for           │
+│   RIGHT Framing: "Events trade consistency and debuggability for            │
 │                   scalability and producer independence"                    │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -34,7 +34,7 @@ This section teaches event-driven architecture as Staff Engineers practice it: w
 │   │  5. Who is on-call when event processing breaks at 3am?             │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   If you can't answer all five, you're not ready for events.               │
+│   If you can't answer all five, you're not ready for events.                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

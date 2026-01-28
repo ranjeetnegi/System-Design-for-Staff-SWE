@@ -1,4 +1,4 @@
-# Chapter 6: Phase 3 — Scale: Capacity Planning and Growth at Staff Level
+# Chapter 9: Phase 3 — Scale: Capacity Planning and Growth at Staff Level
 
 ---
 

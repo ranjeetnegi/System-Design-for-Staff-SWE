@@ -1,4 +1,4 @@
-# Volume 3, Part 4: Backpressure, Retries, and Idempotency
+# Chapter 15: Backpressure, Retries, and Idempotency
 ## Preventing Cascading Failures
 
 **Perspective: Google Staff Engineer — System Stability Under Load**

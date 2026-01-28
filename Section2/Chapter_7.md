@@ -1,6 +1,4 @@
-# System Design Interview Preparation for Google Staff Engineer (L6)
-
-## Volume 2, Section 2: Phase 1 — Users & Use Cases: Staff-Level Thinking
+# Chapter 7: Phase 1 — Users & Use Cases: Staff-Level Thinking
 
 ---
 

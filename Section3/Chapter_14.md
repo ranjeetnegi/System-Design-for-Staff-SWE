@@ -1,4 +1,4 @@
-# Volume 3, Part 3: Leader Election, Coordination, and Distributed Locks
+# Chapter 14: Leader Election, Coordination, and Distributed Locks
 
 ## When Your System Needs a Boss—And When It Doesn't
 
