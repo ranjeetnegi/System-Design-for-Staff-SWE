@@ -175,8 +175,8 @@ Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
 Chapter 23: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
 Chapter 24: Multi-Region Systems — Geo-Replication, Latency, and Failure
 Chapter 25: Data Locality, Compliance, and System Evolution
-Chapter 26: Cost, Efficiency, and Sustainable System Design at Staff Level [TODO]
-Chapter 27: System Evolution, Migration, and Risk Management at Staff Level [TODO]
+Chapter 26: Cost, Efficiency, and Sustainable System Design
+Chapter 27: System Evolution, Migration, and Risk Management
 
 
 # Section 5 — Staff-Level Design Problems [TODO]
@@ -186,7 +186,8 @@ Chapter 30. News feed
 Chapter 31. Real-time collaboration
 Chapter 32. Messaging platform
 Chapter 33. Metrics / observability system
-Chapter 34. Configuration / Feature Flag System
+Chapter 34. Configuration, Feature Flags & Secrets Management
+
 Chapter 35. API Gateway / Edge Request Routing System
 Chapter 36. Search / Indexing System (Read-heavy, Latency-sensitive)
 Chapter 37. Recommendation / Ranking System (Simplified)
@@ -196,4 +197,4 @@ Chapter 40. Distributed Scheduler / Job Orchestration System
 Chapter 41. Feature Experimentation / A/B Testing Platform
 Chapter 42. Log Aggregation & Query System
 Chapter 43. Payment / Transaction Processing System
-Chapter 44. Distributed Configuration / Secrets Management System
+Chapter 44. Media upload & processing pipeline

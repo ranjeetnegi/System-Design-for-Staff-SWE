@@ -3922,6 +3922,735 @@ Design a CI/CD pipeline that:
 
 ---
 
+# Part 21: GCP Cost Optimization (Google Cloud Perspective)
+
+Staff engineers working with Google Cloud face similar but distinct cost optimization patterns. This section covers GCP-specific strategies.
+
+## GCP Cost Model Fundamentals
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GCP COST MODEL: KEY DIFFERENCES FROM AWS                 │
+│                                                                             │
+│   PRICING PHILOSOPHY:                                                       │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  AWS: Pay for what you provision                                    │   │
+│   │  GCP: Pay for what you use (sustained use discounts automatic)      │   │
+│   │                                                                     │   │
+│   │  GCP automatically applies discounts:                               │   │
+│   │  • 20% discount for 50% monthly usage                               │   │
+│   │  • 30% discount for 75% monthly usage                               │   │
+│   │  • No commitment required (unlike AWS Reserved)                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   KEY GCP COST LEVERS:                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Committed Use Discounts (CUDs): 1-3 year, up to 57% off          │   │
+│   │  • Preemptible VMs: 60-91% off, max 24hr, preemptible anytime       │   │
+│   │  • Spot VMs: Similar to preemptible, newer pricing model            │   │
+│   │  • Sole-tenant nodes: For compliance/licensing requirements         │   │
+│   │  • Custom machine types: Pay exactly for vCPU + RAM you need        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   GCP-SPECIFIC SURPRISES:                                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Egress to internet: $0.12/GB (similar to AWS)                    │   │
+│   │  • Cross-region: $0.01-0.08/GB (often cheaper than AWS)             │   │
+│   │  • BigQuery: Pay per query (easy to run expensive queries)          │   │
+│   │  • Cloud SQL: Always-on, no serverless option (until AlloyDB)       │   │
+│   │  • GKE: Control plane now charged ($0.10/hour per cluster)          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## GCP Compute Optimization
+
+```
+// Pseudocode for GCP compute optimization
+
+CLASS GCPComputeOptimizer:
+    
+    FUNCTION optimize_vm_fleet(current_fleet):
+        recommendations = []
+        
+        FOR vm IN current_fleet:
+            // Check for right-sizing
+            avg_cpu = get_avg_cpu_utilization(vm, days=30)
+            avg_memory = get_avg_memory_utilization(vm, days=30)
+            
+            IF avg_cpu < 30 AND avg_memory < 30:
+                // Underutilized - recommend smaller or custom
+                optimal = calculate_custom_machine_type(
+                    vcpus = ceil(vm.vcpus * avg_cpu / 50),  // Target 50% util
+                    memory_gb = ceil(vm.memory_gb * avg_memory / 50)
+                )
+                
+                recommendations.append({
+                    vm: vm,
+                    recommendation: "Downsize to custom machine type",
+                    current_cost: vm.monthly_cost,
+                    new_cost: optimal.monthly_cost,
+                    savings: vm.monthly_cost - optimal.monthly_cost
+                })
+            
+            // Check for sustained use optimization
+            uptime_percent = get_uptime_percent(vm, days=30)
+            IF uptime_percent < 50:
+                recommendations.append({
+                    vm: vm,
+                    recommendation: "Consider turning off when not in use",
+                    note: "Missing out on sustained use discounts"
+                })
+            
+            // Check for preemptible/spot conversion
+            IF vm.can_tolerate_preemption:
+                preemptible_cost = vm.monthly_cost * 0.2  // ~80% savings
+                recommendations.append({
+                    vm: vm,
+                    recommendation: "Convert to Preemptible/Spot",
+                    savings: vm.monthly_cost - preemptible_cost
+                })
+        
+        RETURN recommendations
+    
+    FUNCTION design_cud_strategy(fleet, planning_horizon):
+        // Committed Use Discounts for predictable baseline
+        
+        // Calculate baseline usage (minimum over 30 days)
+        baseline = calculate_baseline_usage(fleet)
+        
+        // CUD pricing
+        cud_1yr_discount = 0.37  // 37% off
+        cud_3yr_discount = 0.57  // 57% off
+        
+        // Recommendation based on confidence
+        IF planning_horizon >= 3 AND usage_stable:
+            cud_amount = baseline * 0.8  // Cover 80% of baseline
+            term = 3
+            discount = cud_3yr_discount
+        ELSE IF planning_horizon >= 1:
+            cud_amount = baseline * 0.6  // More conservative
+            term = 1
+            discount = cud_1yr_discount
+        ELSE:
+            RETURN "Rely on sustained use discounts only"
+        
+        RETURN {
+            recommended_cud: cud_amount,
+            term_years: term,
+            monthly_savings: cud_amount * on_demand_rate * discount,
+            break_even_months: term * 12 * (1 - discount)
+        }
+```
+
+## BigQuery Cost Optimization
+
+BigQuery is powerful but can generate surprise bills. Staff engineers design with query cost in mind.
+
+```
+// Pseudocode for BigQuery cost optimization
+
+CLASS BigQueryCostOptimizer:
+    
+    FUNCTION analyze_query_patterns(project_id, days=30):
+        queries = get_query_history(project_id, days)
+        
+        cost_analysis = {
+            total_bytes_processed: 0,
+            total_cost: 0,
+            expensive_queries: [],
+            optimization_opportunities: []
+        }
+        
+        FOR query IN queries:
+            query_cost = query.bytes_processed / (1024^4) * 5  // $5/TB
+            cost_analysis.total_bytes_processed += query.bytes_processed
+            cost_analysis.total_cost += query_cost
+            
+            // Flag expensive queries
+            IF query_cost > 10:  // $10+ per query
+                cost_analysis.expensive_queries.append({
+                    query: query.sql,
+                    user: query.user,
+                    cost: query_cost,
+                    bytes: query.bytes_processed
+                })
+            
+            // Identify optimization opportunities
+            IF query.uses_select_star:
+                cost_analysis.optimization_opportunities.append({
+                    query: query.sql,
+                    issue: "SELECT * scans all columns",
+                    fix: "Select only needed columns"
+                })
+            
+            IF NOT query.uses_partition_filter:
+                cost_analysis.optimization_opportunities.append({
+                    query: query.sql,
+                    issue: "Not filtering on partition column",
+                    fix: "Add partition filter to reduce scan"
+                })
+            
+            IF query.joins_unpartitioned_tables:
+                cost_analysis.optimization_opportunities.append({
+                    query: query.sql,
+                    issue: "Joining large unpartitioned tables",
+                    fix: "Partition tables or use clustering"
+                })
+        
+        RETURN cost_analysis
+    
+    FUNCTION design_cost_controls(project_id):
+        controls = []
+        
+        // Per-user daily limits
+        controls.append({
+            type: "Per-user quota",
+            limit: "1TB/day per user",
+            action: "Block queries exceeding limit",
+            rationale: "Prevent runaway exploratory queries"
+        })
+        
+        // Per-query limits
+        controls.append({
+            type: "Per-query limit",
+            limit: "500GB per query",
+            action: "Require approval for larger queries",
+            rationale: "Force query optimization before large scans"
+        })
+        
+        // Flat-rate pricing evaluation
+        monthly_usage = estimate_monthly_bytes()
+        on_demand_cost = monthly_usage / (1024^4) * 5
+        flat_rate_cost = 2000  // $2000/month for 500 slots
+        
+        IF on_demand_cost > flat_rate_cost * 1.5:
+            controls.append({
+                type: "Pricing model",
+                recommendation: "Switch to flat-rate pricing",
+                current_cost: on_demand_cost,
+                flat_rate_cost: flat_rate_cost,
+                savings: on_demand_cost - flat_rate_cost
+            })
+        
+        RETURN controls
+```
+
+## Cloud Storage Cost Optimization
+
+```
+// Pseudocode for GCS lifecycle and cost optimization
+
+FUNCTION design_gcs_lifecycle(bucket_purpose, access_patterns):
+    rules = []
+    
+    SWITCH bucket_purpose:
+        CASE "application_logs":
+            rules.append({
+                age: 30,
+                action: "SetStorageClass",
+                target: "NEARLINE"  // Lower cost, retrieval fee
+            })
+            rules.append({
+                age: 90,
+                action: "SetStorageClass",
+                target: "COLDLINE"
+            })
+            rules.append({
+                age: 365,
+                action: "SetStorageClass",
+                target: "ARCHIVE"
+            })
+            rules.append({
+                age: 2555,  // 7 years
+                action: "Delete"
+            })
+        
+        CASE "user_content":
+            // Use Autoclass - GCP automatically moves based on access
+            RETURN {
+                use_autoclass: true,
+                rationale: "Unpredictable access patterns, let GCP optimize"
+            }
+        
+        CASE "database_backups":
+            rules.append({
+                age: 7,
+                action: "SetStorageClass",
+                target: "NEARLINE"
+            })
+            rules.append({
+                age: 30,
+                action: "SetStorageClass",
+                target: "COLDLINE"
+            })
+            rules.append({
+                age: 365,
+                action: "Delete",
+                condition: "Keep last 12 monthly backups"
+            })
+    
+    RETURN rules
+```
+
+---
+
+# Part 22: Kubernetes and Container Cost Optimization
+
+Container orchestration adds a layer of cost complexity. Staff engineers must understand both infrastructure and orchestration costs.
+
+## The Kubernetes Cost Challenge
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                KUBERNETES COST: THE HIDDEN LAYERS                            │
+│                                                                             │
+│   LAYER 1: INFRASTRUCTURE                                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Node cost (EC2/GCE/AKS VMs)                                        │   │
+│   │  + Control plane (EKS: $0.10/hr, GKE: $0.10/hr, AKS: free)          │   │
+│   │  + Load balancers (per-LB charges)                                  │   │
+│   │  + Persistent volumes (EBS/PD)                                      │   │
+│   │  + Network (cross-AZ, ingress/egress)                               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   LAYER 2: ORCHESTRATION OVERHEAD                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  System pods (kube-system namespace)                                │   │
+│   │  + Monitoring/observability stack                                   │   │
+│   │  + Service mesh (Istio can add 50% overhead)                        │   │
+│   │  + Logging agents                                                   │   │
+│   │  + Security scanning                                                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   LAYER 3: INEFFICIENCY                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Over-provisioned resource requests                                 │   │
+│   │  + Fragmentation (can't bin-pack perfectly)                         │   │
+│   │  + Unused reserved capacity                                         │   │
+│   │  + Right-sizing inertia ("works fine, don't touch")                 │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   TYPICAL WASTE: 30-50% of Kubernetes spend is on unused resources          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Resource Request/Limit Optimization
+
+```
+// Pseudocode for Kubernetes resource optimization
+
+CLASS K8sResourceOptimizer:
+    
+    FUNCTION analyze_pod_resources(namespace, days=14):
+        pods = get_pod_metrics(namespace, days)
+        recommendations = []
+        
+        FOR pod IN pods:
+            // Compare actual usage to requests
+            cpu_request = pod.spec.resources.requests.cpu
+            cpu_actual_p99 = pod.metrics.cpu.p99
+            cpu_utilization = cpu_actual_p99 / cpu_request
+            
+            memory_request = pod.spec.resources.requests.memory
+            memory_actual_p99 = pod.metrics.memory.p99
+            memory_utilization = memory_actual_p99 / memory_request
+            
+            // Flag over-provisioned pods
+            IF cpu_utilization < 0.3 AND memory_utilization < 0.3:
+                recommendations.append({
+                    pod: pod.name,
+                    issue: "Significantly over-provisioned",
+                    current_requests: {cpu: cpu_request, memory: memory_request},
+                    recommended: {
+                        cpu: cpu_actual_p99 * 1.3,  // 30% headroom
+                        memory: memory_actual_p99 * 1.3
+                    },
+                    savings_estimate: calculate_savings(pod, new_requests)
+                })
+            
+            // Flag under-provisioned pods (risk)
+            IF cpu_utilization > 0.9 OR memory_utilization > 0.9:
+                recommendations.append({
+                    pod: pod.name,
+                    issue: "Near limit - risk of throttling/OOM",
+                    current_requests: {cpu: cpu_request, memory: memory_request},
+                    recommended: {
+                        cpu: cpu_actual_p99 * 1.5,
+                        memory: memory_actual_p99 * 1.5
+                    },
+                    priority: "HIGH"
+                })
+            
+            // Flag pods without limits
+            IF NOT pod.spec.resources.limits:
+                recommendations.append({
+                    pod: pod.name,
+                    issue: "No resource limits - can starve other pods",
+                    recommendation: "Add limits (typically 2x requests)"
+                })
+        
+        RETURN recommendations
+    
+    FUNCTION optimize_node_pool(cluster):
+        nodes = get_cluster_nodes(cluster)
+        
+        // Calculate cluster-wide utilization
+        total_allocatable_cpu = sum(n.allocatable.cpu for n in nodes)
+        total_requested_cpu = sum(n.requested.cpu for n in nodes)
+        total_used_cpu = sum(n.used.cpu for n in nodes)
+        
+        request_efficiency = total_requested_cpu / total_allocatable_cpu
+        usage_efficiency = total_used_cpu / total_allocatable_cpu
+        request_accuracy = total_used_cpu / total_requested_cpu
+        
+        RETURN {
+            node_count: len(nodes),
+            request_efficiency: request_efficiency,  // Should be 60-80%
+            usage_efficiency: usage_efficiency,      // Actual utilization
+            request_accuracy: request_accuracy,      // How accurate are requests
+            wasted_capacity: (total_allocatable_cpu - total_used_cpu) * cost_per_cpu,
+            recommendations: generate_recommendations(
+                request_efficiency, usage_efficiency, request_accuracy
+            )
+        }
+```
+
+## Cluster Autoscaler Optimization
+
+```
+// Pseudocode for cluster autoscaler configuration
+
+CLASS ClusterAutoscalerConfig:
+    
+    FUNCTION design_autoscaler_policy(workload_patterns):
+        // Analyze workload characteristics
+        scale_up_frequency = workload_patterns.avg_scale_up_events_per_day
+        scale_down_frequency = workload_patterns.avg_scale_down_events_per_day
+        avg_pending_time = workload_patterns.avg_pod_pending_time
+        
+        config = {
+            // Scale-up settings
+            scan_interval: "10s",  // How often to check for pending pods
+            scale_up_delay: "0s",  // Scale up immediately when needed
+            
+            // Scale-down settings (where cost savings happen)
+            scale_down_delay_after_add: "10m",  // Don't scale down too fast
+            scale_down_unneeded_time: "10m",    // How long node must be underutilized
+            scale_down_utilization_threshold: 0.5,  // Scale down if <50% utilized
+            
+            // Node selection
+            expander: "least-waste",  // Choose node type that wastes least capacity
+            
+            // Safety
+            max_node_provision_time: "15m",  // Fail fast if node doesn't come up
+            skip_nodes_with_local_storage: false,  // Allow scaling down pods with local storage
+            skip_nodes_with_system_pods: true  // Don't scale down kube-system nodes
+        }
+        
+        // Optimize based on patterns
+        IF scale_up_frequency > 10:
+            // Frequent scaling - pre-provision buffer
+            config.over_provisioning = {
+                enabled: true,
+                buffer_pods: 2,  // Keep capacity for 2 extra pods
+                rationale: "Frequent scaling events justify buffer capacity"
+            }
+        
+        IF avg_pending_time > "2m":
+            // Slow scale-up - consider larger nodes or pre-provisioning
+            config.recommendations.append(
+                "Consider larger node types for faster scale-up"
+            )
+        
+        RETURN config
+    
+    FUNCTION analyze_node_pool_diversity(cluster):
+        // Multi-instance-type strategy for better bin-packing and availability
+        
+        workloads = get_workload_profiles(cluster)
+        
+        recommended_pools = []
+        
+        // General purpose pool (default)
+        recommended_pools.append({
+            name: "general-purpose",
+            instance_types: ["m5.xlarge", "m5.2xlarge", "m5a.xlarge"],
+            target_capacity: "70%",  // Main workload
+            use_spot: false
+        })
+        
+        // Spot pool for fault-tolerant workloads
+        recommended_pools.append({
+            name: "spot-workers",
+            instance_types: ["m5.xlarge", "m5.2xlarge", "m4.xlarge", "c5.xlarge"],
+            target_capacity: "20%",
+            use_spot: true,
+            spot_allocation_strategy: "capacity-optimized"
+        })
+        
+        // Burstable pool for low-priority
+        IF has_low_priority_workloads(workloads):
+            recommended_pools.append({
+                name: "burstable",
+                instance_types: ["t3.large", "t3.xlarge"],
+                target_capacity: "10%",
+                use_spot: true
+            })
+        
+        RETURN recommended_pools
+```
+
+## Multi-Tenant Cost Attribution
+
+```
+// Pseudocode for Kubernetes cost attribution
+
+CLASS K8sCostAttribution:
+    
+    FUNCTION calculate_namespace_costs(cluster, period):
+        node_costs = get_node_costs(cluster, period)
+        namespaces = get_all_namespaces(cluster)
+        
+        namespace_costs = {}
+        
+        FOR namespace IN namespaces:
+            pods = get_pods(namespace)
+            
+            // Calculate resource usage
+            cpu_seconds = sum(p.cpu_usage * p.duration for p in pods)
+            memory_gb_seconds = sum(p.memory_usage * p.duration for p in pods)
+            storage_gb_hours = sum(get_pvc_usage(p) for p in pods)
+            network_gb = sum(get_network_usage(p) for p in pods)
+            
+            // Calculate proportional cost
+            cluster_cpu_seconds = get_cluster_total_cpu_seconds(period)
+            cluster_memory_seconds = get_cluster_total_memory_seconds(period)
+            
+            cpu_cost = (cpu_seconds / cluster_cpu_seconds) * node_costs.compute
+            memory_cost = (memory_gb_seconds / cluster_memory_seconds) * node_costs.memory
+            storage_cost = storage_gb_hours * STORAGE_RATE
+            network_cost = network_gb * NETWORK_RATE
+            
+            namespace_costs[namespace] = {
+                compute: cpu_cost + memory_cost,
+                storage: storage_cost,
+                network: network_cost,
+                total: cpu_cost + memory_cost + storage_cost + network_cost,
+                
+                // Efficiency metrics
+                request_vs_usage: calculate_request_efficiency(pods),
+                recommendation: generate_optimization_recommendation(pods)
+            }
+        
+        RETURN namespace_costs
+    
+    FUNCTION implement_cost_guardrails(namespace):
+        guardrails = {}
+        
+        // Resource quotas
+        guardrails.resource_quota = {
+            hard: {
+                "requests.cpu": "100",        // 100 CPU cores
+                "requests.memory": "200Gi",   // 200GB RAM
+                "persistentvolumeclaims": 20,
+                "services.loadbalancers": 5
+            }
+        }
+        
+        // Limit ranges (default requests if not specified)
+        guardrails.limit_range = {
+            default: {
+                cpu: "500m",
+                memory: "512Mi"
+            },
+            defaultRequest: {
+                cpu: "100m",
+                memory: "128Mi"
+            },
+            max: {
+                cpu: "4",
+                memory: "8Gi"
+            }
+        }
+        
+        // Network policies (reduce cross-namespace traffic)
+        guardrails.network_policy = {
+            allow_same_namespace: true,
+            allow_egress_internet: false,  // Require explicit approval
+            allow_cross_namespace: ["monitoring", "logging"]
+        }
+        
+        RETURN guardrails
+```
+
+---
+
+# Part 23: Cost Governance and Organizational Patterns
+
+Staff engineers don't just optimize individual systems—they establish patterns and governance for sustainable cost management across organizations.
+
+## The FinOps Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FINOPS: CLOUD FINANCIAL OPERATIONS                        │
+│                                                                             │
+│   THREE PHASES:                                                             │
+│                                                                             │
+│   PHASE 1: INFORM                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Tag all resources for cost attribution                           │   │
+│   │  • Create cost dashboards per team/service                          │   │
+│   │  • Establish cost reporting cadence                                 │   │
+│   │  • Make costs visible to engineers (not just finance)               │   │
+│   │                                                                     │   │
+│   │  Staff Role: Design tagging strategy, build dashboards              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   PHASE 2: OPTIMIZE                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Right-size resources based on data                               │   │
+│   │  • Implement auto-scaling                                           │   │
+│   │  • Purchase commitments (RI, Savings Plans)                         │   │
+│   │  • Clean up unused resources                                        │   │
+│   │                                                                     │   │
+│   │  Staff Role: Lead optimization initiatives, set targets             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   PHASE 3: OPERATE                                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Continuous cost monitoring                                       │   │
+│   │  • Anomaly detection and alerting                                   │   │
+│   │  • Cost reviews in architecture decisions                           │   │
+│   │  • Budget enforcement and guardrails                                │   │
+│   │                                                                     │   │
+│   │  Staff Role: Establish ongoing governance, mentor teams             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Team-Level Cost Accountability
+
+```
+// Pseudocode for cost accountability framework
+
+CLASS CostAccountabilityFramework:
+    
+    FUNCTION design_team_cost_model(organization):
+        model = {
+            attribution: {},
+            budgets: {},
+            alerts: {},
+            governance: {}
+        }
+        
+        // Attribution model
+        model.attribution = {
+            // Tag hierarchy
+            required_tags: [
+                "team",           // Which team owns this
+                "service",        // Which service is this
+                "environment",    // prod, staging, dev
+                "cost_center"     // Business unit
+            ],
+            
+            // Shared cost allocation
+            shared_cost_strategy: "proportional",  // Split by usage
+            shared_services: ["monitoring", "logging", "ci-cd"],
+            
+            // Untagged cost handling
+            untagged_policy: "alert_and_attribute_to_platform"
+        }
+        
+        // Budget model
+        FOR team IN organization.teams:
+            historical = get_historical_cost(team, months=6)
+            growth_rate = calculate_growth_rate(team)
+            
+            model.budgets[team] = {
+                monthly_budget: historical.p75 * (1 + growth_rate),
+                alert_thresholds: [0.5, 0.75, 0.9, 1.0],
+                overage_policy: "require_justification",
+                review_frequency: "monthly"
+            }
+        
+        // Alert model
+        model.alerts = {
+            anomaly_detection: {
+                enabled: true,
+                sensitivity: "medium",
+                alert_channels: ["email", "slack", "pagerduty"]
+            },
+            budget_alerts: {
+                enabled: true,
+                thresholds: [50, 75, 90, 100, 110]  // Percent of budget
+            },
+            cost_spike_alerts: {
+                enabled: true,
+                threshold: "20% day-over-day increase"
+            }
+        }
+        
+        // Governance
+        model.governance = {
+            cost_review_cadence: "monthly",
+            architecture_review_threshold: "$10,000/month increase",
+            approval_required: {
+                new_service: "team_lead",
+                major_change: "staff_engineer",
+                large_commitment: "engineering_director"
+            }
+        }
+        
+        RETURN model
+    
+    FUNCTION implement_cost_culture(organization):
+        initiatives = []
+        
+        // Visibility
+        initiatives.append({
+            name: "Cost Dashboard Access",
+            action: "Give all engineers read access to cost dashboards",
+            rationale: "Can't optimize what you can't see"
+        })
+        
+        // Accountability
+        initiatives.append({
+            name: "Team Cost Reviews",
+            action: "Monthly cost review in team meetings",
+            rationale: "Make cost a normal engineering topic"
+        })
+        
+        // Incentives
+        initiatives.append({
+            name: "Cost Efficiency Wins",
+            action: "Celebrate significant cost reductions in all-hands",
+            rationale: "Reinforce that efficiency is valued"
+        })
+        
+        // Education
+        initiatives.append({
+            name: "Cost Optimization Training",
+            action: "Quarterly workshops on cloud cost optimization",
+            rationale: "Build organizational capability"
+        })
+        
+        // Process
+        initiatives.append({
+            name: "Cost in Design Reviews",
+            action: "Include cost estimate in architecture proposals",
+            rationale: "Shift cost consideration left"
+        })
+        
+        RETURN initiatives
+```
+
+---
+
 # AWS Cost Quick Reference
 
 ## AWS Service Cost Cheat Sheet
@@ -3972,6 +4701,65 @@ Design a CI/CD pipeline that:
 ☐ Log sampling for high-volume applications
 ☐ Metric aggregation (don't store per-second forever)
 ☐ Dashboard consolidation
+
+---
+
+# GCP Cost Quick Reference
+
+## GCP Service Cost Cheat Sheet
+
+| Service | Primary Cost Driver | Hidden Costs | Optimization Lever |
+|---------|--------------------|--------------|--------------------|
+| **Compute Engine** | Instance hours | Persistent Disk, Network | Sustained use, CUDs, Preemptible |
+| **Cloud SQL** | Instance hours | Storage, backups, HA | Right-size, CUDs |
+| **BigQuery** | Bytes scanned | Storage, streaming inserts | Partitioning, flat-rate |
+| **Cloud Storage** | Storage volume | Operations, retrieval | Lifecycle, Autoclass |
+| **GKE** | Node + control plane | PD, LB, network | Autopilot, Spot nodes |
+| **Cloud Run** | CPU-seconds + memory | Network, min instances | Concurrency, cold start |
+| **Pub/Sub** | Message operations | Storage, acknowledge | Batching, ordering |
+| **Cloud Functions** | Invocations + duration | Network, memory | Right-size memory |
+
+## GCP Cost Optimization Checklist
+
+**Compute:**
+☐ Leverage sustained use discounts (automatic)
+☐ Evaluate Committed Use Discounts for stable baseline
+☐ Use Preemptible/Spot for fault-tolerant workloads
+☐ Right-size with custom machine types
+☐ Consider Sole-tenant nodes only when required
+
+**Storage:**
+☐ Enable Autoclass for unpredictable access patterns
+☐ Lifecycle policies for known patterns
+☐ Use Regional vs Multi-regional based on requirements
+☐ Archive old data to Coldline/Archive
+
+**Database:**
+☐ Right-size Cloud SQL instances
+☐ Use read replicas instead of scaling primary
+☐ Consider Spanner only for true global scale
+☐ AlloyDB for PostgreSQL workloads
+☐ Firestore vs Datastore based on usage pattern
+
+**BigQuery:**
+☐ Partition and cluster tables
+☐ Use LIMIT and column selection
+☐ Evaluate flat-rate for high-volume users
+☐ Set query quotas per user/project
+☐ Use BigQuery BI Engine for dashboards
+
+**GKE:**
+☐ Consider GKE Autopilot for simplified operations
+☐ Use Spot VMs in node pools
+☐ Right-size pod requests
+☐ Enable cluster autoscaler with aggressive scale-down
+☐ Use Workload Identity instead of service account keys
+
+**Network:**
+☐ Use Premium vs Standard tier based on latency needs
+☐ Cloud CDN for cacheable content
+☐ Private Google Access for GCP service traffic
+☐ Minimize cross-region data transfer
 
 ---
 

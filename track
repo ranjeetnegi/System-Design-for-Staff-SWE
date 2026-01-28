@@ -1,0 +1,232 @@
+Section 1 — Staff Engineer Mindset & Evaluation
+Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
+Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
+Chapter 3: Designing Systems That Scale Across Teams (Staff Perspective)   ← MOVED
+Chapter 4: Staff Engineer Mindset — Designing Under Ambiguity
+Chapter 5: Trade-offs, Constraints, and Decision-Making at Staff Level
+Chapter 6: Communication and Interview Leadership for Google Staff Engineers
+
+
+Section 2 — System Design Framework (5 Phases)
+Chapter 7: The Staff-Level System Design Framework
+Chapter 8: Phase 1 — Users & Use Cases
+Chapter 9: Phase 2 — Functional Requirements
+Chapter 10: Phase 3 — Scale: Capacity Planning and Growth
+Chapter 11: Cost, Efficiency, and Sustainable Design (NEW POSITION)  ← MOVED
+Chapter 12: Phase 4 & Phase 5 — NFRs, Assumptions, Constraints
+Chapter 13: End-to-End System Design Using the 5-Phase Framework
+
+Section 3 — Distributed Systems
+# Chapter 14: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
+# Chapter 15: Replication and Sharding — Scaling Without Losing Control
+# Chapter 16: Leader Election, Coordination, and Distributed Locks
+# Chapter 17: Backpressure, Retries, and Idempotency
+# Chapter 18: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
+# Chapter 19: Failure Models and Partial Failures — Designing for Reality at Staff Level
+# Chapter 20: CAP Theorem — Behavior Under Partition (Applied Case Studies)
+
+Section 4 — Data Systems & Global Scale
+# Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
+# Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
+# Chapter 23: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
+# Chapter 24: Multi-Region Systems — Geo-Replication, Latency, and Failure
+# Chapter 25: Data Locality, Compliance, and System Evolution
+# Chapter 26: Cost, Efficiency, and Sustainable System Design at Staff Level [TODO]
+# Chapter 27: System Evolution, Migration, and Risk Management at Staff Level [TODO]
+
+
+Section 5 — Staff-Level Design Problems [TODO]
+# Chapter 28. Global rate limiter
+# Chapter 29. Distributed cache
+# Chapter 30. News feed
+# Chapter 31. Real-time collaboration
+# Chapter 32. Messaging platform
+# Chapter 33. Metrics / observability system
+# Chapter 34. Configuration / Feature Flag System
+# Chapter 35. API Gateway / Edge Request Routing System
+# Chapter 36. Search / Indexing System (Read-heavy, Latency-sensitive)
+# Chapter 37. Recommendation / Ranking System (Simplified)
+# Chapter 38. Notification Delivery System (Fan-out at Scale)
+# Chapter 39. Authentication & Authorization System
+# Chapter 40. Distributed Scheduler / Job Orchestration System
+# Chapter 41. Feature Experimentation / A/B Testing Platform
+# Chapter 42. Log Aggregation & Query System
+# Chapter 43. Payment / Transaction Processing System
+# Chapter 44. Distributed Configuration / Secrets Management System
+
+------------------- Reviewer --------
+
+You are a Google Staff Engineer (L6) and system design interviewer who has evaluated hundreds of Staff-level candidates.
+
+Your task is to REVIEW and EXTEND the provided section so that it fully meets the depth, breadth, and judgment expected at Google Staff Engineer (L6) level.
+
+This is NOT a rewrite task.
+This is a Staff-level gap-filling and hardening task.
+
+---
+
+STEP 1: Google L6 Coverage Audit (MANDATORY)
+
+Evaluate the section against Google Staff Engineer (L6) expectations across these dimensions:
+
+1. Judgment & Decision-Making
+   - Are major design decisions explained with clear WHY?
+   - Are trade-offs explicit and contextual?
+   - Are alternatives considered and consciously rejected?
+
+2. Failure & Degradation Thinking
+   - Does the section reason about partial failures?
+   - Does it explain runtime behavior during failure, not just recovery?
+   - Is blast radius explicitly discussed?
+
+3. Scale & Evolution
+   - Does the design consider growth (v1 → 10× → multi-year)?
+   - Are bottlenecks identified before they fail?
+   - Is evolution driven by real constraints or incidents?
+
+4. Staff-Level Signals
+   - Is there a clear difference between L5 (Senior) and L6 (Staff) thinking?
+   - Does the content demonstrate system-wide ownership?
+   - Could this explanation be used to *teach* another engineer?
+
+Clearly identify:
+- Which areas meet Google L6 bar
+- Which areas are shallow, missing, or L5-level
+
+Be direct and critical — act like a real interviewer.
+
+---
+
+STEP 2: Add Missing or Weak Topics (MANDATORY)
+
+If any topic is:
+- Missing
+- Underdeveloped
+- Too abstract
+- Lacking real-world grounding
+
+Then ADD new subsections that include:
+- Clear explanation of the topic
+- WHY it matters at Google L6 level
+- What failure looks like if it is ignored
+- How a Staff Engineer reasons about it differently than a Senior Engineer
+
+Do NOT remove existing content unless incorrect.
+
+---
+
+STEP 3: Real-World Application (MANDATORY)
+
+For every major concept, ground it using at least ONE real system such as:
+- Rate limiter
+- News feed
+- Messaging system
+- Notification system
+- API gateway
+
+For each example:
+- Explain the concrete design decision
+- Describe trade-offs
+- Show failure behavior
+- Explain what decision was made and WHY
+
+Avoid abstract or purely theoretical explanations.
+
+---
+
+STEP 4: Diagram Augmentation (MANDATORY)
+
+If diagrams are missing or insufficient:
+
+- Identify which concepts require diagrams to improve understanding.
+- Add 2–3 diagrams maximum per section.
+- Diagrams must be:
+  - Conceptual
+  - Interview-style
+  - Focused on teaching one idea clearly
+
+Use text-described diagrams or Mermaid-style diagrams for:
+- Architecture overview
+- Data flow (read/write paths)
+- Failure propagation
+- Containment boundaries
+
+Do NOT add decorative or vendor-specific diagrams.
+
+---
+
+STEP 5: Interview Calibration (MANDATORY)
+
+Add explicit interview-calibrated guidance:
+- Example phrases a Google Staff Engineer would say
+- What signals an interviewer is looking for in this section
+- One common mistake made by strong L5 engineers and how L6 thinking differs
+
+---
+
+STEP 6: Final Verification (MANDATORY)
+
+Conclude with:
+- A clear statement:
+  “This section now meets / still does not fully meet Google Staff Engineer (L6) expectations.”
+- A short checklist of:
+  - Staff-level signals covered
+  - Any remaining gaps (if unavoidable)
+
+---
+
+Important Constraints:
+- Maintain Staff-level tone: calm, judgment-focused, experience-driven
+- Do NOT simplify for beginners
+- Do NOT turn this into academic theory
+- Do NOT focus on tools or vendor-specific details
+
+Begin once the section content is provided.
+
+-------------------
+
+Use sudo code instade of any specific language code, Is everyhing covered as google l6 level depth and breadth now? if not please add. Once done, move brainstrming and Exercise to the last and add more brainstrming and Exercises to cover all topics.
+
+
+----------------------------Template Ends-------------------------------------
+
+
+Chapter 28 — Global Rate Limiter
+System to design: Global Rate Limiter
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 29 — Distributed Cache
+System to design: Distributed Cache
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 30 — News Feed
+System to design: News Feed System
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 31 — Real-Time Collaboration
+System to design: Real-Time Collaboration System (Docs / Whiteboard)
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 32 — Messaging Platform
+System to design: Messaging Platform (1:1 + Group)
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 33 — Metrics / Observability System
+System to design: Metrics & Observability System
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 34 — Configuration / Feature Flag System
+System to design: Configuration, Feature Flags & Secrets Management System
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 35 — API Gateway / Edge Routing
+System to design: API Gateway & Edge Request Routing System
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 36 — Search / Indexing System
+System to design: Search & Indexing System (Read-Heavy, Low Latency)
+Apply the MASTER PROMPT in full.
+--------------------------------------------------------------------------
+Chapter 37 — Recommendation / Ranking System (Simplified)
+System to design: Recommendation & Ranking System (Non-ML Focused)
+Apply the MASTER PROMPT in full.
