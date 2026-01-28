@@ -1,4 +1,5 @@
 Section 1 — Staff Engineer Mindset & Evaluation
+---
 Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
 Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
 Chapter 3: Designing Systems That Scale Across Teams (Staff Perspective)   ← MOVED
@@ -8,6 +9,7 @@ Chapter 6: Communication and Interview Leadership for Google Staff Engineers
 
 
 Section 2 — System Design Framework (5 Phases)
+---
 Chapter 7: The Staff-Level System Design Framework
 Chapter 8: Phase 1 — Users & Use Cases
 Chapter 9: Phase 2 — Functional Requirements
@@ -17,6 +19,7 @@ Chapter 12: Phase 4 & Phase 5 — NFRs, Assumptions, Constraints
 Chapter 13: End-to-End System Design Using the 5-Phase Framework
 
 Section 3 — Distributed Systems
+---
 # Chapter 14: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
 # Chapter 15: Replication and Sharding — Scaling Without Losing Control
 # Chapter 16: Leader Election, Coordination, and Distributed Locks
@@ -26,6 +29,7 @@ Section 3 — Distributed Systems
 # Chapter 20: CAP Theorem — Behavior Under Partition (Applied Case Studies)
 
 Section 4 — Data Systems & Global Scale
+---
 # Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
 # Chapter 22: Caching at Scale — Redis, CDN, and Edge Systems
 # Chapter 23: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
@@ -36,6 +40,7 @@ Section 4 — Data Systems & Global Scale
 
 
 Section 5 — Staff-Level Design Problems [TODO]
+---
 # Chapter 28. Global rate limiter
 # Chapter 29. Distributed cache
 # Chapter 30. News feed
@@ -188,16 +193,17 @@ Begin once the section content is provided.
 Use sudo code instade of any specific language code, Is everyhing covered as google l6 level depth and breadth now? if not please add. Once done, move brainstrming and Exercise to the last and add more brainstrming and Exercises to cover all topics.
 
 
+
+
+
 ----------------------------Template Ends-------------------------------------
+Chapter 28 - System to design: Global Rate Limiter - Apply the MASTER_PROMPT in full.
 
-
-Chapter 28 — Global Rate Limiter
-System to design: Global Rate Limiter
-Apply the MASTER PROMPT in full.
 --------------------------------------------------------------------------
 Chapter 29 — Distributed Cache
 System to design: Distributed Cache
 Apply the MASTER PROMPT in full.
+
 --------------------------------------------------------------------------
 Chapter 30 — News Feed
 System to design: News Feed System

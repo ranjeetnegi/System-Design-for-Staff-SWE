@@ -70,15 +70,15 @@ A system that doesn't need to change is either trivial or dead. Every successful
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    WHY SYSTEMS MUST EVOLVE                                  │
 │                                                                             │
-│   EXTERNAL PRESSURE                          INTERNAL PRESSURE              │
-│   ┌─────────────────────────────────┐       ┌─────────────────────────────┐ │
-│   │  • Users grow from 1K to 1M     │       │  • Code becomes unmaint-    │ │
-│   │  • New features required        │       │    ainable                  │ │
-│   │  • Competitors force innovation │       │  • Dependencies go EOL      │ │
-│   │  • Compliance laws change       │       │  • Original authors leave   │ │
-│   │  • Data locality requirements   │       │  • Performance degrades     │ │
-│   │  • Cost pressure increases      │       │  • Technical debt compounds │ │
-│   └─────────────────────────────────┘       └─────────────────────────────┘ │
+│   EXTERNAL PRESSURE                        INTERNAL PRESSURE                │
+│   ┌─────────────────────────────────┐     ┌─────────────────────────────┐   │
+│   │  • Users grow from 1K to 1M     │     │  • Code becomes unmaint-    │   │
+│   │  • New features required        │     │    ainable                  │   │
+│   │  • Competitors force innovation │     │  • Dependencies go EOL      │   │
+│   │  • Compliance laws change       │     │  • Original authors leave   │   │
+│   │  • Data locality requirements   │     │  • Performance degrades     │   │
+│   │  • Cost pressure increases      │     │  • Technical debt compounds │   │
+│   └─────────────────────────────────┘     └─────────────────────────────┘   │
 │                                                                             │
 │   THE EVOLUTION CERTAINTY:                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -2986,7 +2986,7 @@ FUNCTION send_notification(user, message):
 │   │      └────────┴────────┴────────┴────────┘                          │   │
 │   │                        │                                            │   │
 │   │              ┌─────────▼─────────┐                                  │   │
-│   │              │   Shared Database  │                                 │   │
+│   │              │   Shared Database │                                  │   │
 │   │              └───────────────────┘                                  │   │
 │   │                                                                     │   │
 │   │   Problem: Migration failure in Svc3 or DB affects ALL services     │   │

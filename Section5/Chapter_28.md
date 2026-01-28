@@ -3571,7 +3571,7 @@ ROLLBACK TRIGGER:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    RATE LIMITER ON-CALL RUNBOOK                              │
+│                    RATE LIMITER ON-CALL RUNBOOK                             │
 │                                                                             │
 │   ALERT: Rate Limiter Latency High                                          │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
