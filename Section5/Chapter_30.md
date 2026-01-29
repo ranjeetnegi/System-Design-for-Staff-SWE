@@ -4329,20 +4329,591 @@ Approach:
 
 ---
 
+## Component-Specific Brainstorming Questions
+
+```
+FEED STORAGE:
+
+QUESTION 41: What happens when a Feed Storage shard experiences 
+             memory pressure and must evict entries?
+
+Consider:
+• Which users' feeds get evicted first?
+• How do you prevent evicting active users?
+• What's the cost of rebuilding evicted feeds?
+• How do you handle "cold start" when evicted user returns?
+
+Staff answer: LRU by last access time, not by user ID. Active users 
+never evicted. Cold users rebuilt on-demand (acceptable latency hit 
+for users who haven't opened app in weeks).
+
+---
+
+QUESTION 42: Design a Feed Storage migration from Redis to 
+             a custom in-memory store.
+
+Consider:
+• Zero downtime requirement
+• Data consistency during migration
+• Rollback strategy
+• Performance comparison validation
+
+---
+
+CONTENT CACHE:
+
+QUESTION 43: Content Cache achieves 99% hit rate. What causes 
+             the 1% misses and how do you reduce them?
+
+Consider:
+• New posts (cold start)
+• Edited posts (invalidation)
+• Long-tail content (rarely accessed old posts)
+• Cache restarts
+
+Staff answer: 1% misses dominated by new posts (<1 minute old) and 
+long-tail historical content. Reduce by: write-through on creation, 
+extended TTL for popular content, accept higher miss rate for 
+content older than 7 days.
+
+---
+
+QUESTION 44: How do you handle a cache poisoning attack where 
+             an attacker stores malicious content under valid post IDs?
+
+Consider:
+• How could this happen?
+• Detection mechanisms
+• Invalidation strategy
+• Prevention at write time
+
+---
+
+FAN-OUT WORKERS:
+
+QUESTION 45: Fan-out queue has 10M messages backed up. 
+             Which messages do you process first?
+
+Consider:
+• Active users vs inactive users
+• Recent posts vs older posts
+• Celebrity posts vs normal posts
+• First-in-first-out vs priority queue
+
+Staff answer: Priority queue with: (1) Posts to active users, 
+(2) Celebrity posts (already in Celebrity Index), (3) Posts to 
+inactive users. Never FIFO—user importance matters more than 
+message age.
+
+---
+
+QUESTION 46: A fan-out worker consistently fails on specific 
+             users' feeds. How do you handle poison messages?
+
+Consider:
+• Dead letter queue
+• Retry limits
+• Manual investigation queue
+• Impact on affected users
+
+---
+
+RANKING SERVICE:
+
+QUESTION 47: Ranking model accuracy degrades over time 
+             (concept drift). How do you detect and handle this?
+
+Consider:
+• What metrics indicate drift?
+• Automatic vs manual retraining
+• A/B testing new models
+• Rollback strategy
+
+Staff answer: Monitor CTR prediction vs actual CTR. If gap exceeds 
+threshold, trigger model retraining pipeline. Always have fallback 
+to previous model. A/B test new model on 5% before full rollout.
+
+---
+
+QUESTION 48: Users complain "I'm not seeing posts from my 
+             best friend." How do you debug ranking issues?
+
+Consider:
+• Friend's posts in feed but ranked low
+• Friend's posts not in feed at all
+• Ranking explanation/transparency
+• Balancing engagement vs user preferences
+
+---
+
+SOCIAL GRAPH:
+
+QUESTION 49: A user follows 10,000 accounts in 1 minute. 
+             Is this abuse or legitimate behavior?
+
+Consider:
+• Import from another platform
+• Bot/automated behavior
+• Rate limiting implications
+• Impact on system
+
+Staff answer: Could be either. Check: account age, follow pattern 
+(sequential IDs = bot), source (API vs UI). Rate limit to 100/hour 
+with burst allowance for imports. Queue excess for later processing.
+
+---
+
+QUESTION 50: Social graph becomes inconsistent between regions 
+             after a long partition. How do you reconcile?
+
+Consider:
+• Conflicting follow/unfollow operations
+• Which version wins?
+• User notification of changes
+• Prevention strategies
+
+---
+
+ABUSE DETECTION:
+
+QUESTION 51: How do you distinguish between viral organic content 
+             and coordinated inauthentic behavior (fake virality)?
+
+Consider:
+• Similar engagement patterns
+• Account network analysis
+• Timing analysis
+• False positive cost
+
+---
+
+QUESTION 52: An abuse detection rule has 5% false positive rate. 
+             Is this acceptable?
+
+Consider:
+• 5% of 100M posts/day = 5M legitimate posts blocked
+• User experience impact
+• Appeal process load
+• Balance with true positive rate
+
+Staff answer: Depends on action severity. For hiding posts: 5% too 
+high (use 0.1% threshold). For flagging for review: 5% acceptable. 
+For permanent ban: require human review, no automated action.
+
+---
+
+MULTI-REGION:
+
+QUESTION 53: EU users complain their feeds are 30 minutes stale 
+             after US-EU network restored. Why?
+
+Consider:
+• Replication backlog during partition
+• Priority of catch-up traffic
+• Impact on real-time traffic
+• User-facing mitigation
+
+Staff answer: Backlog flooding forward path. Solution: separate 
+queues for catch-up vs real-time, rate limit catch-up to not 
+impact real-time. Accept temporary staleness for non-active users, 
+prioritize catch-up for users currently online.
+
+---
+
+QUESTION 54: Regulations require EU user data to never leave EU. 
+             How does this affect feed design?
+
+Consider:
+• EU users following US users
+• Content replication
+• Metadata vs content separation
+• Compliance verification
+
+---
+
+MONITORING & OPERATIONS:
+
+QUESTION 55: Define the top 5 SLOs for the news feed system.
+
+Consider:
+• User-facing vs internal metrics
+• Latency vs availability vs correctness
+• How to measure each
+• Error budget calculation
+
+Staff answer:
+1. Feed load latency P99 < 500ms (99.9% of requests)
+2. Feed availability > 99.9%
+3. Post visibility latency P95 < 5 minutes
+4. Content freshness: <1% feeds older than 5 minutes
+5. Error rate < 0.1%
+
+---
+
+QUESTION 56: You need to reduce on-call burden by 50%. 
+             What changes do you prioritize?
+
+Consider:
+• Most frequent alert types
+• Automation opportunities
+• Self-healing mechanisms
+• Alert fatigue reduction
+```
+
+---
+
+## Component-Specific Exercises
+
+```
+EXERCISE 13: Feed Storage Hot/Cold Tiering Implementation
+
+Scenario:
+• 200M users, 50% active in last 7 days
+• Memory budget: 500 GB (not enough for all)
+• SSD tier for cold users
+
+Design:
+• Access pattern tracking
+• Promotion/demotion criteria
+• Rebuild latency for cold users
+• Memory management
+
+Deliverables:
+• Pseudocode for tiering logic
+• Latency SLOs per tier
+• Cost analysis
+
+---
+
+EXERCISE 14: Content Cache Stampede Prevention
+
+Scenario:
+• Celebrity with 50M followers posts
+• Post TTL expires after 24 hours
+• 50M users refresh feeds simultaneously
+• All requests miss cache for that post
+
+Design:
+• Request coalescing implementation
+• Staggered TTL strategy
+• Background refresh mechanism
+• Fallback during stampede
+
+Deliverables:
+• Pseudocode for stampede prevention
+• Latency impact analysis
+• Comparison: with vs without mitigation
+
+---
+
+EXERCISE 15: Fan-out Worker Priority Queue Design
+
+Scenario:
+• 100M posts/day
+• 15B fan-out writes/day
+• Celebrity post: 10M fan-outs
+• Normal post: 150 fan-outs
+
+Design:
+• Priority levels and criteria
+• Queue partitioning strategy
+• Worker allocation per priority
+• Starvation prevention
+
+Deliverables:
+• Priority queue architecture diagram
+• Pseudocode for priority assignment
+• Latency SLOs per priority level
+
+---
+
+EXERCISE 16: Ranking Service A/B Testing Framework
+
+Scenario:
+• Current model: 10% engagement improvement
+• New model: Claims 15% improvement
+• Need to validate safely
+
+Design:
+• Traffic splitting mechanism
+• Metrics collection
+• Statistical significance calculation
+• Rollback triggers
+
+Deliverables:
+• A/B test design document
+• Pseudocode for traffic routing
+• Success/failure criteria
+
+---
+
+EXERCISE 17: Abuse Detection False Positive Reduction
+
+Scenario:
+• Current false positive rate: 2%
+• 2M legitimate posts incorrectly flagged daily
+• User complaints increasing
+
+Design:
+• Multi-stage detection (warn → review → block)
+• Appeal process integration
+• Model improvement feedback loop
+• False positive monitoring
+
+Deliverables:
+• Detection pipeline redesign
+• Pseudocode for staged enforcement
+• Target false positive rate and timeline
+
+---
+
+EXERCISE 18: Multi-Region Failover Drill
+
+Scenario:
+• 3 regions: US-EAST, EU-WEST, AP-EAST
+• Need to simulate US-EAST complete outage
+• No data loss, minimal user impact
+
+Design:
+• Traffic rerouting mechanism
+• Data consistency during failover
+• User experience during transition
+• Recovery procedure
+
+Deliverables:
+• Runbook for failover drill
+• Expected user impact per phase
+• Success criteria
+
+---
+
+EXERCISE 19: Feed System Cost Reduction by 30%
+
+Scenario:
+• Current cost: $730K/month
+• Target: $511K/month
+• Cannot reduce DAU or functionality
+
+Design:
+• Cost breakdown by component
+• Optimization opportunities
+• Trade-offs accepted
+• Implementation priority
+
+Deliverables:
+• Cost reduction plan with specific changes
+• Risk assessment for each change
+• Timeline for implementation
+
+---
+
+EXERCISE 20: Zero-Downtime Database Migration
+
+Scenario:
+• Current: Post Store on MySQL
+• Target: Post Store on distributed database
+• 10B posts, 500GB writes/day
+• Cannot lose any data
+
+Design:
+• Dual-write strategy
+• Read migration phases
+• Verification mechanism
+• Rollback plan
+
+Deliverables:
+• Migration architecture diagram
+• Pseudocode for dual-write
+• Verification queries
+• Rollback criteria
+```
+
+---
+
+## Trade-off Debates (Additional)
+
+```
+DEBATE 4: Client-side Feed Assembly vs Server-side
+
+POSITION A: Server assembles complete feed
+• Single request from client
+• Server does all work
+• Consistent experience
+
+POSITION B: Client assembles from multiple APIs
+• Feed structure API, content API, ranking API
+• Client has more control
+• Can cache components independently
+
+Staff resolution:
+Server-side for mobile (bandwidth matters).
+Hybrid for web (can parallelize requests).
+Never full client-side (too many round trips on mobile).
+
+---
+
+DEBATE 5: Per-Post Engagement vs Aggregated
+
+POSITION A: Real-time per-post engagement counts
+• Every like updates counter
+• Users see current count
+• High write volume
+
+POSITION B: Aggregated engagement (updated every 5 minutes)
+• Batch counter updates
+• Users see slightly stale counts
+• Much lower write volume
+
+Staff resolution:
+Aggregated for display (users don't notice 5-minute lag).
+Real-time for own actions (I liked, count should increment).
+Hybrid: Local optimistic update + eventual server sync.
+
+---
+
+DEBATE 6: Separate Celebrity Service vs Integrated
+
+POSITION A: Dedicated Celebrity Service
+• Separate infrastructure for celebrities
+• Specialized handling
+• Different SLOs
+
+POSITION B: Integrated with special handling
+• Same infrastructure, different code paths
+• Simpler operations
+• Risk of celebrity impact on regular users
+
+Staff resolution:
+Integrated with isolation. Celebrity Index is separate data 
+structure, but runs in same service. Avoids operational 
+complexity of separate service while limiting blast radius.
+
+---
+
+DEBATE 7: Feed Correctness vs Speed
+
+POSITION A: Correct feed always (strong consistency)
+• Never show stale data
+• Never miss posts
+• Higher latency acceptable
+
+POSITION B: Fast feed always (eventual consistency)
+• Sub-100ms always
+• May miss recent posts
+• May show slightly stale data
+
+Staff resolution:
+Speed for most cases (users don't notice small inconsistencies).
+Correctness for "own posts" (author must see their post immediately).
+Never sacrifice speed for correctness that users can't perceive.
+```
+
+---
+
+## Failure Injection Exercises (Additional)
+
+```
+FAILURE INJECTION 4: Ranking Service Latency Spike
+
+Setup:
+• Inject 500ms latency into ranking service
+• Maintain normal traffic
+
+Expected behavior:
+• Degradation to Level 2 or 3
+• Feed loads continue with cached/chronological ranking
+• Alert fires within 1 minute
+
+Validate:
+• Feed latency SLO maintained
+• Degradation properly logged
+• Recovery when latency returns to normal
+
+---
+
+FAILURE INJECTION 5: Social Graph Corruption
+
+Setup:
+• Corrupt 1% of follow edges (wrong direction)
+• Don't notify users
+
+Expected behavior:
+• Affected users see wrong posts in feed
+• Detection via user complaints or anomaly detection
+• Rollback mechanism exists
+
+Validate:
+• Corruption detected within X minutes
+• Rollback completes without data loss
+• Affected users' feeds correct after rollback
+
+---
+
+FAILURE INJECTION 6: Content Cache Full Eviction
+
+Setup:
+• Flush entire Content Cache
+• Maintain normal traffic
+
+Expected behavior:
+• Cache hit rate drops to 0%
+• Post Store handles increased load
+• Cache warms over 10-30 minutes
+
+Validate:
+• No user-facing errors during warming
+• Post Store doesn't exceed capacity
+• Full recovery within target time
+
+---
+
+FAILURE INJECTION 7: Cross-Region Replication Delay
+
+Setup:
+• Inject 5-minute delay in US-EAST to EU-WEST replication
+• Users in EU following US creators
+
+Expected behavior:
+• EU users see 5-minute stale US content
+• No errors, just staleness
+• Monitoring detects replication lag
+
+Validate:
+• Lag metric accurately reflects delay
+• Alert fires at appropriate threshold
+• Recovery when delay removed
+```
+
+---
+
 # Part 20: Final Verification — L6 Readiness Checklist
 
 ## L6 Coverage Assessment
 
 | Dimension | Status | Evidence |
 |-----------|--------|----------|
-| **Judgment & Decision-Making** | ✅ Covered | L5 vs L6 table, trade-off sections, explicit WHY for all major decisions |
-| **Failure & Degradation Thinking** | ✅ Covered | Part 9 failure modes, retry storm handling, ranking degradation levels, split-brain scenarios |
-| **Scale & Evolution** | ✅ Covered | V1-V4 evolution, 10x scale exercises, concrete bottleneck progression |
-| **Cost & Efficiency** | ✅ Covered | Part 11 + AWS optimization, per-request cost breakdown |
-| **Multi-Region** | ✅ Covered | Part 12 + partition healing, split-brain resolution |
-| **Security & Abuse** | ✅ Covered | Part 13 abuse vectors, rate limiting |
-| **Organizational Reality** | ✅ Covered | On-call runbook, monitoring dashboard, migration process |
-| **Interview Calibration** | ✅ Covered | Part 16 + 5 follow-up questions |
+| **Judgment & Decision-Making** | ✅ Covered | L5 vs L6 table, trade-off sections, 7 trade-off debates, explicit WHY for all major decisions |
+| **Failure & Degradation Thinking** | ✅ Covered | Part 9 failure modes, retry storm handling, ranking degradation levels, split-brain scenarios, 7 failure injection exercises |
+| **Scale & Evolution** | ✅ Covered | V1-V4 evolution, 10x scale exercises, concrete bottleneck progression, component-specific scaling questions |
+| **Cost & Efficiency** | ✅ Covered | Part 11 + AWS optimization, per-request cost breakdown, Exercise 19 (30% cost reduction) |
+| **Multi-Region** | ✅ Covered | Part 12 + partition healing, split-brain resolution, Exercise 18 (failover drill), Q53-54 (regional compliance) |
+| **Security & Abuse** | ✅ Covered | Part 13 abuse vectors, rate limiting, Q51-52 (abuse detection trade-offs), Exercise 17 (false positive reduction) |
+| **Organizational Reality** | ✅ Covered | On-call runbook, monitoring dashboard, migration process, Q55-56 (SLOs, on-call burden) |
+| **Interview Calibration** | ✅ Covered | Part 16 + 5 follow-up questions, component-specific Staff answers throughout |
+
+## Component-Specific Coverage
+
+| Component | Brainstorming Questions | Exercises | Failure Injection |
+|-----------|------------------------|-----------|-------------------|
+| Feed Storage | Q41-42 | E13 (tiering) | Covered in Part 9 |
+| Content Cache | Q43-44 | E14 (stampede) | FI6 (full eviction) |
+| Fan-out Workers | Q45-46 | E15 (priority queue) | Covered in Part 9 |
+| Ranking Service | Q47-48 | E16 (A/B testing) | FI4 (latency spike) |
+| Social Graph | Q49-50 | Covered in E12 | FI5 (corruption) |
+| Abuse Detection | Q51-52 | E17 (false positives) | - |
+| Multi-Region | Q53-54 | E18 (failover drill) | FI7 (replication delay) |
+| Cost/Operations | Q55-56 | E19 (cost reduction) | - |
+| Migration | - | E20 (database migration) | - |
 
 ## Staff-Level Signals Covered
 
@@ -4356,12 +4927,31 @@ Approach:
 - ✅ Per-request cost awareness
 - ✅ Monitoring and alerting design
 - ✅ On-call procedures
+- ✅ Component-specific failure handling
+- ✅ A/B testing and gradual rollout
+- ✅ Abuse detection trade-offs
+- ✅ Cross-region compliance considerations
+
+## Brainstorming & Exercises Summary
+
+| Category | Count |
+|----------|-------|
+| "What If X Changes?" Questions | 5 (Q1-5) |
+| Component-Specific Questions | 16 (Q41-56) |
+| Additional L6 Questions | 5 (Q36-40) |
+| Redesign Exercises | 3 (E1-3) |
+| Failure Injection Exercises | 7 (original 3 + FI4-7) |
+| Component-Specific Exercises | 8 (E13-20) |
+| Additional Exercises | 4 (E9-12) |
+| Trade-off Debates | 7 (D1-7) |
+| **Total** | **56 questions/exercises** |
 
 ## Remaining Considerations
 
 - ML ranking specifics intentionally omitted (separate domain)
 - Content moderation pipeline not covered (separate system)
 - Media processing not covered (separate system)
+- These are explicitly out of scope per functional requirements
 
 ---
 
