@@ -3225,7 +3225,7 @@ When clients receive 429 (Too Many Requests), poorly behaved clients retry immed
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    RETRY STORM AMPLIFICATION                                 │
+│                    RETRY STORM AMPLIFICATION                                │
 │                                                                             │
 │   TIMELINE:                                                                 │
 │   T+0:    Customer at 1000/1000 limit                                       │
@@ -3361,7 +3361,7 @@ CLASS AsyncConfigManager:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│           CASCADING FAILURE: RATE LIMITER CAUSES OUTAGE                      │
+│           CASCADING FAILURE: RATE LIMITER CAUSES OUTAGE                     │
 │                                                                             │
 │   INITIAL STATE:                                                            │
 │   • Rate limiter cluster: 16 nodes, healthy                                 │

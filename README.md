@@ -179,7 +179,7 @@ Chapter 26: Cost, Efficiency, and Sustainable System Design
 Chapter 27: System Evolution, Migration, and Risk Management
 
 
-# Section 5 — Staff-Level Design Problems [TODO]
+# Section 5 — Staff-Level Design Problems
 Chapter 28. Global rate limiter
 Chapter 29. Distributed cache
 Chapter 30. News feed
