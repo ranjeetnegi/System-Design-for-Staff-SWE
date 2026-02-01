@@ -24,7 +24,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    SECTION 1: LEARNING PATH                                  │
+│                    SECTION 1: LEARNING PATH                                 │
 │                                                                             │
 │   Chapter 1                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
