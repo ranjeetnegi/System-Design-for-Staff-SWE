@@ -4822,6 +4822,239 @@ Analysis points:
 • Lost device: History gone forever
 • Backup: Encrypted backup to cloud, user holds key
 Conclusion: Possible but significant UX tradeoffs. Evaluate.
+
+EXERCISE 6: MULTI-DEVICE SYNC WITHOUT CONFLICTS
+─────────────────────────────────────────────────────────────────────────────
+Constraint: User has 4 devices. All must show identical message state.
+Question: What's the sync protocol?
+
+Analysis points:
+• Read on one device → mark read on all (propagation delay?)
+• Type on phone, switch to laptop → continue typing indicator?
+• Delete on tablet → propagate to phone immediately?
+• Offline edits on two devices → which wins?
+Conclusion: Vector clocks or CRDTs for conflict-free sync.
+
+EXERCISE 7: SEARCH AT MESSAGING SCALE
+─────────────────────────────────────────────────────────────────────────────
+Constraint: 100B messages. User searches "dinner plans with Bob last month."
+Question: How do you make this fast?
+
+Analysis points:
+• Full-text index on 100B messages = massive storage
+• Per-user index: N users × avg messages = still huge
+• Tiered search: Recent in fast index, old messages = slow query
+• Privacy: Search index must be access-controlled
+Conclusion: Trade-off between search speed and index cost.
+
+EXERCISE 8: GRACEFUL CLIENT BEHAVIOR DURING OUTAGE
+─────────────────────────────────────────────────────────────────────────────
+Constraint: Server is down for 10 minutes. What should client do?
+Question: Design the client-side resilience strategy.
+
+Analysis points:
+• Queue messages locally with retry
+• Show clear status ("connecting..." vs "sending...")
+• Allow reading cached messages
+• Don't lose user's typed message
+• Reconnect with backoff (don't storm)
+Conclusion: Client is a full participant in reliability.
+```
+
+## Topic-Specific Practice Questions
+
+```
+ORDERING & CONSISTENCY:
+─────────────────────────────────────────────────────────────────────────────
+
+Q16: Alice sends "A" then "B". Due to network issues, "B" arrives at server 
+     first. How does your system ensure Alice's messages display in order?
+     
+     Explore: Client-side sequence, server reordering, gap detection
+
+Q17: In a group, Alice and Bob send messages at the exact same millisecond. 
+     How do you decide ordering? Is it consistent across all members?
+     
+     Explore: Tiebreaker rules, deterministic ordering, Lamport timestamps
+
+Q18: Message edits and deletes arrive out of order. How do you handle 
+     "delete message 5" arriving before "message 5" itself?
+     
+     Explore: Tombstones, operation log, version vectors
+
+PRESENCE & REAL-TIME SIGNALS:
+─────────────────────────────────────────────────────────────────────────────
+
+Q19: User has 500 contacts. How do you efficiently show which are online 
+     without creating N² traffic?
+     
+     Explore: Subscription limits, lazy loading, bloom filters for presence
+
+Q20: Typing indicator shows for 5 seconds, but user stops typing after 2. 
+     How do you handle "stop typing" signal loss?
+     
+     Explore: Auto-expire, explicit stop, heartbeat-based
+
+Q21: Presence shows "online" but user closed app 2 minutes ago. Why does 
+     this happen and is it acceptable?
+     
+     Explore: Heartbeat intervals, TTL trade-offs, "last seen" as fallback
+
+CONNECTION & DELIVERY:
+─────────────────────────────────────────────────────────────────────────────
+
+Q22: User is on flaky mobile network (connects/disconnects every 30 seconds). 
+     How do you avoid constant sync overhead?
+     
+     Explore: Connection coalescing, sync checkpoints, resume tokens
+
+Q23: Push notification says "New message from Alice" but when user opens app, 
+     no message appears. What went wrong?
+     
+     Explore: Race conditions, sync timing, push as trigger not content
+
+Q24: User has app open but phone went to sleep. Is WebSocket still alive? 
+     How do you handle mobile app backgrounding?
+     
+     Explore: Keep-alive, OS constraints, push fallback for backgrounded apps
+
+MEDIA & ATTACHMENTS:
+─────────────────────────────────────────────────────────────────────────────
+
+Q25: User sends 50MB video. How do you handle upload? What if it fails at 80%?
+     
+     Explore: Resumable upload, chunking, client-side compression
+
+Q26: Media expires after 30 days but user still sees the message. What do they 
+     see where the image was?
+     
+     Explore: Placeholder, "media expired", re-request option
+
+Q27: Same image sent to 100 different conversations. Do you store it 100 times?
+     
+     Explore: Content-addressable storage, privacy implications, dedup cost
+
+GROUPS & MEMBERSHIP:
+─────────────────────────────────────────────────────────────────────────────
+
+Q28: Admin removes a user from group. User was offline. When they come online, 
+     do they see messages sent while they were still a member?
+     
+     Explore: Membership snapshot at send time, retroactive visibility
+
+Q29: Group has 10,000 members. Member list request takes 5 seconds. How do 
+     you optimize?
+     
+     Explore: Pagination, lazy loading, "X and 9,997 others"
+
+Q30: Two admins simultaneously remove each other from the group. Who wins?
+     
+     Explore: Last-write-wins, optimistic locking, admin hierarchy
+```
+
+## Comprehensive Design Exercises
+
+```
+FULL DESIGN EXERCISE 1: DISAPPEARING MESSAGES
+─────────────────────────────────────────────────────────────────────────────
+Requirement: Messages auto-delete after 24 hours from being READ (not sent).
+
+Design considerations:
+• Per-recipient read time tracking
+• Group messages: Delete when ALL have read? Or per-recipient?
+• What if recipient never reads? Keep forever?
+• Storage implication: Can't use TTL on write
+• Sync implication: Deleted message must be removed from all devices
+
+Pseudo-code for expiry check:
+FUNCTION check_message_expiry(message, recipient):
+    read_time = get_read_time(message.id, recipient.id)
+    
+    IF read_time IS NULL:
+        RETURN NOT_EXPIRED  // Never read, don't expire
+    
+    IF now() - read_time > 24_HOURS:
+        RETURN EXPIRED
+    
+    RETURN NOT_EXPIRED
+
+FULL DESIGN EXERCISE 2: MESSAGE REACTIONS AT SCALE
+─────────────────────────────────────────────────────────────────────────────
+Requirement: Users can react to messages with emoji. Show reaction counts.
+
+Design considerations:
+• Data model: Per-message reaction list vs reaction counts
+• Popular message: 1M reactions on viral message in large group
+• Real-time updates: Push reaction changes to all viewers?
+• Undo reaction: Track individual reactions or just counts?
+• Privacy: Who can see who reacted?
+
+Storage trade-off:
+Option A: Store every (message_id, user_id, emoji) - accurate but huge
+Option B: Store (message_id, emoji, count) - compact but can't undo
+Option C: Hybrid - detailed for first 1000, counts after
+
+FULL DESIGN EXERCISE 3: SCHEDULED MESSAGES
+─────────────────────────────────────────────────────────────────────────────
+Requirement: User can schedule message to send at future time.
+
+Design considerations:
+• Storage: Where do scheduled messages live before send time?
+• Reliability: What if scheduler service is down at send time?
+• Edit/cancel: User wants to change scheduled message
+• Timezone: User in LA schedules for "9 AM" - whose 9 AM?
+• Ordering: Scheduled message vs real-time messages interleave?
+
+Scheduler reliability:
+FUNCTION schedule_message(message, send_at):
+    // Store in scheduled_messages table
+    store_scheduled(message, send_at)
+    
+    // Also enqueue in distributed scheduler
+    scheduler.enqueue(
+        task_id = message.id,
+        execute_at = send_at,
+        action = "send_message",
+        payload = message
+    )
+    
+    // Belt and suspenders: Sweeper job checks for missed
+    // scheduled messages every minute
+
+FULL DESIGN EXERCISE 4: MESSAGE FORWARDING CHAIN
+─────────────────────────────────────────────────────────────────────────────
+Requirement: Track how many times a message was forwarded (like WhatsApp).
+
+Design considerations:
+• Forward count: Linear chain or tree?
+• Privacy: Original sender visible to forward recipients?
+• Virality detection: Alert if message forwarded 1000+ times
+• Storage: Copy message or reference original?
+• Editing: If original is edited, do forwards update?
+
+Chain tracking:
+Message:
+    id: string
+    original_message_id: string (null if original)
+    forward_count: int (count of direct forwards from THIS message)
+    chain_depth: int (how many hops from original)
+
+FULL DESIGN EXERCISE 5: CROSS-PLATFORM MESSAGE SYNC
+─────────────────────────────────────────────────────────────────────────────
+Requirement: Sync messages between WhatsApp, Telegram, and your platform.
+
+Design considerations:
+• API differences: Each platform has different capabilities
+• Identity mapping: Same user on different platforms
+• Feature mismatch: Telegram has channels, WhatsApp doesn't
+• Delivery receipt: How to track across platforms?
+• Failure: One platform is down, others continue
+
+This is a HARD problem that demonstrates L6 systems thinking:
+• Abstraction layer for platform-agnostic message model
+• Adapter pattern for each platform's API
+• Event sourcing for reliable cross-platform sync
+• Graceful degradation when platforms are unavailable
 ```
 
 ---
@@ -4880,6 +5113,22 @@ An L5 might design a working messaging system. An L6 designs a messaging system 
 - [x] Interview calibration with L5 vs L6 distinction
 - [x] Deep exercises requiring constraint-based redesign
 
+### Topic Coverage in Exercises:
+
+| Topic | Questions/Exercises |
+|-------|---------------------|
+| **Ordering & Consistency** | Q16, Q17, Q18 |
+| **Presence & Real-Time** | Q19, Q20, Q21 |
+| **Connection & Delivery** | Q22, Q23, Q24 |
+| **Media & Attachments** | Q25, Q26, Q27 |
+| **Groups & Membership** | Q28, Q29, Q30 |
+| **Failure & Resilience** | Q1-Q4 |
+| **Scale Stress** | Q5-Q8 |
+| **Cost Optimization** | Q9-Q11 |
+| **Organizational** | Q12-Q15 |
+| **Full Design Exercises** | Disappearing messages, Reactions, Scheduling, Forwarding, Cross-platform |
+| **Constraint Redesigns** | P2P, 10ms latency, Serverless, Privacy-preserving abuse, No storage |
+
 ### Remaining Considerations (Not Gaps):
 
 1. **End-to-end encryption** is explicitly out of scope (acknowledged and explained)
@@ -4888,6 +5137,15 @@ An L5 might design a working messaging system. An L6 designs a messaging system 
 
 These are intentional scope boundaries, not gaps. Each could be a separate chapter.
 
+### Pseudo-Code Convention:
+
+All code examples in this chapter use language-agnostic pseudo-code:
+- `FUNCTION` keyword for function definitions
+- `IF/ELSE/FOR/WHILE` for control flow
+- Descriptive variable names in snake_case
+- No language-specific syntax (no `def`, `public void`, `func`, etc.)
+- Comments explain intent, not syntax
+
 ### How to Use This Chapter in Interview:
 
 1. Start with the "L5 vs L6 Messaging Platform Decisions" table to frame your approach
@@ -4895,3 +5153,5 @@ These are intentional scope boundaries, not gaps. Each could be a separate chapt
 3. Reference the failure timeline when asked "what if X fails"
 4. Apply the trade-off debates when pushed on design choices
 5. Use the brainstorming questions to anticipate follow-ups
+6. Practice the full design exercises to build end-to-end fluency
+7. Study the common L5 mistakes section to avoid interview pitfalls
