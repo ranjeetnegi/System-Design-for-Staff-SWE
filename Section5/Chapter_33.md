@@ -1,4 +1,4 @@
-# Chapter 33: Authentication System (AuthN) — Single Cluster
+# Chapter 33: Authentication System
 
 ---
 
