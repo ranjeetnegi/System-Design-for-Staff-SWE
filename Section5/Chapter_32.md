@@ -168,7 +168,7 @@ With notification system:
 │                                                                             │
 │   FAILURE MODE 1: NOTIFICATION FATIGUE                                      │
 │   Users overwhelmed → Disable notifications → Miss critical alerts          │
-│   No cross-service rate limiting → User receives 50+ notifications/day     │
+│   No cross-service rate limiting → User receives 50+ notifications/day      │
 │                                                                             │
 │   FAILURE MODE 2: INCONSISTENT EXPERIENCE                                   │
 │   Different services have different notification quality                    │
@@ -1164,11 +1164,11 @@ COST ESTIMATE:
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                        NOTIFICATION API                             │   │
 │   │   (Validation, Preferences, Rate Limiting, Queuing)                 │   │
-│   │                                                                     │
-│   │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                │   │
-│   │   │  API        │  │  API        │  │  API        │                │   │
-│   │   │  Server 1   │  │  Server 2   │  │  Server N   │                │   │
-│   │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                │   │
+│   │                                                                     │ 
+│   │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │   │
+│   │   │  API        │  │  API        │  │  API        │                 │   │
+│   │   │  Server 1   │  │  Server 2   │  │  Server N   │                 │   │
+│   │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                 │   │
 │   │          │                │                │                        │   │
 │   └──────────┼────────────────┼────────────────┼────────────────────────┘   │
 │              │                │                │                            │
@@ -1437,7 +1437,8 @@ CLASS DeliveryWorker:
                 ELSE IF result.retryable:
                     queue.nack_with_delay(message, calculate_backoff(message))
                 ELSE:
-                    // Permanent failure
+                    // Permanent failure: move to DLQ for investigation
+                    move_to_dlq(message)
                     queue.ack(message)
                     log.warn("Permanent failure: " + message.id)
                     
@@ -1445,6 +1446,9 @@ CLASS DeliveryWorker:
                 log.error("Delivery error: " + e)
                 queue.nack_with_delay(message, 30s)
 ```
+
+**Dead letter queue (DLQ):** After max retries, notifications are moved to a DLQ (separate topic or table) for inspection and optional manual replay. This avoids losing events and supports debugging and compliance.
+
 
 ### Channel-Specific Configuration
 
@@ -2217,7 +2221,7 @@ FUNCTION calculate_retry_delay(policy, attempt):
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         SEND API HOT PATH                                   │
 │                                                                             │
-│   Every notification send follows this path. Each step must be fast.       │
+│   Every notification send follows this path. Each step must be fast.        │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  1. Parse and validate request             ~0.5ms                   │   │
@@ -2503,6 +2507,120 @@ Common causes:
     - Provider error (10%)
     - Actually delivered, user didn't notice (5%)
 ```
+
+---
+
+# Part 12b: Rollout, Rollback & Operational Safety
+
+## Deployment Strategy
+
+```
+NOTIFICATION SYSTEM DEPLOYMENT:
+
+COMPONENT TYPES AND STRATEGY:
+
+1. API Servers (stateless)
+   Strategy: Rolling deployment
+   - Deploy one instance at a time
+   - Health check before traffic
+   - No session affinity
+   Rollback: Redeploy previous version
+
+2. Delivery Workers (stateless consumers)
+   Strategy: Rolling with drain
+   - Stop consuming new messages
+   - Finish in-flight deliveries (timeout: 30s)
+   - Then terminate and replace
+   Rollback: Same rolling rollback
+
+3. Schema / Config changes
+   Strategy: Forward-compatible first
+   - New code reads old and new
+   - Deploy code, then migrate data/config
+   - Old code retired after migration
+   Rollback: Revert code; old code must still read current schema
+
+CANARY CRITERIA (for API or worker changes):
+
+Success (proceed to next stage):
+   - Error rate delta < 0.1% vs baseline
+   - P99 latency delta < 10% vs baseline
+   - Delivery success rate unchanged
+   - No new error types in logs
+
+Failure (rollback):
+   - Error rate > 1% or 2× baseline
+   - P99 latency > 2× baseline
+   - Delivery rate drops > 5%
+   - Critical alert (e.g. provider errors spike)
+
+ROLLOUT STAGES:
+   1% → wait 15 min → 10% → wait 30 min → 50% → wait 1 hr → 100%
+
+BAKE TIME:
+   - 15 min at 1% (catch immediate crashes)
+   - 30 min at 10% (catch load-related bugs)
+   - 1 hr at 50% (confidence before full)
+```
+
+## Rollback Safety
+
+```
+ROLLBACK TRIGGERS:
+
+- Canary criteria failed (see above)
+- On-call decides (customer impact, unknown behavior)
+- Automated: error rate > 2% for 5 minutes
+
+ROLLBACK MECHANISM:
+
+- API/Workers: Redeploy previous artifact (same pipeline, previous version)
+- Config: Revert config push; restart not required if config is hot-reloaded (else restart)
+- Schema: No direct rollback; code must support both old and new during transition
+
+DATA COMPATIBILITY:
+
+- New code must not write schema/config that old code cannot read
+- Additive only: new columns nullable or with default
+- Breaking changes require multi-phase migration and feature flags
+
+ROLLBACK TIME:
+
+- Stateless API/Workers: 5–10 minutes to roll back full fleet
+- Config only: 1–2 minutes
+```
+
+## Concrete Scenario: Bad Config Deployment
+
+```
+SCENARIO: Bad config/code deployment
+
+1. CHANGE DEPLOYED
+   - New rate limit config: per-user limit reduced from 10/min to 2/min
+   - Expected: Reduce spam for abusive users
+   - Actual: Legitimate burst (e.g. order status updates) gets rate-limited;
+     many notifications return "rate_limited" and are never queued.
+
+2. BREAKAGE TYPE
+   - Subtle: No crash. API returns 200 with status="rate_limited".
+   - Callers may not treat "rate_limited" as failure; notifications silently dropped.
+
+3. DETECTION SIGNALS
+   - Spike in "rate_limited" responses (metrics)
+   - Drop in queue enqueue rate
+   - Customer reports: "I didn’t get my order confirmation"
+   - Dashboard: rate_limit.exceeded up 10×
+
+4. ROLLBACK STEPS
+   a. Revert rate limit config to previous (or feature-flag off).
+   b. If config is file-based: deploy previous config, restart API servers if needed.
+   c. Verify: rate_limited metric drops, enqueue rate restored.
+   d. Communicate: "Rate limit was too aggressive; reverted. Notifications resuming."
+
+5. GUARDRAILS ADDED
+   - Rate limit changes go through canary (1% → 10% → 100%) with delivery-rate checks.
+   - Alert if "rate_limited" share of traffic exceeds 5%.
+   - Runbook: "Rate limit change rollback" with exact config keys and revert steps.```
 
 ---
 
@@ -2822,6 +2940,24 @@ REASONING:
 ---
 
 # Part 16: Interview Calibration (L5 Focus)
+
+## What Interviewers Evaluate
+
+| Signal | How It's Assessed |
+|--------|-------------------|
+| Scope management | Do they ask clarifying questions (channels, volume, critical vs nice-to-have)? |
+| Trade-off reasoning | Do they justify sync vs async, centralized vs per-service, cache TTL? |
+| Failure thinking | Do they proactively discuss provider failure, queue down, duplicate delivery? |
+| Scale awareness | Do they reason with numbers (QPS, 10× scale, fragile assumption)? |
+| Ownership mindset | Do they mention rollout, rollback, on-call, debugging "user didn't get it"? |
+
+## Example Strong L5 Phrases
+
+- "Before I dive in, let me clarify: which channels and what's the burst pattern?"
+- "I'm intentionally NOT building rich templating / ML channel selection for V1 because..."
+- "The main failure mode I'm worried about is the email provider rate-limiting us during a flash sale."
+- "At 10× scale, the first thing that breaks is the message queue partition throughput."
+- "For V1, I'd accept 60-second preference staleness to keep send latency under 50ms."
 
 ## How Google Interviews Probe Notification Systems
 
@@ -3349,7 +3485,45 @@ IMPLICATION:
 
 ---
 
-## D. Correctness & Data Integrity
+## D. Ownership Under Pressure
+
+```
+SCENARIO: 30-minute mitigation window
+
+You're on-call. At 2 AM an alert fires: "Notification delivery rate dropped 40%."
+Customer-impacting. You have about 30 minutes before the next escalation.
+
+QUESTIONS:
+
+1. What do you check first?
+   - Delivery rate BY CHANNEL (push vs email vs SMS): which channel broke?
+   - Provider status (APNs/FCM/email/SMS) and our error rate to each.
+   - Queue depth and consumer lag: are we falling behind or is the provider failing?
+   - Recent deploys or config changes (last 24–48 hours).
+
+2. What do you explicitly AVOID touching?
+   - Database schema or migrations.
+   - Idempotency or preference store logic (high risk of duplicates or wrong prefs).
+   - Broad rate limit changes (can hide or cause new issues).
+   - Don’t restart the whole worker fleet at once (lose in-flight work, thundering herd).
+
+3. What's your escalation criteria?
+   - Escalate if root cause is outside our system (e.g. provider outage) and we need
+     status page / vendor contact.
+   - Escalate if rollback or code change is required and you’re not confident.
+   - Escalate if impact is critical (e.g. security alerts) and ETA to fix > 15 min.
+
+4. How do you communicate status?
+   - Post in incident channel: "Investigating. Delivery down 40%. Checking channel-level
+     metrics and provider status."
+   - Update every 10–15 min with: what you found, what you’re doing next, ETA if possible.
+   - When mitigation is in place: "Mitigation: reduced email worker concurrency to
+     respect provider limits. Monitoring. Next update in 15 min."
+```
+
+---
+
+## E. Correctness & Data Integrity
 
 ### Exercise D1: Ensuring No Duplicate Notifications
 
@@ -3416,7 +3590,7 @@ MITIGATION:
 
 ---
 
-## E. Incremental Evolution & Ownership
+## F. Incremental Evolution & Ownership
 
 ### Exercise E1: Adding Scheduled Notifications (2 weeks)
 
@@ -3503,7 +3677,7 @@ ROLLBACK:
 
 ---
 
-## F. Interview-Oriented Thought Prompts
+## G. Interview-Oriented Thought Prompts
 
 ### Prompt F1: "What if we need multi-region?"
 
@@ -3648,6 +3822,9 @@ F. Ownership & On-Call Reality:
 ✓ Rate limiting at multiple levels
 
 G. Rollout & Operational Safety:
+✓ Deployment strategy (rolling, canary criteria, stages, bake time)
+✓ Rollback triggers, mechanism, data compatibility
+✓ Concrete bad-config deployment scenario and guardrails
 ✓ System evolution (V1 → V2)
 ✓ Schema migration approach
 ✓ Feature flag rollout
