@@ -5083,35 +5083,6 @@ An L5 might design a working messaging system. An L6 designs a messaging system 
 
 ---
 
-# L6 Review: Final Verification
-
-## This section now meets Google Staff Engineer (L6) expectations.
-
-### Staff-Level Signals Covered:
-
-| Category | Coverage | Key Additions |
-|----------|----------|---------------|
-| **Judgment & Decision-Making** | ✅ Complete | Explicit WHY for all major decisions; alternatives considered and rejected with reasoning |
-| **Failure & Degradation Thinking** | ✅ Complete | Cascading failure timeline; blast radius analysis; partial failure behavior; retry storm quantification |
-| **Scale & Evolution** | ✅ Complete | Order-of-magnitude estimates; dangerous assumptions identified; V1→V2→V3 evolution with incident-driven redesign |
-| **Cost & Sustainability** | ✅ Complete | Cost per message breakdown; operational burden as constraint; explicit over-engineering avoidance |
-| **Organizational Reality** | ✅ Complete | Team ownership boundaries; on-call burden; cross-team coordination; migration strategies |
-
-### Checklist of L6 Signals:
-
-- [x] Trade-offs explicitly stated with context
-- [x] Partial failure scenarios (not just total outage)
-- [x] Blast radius containment for each failure mode
-- [x] Cascading failure timeline with trigger → propagation → containment
-- [x] Quantified capacity assumptions and what breaks first
-- [x] Cost treated as first-class design constraint
-- [x] Operational burden considered in architecture
-- [x] Team boundaries and ownership clarity
-- [x] Migration path for major changes (FOW→FOR example)
-- [x] Rolling deployment strategy for stateful services
-- [x] Thundering herd mitigation with quantified analysis
-- [x] Interview calibration with L5 vs L6 distinction
-- [x] Deep exercises requiring constraint-based redesign
 
 ### Topic Coverage in Exercises:
 
