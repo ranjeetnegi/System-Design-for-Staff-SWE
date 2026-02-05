@@ -1164,7 +1164,7 @@ COST ESTIMATE:
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                        NOTIFICATION API                             │   │
 │   │   (Validation, Preferences, Rate Limiting, Queuing)                 │   │
-│   │                                                                     │ 
+│   │                                                                     │   |
 │   │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │   │
 │   │   │  API        │  │  API        │  │  API        │                 │   │
 │   │   │  Server 1   │  │  Server 2   │  │  Server N   │                 │   │
@@ -1177,37 +1177,37 @@ COST ESTIMATE:
 │          ┌────────────────────┼────────────────────┐                        │
 │          │                    │                    │                        │
 │          ▼                    ▼                    ▼                        │
-│   ┌─────────────┐     ┌──────────────┐     ┌─────────────┐                 │
-│   │ PREFERENCE  │     │    MESSAGE   │     │ IDEMPOTENCY │                 │
-│   │    STORE    │     │     QUEUE    │     │    CACHE    │                 │
-│   │   (Redis)   │     │   (Kafka)    │     │   (Redis)   │                 │
-│   └─────────────┘     └──────┬───────┘     └─────────────┘                 │
+│   ┌─────────────┐     ┌──────────────┐     ┌─────────────┐                  │
+│   │ PREFERENCE  │     │    MESSAGE   │     │ IDEMPOTENCY │                  │
+│   │    STORE    │     │     QUEUE    │     │    CACHE    │                  │
+│   │   (Redis)   │     │   (Kafka)    │     │   (Redis)   │                  │
+│   └─────────────┘     └──────┬───────┘     └─────────────┘                  │
 │                              │                                              │
 │                              ▼                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                     DELIVERY WORKERS                                │   │
 │   │                                                                     │   │
-│   │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                │   │
-│   │   │  Push       │  │  Email      │  │  SMS        │                │   │
-│   │   │  Workers    │  │  Workers    │  │  Workers    │                │   │
-│   │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                │   │
+│   │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │   │
+│   │   │  Push       │  │  Email      │  │  SMS        │                 │   │
+│   │   │  Workers    │  │  Workers    │  │  Workers    │                 │   │
+│   │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                 │   │
 │   │          │                │                │                        │   │
 │   └──────────┼────────────────┼────────────────┼────────────────────────┘   │
 │              │                │                │                            │
 │              ▼                ▼                ▼                            │
-│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                  │
-│   │  APNs/FCM   │     │   Email     │     │    SMS      │                  │
-│   │  Providers  │     │   Provider  │     │   Gateway   │                  │
-│   └─────────────┘     └─────────────┘     └─────────────┘                  │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                   │
+│   │  APNs/FCM   │     │   Email     │     │    SMS      │                   │
+│   │  Providers  │     │   Provider  │     │   Gateway   │                   │
+│   └─────────────┘     └─────────────┘     └─────────────┘                   │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                      STORAGE LAYER                                  │   │
 │   │                                                                     │   │
-│   │   ┌─────────────────┐    ┌─────────────────┐                       │   │
-│   │   │   Notification   │    │   Device Token  │                       │   │
-│   │   │   Database       │    │   Store         │                       │   │
-│   │   │   (PostgreSQL)   │    │   (PostgreSQL)  │                       │   │
-│   │   └─────────────────┘    └─────────────────┘                       │   │
+│   │   ┌─────────────────┐    ┌─────────────────┐                        │   │
+│   │   │   Notification  │    │   Device Token  │                        │   │
+│   │   │   Database      │    │   Store         │                        │   │
+│   │   │   (PostgreSQL)  │    │   (PostgreSQL)  │                        │   │
+│   │   └─────────────────┘    └─────────────────┘                        │   │
 │   │                                                                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -2083,7 +2083,7 @@ FUNCTION record_delivery_status(notification_id, channel, status):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│      FAILURE SCENARIO: EMAIL PROVIDER RATE LIMITED DURING FLASH SALE       │
+│      FAILURE SCENARIO: EMAIL PROVIDER RATE LIMITED DURING FLASH SALE        │
 │                                                                             │
 │   TRIGGER:                                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -2119,7 +2119,7 @@ FUNCTION record_delivery_status(notification_id, channel, status):
 │   │  - Alert: "Email queue depth > 10,000"                              │   │
 │   │  - Alert: "Email delivery latency P99 > 5 minutes"                  │   │
 │   │  - Alert: "Email provider 429 errors > 100/minute"                  │   │
-│   │  - Dashboard: Email send rate flatlined at 1,500/sec               │   │
+│   │  - Dashboard: Email send rate flatlined at 1,500/sec                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   SENIOR ENGINEER RESPONSE:                                                 │
@@ -2132,14 +2132,14 @@ FUNCTION record_delivery_status(notification_id, channel, status):
 │   │                                                                     │   │
 │   │  MITIGATION (5-15 min):                                             │   │
 │   │  5. Reduce email worker concurrency to match rate limit             │   │
-│   │  6. Prioritize transactional over promotional in queue             │   │
+│   │  6. Prioritize transactional over promotional in queue              │   │
 │   │  7. Consider: Temporarily defer non-critical emails                 │   │
 │   │                                                                     │   │
 │   │  POST-INCIDENT:                                                     │   │
 │   │  1. Review: Did we know about rate limit before sale?               │   │
 │   │  2. Action: Pre-increase rate limit for known events                │   │
-│   │  3. Action: Add queue priority (transactional > promotional)       │   │
-│   │  4. Action: Add admission control at API layer during bursts       │   │
+│   │  3. Action: Add queue priority (transactional > promotional)        │   │
+│   │  4. Action: Add admission control at API layer during bursts        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   PERMANENT FIX:                                                            │
@@ -2235,12 +2235,12 @@ FUNCTION calculate_retry_delay(policy, attempt):
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   BIGGEST FACTORS:                                                          │
-│   - Kafka enqueue (5ms) - Most variable, depends on broker load            │
-│   - Preference cache miss (20ms) - Rare if cache size is adequate          │
-│   - Redis operations (3ms) - Multiple round trips                          │
+│   - Kafka enqueue (5ms) - Most variable, depends on broker load             │
+│   - Preference cache miss (20ms) - Rare if cache size is adequate           │
+│   - Redis operations (3ms) - Multiple round trips                           │
 │                                                                             │
 │   OPTIMIZATION OPPORTUNITY:                                                 │
-│   Pipeline Redis operations (idempotency + preferences + rate limit)       │
+│   Pipeline Redis operations (idempotency + preferences + rate limit)        │
 │   3 sequential calls → 1 pipelined call: 3ms → 1.5ms                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3113,9 +3113,9 @@ SIGNALS OF SENIOR-LEVEL THINKING:
 │                                                                             │
 │   ┌───────────────────────────────────────────────────────────────────┐     │
 │   │                         PRODUCER SERVICES                         │     │
-│   │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐              │     │
-│   │  │ Payment │  │  Order  │  │ Security│  │Marketing│              │     │
-│   │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘              │     │
+│   │  ┌─────────┐  ┌─────────┐ ┌─────────┐  ┌─────────┐                │     │
+│   │  │ Payment │  │  Order  │ │ Security│  │Marketing│                │     │
+│   │  └────┬────┘  └────┬────  └────┬────┘  └────┬────┘                │     │
 │   └───────┼────────────┼───────────┼────────────┼─────────────────────┘     │
 │           └────────────┴───────────┴────────────┘                           │
 │                               │                                             │
@@ -3127,36 +3127,36 @@ SIGNALS OF SENIOR-LEVEL THINKING:
 │                                  ▼                                          │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                      NOTIFICATION API SERVICE                       │   │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │   │
-│   │  │ Validation  │→ │ Preferences │→ │ Rate Limit  │→ Enqueue        │   │
-│   │  └─────────────┘  └─────────────┘  └─────────────┘                 │   │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │   │
+│   │  │ Validation  │→ │ Preferences │→ │ Rate Limit  │→ Enqueue         │   │
+│   │  └─────────────┘  └─────────────┘  └─────────────┘                  │   │
 │   └──────────────────────────────┬──────────────────────────────────────┘   │
 │                                  │                                          │
 │              ┌───────────────────┼───────────────────┐                      │
 │              ▼                   ▼                   ▼                      │
-│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐              │
-│   │ Redis Cluster   │ │     KAFKA       │ │   PostgreSQL    │              │
-│   │                 │ │                 │ │                 │              │
-│   │ - Idempotency   │ │ - High Priority │ │ - Notifications │              │
-│   │ - Preferences   │ │ - Normal Queue  │ │ - Deliveries    │              │
-│   │ - Rate Limits   │ │ - Low Priority  │ │ - Tokens        │              │
-│   └─────────────────┘ └────────┬────────┘ │ - Preferences   │              │
-│                                │          └─────────────────┘              │
+│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐               │
+│   │ Redis Cluster   │ │     KAFKA       │ │   PostgreSQL    │               │
+│   │                 │ │                 │ │                 │               │
+│   │ - Idempotency   │ │ - High Priority │ │ - Notifications │               │
+│   │ - Preferences   │ │ - Normal Queue  │ │ - Deliveries    │               │
+│   │ - Rate Limits   │ │ - Low Priority  │ │ - Tokens        │               │
+│   └─────────────────┘ └────────┬────────┘ │ - Preferences   │               │
+│                                │          └─────────────────┘               │
 │                                ▼                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                       DELIVERY WORKERS                              │   │
 │   │                                                                     │   │
-│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐            │   │
-│   │   │ Push Worker │    │Email Worker │    │ SMS Worker  │            │   │
-│   │   │ (50 inst)   │    │ (20 inst)   │    │ (5 inst)    │            │   │
-│   │   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘            │   │
+│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐             │   │
+│   │   │ Push Worker │    │Email Worker │    │ SMS Worker  │             │   │
+│   │   │ (50 inst)   │    │ (20 inst)   │    │ (5 inst)    │             │   │
+│   │   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘             │   │
 │   └──────────┼──────────────────┼──────────────────┼────────────────────┘   │
 │              │                  │                  │                        │
 │              ▼                  ▼                  ▼                        │
-│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐              │
-│   │   APNs / FCM    │ │  Email Provider │ │   SMS Gateway   │              │
-│   │   (Push)        │ │  (SendGrid)     │ │   (Twilio)      │              │
-│   └─────────────────┘ └─────────────────┘ └─────────────────┘              │
+│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐               │
+│   │   APNs / FCM    │ │  Email Provider │ │   SMS Gateway   │               │
+│   │   (Push)        │ │  (SendGrid)     │ │   (Twilio)      │               │
+│   └─────────────────┘ └─────────────────┘ └─────────────────┘               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3194,7 +3194,7 @@ SIGNALS OF SENIOR-LEVEL THINKING:
 │    │                │◀────────────────│              │              │       │
 │    │                │                 │              │              │       │
 │    │                │ 5. Enqueue      │              │              │       │
-│    │                │────────────────────────────────▶│              │       │
+│    │                │───────────────────────────────▶│              │       │
 │    │                │                 │              │              │       │
 │    │ 202 Accepted   │                 │              │              │       │
 │    │◀───────────────│                 │              │              │       │
@@ -3203,7 +3203,7 @@ SIGNALS OF SENIOR-LEVEL THINKING:
 │    │                │                 │              │─────────────▶│       │
 │    │                │                 │              │              │       │
 │    │                │                 │              │ 7. Deliver   │       │
-│    │                │                 │              │──────────────────────▶│
+│    │                │                 │              │─────────────────────▶│
 │    │                │                 │              │              │  APNs │
 │    │                │                 │              │              │       │
 │    │                │                 │              │ 8. Update DB │       │
