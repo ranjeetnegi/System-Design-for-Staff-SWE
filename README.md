@@ -218,11 +218,11 @@ Chapter 30: Distributed Cache (Single Cluster)
 
 Chapter 31: Object / File Storage System
 
-Chapter 32: Basic Notification System
+Chapter 32: Notification System
 
 Chapter 33: Authentication System (AuthN)
 
-Chapter 34: Search System (Basic Indexing)
+Chapter 34: Search System
 
 Chapter 35: Metrics Collection System
 
