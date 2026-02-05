@@ -2621,14 +2621,14 @@ SCENARIO: Bad config/code deployment
    - Rate limit changes go through canary (1% → 10% → 100%) with delivery-rate checks.
    - Alert if "rate_limited" share of traffic exceeds 5%.
    - Runbook: "Rate limit change rollback" with exact config keys and revert steps.```
-
+```
 ---
 
 # Part 13: Security Basics & Abuse Prevention
 
 ## Authentication & Authorization
 
-```
+
 AUTHENTICATION:
 
 API Clients (internal services):
