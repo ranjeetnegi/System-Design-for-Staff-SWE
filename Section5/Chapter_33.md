@@ -889,6 +889,18 @@ MOST FRAGILE ASSUMPTION:
     Detection: Monitor login failure rate, unique IPs, credential velocity
 ```
 
+## Scale Estimates Table (Senior Bar)
+
+| Metric | Current | 10× Scale | Breaking Point |
+|--------|---------|-----------|----------------|
+| Logins/sec | 230 (avg), 2.3K peak | 2.3K avg, 23K peak | bcrypt CPU exhausts ~5K/sec per pool |
+| Sessions | 50M active | 500M | Session DB write throughput (~30K/sec single primary) |
+| Token validations/sec | 100K (across services) | 1M | Local JWT verify scales; blocklist Redis may need sharding |
+| Credential store | 100M rows, 50 GB | 1B rows, 500 GB | Single primary read capacity; need sharding |
+| Rate limit keys (Redis) | ~10M active | ~100M | Redis memory and key eviction |
+
+**Breaking point summary:** The first hard limit at 10× is **bcrypt CPU** (login path). Session store and credential DB become bottlenecks next. Token validation (JWT) and rate-limit logic scale with horizontal instances.
+
 ## Back-of-Envelope: Login Server Sizing
 
 ```
@@ -1541,6 +1553,54 @@ LOGOUT IDEMPOTENCY:
 
 # Part 10: Failure Handling & Reliability
 
+## Partial Failure Behavior (Not Total Outage)
+
+The reviewer requires explicit treatment of **partial** failures: one replica slow, or one dependency timing out (not fully down).
+
+```
+PARTIAL FAILURE: One dependency slow (e.g. Redis 10× latency)
+
+SITUATION: Redis responds but with 50ms latency instead of 5ms
+
+BEHAVIOR:
+- Rate limit check: 1ms → 50ms per login
+- Blocklist check (on validation): 0.5ms → 5ms
+- Login path: +50ms (noticeable but not fatal)
+- Token validation path: +5ms (still < 10ms total)
+
+USER IMPACT:
+- Login feels slightly slower
+- No incorrect accepts/denies (rate limit still correct, just slow)
+- No security degradation
+
+DETECTION: Redis P99 latency metric; auth API latency increase
+
+MITIGATION: Scale Redis or add replicas; circuit breaker if latency > 100ms
+
+---
+
+PARTIAL FAILURE: One database replica slow (read used for credential lookup)
+
+SITUATION: Primary is healthy; read replica has replication lag or disk contention
+
+BEHAVIOR:
+- If credential lookup uses replica: login latency +50–200ms
+- If credential lookup uses primary: no impact
+- Session read on refresh: may hit slow replica → refresh latency up
+
+USER IMPACT:
+- Login or refresh occasionally slow
+- No wrong credentials accepted (primary is source of truth for writes)
+
+DETECTION: Read replica lag metric; P99 login/refresh latency by instance
+
+MITIGATION: Route credential lookups to primary only; use replica only for non-critical reads
+```
+
+**L5 relevance:** Senior engineers distinguish "dependency down" from "dependency slow." Partial failure often causes latency degradation and timeouts before total failure; runbooks and alerts should treat them explicitly.
+
+---
+
 ## Dependency Failures
 
 ### Database Failure
@@ -1956,6 +2016,23 @@ DEFERRED OPTIMIZATIONS:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Cost Analysis Table (Senior Bar)
+
+| Cost Driver | Current | At 10× Scale | Optimization |
+|-------------|---------|--------------|---------------|
+| Compute (auth API + bcrypt) | ~$20,000/mo | ~$120,000/mo (sub-linear) | Auto-scale off-peak; edge rate limit to reduce app load |
+| Database | ~$4,700/mo | ~$25,000/mo (sharding) | Read replicas for credential lookup; session store shard by user_id |
+| Redis | ~$1,000/mo | ~$5,000/mo | Cluster mode; blocklist TTL to cap size |
+| KMS | ~$500/mo | ~$500/mo | Flat; key count doesn't scale with users |
+
+**Tie to operations:**
+
+| Decision | Cost Impact | Operability Impact | On-Call Impact |
+|----------|-------------|-------------------|----------------|
+| More auth instances | +$10K/mo | Better login capacity during attacks | Fewer "login slow" pages |
+| Edge WAF rate limiting | -$6K/mo | Less app-level rate limit logic | Fewer credential-stuffing incidents |
+| Shard session store | +$5K/mo | More complex "logout all" / session queries | Runbook updates; cross-shard revoke |
+
 ## On-Call Burden Analysis
 
 ```
@@ -2313,6 +2390,29 @@ Solution:
 Effort: 2 weeks
 ```
 
+## Rushed Decision Scenario (Real-World Application)
+
+```
+RUSHED DECISION: Defer MFA and ship password-only for launch
+
+CONTEXT:
+- Launch deadline in 4 weeks; product needed login immediately
+- Ideal solution: Password + optional TOTP MFA from day one
+- Time pressure: No bandwidth to integrate TOTP library, key backup flows, and recovery codes
+
+DECISION MADE:
+- Ship password-only auth; document MFA as V1.1
+- Rely on rate limiting and account lockout as only defenses
+- Acceptable because: Launch traffic was small; attack surface limited; security review accepted risk with timeline
+
+TECHNICAL DEBT INTRODUCED:
+- MFA added later required schema change (mfa_enabled, mfa_secret), migration, and client flows
+- Users who had already chosen weak passwords remained at risk until MFA rollout
+- Cost of carrying debt: One high-profile account compromise incident; 2-week MFA push; ongoing support for "why no MFA at signup?"
+
+WHEN TO FIX: Before scaling user base or before any regulated/enterprise customers. Revisit when security audit or compliance requires MFA.
+```
+
 ## V2 Improvements
 
 ```
@@ -2510,41 +2610,30 @@ COMMON INTERVIEWER QUESTIONS:
 ```
 L4 MISTAKE: "Store passwords with SHA-256"
 
-Problem:
-- SHA-256 is fast → attacker can try billions/sec
-- Even with salt, GPU cracking is feasible
+WHY IT'S L4: Focus on "hashing" without understanding attack model (brute force).
+Problem: SHA-256 is fast → attacker can try billions/sec; even with salt, GPU cracking is feasible.
 
-L5 Approach:
-- bcrypt (or Argon2id) with high cost factor
-- Intentionally slow → 100 tries/sec on GPU
-- Cost factor tuned to balance security and UX
+L5 APPROACH: bcrypt (or Argon2id) with high cost factor. Intentionally slow → 100 tries/sec on GPU.
+Cost factor tuned to balance security and UX.
 
 
 L4 MISTAKE: "Call auth service to validate every request"
 
-Problem:
-- Auth service becomes SPOF for entire platform
-- 100K QPS to auth for validation alone
-- Adds 5ms latency to every request
+WHY IT'S L4: Treats auth as a single service call; doesn't reason about scale and SPOF.
+Problem: Auth service becomes SPOF for entire platform; 100K QPS to auth; adds 5ms latency to every request.
 
-L5 Approach:
-- JWT with local validation
-- Public key distributed via JWKS
-- Auth service only needed for login/refresh
-- Validation: 0.1ms, no network call
+L5 APPROACH: JWT with local validation. Public key distributed via JWKS. Auth service only needed for login/refresh.
+Validation: 0.1ms, no network call.
 
 
-L5 BORDERLINE MISTAKE: "Use symmetric JWT signing (HS256)"
+BORDERLINE L5 MISTAKE: "Use symmetric JWT signing (HS256)"
 
-Problem:
-- All services share the signing secret
-- One compromised service can forge tokens for any user
-- Secret rotation requires updating all services simultaneously
+WHY IT'S BORDERLINE: Correct choice of "signed token" but wrong trade-off (simplicity over security).
+Problem: All services share the signing secret; one compromised service can forge tokens for any user;
+secret rotation requires updating all services simultaneously.
 
-L5 Approach:
-- RS256 (asymmetric): private key in auth service only
-- Services only have public key → can verify but not forge
-- Key rotation: publish new public key, services fetch it
+L5 FIX: RS256 (asymmetric): private key in auth service only. Services only have public key → can verify but not forge.
+Key rotation: publish new public key, services fetch it.
 ```
 
 ---
@@ -2864,6 +2953,39 @@ PERMANENT FIX:
 3. Edge-level rate limiting as backstop (not dependent on Redis)
 ```
 
+### Scenario B5: Database Failover During Peak
+
+```
+SITUATION: PostgreSQL primary fails, replica promoted during high login traffic
+
+IMMEDIATE BEHAVIOR:
+- 10–30 second write unavailability
+- Auth API connection errors; login and refresh return 5xx
+- Existing tokens continue to validate (JWT local; no DB)
+- Replica promoted to primary; connections re-established
+
+USER SYMPTOMS:
+- "Login failed" / "Service unavailable" for 10–30 seconds
+- Users who retry after failover succeed
+- No session or credential corruption (failover is transparent to data)
+
+DETECTION:
+- Database failover alerts (cloud provider / PgBouncer)
+- Auth API error rate spike
+- Connection pool exhaustion logs
+
+FIRST MITIGATION:
+1. Confirm failover completed (new primary healthy)
+2. Verify auth API reconnected (no code change needed)
+3. Monitor login success rate returning to baseline
+4. Do not restart auth fleet (thundering herd)
+
+PERMANENT FIX:
+1. Multi-AZ deployment; automated failover tested regularly
+2. Connection retry with backoff in auth service
+3. Runbook: "DB failover during peak" with verification steps
+```
+
 ---
 
 ## C. Cost & Trade-off Exercises
@@ -2905,7 +3027,10 @@ SENIOR RECOMMENDATION:
 ## D. Ownership Under Pressure
 
 ```
-SCENARIO: 2 AM alert — "Login success rate dropped to 60%"
+SCENARIO: 30-minute mitigation window
+
+You're on-call. At 2 AM an alert fires: "Login success rate dropped to 60%."
+Customer-impacting. You have about 30 minutes before the next escalation.
 
 QUESTIONS:
 
@@ -3111,17 +3236,21 @@ B. Trade-offs & Technical Judgment:
 ✓ Token expiry trade-off (security vs usability)
 
 C. Failure Handling & Reliability:
+✓ Partial failure behavior (one dependency slow / one replica slow)
 ✓ Database failure, Redis failure, KMS failure
 ✓ Credential stuffing production scenario
 ✓ Timeout and retry configuration
+✓ Failure injection: Slow DB, Retry storm, Signing key, Redis down, Database failover (B5)
 
 D. Scale & Performance:
 ✓ Concrete numbers (20M logins/day, 230/sec, attack traffic)
+✓ Scale Estimates Table (Current | 10× | Breaking Point)
 ✓ bcrypt as CPU bottleneck identified
 ✓ Token validation decoupled (0.1ms, no network)
 
 E. Cost & Operability:
 ✓ $26K/month breakdown, attack cost highlighted
+✓ Cost Analysis Table (Current | At Scale | Optimization) and tie to operations
 ✓ Misleading signals section
 ✓ On-call burden analysis
 
@@ -3136,9 +3265,13 @@ G. Rollout & Operational Safety:
 ✓ Bad deployment scenario (JWT claims format change)
 
 H. Interview Calibration:
-✓ L4 vs L5 mistakes (SHA256 vs bcrypt, calling auth for validation)
+✓ What Interviewers Evaluate table; Example Strong L5 Phrases
+✓ L4 mistakes with WHY IT'S L4 / L5 APPROACH; Borderline L5 with L5 FIX
 ✓ Strong L5 signals and phrases
 ✓ Clarifying questions and non-goals
+
+I. Real-World Application (Step 9):
+✓ Rushed Decision scenario (defer MFA for launch → technical debt and when to fix)
 ```
 
 ---
