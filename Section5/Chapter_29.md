@@ -1731,7 +1731,7 @@ Rate limiting is in the critical path of every request. A bad deployment can eit
 │                                                                             │
 │   ROLLBACK EXECUTION (< 5 MINUTES):                                         │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  1. Revert deployment to previous version                          │   │
+│   │  1. Revert deployment to previous version                           │   │
 │   │     - kubectl rollback deployment/api-server                        │   │
 │   │     OR                                                              │   │
 │   │     - Feature flag: disable new rate limiter code                   │   │
@@ -2111,7 +2111,7 @@ WHAT NOT TO DO:
 │   │  1. Partner is trusted, contractually liable for abuse              │   │
 │   │  2. We're monitoring their traffic with bypass metric               │   │
 │   │  3. Fallback: We can remove from allowlist instantly                │   │
-│   │  4. Business value of launch >> risk of brief unprotected period   │   │
+│   │  4. Business value of launch >> risk of brief unprotected period    │   │
 │   │  5. Backend can handle their expected load (verified)               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
