@@ -64,7 +64,7 @@ You cannot do everything in the request path. Some work is slow, unreliable, or 
 │   WITHOUT A JOB QUEUE:                                                      │
 │   ├── User waits while email sends (2-5 seconds, SMTP timeout)              │
 │   ├── If email service is down, signup fails (unnecessary coupling)         │
-│   ├── Image resize in request path: 3-10 second response times             │
+│   ├── Image resize in request path: 3-10 second response times              │
 │   ├── PDF generation blocks the API thread (resource starvation)            │
 │   ├── Retry logic embedded in request handlers (complex, fragile)           │
 │   └── No visibility: "Did the invoice get generated?" (nobody knows)        │
@@ -72,8 +72,8 @@ You cannot do everything in the request path. Some work is slow, unreliable, or 
 │   WITH A JOB QUEUE:                                                         │
 │   ├── Request returns immediately; work happens in background               │
 │   ├── Decoupled: Email service down? Jobs queue up, process when it's back  │
-│   ├── Controlled concurrency: 10 workers, not 10,000 threads               │
-│   ├── Built-in retry with backoff (no ad-hoc retry logic everywhere)       │
+│   ├── Controlled concurrency: 10 workers, not 10,000 threads                │
+│   ├── Built-in retry with backoff (no ad-hoc retry logic everywhere)        │
 │   ├── Visibility: Job status, queue depth, processing rate (dashboards)     │
 │   └── Prioritization: Urgent jobs before batch jobs                         │
 │                                                                             │
@@ -406,78 +406,78 @@ PARTIAL FAILURE: Worker pool partially down (3 of 10 workers lost)
 │                                                                             │
 │   LATENCY:                                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Enqueue: P50 < 5ms, P99 < 50ms (must not slow request path)      │   │
-│   │  Dispatch (poll-to-receive): P50 < 100ms, P99 < 500ms             │   │
-│   │  End-to-end (enqueue-to-start-processing): P50 < 2s, P99 < 30s   │   │
-│   │  End-to-end under load: P99 < 5 minutes (backlog scenario)        │   │
+│   │  Enqueue: P50 < 5ms, P99 < 50ms (must not slow request path)        │   │
+│   │  Dispatch (poll-to-receive): P50 < 100ms, P99 < 500ms               │   │
+│   │  End-to-end (enqueue-to-start-processing): P50 < 2s, P99 < 30s      │   │
+│   │  End-to-end under load: P99 < 5 minutes (backlog scenario)          │   │
 │   │                                                                     │   │
-│   │  WHY these targets:                                                │   │
-│   │  Enqueue is on the hot path (user-facing request). Must be fast.   │   │
-│   │  Processing latency is less critical—"background" means seconds    │   │
-│   │  to minutes is acceptable, not milliseconds.                       │   │
+│   │  WHY these targets:                                                 │   │
+│   │  Enqueue is on the hot path (user-facing request). Must be fast.    │   │
+│   │  Processing latency is less critical—"background" means seconds     │   │
+│   │  to minutes is acceptable, not milliseconds.                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   AVAILABILITY:                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Enqueue path: 99.95% (enqueue failure = lost work request)        │   │
-│   │  Processing path: 99.9% (brief processing delays acceptable)      │   │
-│   │  Job status API: 99.9% (non-critical, informational)              │   │
+│   │  Enqueue path: 99.95% (enqueue failure = lost work request)         │   │
+│   │  Processing path: 99.9% (brief processing delays acceptable)        │   │
+│   │  Job status API: 99.9% (non-critical, informational)                │   │
 │   │                                                                     │   │
-│   │  WHY 99.95% for enqueue:                                           │   │
-│   │  If enqueue fails and the producer doesn't retry, the work is      │   │
-│   │  silently lost. The enqueue path is the durability boundary—once   │   │
-│   │  a job is persisted, it's safe. Before that, it's at risk.         │   │
+│   │  WHY 99.95% for enqueue:                                            │   │
+│   │  If enqueue fails and the producer doesn't retry, the work is       │   │
+│   │  silently lost. The enqueue path is the durability boundary—once    │   │
+│   │  a job is persisted, it's safe. Before that, it's at risk.          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   CONSISTENCY:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  At-least-once delivery (guaranteed)                               │   │
-│   │  - Every enqueued job will be delivered to a worker at least once  │   │
-│   │  - Duplicates possible (lease expiry + late ACK = double delivery) │   │
-│   │  - Handlers MUST be idempotent                                     │   │
+│   │  At-least-once delivery (guaranteed)                                │   │
+│   │  - Every enqueued job will be delivered to a worker at least once   │   │
+│   │  - Duplicates possible (lease expiry + late ACK = double delivery)  │   │
+│   │  - Handlers MUST be idempotent                                      │   │
 │   │                                                                     │   │
 │   │  WHY not exactly-once:                                              │   │
-│   │  Exactly-once requires distributed transactions between the queue  │   │
-│   │  and the handler's side effects. Impractical. At-least-once +      │   │
-│   │  idempotent handlers achieves the same user-visible result.        │   │
+│   │  Exactly-once requires distributed transactions between the queue   │   │
+│   │  and the handler's side effects. Impractical. At-least-once +       │   │
+│   │  idempotent handlers achieves the same user-visible result.         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   DURABILITY:                                                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Zero job loss after successful enqueue ACK                        │   │
-│   │  - Jobs persisted to durable storage before ACK                    │   │
-│   │  - Storage: Replicated database (not in-memory)                    │   │
+│   │  Zero job loss after successful enqueue ACK                         │   │
+│   │  - Jobs persisted to durable storage before ACK                     │   │
+│   │  - Storage: Replicated database (not in-memory)                     │   │
 │   │                                                                     │   │
-│   │  WHY strict durability:                                            │   │
-│   │  Unlike metrics (best-effort), jobs represent committed work.      │   │
-│   │  "Send invoice" lost = customer never gets invoice = revenue risk. │   │
-│   │  "Resize image" lost = broken user profile forever.                │   │
+│   │  WHY strict durability:                                             │   │
+│   │  Unlike metrics (best-effort), jobs represent committed work.       │   │
+│   │  "Send invoice" lost = customer never gets invoice = revenue risk.  │   │
+│   │  "Resize image" lost = broken user profile forever.                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   ORDERING:                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Best-effort FIFO within a priority level                          │   │
-│   │  - No strict ordering guarantee                                    │   │
-│   │  - Jobs of equal priority: approximately FIFO                      │   │
-│   │  - Higher priority jobs dispatched before lower priority           │   │
+│   │  Best-effort FIFO within a priority level                           │   │
+│   │  - No strict ordering guarantee                                     │   │
+│   │  - Jobs of equal priority: approximately FIFO                       │   │
+│   │  - Higher priority jobs dispatched before lower priority            │   │
 │   │                                                                     │   │
-│   │  WHY no strict ordering:                                           │   │
-│   │  Strict FIFO requires single-consumer dispatch (no parallelism)   │   │
-│   │  or complex partitioning. Most job types don't need ordering—      │   │
-│   │  "send email A" and "resize image B" are independent.              │   │
+│   │  WHY no strict ordering:                                            │   │
+│   │  Strict FIFO requires single-consumer dispatch (no parallelism)     │   │
+│   │  or complex partitioning. Most job types don't need ordering—       │   │
+│   │  "send email A" and "resize image B" are independent.               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   TRADE-OFFS ACCEPTED:                                                      │
-│   - At-least-once over exactly-once (simpler, requires idempotent handlers)│
-│   - Best-effort FIFO over strict ordering (enables parallelism)            │
-│   - Higher enqueue availability over processing availability               │
-│   - Processing latency in seconds (not milliseconds)                       │
+│   - At-least-once over exactly-once (simpler, requires idempotent handlers) │
+│   - Best-effort FIFO over strict ordering (enables parallelism)             │
+│   - Higher enqueue availability over processing availability                │
+│   - Processing latency in seconds (not milliseconds)                        │
 │                                                                             │
 │   TRADE-OFFS NOT ACCEPTED:                                                  │
-│   - Job loss after ACK (non-negotiable)                                    │
-│   - Silent failure (must be visible in DLQ, metrics, or alerts)            │
-│   - Unbounded retry (must exhaust to DLQ; no infinite retry loops)         │
-│   - Head-of-line blocking (one slow job type must not block others)        │
+│   - Job loss after ACK (non-negotiable)                                     │
+│   - Silent failure (must be visible in DLQ, metrics, or alerts)             │
+│   - Unbounded retry (must exhaust to DLQ; no infinite retry loops)          │
+│   - Head-of-line blocking (one slow job type must not block others)         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -590,9 +590,9 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │                    BACKGROUND JOB QUEUE ARCHITECTURE                        │
 │                                                                             │
 │   PRODUCERS (API servers, services, schedulers)                             │
-│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐             │
-│   │ API Svc  │    │ User Svc │    │ Billing  │    │Scheduler │             │
-│   └────┬─────┘    └────┬─────┘    └────┬─────┘    └────┬─────┘             │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+│   │ API Svc  │    │ User Svc │    │ Billing  │    │Scheduler │              │
+│   └────┬─────┘    └────┬─────┘    └────┬─────┘    └────┬─────┘              │
 │        │               │               │               │                    │
 │        └───────────────┼───────────────┼───────────────┘                    │
 │                        ▼               ▼                                    │
@@ -611,12 +611,12 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │               │     (PostgreSQL)                │                           │
 │               │                                 │                           │
 │               │  ┌───────────┐  ┌───────────┐   │                           │
-│               │  │  Pending   │  │ Processing │   │                          │
-│               │  │   Jobs     │  │   Jobs     │   │                          │
+│               │  │  Pending  │  │ Processing│   │                           │
+│               │  │   Jobs    │  │   Jobs    │   │                           │
 │               │  └───────────┘  └───────────┘   │                           │
 │               │  ┌───────────┐  ┌───────────┐   │                           │
-│               │  │ Completed  │  │   DLQ      │   │                          │
-│               │  │   Jobs     │  │   Jobs     │   │                          │
+│               │  │ Completed │  │   DLQ     │   │                           │
+│               │  │   Jobs    │  │   Jobs    │   │                           │
 │               │  └───────────┘  └───────────┘   │                           │
 │               └──────────────┬──────────────────┘                           │
 │                              │                                              │
@@ -630,7 +630,7 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │               └──────────────┬──────────────────┘                           │
 │                              │                                              │
 │                   ┌──────────┼──────────┐                                   │
-│                   ▼          ▼          ▼                                    │
+│                   ▼          ▼          ▼                                   │
 │              ┌────────┐ ┌────────┐ ┌────────┐                               │
 │              │Worker 1│ │Worker 2│ │Worker N│                               │
 │              │        │ │        │ │        │                               │
@@ -643,8 +643,8 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │   MONITORING:                                                               │
 │   ┌──────────────────────────┐     ┌──────────────────────┐                 │
 │   │   Queue Metrics Exporter │────→│  Dashboard / Alerts  │                 │
-│   │   - queue_depth          │     │  - Grafana            │                │
-│   │   - processing_rate      │     │  - PagerDuty          │                │
+│   │   - queue_depth          │     │  - Grafana           │                 │
+│   │   - processing_rate      │     │  - PagerDuty         │                 │
 │   │   - dlq_depth            │     └──────────────────────┘                 │
 │   └──────────────────────────┘                                              │
 │                                                                             │
@@ -1446,7 +1446,7 @@ COST ESTIMATE (V1: 500 jobs/sec, AWS us-east-1):
 ```
 COST AT SCALE:
 
-| Scale | Jobs/sec | Workers | DB           | Monthly Cost | Cost/M jobs |
+| Scale | Jobs/sec | Workers | DB           | Monthly Cost| Cost/M jobs|
 |-------|----------|---------|--------------|-------------|-------------|
 | 1×    | 500      | 10      | r5.large     | $1,150      | $0.89       |
 | 3×    | 1,500    | 30      | r5.xlarge    | $2,600      | $0.67       |
@@ -1468,14 +1468,14 @@ BIGGEST COST DRIVER: Worker compute (54% of total at 1×, ~70% at 10×).
 ```
 DECISION TRADE-OFFS — COST, OPERABILITY, ON-CALL:
 
-| Decision                    | Cost Impact   | Operability Impact      | On-Call Impact                    |
-|----------------------------|--------------|--------------------------|-----------------------------------|
-| More worker instances      | +$62/instance| Higher throughput        | Fewer "queue_depth" pages          |
-| Separate worker pools      | +$200/mo     | Isolate failure by type  | Clearer blame (email vs image)     |
-| Read replica for status    | +$175/mo     | Offload read load        | Status API stays up during writes  |
-| Simpler architecture (1 DB)| -$350/mo     | Single place to debug    | One failover to understand        |
-| Autoscale workers          | -$350 off-peak| Variable capacity       | Must tune scale-up/scale-down     |
-| DLQ retention 30 days      | +$50/mo      | Full failure history     | Replay after fix without repro     |
+| Decision                   | Cost Impact    | Operability Impact       | On-Call Impact                     |
+|----------------------------|----------------|--------------------------|------------------------------------|
+| More worker instances      | +$62/instance  | Higher throughput        | Fewer "queue_depth" pages          |
+| Separate worker pools      | +$200/mo       | Isolate failure by type  | Clearer blame (email vs image)     |
+| Read replica for status    | +$175/mo       | Offload read load        | Status API stays up during writes  |
+| Simpler architecture (1 DB)| -$350/mo       | Single place to debug    | One failover to understand         |
+| Autoscale workers          | -$350 off-peak | Variable capacity        | Must tune scale-up/scale-down      |
+| DLQ retention 30 days      | +$50/mo       | Full failure history      | Replay after fix without repro     |
 
 L5 RELEVANCE: A Senior engineer explicitly weighs cost against operability.
 Cutting cost by removing the read replica saves $175/mo but makes status
@@ -1523,7 +1523,7 @@ THE FALSE CONFIDENCE PROBLEM:
 | dlq_depth           | 0                    | Failures going to wrong partition; DLQ counter not incremented     |
 | jobs_completed_total| Steady increase      | Duplicate executions (lease expiry + slow ACK); business double-charged |
 | enqueue_error_rate  | 0%                   | Producers retrying; idempotency saving you; one 503 = lost job     |
-| oldest_pending_job   | 30s                  | One priority band starved; high-priority fine, low-priority stuck  |
+| oldest_pending_job  | 30s                 | One priority band starved; high-priority fine, low-priority stuck  |
 
 THE ACTUAL SIGNAL (Job Queue):
 
@@ -1641,19 +1641,19 @@ V1 SECURITY ACCEPTABLE RISKS:
 │   - Single job table, priority support                                      │
 │   - Manual DLQ management via admin API                                     │
 │   - Autoscaling workers on queue_depth                                      │
-│   Scale: 500 jobs/sec, 10 workers, 30 job types                            │
+│   Scale: 500 jobs/sec, 10 workers, 30 job types                             │
 │                                                                             │
 │   V1.1 (First Issues — triggered by growth):                                │
 │   - TRIGGER: Queue depth spikes during daily batch imports (3× normal)      │
 │   - FIX: Separate worker pools by job category                              │
 │     Pool A: email/notification workers (latency-sensitive, lightweight)     │
-│     Pool B: image/video workers (CPU-heavy, memory-heavy)                  │
-│     Pool C: batch/sync workers (long-running, external APIs)               │
+│     Pool B: image/video workers (CPU-heavy, memory-heavy)                   │
+│     Pool C: batch/sync workers (long-running, external APIs)                │
 │   - BENEFIT: Heavy image resize jobs no longer delay email delivery         │
-│   - TRIGGER: Polling contention at 50 workers                              │
+│   - TRIGGER: Polling contention at 50 workers                               │
 │   - FIX: Workers poll by job type partition (not entire table)              │
 │                                                                             │
-│   V2 (Incremental — triggered by 5× growth):                               │
+│   V2 (Incremental — triggered by 5× growth):                                │
 │   - TRIGGER: PostgreSQL write throughput at limit (5,000 jobs/sec peak)     │
 │   - FIX: LISTEN/NOTIFY for instant dispatch (reduce empty polls)            │
 │   - FIX: Connection pooling optimization (PgBouncer in transaction mode)    │
@@ -1661,7 +1661,7 @@ V1 SECURITY ACCEPTABLE RISKS:
 │   - FIX: Table partitioning by created_at (drop old partitions instead      │
 │     of DELETE)                                                              │
 │   - TRIGGER: Need for priority queues with strict isolation                 │
-│   - FIX: Separate tables per priority tier (high/normal/low)               │
+│   - FIX: Separate tables per priority tier (high/normal/low)                │
 │                                                                             │
 │   NOT IN SCOPE (would be V3, Staff-level):                                  │
 │   - Migrate from PostgreSQL to purpose-built store                          │
@@ -1923,47 +1923,47 @@ STRONG L5 SIGNALS:
 │                    JOB QUEUE SYSTEM ARCHITECTURE                            │
 │                                                                             │
 │                                                                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                    │
-│  │ API Svc  │  │ User Svc │  │ Billing  │  │Scheduler │                    │
-│  │ (enqueue)│  │ (enqueue)│  │ (enqueue)│  │ (enqueue)│                    │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘                    │
-│       │              │              │              │                         │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐                  │
+│  │ API Svc  │   │ User Svc │   │ Billing  │   │Scheduler │                  │
+│  │ (enqueue)│   │ (enqueue)│   │ (enqueue)│   │ (enqueue)│                  │
+│  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘                  │
+│       │              │              │              │                        │
 │       └──────────────┴──────┬───────┴──────────────┘                        │
 │                             ▼                                               │
 │              ┌──────────────────────────────┐                               │
-│              │       ENQUEUE API (×2)       │  ← Stateless, LB'd           │
+│              │       ENQUEUE API (×2)       │  ← Stateless, LB'd            │
 │              │   Validate → Assign ID →     │                               │
 │              │   Persist → ACK              │                               │
 │              └─────────────┬────────────────┘                               │
 │                            │                                                │
 │                            ▼                                                │
 │              ┌──────────────────────────────┐                               │
-│              │    POSTGRESQL (Primary)       │  ← Single source of truth    │
+│              │    POSTGRESQL (Primary)      │  ← Single source of truth     │
 │              │                              │                               │
 │              │  jobs table:                 │                               │
 │              │  ┌────────────────────────┐  │                               │
 │              │  │ pending (visible)      │──┤──→ Workers poll here          │
 │              │  │ processing (leased)    │  │                               │
 │              │  │ completed              │  │                               │
-│              │  │ dead (DLQ)            │  │                               │
+│              │  │ dead (DLQ)             │  │                               │
 │              │  └────────────────────────┘  │                               │
 │              │                              │                               │
 │              │  Replica ──→ Status queries  │                               │
 │              └──────────────┬───────────────┘                               │
 │                             │                                               │
 │              ┌──────────────┼──────────────┐                                │
-│              ▼              ▼              ▼                                 │
+│              ▼              ▼              ▼                                │
 │     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                      │
 │     │ Worker Pool A│ │ Worker Pool B│ │ Worker Pool C│                      │
-│     │ (Email/Notif)│ │ (Image/Video)│ │ (Sync/Batch) │                     │
-│     │  ×5 light    │ │  ×3 heavy    │ │  ×2 medium   │                     │
+│     │ (Email/Notif)│ │ (Image/Video)│ │ (Sync/Batch) │                      │
+│     │  ×5 light    │ │  ×3 heavy    │ │  ×2 medium   │                      │
 │     │              │ │              │ │              │                      │
-│     │ Poll → Claim │ │ Poll → Claim │ │ Poll → Claim │                     │
-│     │ → Execute    │ │ → Execute    │ │ → Execute    │                     │
-│     │ → ACK/NACK   │ │ → ACK/NACK   │ │ → ACK/NACK   │                    │
+│     │ Poll → Claim │ │ Poll → Claim │ │ Poll → Claim │                      │
+│     │ → Execute    │ │ → Execute    │ │ → Execute    │                      │
+│     │ → ACK/NACK   │ │ → ACK/NACK   │ │ → ACK/NACK   │                      │
 │     └──────┬───────┘ └──────┬───────┘ └──────┬───────┘                      │
-│            │                │                │                               │
-│            ▼                ▼                ▼                               │
+│            │                │                │                              │
+│            ▼                ▼                ▼                              │
 │     ┌──────────┐     ┌──────────┐     ┌──────────┐                          │
 │     │   SMTP   │     │  Object  │     │ External │                          │
 │     │  Server  │     │ Storage  │     │   APIs   │                          │
@@ -1982,42 +1982,42 @@ STRONG L5 SIGNALS:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    JOB LIFECYCLE STATE MACHINE                               │
+│                    JOB LIFECYCLE STATE MACHINE                              │
 │                                                                             │
 │                                                                             │
 │   ┌──────────────────────────────────────────────────────────────┐          │
 │   │                                                              │          │
 │   │  ENQUEUE                                                     │          │
 │   │  ┌─────────┐                                                 │          │
-│   │  │ pending  │ ← initial state after INSERT                    │         │
-│   │  └────┬─────┘                                                 │         │
+│   │  │ pending  │ ← initial state after INSERT                   │          │
+│   │  └────┬─────┘                                                │          │
 │   │       │                                                      │          │
 │   │       │ Worker polls + claims (FOR UPDATE SKIP LOCKED)       │          │
 │   │       ▼                                                      │          │
 │   │  ┌────────────┐                                              │          │
-│   │  │ processing  │ ← lease_expiry set, worker_id assigned       │         │
+│   │  │ processing  │ ← lease_expiry set, worker_id assigned      │          │
 │   │  └─────┬──────┘                                              │          │
 │   │        │                                                     │          │
 │   │        ├─── SUCCESS ──→ ┌───────────┐                        │          │
 │   │        │                │ completed  │ → Retained 7 days     │          │
 │   │        │                └───────────┘   → then deleted       │          │
 │   │        │                                                     │          │
-│   │        ├─── FAILURE (retriable, attempts < max) ─────┐      │          │
+│   │        ├─── FAILURE (retriable, attempts < max) ─────-┐      │          │
 │   │        │                                              │      │          │
 │   │        │    ┌──────────────────────────────────┐      │      │          │
-│   │        │    │ visible_after = now + backoff     │      │      │         │
-│   │        │    │ attempt_count++                   │      │      │         │
-│   │        │    │ status = 'pending'                │◄─────┘      │         │
-│   │        │    └──────────────────────────────────┘              │         │
+│   │        │    │ visible_after = now + backoff    │      │      │          │
+│   │        │    │ attempt_count++                  │      │      │          │
+│   │        │    │ status = 'pending'               │◄─────┘      │          │
+│   │        │    └──────────────────────────────────┘             │          │
 │   │        │         │                                           │          │
 │   │        │         └── (back to pending, waits for             │          │
 │   │        │              visible_after before re-dispatch)      │          │
 │   │        │                                                     │          │
-│   │        ├─── FAILURE (attempts >= max_retries) ───┐           │          │
+│   │        ├─── FAILURE (attempts >= max_retries) ─-──┐          │          │
 │   │        │                                          ▼          │          │
 │   │        │                                    ┌─────────┐      │          │
-│   │        │                                    │  dead    │      │         │
-│   │        │                                    │  (DLQ)   │      │         │
+│   │        │                                    │  dead   │      │          │
+│   │        │                                    │  (DLQ)  │      │          │
 │   │        │                                    └────┬────┘      │          │
 │   │        │                                         │           │          │
 │   │        │                              Replay ────┘→ pending  │          │
