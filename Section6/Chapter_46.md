@@ -19,9 +19,9 @@ This chapter covers metrics and observability system design at Staff Engineer de
 │          METRICS / OBSERVABILITY SYSTEM: THE STAFF ENGINEER VIEW            │
 │                                                                             │
 │   WRONG Framing: "Collect and display metrics"                              │
-│   RIGHT Framing: "Ingest millions of time-series at sub-second latency,   │
-│                   store them cost-efficiently for years, and enable        │
-│                   millisecond queries during live production incidents"    │
+│   RIGHT Framing: "Ingest millions of time-series at sub-second latency,     │
+│                   store them cost-efficiently for years, and enable         │
+│                   millisecond queries during live production incidents"     │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Before designing, understand:                                      │   │
@@ -75,34 +75,34 @@ It answers three fundamental questions:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                  THE THREE PILLARS OF OBSERVABILITY                          │
+│                  THE THREE PILLARS OF OBSERVABILITY                         │
 │                                                                             │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│   │     METRICS      │  │      LOGS        │  │     TRACES       │         │
-│   │                  │  │                  │  │                  │         │
-│   │ What:            │  │ What:            │  │ What:            │         │
-│   │ Numeric values   │  │ Discrete events  │  │ Request paths    │         │
-│   │ over time        │  │ with context     │  │ across services  │         │
-│   │                  │  │                  │  │                  │         │
-│   │ When:            │  │ When:            │  │ When:            │         │
-│   │ "Is latency up?" │  │ "Why did this    │  │ "Where is the    │         │
-│   │ "How many 5xx?"  │  │  request fail?"  │  │  bottleneck?"    │         │
-│   │                  │  │                  │  │                  │         │
-│   │ Volume:          │  │ Volume:          │  │ Volume:          │         │
-│   │ Medium           │  │ Very high        │  │ Low (sampled)    │         │
-│   │ (aggregated)     │  │ (per-event)      │  │ (per-request)    │         │
-│   │                  │  │                  │  │                  │         │
-│   │ Cost:            │  │ Cost:            │  │ Cost:            │         │
-│   │ Low per series   │  │ Very high at     │  │ Medium           │         │
-│   │                  │  │ scale            │  │ (sampling helps) │         │
-│   └──────────────────┘  └──────────────────┘  └──────────────────┘         │
+│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐          │
+│   │     METRICS      │  │      LOGS        │  │     TRACES       │          │
+│   │                  │  │                  │  │                  │          │
+│   │ What:            │  │ What:            │  │ What:            │          │
+│   │ Numeric values   │  │ Discrete events  │  │ Request paths    │          │
+│   │ over time        │  │ with context     │  │ across services  │          │
+│   │                  │  │                  │  │                  │          │
+│   │ When:            │  │ When:            │  │ When:            │          │
+│   │ "Is latency up?" │  │ "Why did this    │  │ "Where is the    │          │
+│   │ "How many 5xx?"  │  │  request fail?"  │  │  bottleneck?"    │          │
+│   │                  │  │                  │  │                  │          │
+│   │ Volume:          │  │ Volume:          │  │ Volume:          │          │
+│   │ Medium           │  │ Very high        │  │ Low (sampled)    │          │
+│   │ (aggregated)     │  │ (per-event)      │  │ (per-request)    │          │
+│   │                  │  │                  │  │                  │          │
+│   │ Cost:            │  │ Cost:            │  │ Cost:            │          │
+│   │ Low per series   │  │ Very high at     │  │ Medium           │          │
+│   │                  │  │ scale            │  │ (sampling helps) │          │
+│   └──────────────────┘  └──────────────────┘  └──────────────────┘          │
 │                                                                             │
 │   THIS CHAPTER FOCUSES ON METRICS                                           │
 │   (Logs and traces referenced where they intersect)                         │
 │                                                                             │
-│   Staff insight: Metrics DETECT problems. Logs and traces DIAGNOSE them.   │
-│   Design the metrics path for speed and reliability. Design the logs/trace │
-│   path for depth and context.                                              │
+│   Staff insight: Metrics DETECT problems. Logs and traces DIAGNOSE them.    │
+│   Design the metrics path for speed and reliability. Design the logs/trace  │
+│   path for depth and context.                                               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -128,8 +128,8 @@ It answers three fundamental questions:
 │   • Historical trends for comparison                                        │
 │   ↓                                                                         │
 │   ALARM SYSTEM (alerting)                                                   │
-│   • Heart rate below 40 or above 150? → Page the doctor                    │
-│   • Blood oxygen below 90%? → Critical alarm                               │
+│   • Heart rate below 40 or above 150? → Page the doctor                     │
+│   • Blood oxygen below 90%? → Critical alarm                                │
 │   ↓                                                                         │
 │   MEDICAL RECORDS (long-term storage)                                       │
 │   • Trends over days/months for diagnosis                                   │
@@ -137,17 +137,17 @@ It answers three fundamental questions:
 │                                                                             │
 │   COMPLICATIONS AT SCALE:                                                   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  What if you have 10 million patients? (10M services/containers)   │   │
-│   │  → Can't have a nurse per patient; need automated monitoring       │   │
+│   │  What if you have 10 million patients? (10M services/containers)    │   │
+│   │  → Can't have a nurse per patient; need automated monitoring        │   │
 │   │                                                                     │   │
-│   │  What if each patient has 500 vital signs? (500 metrics per host)  │   │
-│   │  → Can't display all at once; need smart aggregation and ranking   │   │
+│   │  What if each patient has 500 vital signs? (500 metrics per host)   │   │
+│   │  → Can't display all at once; need smart aggregation and ranking    │   │
 │   │                                                                     │   │
 │   │  What if the monitoring system itself gets sick?                    │   │
-│   │  → Must be more reliable than the systems it monitors              │   │
+│   │  → Must be more reliable than the systems it monitors               │   │
 │   │                                                                     │   │
 │   │  What if historical records fill the warehouse?                     │   │
-│   │  → Need to summarize: hourly stats not per-second after 30 days    │   │
+│   │  → Need to summarize: hourly stats not per-second after 30 days     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -238,53 +238,53 @@ Post-mortem with metrics:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              OBSERVABILITY SYSTEM FAILURE MODES                              │
+│              OBSERVABILITY SYSTEM FAILURE MODES                             │
 │                                                                             │
 │   FAILURE MODE 1: FLYING BLIND                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  No metrics → No alerts → No awareness → User-reported outages     │   │
-│   │  Detection shifts from seconds to hours                            │   │
-│   │  MTTR (Mean Time To Recovery) increases 10-50×                     │   │
+│   │  No metrics → No alerts → No awareness → User-reported outages      │   │
+│   │  Detection shifts from seconds to hours                             │   │
+│   │  MTTR (Mean Time To Recovery) increases 10-50×                      │   │
 │   │                                                                     │   │
-│   │  Real example: A silent data corruption bug ran for 3 weeks        │   │
-│   │  because there were no data integrity metrics.                     │   │
+│   │  Real example: A silent data corruption bug ran for 3 weeks         │   │
+│   │  because there were no data integrity metrics.                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   FAILURE MODE 2: ALERT FATIGUE                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Bad metrics → Too many false alerts → On-call ignores alerts      │   │
-│   │  → Real incident missed because it looked like another false alarm │   │
+│   │  Bad metrics → Too many false alerts → On-call ignores alerts       │   │
+│   │  → Real incident missed because it looked like another false alarm  │   │
 │   │                                                                     │   │
-│   │  This is WORSE than no alerts. False confidence kills.             │   │
+│   │  This is WORSE than no alerts. False confidence kills.              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   FAILURE MODE 3: OBSERVABILITY SYSTEM ITSELF OVERLOADED                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  During traffic spike, metrics pipeline also overloads             │   │
-│   │  → Metrics delayed or lost during the exact moment you need them   │   │
-│   │  → Dashboards show stale data → Wrong diagnosis → Wrong fix        │   │
+│   │  During traffic spike, metrics pipeline also overloads              │   │
+│   │  → Metrics delayed or lost during the exact moment you need them    │   │
+│   │  → Dashboards show stale data → Wrong diagnosis → Wrong fix         │   │
 │   │                                                                     │   │
-│   │  Staff insight: The observability system must be provisioned for   │   │
-│   │  the WORST day, not the average day.                               │   │
+│   │  Staff insight: The observability system must be provisioned for    │   │
+│   │  the WORST day, not the average day.                                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   FAILURE MODE 4: CARDINALITY EXPLOSION                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Developer adds user_id as a metric label                          │   │
-│   │  → 100M users × 50 metrics = 5 BILLION time series                 │   │
-│   │  → TSDB runs out of memory → All metrics unavailable               │   │
+│   │  Developer adds user_id as a metric label                           │   │
+│   │  → 100M users × 50 metrics = 5 BILLION time series                  │   │
+│   │  → TSDB runs out of memory → All metrics unavailable                │   │
 │   │  → One bad label takes down entire observability stack              │   │
 │   │                                                                     │   │
-│   │  This is the #1 operational incident in metrics systems.           │   │
+│   │  This is the #1 operational incident in metrics systems.            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   FAILURE MODE 5: METRIC MISINTERPRETATION                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Average latency looks fine at 50ms → But P99 is 12 seconds        │   │
-│   │  → 1% of users having terrible experience                          │   │
-│   │  → Dashboard shows green → No investigation                        │   │
+│   │  Average latency looks fine at 50ms → But P99 is 12 seconds         │   │
+│   │  → 1% of users having terrible experience                           │   │
+│   │  → Dashboard shows green → No investigation                         │   │
 │   │                                                                     │   │
-│   │  Staff insight: Averages lie. Always use percentiles.              │   │
+│   │  Staff insight: Averages lie. Always use percentiles.               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -580,29 +580,29 @@ none of them well. In practice, these systems share infrastructure
 │                  LATENCY REQUIREMENTS BY PATH                               │
 │                                                                             │
 │   METRIC EMISSION (in-process):                                             │
-│   P50: < 1μs  │  P99: < 10μs  │  Budget: ZERO blocking to application     │
-│   WHY: A metric call inside a request path that adds 1ms per call          │
-│   at 100 calls/request adds 100ms of latency. Unacceptable.               │
+│   P50: < 1μs  │  P99: < 10μs  │  Budget: ZERO blocking to application       │
+│   WHY: A metric call inside a request path that adds 1ms per call           │
+│   at 100 calls/request adds 100ms of latency. Unacceptable.                 │
 │                                                                             │
 │   INGESTION (end-to-end, emission to queryable):                            │
-│   P50: < 10s  │  P99: < 30s                                                │
-│   WHY: During incidents, 30s staleness is tolerable. Beyond 60s,           │
-│   dashboards become misleading—you're debugging with stale data.           │
+│   P50: < 10s  │  P99: < 30s                                                 │
+│   WHY: During incidents, 30s staleness is tolerable. Beyond 60s,            │
+│   dashboards become misleading—you're debugging with stale data.            │
 │                                                                             │
 │   DASHBOARD QUERY (standard time range):                                    │
-│   P50: < 500ms  │  P99: < 3s                                               │
-│   WHY: On-call engineer refreshing dashboard during incident.              │
-│   More than 3 seconds → they'll open another tab and lose context.         │
+│   P50: < 500ms  │  P99: < 3s                                                │
+│   WHY: On-call engineer refreshing dashboard during incident.               │
+│   More than 3 seconds → they'll open another tab and lose context.          │
 │                                                                             │
 │   ALERT EVALUATION (rule check cycle):                                      │
-│   P50: < 15s  │  P99: < 60s                                                │
-│   WHY: Alerts should fire within 1–2 minutes of condition onset.           │
-│   60s evaluation + 60s "for" duration = ~2 min detection latency.          │
+│   P50: < 15s  │  P99: < 60s                                                 │
+│   WHY: Alerts should fire within 1–2 minutes of condition onset.            │
+│   60s evaluation + 60s "for" duration = ~2 min detection latency.           │
 │                                                                             │
 │   AD-HOC QUERY (wide time range, many series):                              │
-│   P50: < 5s  │  P99: < 30s                                                 │
-│   WHY: Exploratory queries during post-mortem. Users tolerate waiting      │
-│   but will abort and simplify query if > 30s.                              │
+│   P50: < 5s  │  P99: < 30s                                                  │
+│   WHY: Exploratory queries during post-mortem. Users tolerate waiting       │
+│   but will abort and simplify query if > 30s.                               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -861,62 +861,62 @@ Bad deploy adds user_id as label to a metric
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                   METRICS SYSTEM ARCHITECTURE                               │
 │                                                                             │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐                                    │
-│  │ Service │  │ Service │  │ Service │  ... (millions)                     │
-│  │   A     │  │   B     │  │   C     │                                    │
-│  └────┬────┘  └────┬────┘  └────┬────┘                                    │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐                                      │
+│  │ Service │  │ Service │  │ Service │  ... (millions)                      │
+│  │   A     │  │   B     │  │   C     │                                      │
+│  └────┬────┘  └────┬────┘  └────┬────┘                                      │
 │       │            │            │                                           │
 │       ▼            ▼            ▼                                           │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐                                    │
-│  │ Agent / │  │ Agent / │  │ Agent / │  (per-host or sidecar)             │
-│  │ Sidecar │  │ Sidecar │  │ Sidecar │                                    │
-│  └────┬────┘  └────┬────┘  └────┬────┘                                    │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐                                      │
+│  │ Agent / │  │ Agent / │  │ Agent / │  (per-host or sidecar)               │
+│  │ Sidecar │  │ Sidecar │  │ Sidecar │                                      │
+│  └────┬────┘  └────┬────┘  └────┬────┘                                      │
 │       │            │            │                                           │
 │       └────────────┼────────────┘                                           │
 │                    ▼                                                        │
-│  ┌──────────────────────────────────────────────────┐                      │
-│  │           INGESTION LAYER                         │                      │
-│  │  ┌──────────────────────────────────────────────┐│                      │
-│  │  │  Collector Fleet (stateless, horizontally    ││                      │
-│  │  │  scalable, validates, routes, pre-aggregates)││                      │
-│  │  └──────────────────────────────────────────────┘│                      │
-│  └─────────────────────┬────────────────────────────┘                      │
+│  ┌──────────────────────────────────────────────────┐                       │ 
+│  │           INGESTION LAYER                        │                       │
+│  │  ┌──────────────────────────────────────────────┐│                       │
+│  │  │  Collector Fleet (stateless, horizontally    ││                       │
+│  │  │  scalable, validates, routes, pre-aggregates)││                       │
+│  │  └──────────────────────────────────────────────┘│                       │
+│  └─────────────────────┬────────────────────────────┘                       │
 │                        │                                                    │
 │            ┌───────────┼───────────────┐                                    │
 │            ▼           ▼               ▼                                    │
-│  ┌─────────────┐ ┌──────────┐ ┌────────────────┐                          │
-│  │ Write-Ahead │ │ Streaming│ │ Cardinality    │                          │
-│  │ Log / Queue │ │ Aggreg.  │ │ Enforcer       │                          │
-│  │ (buffer)    │ │ Engine   │ │ (reject/drop)  │                          │
-│  └──────┬──────┘ └─────┬────┘ └────────────────┘                          │
+│  ┌─────────────┐ ┌──────────┐ ┌────────────────┐                            │
+│  │ Write-Ahead │ │ Streaming│ │ Cardinality    │                            │
+│  │ Log / Queue │ │ Aggreg.  │ │ Enforcer       │                            │
+│  │ (buffer)    │ │ Engine   │ │ (reject/drop)  │                            │
+│  └──────┬──────┘ └─────┬────┘ └────────────────┘                            │
 │         │              │                                                    │
 │         ▼              ▼                                                    │
-│  ┌──────────────────────────────────────────────────┐                      │
-│  │           STORAGE LAYER                           │                      │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │                      │
-│  │  │  HOT     │  │  WARM    │  │   COLD       │   │                      │
-│  │  │  (TSDB)  │  │  (Object │  │   (Object    │   │                      │
-│  │  │  In-mem  │  │   Store  │  │    Store,    │   │                      │
-│  │  │  + SSD   │  │   1min   │  │    1hr agg)  │   │                      │
-│  │  │  Raw 48h │  │   agg)   │  │              │   │                      │
-│  │  └──────────┘  └──────────┘  └──────────────┘   │                      │
-│  └──────────────────────┬───────────────────────────┘                      │
+│  ┌──────────────────────────────────────────────────┐                       │
+│  │           STORAGE LAYER                          │                       │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐    │                       │
+│  │  │  HOT     │  │  WARM    │  │   COLD       │    │                       │
+│  │  │  (TSDB)  │  │  (Object │  │   (Object    │    │                       │
+│  │  │  In-mem  │  │   Store  │  │    Store,    │    │                       │
+│  │  │  + SSD   │  │   1min   │  │    1hr agg)  │    │                       │
+│  │  │  Raw 48h │  │   agg)   │  │              │    │                       │
+│  │  └──────────┘  └──────────┘  └──────────────┘    │                       │
+│  └──────────────────────┬───────────────────────────┘                       │
 │                         │                                                   │
-│  ┌──────────────────────┼───────────────────────────┐                      │
-│  │           QUERY LAYER                             │                      │
-│  │  ┌──────────────────────────────────────────────┐│                      │
-│  │  │  Query Engine (fan-out to storage tiers,     ││                      │
-│  │  │  merge results, compute aggregations)         ││                      │
-│  │  └──────────────────────────────────────────────┘│                      │
-│  └──────────┬──────────────────┬────────────────────┘                      │
-│             │                  │                                             │
-│    ┌────────▼────────┐  ┌─────▼──────────┐                                 │
-│    │   DASHBOARDS    │  │  ALERT ENGINE  │                                 │
-│    │   (Grafana,     │  │  (Evaluates    │                                 │
-│    │    custom UI)   │  │   rules,       │                                 │
-│    │                 │  │   routes        │                                 │
-│    │                 │  │   notifications)│                                 │
-│    └─────────────────┘  └────────────────┘                                 │
+│  ┌──────────────────────┼───────────────────────────┐                       │
+│  │           QUERY LAYER                            │                       │
+│  │  ┌──────────────────────────────────────────────┐│                       │
+│  │  │  Query Engine (fan-out to storage tiers,     ││                       │
+│  │  │  merge results, compute aggregations)        ││                       │
+│  │  └──────────────────────────────────────────────┘│                       │
+│  └──────────┬──────────────────┬────────────────────┘                       │
+│             │                  │                                            │
+│    ┌────────▼────────┐  ┌─────▼──────────┐                                  │
+│    │   DASHBOARDS    │  │  ALERT ENGINE  │                                  │
+│    │   (Grafana,     │  │  (Evaluates    │                                  │
+│    │    custom UI)   │  │   rules,       │                                  │
+│    │                 │  │  routes        │                                  │
+│    │                 │  │  notifications)│                                  │
+│    └─────────────────┘  └────────────────┘                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1917,12 +1917,12 @@ REPLICATION:
 TIERED RETENTION:
 
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Tier   │ Resolution │ Retention │ Storage         │ Cost/GB/month    │
+│ Tier   │ Resolution │ Retention │ Storage         │ Cost/GB/month      │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Hot    │ 15 seconds │ 48 hours  │ Local SSD/NVMe  │ $$$$ (highest)   │
-│ Warm   │ 1 minute   │ 30 days   │ Object store    │ $$               │
-│ Cold   │ 1 hour     │ 1 year    │ Object store IA │ $                │
-│ Archive│ 1 day      │ 5 years   │ Glacier/archive │ ¢ (cheapest)     │
+│ Hot    │ 15 seconds │ 48 hours  │ Local SSD/NVMe  │ $$$$ (highest)     │
+│ Warm   │ 1 minute   │ 30 days   │ Object store    │ $$                 │
+│ Cold   │ 1 hour     │ 1 year    │ Object store IA │ $                  │
+│ Archive│ 1 day      │ 5 years   │ Glacier/archive │ ¢ (cheapest)       │
 └────────────────────────────────────────────────────────────────────────┘
 
 PER-NAMESPACE OVERRIDES:
@@ -2585,12 +2585,12 @@ NOT DONE: Per-query adaptive resolution
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                  COST BREAKDOWN (TYPICAL)                                    │
+│                  COST BREAKDOWN (TYPICAL)                                   │
 │                                                                             │
 │   40% │ STORAGE                                                             │
-│       │ ├── Hot (SSD): High $/GB, fast, 48h retention → 15% of total       │
-│       │ ├── Warm (Object store): Low $/GB, 30-day retention → 20%          │
-│       │ └── Cold (Archive): Very low $/GB, 1+ year → 5%                    │
+│       │ ├── Hot (SSD): High $/GB, fast, 48h retention → 15% of total        │
+│       │ ├── Warm (Object store): Low $/GB, 30-day retention → 20%           │
+│       │ └── Cold (Archive): Very low $/GB, 1+ year → 5%                     │
 │       │                                                                     │
 │   30% │ COMPUTE (QUERY)                                                     │
 │       │ ├── Query engine CPU/RAM → 20%                                      │
@@ -3106,37 +3106,37 @@ ARCHITECTURE DIAGRAM:
 
   ┌───────────────────────────────────────────────────────────────────┐
   │  REGION A                                                         │
-  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────────┐ │
-  │  │ Agents │→│Collectors │→│  TSDB     │→│ Object Store (Warm)│ │
-  │  └────────┘  └──────────┘  │ (Sharded) │  └────────────────────┘ │
-  │                            └─────┬─────┘                         │
-  │                                  │        ┌─────────────────┐    │
-  │              ┌───────────────────┤        │ Alert Engine    │    │
-  │              │                   │        │ (Isolated)      │    │
-  │              ▼                   ▼        └─────────────────┘    │
-  │  ┌──────────────┐      ┌──────────────┐                         │
-  │  │ Query Engine │      │ Streaming    │                         │
-  │  │ (Regional)   │      │ Aggregation  │                         │
-  │  └──────┬───────┘      └──────────────┘                         │
-  │         │                                                        │
-  └─────────┼────────────────────────────────────────────────────────┘
+  │  ┌────────┐  ┌──────────┐  ┌──────────-┐  ┌────────────────────┐  │
+  │  │ Agents │→ │Collectors│-→│  TSDB     │-→│ Object Store (Warm)│  │
+  │  └────────┘  └──────────┘  │ (Sharded) │  └────────────────────┘  │
+  │                            └─────┬─────┘                          │
+  │                                  │        ┌─────────────────┐     │
+  │              ┌───────────────────┤        │ Alert Engine    │     │
+  │              │                   │        │ (Isolated)      │     │
+  │              ▼                   ▼        └─────────────────┘     │
+  │  ┌──────────────┐      ┌──────────────┐                           │
+  │  │ Query Engine │      │ Streaming    │                           │
+  │  │ (Regional)   │      │ Aggregation  │                           │
+  │  └──────┬───────┘      └──────────────┘                           │
+  │         │                                                         │
+  └─────────┼────────────────────────────────────────────────────────-┘
             │ (Aggregated metrics)
             ▼
   ┌──────────────────────────┐
   │  GLOBAL VIEW             │
-  │  ┌──────────────────┐   │
-  │  │ Global TSDB      │   │ ← Receives aggregated from all regions
-  │  │ (Aggregated only) │   │
-  │  └────────┬─────────┘   │
+  │  ┌──────────────────┐    │
+  │  │ Global TSDB      │    │ ← Receives aggregated from all regions
+  │  │ (Aggregated only)│    │
+  │  └────────┬─────────┘    │
   │           │              │
-  │  ┌────────▼─────────┐   │
-  │  │ Global Query Eng │   │
-  │  └────────┬─────────┘   │
+  │  ┌────────▼─────────┐    │
+  │  │ Global Query Eng │    │
+  │  └────────┬─────────┘    │
   │           │              │
-  │  ┌────────▼─────────┐   │
-  │  │ Global Alerts    │   │
-  │  │ Global Dashboards│   │
-  │  └──────────────────┘   │
+  │  ┌────────▼─────────┐    │
+  │  │ Global Alerts    │    │
+  │  │ Global Dashboards│    │
+  │  └──────────────────┘    │
   └──────────────────────────┘
 ```
 
@@ -3419,50 +3419,50 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                   METRICS SYSTEM: COMPONENT INTERACTION                      │
+│                   METRICS SYSTEM: COMPONENT INTERACTION                     │
 │                                                                             │
 │  TEACH: How data flows from application to dashboard                        │
 │                                                                             │
 │  APPLICATION CODE                                                           │
-│  ┌─────────────────────────┐                                               │
-│  │ counter.increment()     │ ← O(1), non-blocking, < 1μs                  │
-│  │ histogram.observe(val)  │                                               │
-│  └──────────┬──────────────┘                                               │
-│             │ (batched locally)                                              │
+│  ┌─────────────────────────┐                                                │
+│  │ counter.increment()     │ ← O(1), non-blocking, < 1μs                    │
+│  │ histogram.observe(val)  │                                                │
+│  └──────────┬──────────────┘                                                │
+│             │ (batched locally)                                             │
 │             ▼                                                               │
 │  AGENT (per-host)                                                           │
-│  ┌─────────────────────────┐                                               │
-│  │ Buffer → Batch → Ship   │ ← 10-15s flush interval                      │
-│  │ Pre-aggregate            │                                               │
-│  └──────────┬──────────────┘                                               │
-│             │ (compressed batches)                                           │
+│  ┌─────────────────────────┐                                                │
+│  │ Buffer → Batch → Ship   │ ← 10-15s flush interval                        │
+│  │ Pre-aggregate           │                                                │
+│  └──────────┬──────────────┘                                                │
+│             │ (compressed batches)                                          │
 │             ▼                                                               │
 │  COLLECTOR FLEET (stateless)                                                │
-│  ┌─────────────────────────────────────────────────────────┐               │
-│  │ Validate → Cardinality Check → Route to Shard           │               │
-│  └──────────┬──────────────────────┬───────────────────────┘               │
+│  ┌─────────────────────────────────────────────────────────┐                │
+│  │ Validate → Cardinality Check → Route to Shard           │                │
+│  └──────────┬──────────────────────┬───────────────────────┘                │
 │             │                      │                                        │
 │             ▼                      ▼                                        │
-│  TSDB SHARD (hot)           STREAMING AGGREGATION                          │
-│  ┌───────────────────┐     ┌────────────────────────┐                      │
-│  │ WAL → Head → Block │     │ Pre-compute common     │                      │
-│  │ Index (in-memory)  │     │ aggregations            │                      │
-│  └─────────┬─────────┘     └────────────┬───────────┘                      │
+│  TSDB SHARD (hot)           STREAMING AGGREGATION                           │
+│  ┌───────────────────┐     ┌────────────────────────┐                       │
+│  │ WAL → Head → Block│     │ Pre-compute common     │                       │
+│  │ Index (in-memory) │     │ aggregations           │                       │
+│  └─────────┬─────────┘     └────────────┬───────────┘                       │
 │            │                            │                                   │
 │            ├────────────────────────────┘                                   │
 │            ▼                                                                │
 │  QUERY ENGINE                                                               │
-│  ┌─────────────────────────────────────────────────────────┐               │
-│  │ Parse → Plan → Fetch → Compute → Return                 │               │
-│  │ (with caching, cost limits, priority queuing)            │               │
-│  └──────────┬──────────────────────┬───────────────────────┘               │
+│  ┌─────────────────────────────────────────────────────────┐                │
+│  │ Parse → Plan → Fetch → Compute → Return                 │                │
+│  │ (with caching, cost limits, priority queuing)           │                │
+│  └──────────┬──────────────────────┬───────────────────────┘                │
 │             │                      │                                        │
 │             ▼                      ▼                                        │
-│  DASHBOARDS (Grafana)      ALERT ENGINE (isolated)                         │
-│  ┌───────────────────┐     ┌────────────────────────┐                      │
-│  │ Visualize metrics  │     │ Evaluate rules → Notify │                      │
-│  │ for humans         │     │ (PagerDuty, Slack, etc) │                      │
-│  └───────────────────┘     └────────────────────────┘                      │
+│  DASHBOARDS (Grafana)      ALERT ENGINE (isolated)                          │
+│  ┌───────────────────┐     ┌────────────────────────┐                       │
+│  │ Visualize metrics │     │ Evaluate rules → Notify│                       │
+│  │ for humans        │     │ (PagerDuty, Slack, etc)│                       │
+│  └───────────────────┘     └────────────────────────┘                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3475,44 +3475,44 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 │                                                                             │
 │  TEACH: What happens to a single metric sample, end to end                  │
 │                                                                             │
-│  T+0ms:     counter.increment({service:"api", status:"200"})               │
+│  T+0ms:     counter.increment({service:"api", status:"200"})                │
 │             │                                                               │
 │             ▼ Atomic add, no lock                                           │
-│  T+0.001ms: In-memory counter = 42,847                                     │
+│  T+0.001ms: In-memory counter = 42,847                                      │
 │             │                                                               │
 │             │ (Agent scrapes every 15 seconds)                              │
 │             ▼                                                               │
-│  T+15s:     Agent collects: http_requests_total{...} = 42847 @T=1705312200│
+│  T+15s:     Agent collects: http_requests_total{...} = 42847 @T=1705312200  │
 │             │                                                               │
 │             ▼ Batch with ~5000 other samples, compress with Snappy          │
-│  T+15.1s:   Agent ships batch to collector (500KB compressed)              │
+│  T+15.1s:   Agent ships batch to collector (500KB compressed)               │
 │             │                                                               │
-│             ▼ Collector validates + cardinality check (< 1ms per sample)   │
-│  T+15.2s:   Collector routes to TSDB shard (hash of series fingerprint)    │
+│             ▼ Collector validates + cardinality check (< 1ms per sample)    │
+│  T+15.2s:   Collector routes to TSDB shard (hash of series fingerprint)     │
 │             │                                                               │
-│             ▼ TSDB writes to Write-Ahead Log                               │
-│  T+15.3s:   WAL entry: (series_id=7A3F2B1C, ts=1705312200, val=42847)    │
+│             ▼ TSDB writes to Write-Ahead Log                                │
+│  T+15.3s:   WAL entry: (series_id=7A3F2B1C, ts=1705312200, val=42847)       │
 │             │                                                               │
-│             ▼ TSDB updates in-memory head block                            │
-│  T+15.4s:   Head block chunk appended (Gorilla-compressed)                 │
+│             ▼ TSDB updates in-memory head block                             │
+│  T+15.4s:   Head block chunk appended (Gorilla-compressed)                  │
 │             │                                                               │
 │             ╔════════════════════════════════════════════╗                  │
 │             ║  SAMPLE IS NOW QUERYABLE                   ║                  │
 │             ║  Total latency: ~15 seconds (dominated by  ║                  │
-│             ║  scrape interval, not processing time)      ║                  │
+│             ║  scrape interval, not processing time)     ║                  │
 │             ╚════════════════════════════════════════════╝                  │
 │                                                                             │
 │  LATER (every 2 hours):                                                     │
-│             Head block full → Flush to immutable on-disk block             │
+│             Head block full → Flush to immutable on-disk block              │
 │                                                                             │
 │  LATER (every 6 hours):                                                     │
 │             Compaction merges small blocks into larger blocks               │
 │                                                                             │
 │  LATER (every 48 hours):                                                    │
-│             Downsampling: Raw data → 1-minute roll-ups → Warm storage      │
+│             Downsampling: Raw data → 1-minute roll-ups → Warm storage       │
 │                                                                             │
 │  LATER (every 30 days):                                                     │
-│             1-minute roll-ups → 1-hour roll-ups → Cold storage             │
+│             1-minute roll-ups → 1-hour roll-ups → Cold storage              │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3521,36 +3521,36 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                   FAILURE PROPAGATION MAP                                    │
+│                   FAILURE PROPAGATION MAP                                   │
 │                                                                             │
 │  TEACH: How a single component failure propagates (or doesn't)              │
 │                                                                             │
-│  ┌──────────────┐                                                          │
-│  │  TSDB SHARD  │─── FAILS ───┐                                           │
-│  │  CRASHES     │             │                                            │
-│  └──────────────┘             │                                            │
+│  ┌──────────────┐                                                           │
+│  │  TSDB SHARD  │─── FAILS ───┐                                             │
+│  │  CRASHES     │             │                                             │
+│  └──────────────┘             │                                             │
 │                               ▼                                             │
 │                    ┌─────────────────────────────┐                          │
-│                    │ DIRECT IMPACT                │                          │
-│                    │ • 1/N of series unavailable  │                          │
-│                    │ • Writes queue in collectors │                          │
-│                    │ • Reads return partial data  │                          │
+│                    │ DIRECT IMPACT               │                          │
+│                    │ • 1/N of series unavailable │                          │
+│                    │ • Writes queue in collectors│                          │
+│                    │ • Reads return partial data │                          │
 │                    └──────────┬──────────────────┘                          │
 │                               │                                             │
-│              ┌────────────────┼────────────────────┐                       │
-│              ▼                ▼                     ▼                       │
-│  ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐            │
-│  │ COLLECTOR IMPACT  │ │ QUERY IMPACT    │ │ ALERT IMPACT     │            │
-│  │ • Buffers fill    │ │ • Dashboards    │ │ • Rules touching │            │
-│  │ • After 10min:    │ │   show gaps     │ │   lost series    │            │
-│  │   drops samples   │ │ • Users see     │ │   show "no data" │            │
-│  │   for that shard  │ │   partial data  │ │ • Meta-alert     │            │
-│  │                   │ │                 │ │   fires           │            │
-│  └──────────────────┘ └─────────────────┘ └──────────────────┘            │
+│              ┌────────────────┼────────────────────┐                        │
+│              ▼                ▼                    ▼                        │
+│  ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐              │
+│  │ COLLECTOR IMPACT │ │ QUERY IMPACT    │ │ ALERT IMPACT     │              │
+│  │ • Buffers fill   │ │ • Dashboards    │ │ • Rules touching │              │
+│  │ • After 10min:   │ │   show gaps     │ │   lost series    │              │
+│  │   drops samples  │ │ • Users see     │ │   show "no data" │              │
+│  │   for that shard │ │   partial data  │ │ • Meta-alert     │              │
+│  │                  │ │                 │ │   fires          │              │
+│  └──────────────────┘ └─────────────────┘ └──────────────────┘              │
 │                                                                             │
 │  ╔═══════════════════════════════════════════════════════════════════╗      │
-│  ║  ISOLATION BOUNDARIES (what does NOT propagate):                   ║      │
-│  ║                                                                    ║      │
+│  ║  ISOLATION BOUNDARIES (what does NOT propagate):                  ║      │
+│  ║                                                                   ║      │
 │  ║  ✓ Other TSDB shards: Unaffected (independent)                    ║      │
 │  ║  ✓ Application performance: Unaffected (agents buffer, non-block) ║      │
 │  ║  ✓ Alert engine for other shards: Unaffected (isolated)           ║      │
@@ -3559,12 +3559,12 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 │                                                                             │
 │  CONTRAST: CARDINALITY EXPLOSION (worst-case failure)                       │
 │                                                                             │
-│  ┌──────────────┐                                                          │
-│  │  BAD LABEL   │─── EXPLODES ──┐                                         │
-│  │  DEPLOYED    │               │                                          │
-│  └──────────────┘               │                                          │
+│  ┌──────────────┐                                                           │
+│  │  BAD LABEL   │─── EXPLODES ──┐                                           │
+│  │  DEPLOYED    │               │                                           │
+│  └──────────────┘               │                                           │
 │                                 ▼                                           │
-│              ┌─────────────────────────────────────────────┐               │
+│              ┌───────────────────────────────────────────-──┐               │
 │              │ IF NOT CAUGHT BY CARDINALITY ENFORCER:       │               │
 │              │                                              │               │
 │              │ TSDB shard OOM → Crash                       │               │
@@ -3578,8 +3578,8 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 │              │ TOTAL OBSERVABILITY OUTAGE                   │               │
 │              │                                              │               │
 │              │ THIS IS WHY CARDINALITY ENFORCEMENT IS THE   │               │
-│              │ MOST IMPORTANT FUNCTION IN THE SYSTEM         │               │
-│              └─────────────────────────────────────────────┘               │
+│              │ MOST IMPORTANT FUNCTION IN THE SYSTEM        │               │
+│              └─────────────────────────────────────────────-┘               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3592,49 +3592,49 @@ fire in 15 seconds and alerts that fire in 5 minutes."
 │                                                                             │
 │  TEACH: How the system evolves from simple to production-grade              │
 │                                                                             │
-│  V1: STARTUP (1K hosts, 1M series)                                         │
-│  ┌─────────────────────────────────────────────────────┐                   │
-│  │  App → StatsD (UDP) → Single InfluxDB → Grafana    │                   │
-│  │                                                     │                   │
-│  │  ✓ Simple  ✓ Fast to set up  ✓ Low cost            │                   │
-│  │  ✗ No redundancy  ✗ No cardinality control          │                   │
-│  │  ✗ UDP drops  ✗ Single point of failure             │                   │
-│  └─────────────────────────────────────────────────────┘                   │
+│  V1: STARTUP (1K hosts, 1M series)                                          │
+│  ┌─────────────────────────────────────────────────────┐                    │
+│  │  App → StatsD (UDP) → Single InfluxDB → Grafana     │                    │
+│  │                                                     │                    │
+│  │  ✓ Simple  ✓ Fast to set up  ✓ Low cost             │                    │
+│  │  ✗ No redundancy  ✗ No cardinality control          │                    │
+│  │  ✗ UDP drops  ✗ Single point of failure             │                    │
+│  └─────────────────────────────────────────────────────┘                    │
 │                        │                                                    │
-│     BREAKS: OOM from cardinality, UDP loss, single TSDB saturated          │
-│                        │                                                    │
-│                        ▼                                                    │
-│  V2: GROWTH (50K hosts, 100M series)                                       │
-│  ┌─────────────────────────────────────────────────────┐                   │
-│  │  App → Agent → Collector Fleet → Sharded TSDB       │                   │
-│  │       (buffer)   (stateless)     (hash-partitioned) │                   │
-│  │                                                     │                   │
-│  │  + Buffering  + Horizontal scale  + Cardinality     │                   │
-│  │  + Tiered retention  + Namespace isolation           │                   │
-│  │  + Separate alert engine                            │                   │
-│  │  ✗ Single region  ✗ Alert/query coupled             │                   │
-│  │  ✗ Manual downsampling                              │                   │
-│  └─────────────────────────────────────────────────────┘                   │
-│                        │                                                    │
-│     BREAKS: Regional, alert delays during overload, storage cost           │
+│     BREAKS: OOM from cardinality, UDP loss, single TSDB saturated           │
 │                        │                                                    │
 │                        ▼                                                    │
-│  V3: MATURE PLATFORM (500K hosts, 5B series)                               │
-│  ┌─────────────────────────────────────────────────────┐                   │
-│  │  Multi-region with global view                      │                   │
-│  │  Isolated alert infrastructure                      │                   │
-│  │  Streaming aggregation                              │                   │
-│  │  Automated downsampling                             │                   │
-│  │  Query cost protection                              │                   │
-│  │  Self-monitoring with external dead-man's switch    │                   │
-│  │  Object-store long-term retention                   │                   │
-│  │  Zero-downtime upgrades                             │                   │
-│  │                                                     │                   │
-│  │  ✓ Scales to billions of series                     │                   │
-│  │  ✓ Survives regional failures                       │                   │
-│  │  ✓ Self-monitoring                                  │                   │
-│  │  ✓ Cost-efficient ($0.002/series/month)             │                   │
-│  └─────────────────────────────────────────────────────┘                   │
+│  V2: GROWTH (50K hosts, 100M series)                                        │
+│  ┌─────────────────────────────────────────────────────┐                    │
+│  │  App → Agent → Collector Fleet → Sharded TSDB       │                    │
+│  │       (buffer)   (stateless)     (hash-partitioned) │                    │
+│  │                                                     │                    │
+│  │  + Buffering  + Horizontal scale  + Cardinality     │                    │
+│  │  + Tiered retention  + Namespace isolation          │                    │
+│  │  + Separate alert engine                            │                    │
+│  │  ✗ Single region  ✗ Alert/query coupled             │                    │
+│  │  ✗ Manual downsampling                              │                    │
+│  └─────────────────────────────────────────────────────┘                    │
+│                        │                                                    │
+│     BREAKS: Regional, alert delays during overload, storage cost            │
+│                        │                                                    │
+│                        ▼                                                    │
+│  V3: MATURE PLATFORM (500K hosts, 5B series)                                │
+│  ┌─────────────────────────────────────────────────────┐                    │
+│  │  Multi-region with global view                      │                    │
+│  │  Isolated alert infrastructure                      │                    │
+│  │  Streaming aggregation                              │                    │
+│  │  Automated downsampling                             │                    │
+│  │  Query cost protection                              │                    │
+│  │  Self-monitoring with external dead-man's switch    │                    │
+│  │  Object-store long-term retention                   │                    │
+│  │  Zero-downtime upgrades                             │                    │
+│  │                                                     │                    │
+│  │  ✓ Scales to billions of series                     │                    │
+│  │  ✓ Survives regional failures                       │                    │
+│  │  ✓ Self-monitoring                                  │                    │
+│  │  ✓ Cost-efficient ($0.002/series/month)             │                    │
+│  └─────────────────────────────────────────────────────┘                    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -4112,15 +4112,15 @@ APPROACHES:
    
 3. HIERARCHICAL DISCOVERY (Google's approach):
    ┌──────────────────┐
-   │ Global Registry   │ (knows which clusters exist)
+   │ Global Registry  │ (knows which clusters exist)
    └────────┬─────────┘
             │
    ┌────────▼─────────┐
-   │ Cluster Registry  │ (knows which pods exist in this cluster)
+   │ Cluster Registry │ (knows which pods exist in this cluster)
    └────────┬─────────┘
             │
    ┌────────▼─────────┐
-   │ Agent on Node     │ (knows which pods exist on this node)
+   │ Agent on Node    │ (knows which pods exist on this node)
    └──────────────────┘
    
    Each agent scrapes LOCAL pods (already knows them via kubelet)
@@ -4653,7 +4653,7 @@ MEASURING EACH COMPONENT:
 
 DASHBOARD (self-service):
   Each team sees:
-  ┌────────────────────────────────────────────┐
+  ┌───────────────────────────────────────────-─┐
   │  Team: API-Platform                         │
   │  Monthly Cost: $18,500                      │
   │  Trend: +12% month-over-month               │
@@ -4668,8 +4668,8 @@ DASHBOARD (self-service):
   │  Unused Metrics (no queries in 30d): $2,800 │
   │  → [Clean Up Now] button                    │
   │                                             │
-  │  Quota: 50M series (used: 32M, 64%)        │
-  └────────────────────────────────────────────┘
+  │  Quota: 50M series (used: 32M, 64%)         │
+  └────────────────────────────────────────────-┘
 
 WHY SHOWBACK (not chargeback) IS USUALLY BETTER:
   Chargeback: Team is actually billed, deducted from their budget
@@ -4765,59 +4765,59 @@ PREVENTION:
 │  TEACH: How tenant isolation prevents one team's failure from               │
 │         affecting another team's observability                              │
 │                                                                             │
-│  ┌───────────────────────────────────────────────────────┐                 │
-│  │  TEAM A (API Platform)                                 │                 │
-│  │  Quota: 50M series, 5M samples/sec                    │                 │
-│  │  ┌─────────────────────────────────────────────────┐  │                 │
-│  │  │ Their metrics → Their namespace → Their quota   │  │                 │
-│  │  │ Cardinality bomb? → Only THEIR metrics rejected │  │                 │
-│  │  │ Query of death? → Only THEIR query killed       │  │                 │
-│  │  │ Alert misconfigured? → Only THEIR alerts noisy  │  │                 │
-│  │  └─────────────────────────────────────────────────┘  │                 │
-│  └───────────────────────────────────────────────────────┘                 │
+│  ┌───────────────────────────────────────────────────────┐                  │
+│  │  TEAM A (API Platform)                                │                  │
+│  │  Quota: 50M series, 5M samples/sec                    │                  │
+│  │  ┌─────────────────────────────────────────────────┐  │                  │
+│  │  │ Their metrics → Their namespace → Their quota   │  │                  │
+│  │  │ Cardinality bomb? → Only THEIR metrics rejected │  │                  │
+│  │  │ Query of death? → Only THEIR query killed       │  │                  │
+│  │  │ Alert misconfigured? → Only THEIR alerts noisy  │  │                  │
+│  │  └─────────────────────────────────────────────────┘  │                  │
+│  └───────────────────────────────────────────────────────┘                  │
 │                                                                             │
-│  ┌───────────────────────────────────────────────────────┐                 │
-│  │  TEAM B (Payment Processing)                           │                 │
-│  │  Quota: 20M series, 2M samples/sec                    │                 │
-│  │  ┌─────────────────────────────────────────────────┐  │                 │
-│  │  │ Completely isolated from Team A's failures       │  │                 │
-│  │  │ Even if Team A uses 100% of their quota,        │  │                 │
-│  │  │ Team B's quota is RESERVED and UNAFFECTED        │  │                 │
-│  │  └─────────────────────────────────────────────────┘  │                 │
-│  └───────────────────────────────────────────────────────┘                 │
+│  ┌───────────────────────────────────────────────────────┐                  │
+│  │  TEAM B (Payment Processing)                          │                  │
+│  │  Quota: 20M series, 2M samples/sec                    │                  │
+│  │  ┌─────────────────────────────────────────────────┐  │                  │
+│  │  │ Completely isolated from Team A's failures      │  │                  │
+│  │  │ Even if Team A uses 100% of their quota,        │  │                  │
+│  │  │ Team B's quota is RESERVED and UNAFFECTED       │  │                  │
+│  │  └─────────────────────────────────────────────────┘  │                  │
+│  └───────────────────────────────────────────────────────┘                  │
 │                                                                             │
-│  ╔═══════════════════════════════════════════════════════════╗             │
-│  ║  ISOLATION ENFORCED AT:                                    ║             │
-│  ║                                                            ║             │
-│  ║  1. INGESTION: Per-namespace rate limits at collector      ║             │
-│  ║     → Team A flooding doesn't slow Team B's ingestion     ║             │
-│  ║                                                            ║             │
-│  ║  2. CARDINALITY: Per-namespace limits at cardinality       ║             │
-│  ║     enforcer → Team A's bad label doesn't affect Team B   ║             │
-│  ║                                                            ║             │
-│  ║  3. STORAGE: Per-namespace series quota in TSDB            ║             │
-│  ║     → Team A can't consume Team B's storage                ║             │
-│  ║                                                            ║             │
-│  ║  4. QUERY: Per-namespace concurrency limits in query engine║             │
-│  ║     → Team A's expensive queries don't starve Team B      ║             │
-│  ║                                                            ║             │
-│  ║  5. ALERTING: Per-namespace rule count limits              ║             │
-│  ║     → Team A's 10,000 alert rules don't slow evaluation   ║             │
-│  ╚═══════════════════════════════════════════════════════════╝             │
+│  ╔═══════════════════════════════════════════════════════════╗              │
+│  ║  ISOLATION ENFORCED AT:                                   ║              │
+│  ║                                                           ║              │
+│  ║  1. INGESTION: Per-namespace rate limits at collector     ║              │
+│  ║     → Team A flooding doesn't slow Team B's ingestion     ║              │
+│  ║                                                           ║              │
+│  ║  2. CARDINALITY: Per-namespace limits at cardinality      ║              │
+│  ║     enforcer → Team A's bad label doesn't affect Team B   ║              │
+│  ║                                                           ║              │
+│  ║  3. STORAGE: Per-namespace series quota in TSDB           ║              │
+│  ║     → Team A can't consume Team B's storage               ║              │
+│  ║                                                           ║              │
+│  ║  4. QUERY:Per-namespace concurrency limits in query engine║              │
+│  ║     → Team A's expensive queries don't starve Team B      ║              │
+│  ║                                                           ║              │
+│  ║  5. ALERTING: Per-namespace rule count limits             ║              │
+│  ║     → Team A's 10,000 alert rules don't slow evaluation   ║              │
+│  ╚═══════════════════════════════════════════════════════════╝              │
 │                                                                             │
-│  ┌───────────────────────────────────────────────────────┐                 │
-│  │  SHARED RESOURCES (failure domain for ALL teams):      │                 │
-│  │                                                        │                 │
-│  │  • Collector fleet (stateless — scales independently)  │                 │
-│  │  • TSDB shards (hash partitioned — one team's data     │                 │
-│  │    may share a shard, but quota enforcement prevents    │                 │
-│  │    one team from overwhelming the shard)                │                 │
-│  │  • Query engine (per-user limits protect shared pool)   │                 │
-│  │                                                        │                 │
-│  │  RISK: A platform-level bug (not a tenant bug) can     │                 │
-│  │  affect all teams. This is why platform deploys need    │                 │
-│  │  the MOST conservative canary strategy.                 │                 │
-│  └───────────────────────────────────────────────────────┘                 │
+│  ┌───────────────────────────────────────────────────────┐                  │
+│  │  SHARED RESOURCES (failure domain for ALL teams):     │                  │
+│  │                                                       │                  │
+│  │  • Collector fleet (stateless — scales independently) │                  │
+│  │  • TSDB shards (hash partitioned — one team's data    │                  │
+│  │    may share a shard, but quota enforcement prevents  │                  │
+│  │    one team from overwhelming the shard)              │                  │
+│  │  • Query engine (per-user limits protect shared pool) │                  │
+│  │                                                       │                  │
+│  │  RISK: A platform-level bug (not a tenant bug) can    │                  │
+│  │  affect all teams. This is why platform deploys need  │                  │
+│  │  the MOST conservative canary strategy.               │                  │
+│  └───────────────────────────────────────────────────────┘                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
