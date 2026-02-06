@@ -1486,7 +1486,7 @@ FAILURE MODES:
 │                          │ Impact: Instances stale for up to 60 seconds   │
 │                          │ instead of 5 seconds.                          │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Network partition         │ Instances in partitioned zone: Serve stale    │
+│ Network partition        │ Instances in partitioned zone: Serve stale     │
 │ (service ↔ config)       │ config from local cache. No config updates.    │
 │                          │ On partition heal: Background poll catches up. │
 │                          │ Alert if any instance is stale > 10 minutes.   │
@@ -2397,7 +2397,7 @@ into service failure. This is the most important architectural decision.
 CONFIG CHANGE LIFECYCLE:
 
     ┌─────────┐
-    │ Engineer │
+    │ Engineer│
     └────┬────┘
          │
          │ 1. Submit config change
