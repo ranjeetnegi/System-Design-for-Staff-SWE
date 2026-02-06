@@ -1374,6 +1374,22 @@ RACE CONDITIONS:
         All set circuit to OPEN in Redis. Idempotent operation.
         No race issue—all converge to the same state.
     
+        CROSS-INSTANCE CONSISTENCY LAG:
+        Instance A detects failure → writes OPEN to Redis.
+        Instance B hasn't checked Redis yet → still sends traffic.
+        Window: Up to 1 second (Redis poll interval for CB state).
+        
+        Impact: A few extra requests hit the failing backend during
+        the 1-second lag. Acceptable—circuit breaker is protective,
+        not transactional. The requests fail (502/504), client retries,
+        and by then all instances see OPEN state.
+        
+        WHY NOT push-based (pub/sub for CB state):
+        Adds complexity for a 1-second improvement. Not worth it.
+        Per-instance CB (without Redis) is also valid:
+        Each instance maintains its own CB based on its own observations.
+        Converges within seconds anyway (all instances see same failures).
+    
     Race 4: Health check and routing
     
         Health check marks instance unhealthy.
@@ -1562,6 +1578,160 @@ FAILURE SCENARIO: Route Misconfiguration Incident
      exists, method list is correct"
 ```
 
+## Load Shedding & Priority-Based Degradation
+
+```
+PROBLEM: Gateway auto-scaling takes ~3 minutes. During those 3 minutes of
+a traffic spike, existing instances are overloaded. Rate limiting protects
+backends, but what protects the GATEWAY itself from collapse?
+
+WHY THIS MATTERS FOR L5:
+    Without load shedding, the gateway serves all requests equally.
+    A viral product page generating 10× read traffic competes for the
+    same gateway threads as payment checkout. If the gateway collapses,
+    BOTH reads and payments fail. A Senior engineer ensures that payments
+    survive even when the product catalog is overloaded.
+
+LOAD SHEDDING STRATEGY:
+
+    Priority tiers:
+    | Priority | Routes                        | Behavior Under Overload     |
+    |----------|-------------------------------|-----------------------------|
+    | P0       | /payments/*, /auth/*          | Always served (never shed)  |
+    | P1       | /orders/*, /users/*           | Shed at > 90% CPU          |
+    | P2       | /recommendations/*, /search/* | Shed at > 75% CPU          |
+    | P3       | /analytics/*, /export/*       | Shed at > 60% CPU          |
+
+    Shedding mechanism:
+    1. Gateway monitors its own CPU utilization (per-instance metric)
+    2. When CPU > threshold for a tier: Return 503 for that tier's routes
+       with Retry-After header
+    3. Higher-priority routes continue processing normally
+    4. Shedding is PER-INSTANCE (each instance makes local decisions)
+
+    Implementation (pseudo-code):
+    FUNCTION should_shed(route_priority, current_cpu):
+        thresholds = {P3: 60, P2: 75, P1: 90, P0: never}
+        IF current_cpu > thresholds[route_priority]:
+            RETURN true  // Shed this request
+        RETURN false
+
+    WHY per-instance (not centralized):
+    Centralized load shedding requires coordination (which adds latency
+    and a dependency). Per-instance shedding is local, instant, and
+    doesn't create a new SPOF. Each instance protects itself.
+
+    TRADE-OFF:
+    Without shedding: All requests treated equally → gateway collapse → total outage.
+    With shedding: Low-priority requests return 503 → high-priority routes survive.
+    503 is better than total collapse. Always.
+
+    WHAT A MID-LEVEL ENGINEER MISSES:
+    They configure auto-scaling and assume the scaling gap is acceptable.
+    A Senior engineer knows that 3 minutes of overload can cascade:
+    Thread pool exhaustion → all backends unreachable → total outage.
+    Load shedding buys time until auto-scaling completes.
+```
+
+## Graceful Shutdown & Connection Draining
+
+```
+PROBLEM: During a rolling deploy, a gateway instance is terminated.
+Requests in flight on that instance are aborted. Clients see errors.
+
+WHY THIS MATTERS:
+    At 5,000 req/sec per instance and a 50ms average request duration,
+    ~250 requests are in flight at any moment. Killing the instance
+    drops all 250. That's 250 clients seeing 502/503 errors.
+    At 5 deploys/week × 250 errors = 1,250 avoidable errors/week.
+
+GRACEFUL SHUTDOWN PROCEDURE:
+
+    1. LB DRAIN (T=0):
+       - Load balancer marks instance as "draining" (stops sending new requests)
+       - Instance stops accepting new connections
+       - Existing connections continue processing
+
+    2. IN-FLIGHT COMPLETION (T=0 to T+30s):
+       - Instance completes all in-flight requests (up to 30-second window)
+       - Most requests complete within 1-2 seconds
+       - Requests still in flight after 30s: Forcefully terminated
+
+    3. CONNECTION CLOSE (T+30s):
+       - All idle connections closed
+       - Backend connection pools drained
+       - Redis connections closed
+       - Access log buffer flushed to Kafka
+
+    4. SHUTDOWN (T+30s):
+       - Process exits cleanly
+       - New instance already registered with LB (pre-started during rolling deploy)
+
+    DRAIN TIMEOUT: 30 seconds.
+    WHY 30 seconds:
+    - 99.9% of requests complete in < 10 seconds (even payment routes)
+    - 30 seconds gives generous buffer for slow backend responses
+    - > 30 seconds delays deploy pipeline (5 instances × 30s = 2.5 min minimum)
+
+    ROLLING DEPLOY WITH DRAINING:
+    Instance 1: Drain → shutdown → replace → healthy check → receive traffic
+    Instance 2: Drain → shutdown → replace → healthy check → receive traffic
+    ... (one at a time, never more than 1 instance draining simultaneously)
+
+    WHY one at a time: With 5 instances and N+2 redundancy, losing 1
+    leaves 4 healthy. Losing 2 leaves 3 (still N+0, but risky under load).
+    One at a time is safer.
+```
+
+## Service Registry Unavailability
+
+```
+PROBLEM: The service registry (Consul, K8s API, or custom registry)
+that provides backend instance lists becomes unreachable.
+
+WHY THIS MATTERS:
+    Without the registry, the gateway doesn't know WHERE to route requests.
+    If the registry is down and the gateway has no cached instance list,
+    ALL routes return 502 (cannot connect to any backend).
+
+HANDLING:
+
+    1. CACHED INSTANCE LIST:
+       Gateway caches the instance list from the service registry locally.
+       Cache refreshed: Every 30 seconds (health check interval).
+       
+       If registry is unavailable:
+       → Gateway uses cached list (instances from last successful refresh)
+       → Instance health still checked directly (GET /healthz to each instance)
+       → Gateway can still route traffic using cached, health-checked instances
+
+    2. STALE CACHE RISK:
+       Cached list may be stale:
+       - New instances not discovered (reduce capacity during scale-up)
+       - Removed instances still in cache (routed to, get connection refused)
+       
+       Mitigation for removed instances:
+       → Direct health check fails → instance removed from local cache
+       → Net effect: Self-correcting within 30 seconds (health check interval)
+       
+       Mitigation for new instances:
+       → Not available until registry recovers. Reduced capacity.
+       → Acceptable: Existing instances handle load. Auto-scaling
+         was triggered before registry went down.
+
+    3. ALERT & RECOVERY:
+       - Alert: "Service registry unreachable" (within 1 minute)
+       - Gateway continues serving with cached + health-checked instances
+       - DO NOT restart gateway (clears cache → no instances → total outage)
+       - Investigate registry: Network? Authentication? Cluster quorum?
+
+    4. DEFENSIVE STARTUP:
+       On gateway startup: If registry is unavailable and no local cache:
+       → Gateway starts but marks itself unhealthy (LB doesn't send traffic)
+       → WHY: Better to not start than to start with empty route targets
+       → When registry becomes available: Load instances → mark healthy
+```
+
 ## Orphaned Connection Detection & Cleanup
 
 ```
@@ -1680,6 +1850,90 @@ CACHING STRATEGY:
     creates cache invalidation problems across multiple layers and
     keeps caching at the appropriate layer (CDN for static, backend for
     dynamic).
+```
+
+## Request Body Buffering & Memory Pressure
+
+```
+PROBLEM: The gateway receives the full request body before forwarding to
+the backend. At 15,000 req/sec with 2 KB average body, that's 30 MB/sec
+of request body buffering. Manageable. But what about file upload routes?
+
+BODY BUFFERING STRATEGY:
+
+    Small bodies (< 64 KB): Buffer in memory.
+    WHY: 99% of API requests are < 64 KB. Buffering in memory is fastest.
+    Memory impact: 15,000 req/sec × 64 KB = 960 MB worst case.
+    With 8 GB RAM per instance: 12% of RAM. Acceptable.
+
+    Large bodies (64 KB - 10 MB): Stream to backend (no full buffering).
+    WHY: Buffering a 10 MB file upload in memory at 100 concurrent uploads
+    = 1 GB of RAM just for request bodies. Streaming passes data as it
+    arrives, using only a small buffer (64 KB).
+    
+    Oversized bodies (> 10 MB): Reject immediately with 413 Payload Too Large.
+    WHY: Prevent memory exhaustion from malicious or accidental large uploads.
+    10 MB limit is configurable per route (file upload routes may allow 100 MB).
+
+    MEMORY SAFETY:
+    - Max concurrent in-flight requests per instance: 5,000
+    - Max buffered body memory: 5,000 × 64 KB = 320 MB
+    - If memory usage > 80%: Start shedding low-priority requests (load shedding)
+    - If memory usage > 95%: Reject all new requests (emergency protection)
+    
+    WHAT A MID-LEVEL ENGINEER MISSES:
+    They assume all requests are small JSON bodies. One misconfigured client
+    sending 50 MB payloads can OOM a gateway instance. Per-route body size
+    limits and streaming for large bodies prevent this.
+```
+
+## Distributed Tracing Integration
+
+```
+DISTRIBUTED TRACING:
+
+    X-Request-ID provides basic correlation (gateway log ↔ backend log).
+    But for complex request chains (gateway → service A → service B → service C),
+    X-Request-ID alone doesn't show the dependency graph or per-hop latency.
+
+    GATEWAY'S ROLE IN DISTRIBUTED TRACING:
+
+    1. SPAN CREATION:
+       Gateway creates a root span for each incoming request:
+       {trace_id: <from client or generated>, span_id: <new>,
+        service: "api-gateway", operation: "proxy",
+        tags: {route: "user-service", method: "GET", path: "/users/me"}}
+
+    2. CONTEXT PROPAGATION:
+       Gateway propagates trace context to backend via headers:
+       - traceparent: 00-<trace_id>-<span_id>-01  (W3C Trace Context)
+       - OR X-B3-TraceId / X-B3-SpanId (Zipkin B3 format)
+       Backend creates a child span under the gateway's span.
+
+    3. SPAN COMPLETION:
+       When backend responds, gateway closes the span with:
+       {duration_ms: 42, status: 200, backend_instance: "user-service-2"}
+
+    4. SPAN EXPORT:
+       Gateway exports spans to tracing backend (Jaeger, Zipkin, Datadog)
+       via async UDP or batched HTTP (non-blocking, like logging).
+
+    WHY THIS MATTERS FOR L5:
+    When a mobile app request is slow, distributed tracing shows:
+    - Gateway overhead: 4ms
+    - user-service processing: 15ms
+    - user-service → cache-service: 8ms
+    - user-service → database: 150ms ← bottleneck
+    
+    Without tracing: "The API is slow." With tracing: "The user-service
+    database query is slow." Tracing cuts debugging time from hours to minutes.
+
+    V1 APPROACH: Propagate W3C Trace Context headers. Export spans to Jaeger.
+    Async, non-blocking. ~0.1ms overhead per request.
+    
+    V1 ACCEPTABLE SIMPLIFICATION: If no tracing backend, just propagate
+    X-Request-ID. When tracing is added later, the header propagation
+    pattern is already in place.
 ```
 
 ## What NOT to Optimize
@@ -3145,6 +3399,7 @@ A. Design Correctness & Clarity:
 ✓ Component responsibilities clear (Pipeline, Auth, Rate Limiter, Router, Proxy)
 ✓ Request pipeline with short-circuit behavior at each stage
 ✓ Header stripping for identity spoofing prevention
+✓ Distributed tracing integration (W3C Trace Context propagation)
 
 B. Trade-offs & Technical Judgment:
 ✓ Build vs buy (Kong/Nginx for small teams, custom when justified)
@@ -3152,20 +3407,25 @@ B. Trade-offs & Technical Judgment:
 ✓ Fail-open vs fail-closed for rate limiter (configurable per route)
 ✓ Gateway vs BFF vs Service Mesh (complementary, not replacements)
 ✓ Explicit non-goals (WAF, BFF, service mesh, response aggregation)
+✓ Request body buffering vs streaming (memory-safe body handling)
 
 C. Failure Handling & Reliability:
 ✓ Partial failures: Backend down, backend slow, Redis down, etcd down
 ✓ Circuit breaker per backend (one failure domain can't cascade)
+✓ Circuit breaker cross-instance consistency lag analysis
 ✓ Route misconfiguration incident (full walkthrough with detection/mitigation)
 ✓ TLS certificate expiry scenario
 ✓ Fail-open rate limiting with justification
 ✓ JWT key rotation failure handling
+✓ Service registry unavailability (cached instance list + direct health checks)
+✓ Load shedding with priority-based route degradation
 
 D. Scale & Performance:
 ✓ Concrete numbers (15K QPS, 5 instances, 100M requests/day)
 ✓ Scale growth table (1× to 100×)
 ✓ Gateway overhead budget (< 5ms P50, < 15ms P99)
 ✓ What breaks first at scale (instances → Redis → log pipeline)
+✓ Memory pressure from request body buffering (sizing + limits)
 
 E. Cost & Operability:
 ✓ Cost breakdown ($2,250/month total)
@@ -3182,12 +3442,14 @@ F. Ownership & On-Call Reality:
 ✓ Rollout stages with canary criteria
 ✓ Bad deploy scenario (JWT expiry check removed)
 ✓ Rushed decision scenario (Nginx for MVP)
+✓ Graceful shutdown with connection draining during deploys
 
 G. Concurrency & Consistency:
 ✓ Rate limit consistency model (approximate, Redis-backed)
 ✓ Config propagation model (eventually consistent, 10-second window)
 ✓ Connection pool management and stale connection handling
 ✓ No gateway-level retry (idempotency awareness)
+✓ Circuit breaker cross-instance Redis lag (1-second window, acceptable)
 
 H. Interview Calibration:
 ✓ L4 mistakes (auth+authz in gateway, no header stripping, gateway retries)
@@ -3203,8 +3465,11 @@ Brainstorming (Part 18):
 ✓ Evolution: WebSocket support, new service addition, auth migration
 ✓ Deployment: Rollout stages, bad deploy (auth bypass), rushed decision
 ✓ Interview: Clarifying questions, explicit non-goals, scope creep pushback
+
+UNAVOIDABLE GAPS:
+- None. All Senior-level signals covered after enrichment.
 ```
 
 ---
 
-*This chapter provides the foundation for confidently designing and owning an API gateway as a Senior Software Engineer. The core insight: the gateway is the single most critical piece of shared infrastructure—if it goes down, everything behind it is unreachable. Every design decision flows from this: stateless instances for resilience, N+2 redundancy for availability, per-backend circuit breakers for failure isolation, fail-open rate limiting to avoid self-inflicted outages, and header stripping as a non-negotiable security boundary. The gateway adds < 5ms to every request, authenticates every caller, protects every backend, and provides a single dashboard for observability. Master the failure isolation (one backend can't take down the gateway), the auth boundary (strip and re-inject identity headers), and the build-vs-buy judgment (start with off-the-shelf, go custom when justified), and you can design, own, and operate a gateway at any scale.*
+*This chapter provides the foundation for confidently designing and owning an API gateway as a Senior Software Engineer. The core insight: the gateway is the single most critical piece of shared infrastructure—if it goes down, everything behind it is unreachable. Every design decision flows from this: stateless instances for resilience, N+2 redundancy for availability, per-backend circuit breakers for failure isolation, fail-open rate limiting to avoid self-inflicted outages, priority-based load shedding to survive scaling gaps, and header stripping as a non-negotiable security boundary. The gateway adds < 5ms to every request, authenticates every caller, protects every backend, drains connections gracefully during deploys, and provides a single dashboard for observability. Master the failure isolation (one backend can't take down the gateway), the auth boundary (strip and re-inject identity headers), the load shedding discipline (payments survive even when recommendations don't), and the build-vs-buy judgment (start with off-the-shelf, go custom when justified), and you can design, own, and operate a gateway at any scale.*
