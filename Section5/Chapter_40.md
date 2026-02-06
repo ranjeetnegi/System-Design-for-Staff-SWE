@@ -91,43 +91,43 @@ Software behavior changes constantly—feature launches, threshold adjustments, 
 │                                                                             │
 │   WITHOUT A DEDICATED CONFIG SYSTEM:                                        │
 │   ├── Every behavior change = full code deploy                              │
-│   │   Deploy pipeline: build → test → stage → canary → prod = 30-60 min    │
-│   │   Feature flag flip: 30-60 min. Kill switch activation: 30-60 min.     │
-│   │   Threshold adjustment: 30-60 min. Unacceptable for incidents.         │
+│   │   Deploy pipeline: build → test → stage → canary → prod = 30-60 min     │
+│   │   Feature flag flip: 30-60 min. Kill switch activation: 30-60 min.      │
+│   │   Threshold adjustment: 30-60 min. Unacceptable for incidents.          │
 │   ├── Hardcoded values: Constants buried in code, scattered across files    │
-│   │   "What's the rate limit?" → grep the codebase. Hope it's in one       │
+│   │   "What's the rate limit?" → grep the codebase. Hope it's in one        │
 │   │   place. Often duplicated. Often inconsistent between services.         │
-│   ├── No audit trail: Who changed the timeout from 5s to 30s? When?        │
-│   │   Why? git blame finds the commit, but the reasoning is often lost.    │
-│   ├── No rollback: Bad config value deployed in code? Full rollback of     │
-│   │   the entire binary. 30 minutes to revert a one-line change.           │
-│   ├── No gradual rollout: Feature is either on for everyone or no one.     │
-│   │   No 1% → 10% → 50% → 100% ramp. No A/B testing.                     │
-│   └── No safety gates: No schema validation, no range checks, no          │
-│       dependency validation. Typo in JSON → crash in production.           │
+│   ├── No audit trail: Who changed the timeout from 5s to 30s? When?         │
+│   │   Why? git blame finds the commit, but the reasoning is often lost.     │
+│   ├── No rollback: Bad config value deployed in code? Full rollback of      │
+│   │   the entire binary. 30 minutes to revert a one-line change.            │
+│   ├── No gradual rollout: Feature is either on for everyone or no one.      │
+│   │   No 1% → 10% → 50% → 100% ramp. No A/B testing.                        │
+│   └── No safety gates: No schema validation, no range checks, no            │
+│       dependency validation. Typo in JSON → crash in production.            │
 │                                                                             │
 │   WITH A CONFIGURATION MANAGEMENT SYSTEM:                                   │
 │   ├── Config changes propagate in seconds (not minutes)                     │
 │   ├── Feature flags: Decouple deploy from release                           │
 │   ├── Kill switches: Disable features instantly during incidents            │
-│   ├── Gradual rollout: 1% → 10% → 50% → 100% with metrics at each stage   │
-│   ├── Instant rollback: Revert to previous version in seconds              │
-│   ├── Full audit trail: Who, what, when, why for every change              │
-│   ├── Schema validation: Type-safe configs, range checks, dependency       │
+│   ├── Gradual rollout: 1% → 10% → 50% → 100% with metrics at each stage     │
+│   ├── Instant rollback: Revert to previous version in seconds               │
+│   ├── Full audit trail: Who, what, when, why for every change               │
+│   ├── Schema validation: Type-safe configs, range checks, dependency        │
 │   │   validation before propagation                                         │
-│   └── Environment-aware: Different values for dev/staging/prod             │
+│   └── Environment-aware: Different values for dev/staging/prod              │
 │                                                                             │
 │   KEY INSIGHT:                                                              │
-│   Code deployments are expensive: build, test, stage, canary, rollout.     │
-│   Config changes should be cheap: validate, persist, propagate, done.      │
-│   But "cheap" does NOT mean "unsafe." Config changes cause more outages    │
+│   Code deployments are expensive: build, test, stage, canary, rollout.      │
+│   Config changes should be cheap: validate, persist, propagate, done.       │
+│   But "cheap" does NOT mean "unsafe." Config changes cause more outages     │
 │   than code bugs at many companies. The system must enforce safety.         │
 │                                                                             │
 │   SCOPE BOUNDARY:                                                           │
 │   This system manages RUNTIME configuration for services: feature flags,    │
 │   threshold values, routing rules, and operational knobs. It does NOT       │
 │   manage infrastructure configuration (Terraform, Kubernetes manifests),    │
-│   secrets management (vault, key management), or CI/CD pipeline config.    │
+│   secrets management (vault, key management), or CI/CD pipeline config.     │
 │   Those are separate systems owned by separate teams.                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -638,46 +638,46 @@ EDGE CASES:
 NON-FUNCTIONAL REQUIREMENTS:
 
 ┌──────────────────┬────────────────────────────────────────────────────────┐
-│ Requirement      │ Target & Justification                                │
+│ Requirement      │ Target & Justification                                 │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Read latency     │ P50: 0.001ms, P99: 0.01ms (local cache)              │
-│                  │ Config reads happen on every request in the consuming │
-│                  │ service. Must be in-memory. Any network call is       │
-│                  │ unacceptable.                                         │
+│ Read latency     │ P50: 0.001ms, P99: 0.01ms (local cache)                │
+│                  │ Config reads happen on every request in the consuming  │
+│                  │ service. Must be in-memory. Any network call is        │
+│                  │ unacceptable.                                          │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Write latency    │ P50: 50ms, P99: 500ms (API response)                 │
-│                  │ Config writes are infrequent (~50/day). Latency is    │
-│                  │ less critical. Correctness and safety matter more.    │
+│ Write latency    │ P50: 50ms, P99: 500ms (API response)                   │
+│                  │ Config writes are infrequent (~50/day). Latency is     │
+│                  │ less critical. Correctness and safety matter more.     │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Propagation time │ P50: 5s, P99: 15s (all instances converged)           │
-│                  │ 15 seconds is acceptable for feature flags and        │
-│                  │ threshold changes. Kill switches need faster (< 10s). │
+│ Propagation time │ P50: 5s, P99: 15s (all instances converged)            │
+│                  │ 15 seconds is acceptable for feature flags and         │
+│                  │ threshold changes. Kill switches need faster (< 10s).  │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Availability     │ Config read: 99.99% (served from local cache)         │
-│                  │ Config write: 99.9% (centralized API)                 │
-│                  │ If Config Service is down: reads work (cached).       │
-│                  │ Only writes are blocked. Services continue operating. │
+│ Availability     │ Config read: 99.99% (served from local cache)          │
+│                  │ Config write: 99.9% (centralized API)                  │
+│                  │ If Config Service is down: reads work (cached).        │
+│                  │ Only writes are blocked. Services continue operating.  │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Consistency      │ Eventual consistency with bounded convergence (15s)   │
-│                  │ During propagation: mixed config versions in fleet.   │
-│                  │ After convergence: all instances on same version.     │
-│                  │ Acceptable for 95% of config use cases.               │
+│ Consistency      │ Eventual consistency with bounded convergence (15s)    │
+│                  │ During propagation: mixed config versions in fleet.    │
+│                  │ After convergence: all instances on same version.      │
+│                  │ Acceptable for 95% of config use cases.                │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Durability       │ Config changes must survive any single failure.       │
-│                  │ Replicated database (synchronous replication).        │
-│                  │ Full version history retained for 1 year.             │
-│                  │ Zero data loss tolerance for config state.            │
+│ Durability       │ Config changes must survive any single failure.        │
+│                  │ Replicated database (synchronous replication).         │
+│                  │ Full version history retained for 1 year.              │
+│                  │ Zero data loss tolerance for config state.             │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Correctness      │ Config values must be schema-valid at all times.      │
-│                  │ No invalid config reaches any service instance.       │
-│                  │ Correctness beats speed: reject invalid changes       │
-│                  │ even if it means the change doesn't propagate.        │
+│ Correctness      │ Config values must be schema-valid at all times.       │
+│                  │ No invalid config reaches any service instance.        │
+│                  │ Correctness beats speed: reject invalid changes        │
+│                  │ even if it means the change doesn't propagate.         │
 ├──────────────────┼────────────────────────────────────────────────────────┤
-│ Security         │ - AuthN: OAuth2 / service accounts for API access     │
-│                  │ - AuthZ: Namespace-level RBAC (read/write/admin)      │
-│                  │ - Audit: Every change logged with full context        │
-│                  │ - TLS in transit, encryption at rest for config DB    │
-│                  │ - No secrets in config (enforced by content scanning) │
+│ Security         │ - AuthN: OAuth2 / service accounts for API access      │
+│                  │ - AuthZ: Namespace-level RBAC (read/write/admin)       │
+│                  │ - Audit: Every change logged with full context         │
+│                  │ - TLS in transit, encryption at rest for config DB     │
+│                  │ - No secrets in config (enforced by content scanning)  │
 └──────────────────┴────────────────────────────────────────────────────────┘
 
 TRADE-OFFS EXPLICITLY ACCEPTED:
@@ -707,13 +707,13 @@ SCALE ESTIMATES:
 │ Metric                   │ Estimate      │ Reasoning                    │
 ├──────────────────────────┼───────────────┼──────────────────────────────┤
 │ Total config keys        │ 5,000         │ ~50 services × ~100 configs  │
-│ Config changes per day   │ 50            │ ~10 engineers making changes  │
+│ Config changes per day   │ 50            │ ~10 engineers making changes │
 │ Config reads per second  │ 50,000+       │ All from local cache (0 QPS  │
 │ (logical)                │               │ to config service)           │
 │ Service instances        │ 2,000         │ 50 services × 40 instances   │
 │ Propagation events/day   │ 50            │ 1 per config change          │
-│ Config data size (total) │ ~50 MB        │ 5,000 keys × ~10 KB avg     │
-│ Version history size     │ ~5 GB/year    │ 50 changes/day × 365 × ~300B│
+│ Config data size (total) │ ~50 MB        │ 5,000 keys × ~10 KB avg      │
+│ Version history size     │ ~5 GB/year    │ 50 changes/day × 365 × ~300B │
 │ Active environments      │ 3             │ dev, staging, production     │
 │ Feature flags (active)   │ 200           │ ~4 per service               │
 │ Peak concurrent API      │ 10            │ Config changes are infrequent│
@@ -778,26 +778,26 @@ BACK-OF-ENVELOPE MATH:
 HIGH-LEVEL ARCHITECTURE:
 
 ┌─────────────┐    ┌─────────────────────────────────────────────────────┐
-│  Config UI   │    │                Config Service                       │
-│  (Web App)   │───▶│  ┌──────────────────────────────────────────────┐  │
-└─────────────┘    │  │              Config API                       │  │
-                   │  │  - Validate, persist, version config changes  │  │
-┌─────────────┐    │  │  - Read config values and history             │  │
-│  Config CLI  │───▶│  │  - Evaluate feature flags                    │  │
-└─────────────┘    │  └──────────────┬───────────────────────────────┘  │
-                   │                 │                                    │
-┌─────────────┐    │  ┌──────────────▼───────────────────────────────┐  │
-│ Service API  │───▶│  │          Config Store (PostgreSQL)           │  │
-│ (programmatic│    │  │  - config_current (latest values)            │  │
-│  access)     │    │  │  - config_versions (full history)            │  │
-└─────────────┘    │  │  - config_schemas (validation rules)         │  │
-                   │  └──────────────────────────────────────────────┘  │
-                   │                 │                                    │
-                   │  ┌──────────────▼───────────────────────────────┐  │
-                   │  │        Change Event Publisher                 │  │
-                   │  │  - Publishes config change events to          │  │
-                   │  │    message bus (Kafka / Pub/Sub)              │  │
-                   │  └──────────────┬───────────────────────────────┘  │
+│  Config UI  │    │                Config Service                       │
+│  (Web App)  │───▶│  ┌──────────────────────────────────────────────┐   │
+└─────────────┘    │  │              Config API                      │   │
+                   │  │  - Validate, persist, version config changes │   │
+┌─────────────┐    │  │  - Read config values and history            │   │
+│  Config CLI │───▶│  │  - Evaluate feature flags                    │   │
+└─────────────┘    │  └──────────────┬───────────────────────────────┘   │
+                   │                 │                                   │
+┌─────────────┐    │  ┌──────────────▼───────────────────────────────┐   │
+│ Service API │───▶│  │          Config Store (PostgreSQL)           │   │
+│(programmatic│    │  │  - config_current (latest values)            │   │
+│  access)    │    │  │  - config_versions (full history)            │   │
+└─────────────┘    │  │  - config_schemas (validation rules)         │   │
+                   │  └──────────────────────────────────────────────┘   │
+                   │                 │                                   │
+                   │  ┌──────────────▼───────────────────────────────┐   │
+                   │  │        Change Event Publisher                │   │
+                   │  │  - Publishes config change events to         │   │
+                   │  │    message bus (Kafka / Pub/Sub)             │   │
+                   │  └──────────────┬───────────────────────────────┘   │
                    └─────────────────┼───────────────────────────────────┘
                                      │
                     ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
@@ -806,22 +806,22 @@ HIGH-LEVEL ARCHITECTURE:
                    │         Message Bus (Kafka / Pub/Sub)           │
                    │  - Config change events per namespace           │
                    │  - Durable, ordered delivery                    │
-                   └───────┬────────────┬──────────┬────────────────┘
+                   └───────┬────────────┬──────────┬──────────────-──┘
                            │            │          │
-                    ┌──────▼──┐  ┌──────▼──┐  ┌───▼──────┐
-                    │ Service │  │ Service │  │ Service  │  ... (2,000)
-                    │ Instance│  │ Instance│  │ Instance │
-                    │ A-1     │  │ A-2     │  │ B-1      │
-                    │         │  │         │  │          │
-                    │┌───────┐│  │┌───────┐│  │┌───────┐│
-                    ││Config ││  ││Config ││  ││Config ││
-                    ││Client ││  ││Client ││  ││Client ││
-                    ││Library││  ││Library││  ││Library ││
-                    │├───────┤│  │├───────┤│  │├───────┤│
-                    ││Local  ││  ││Local  ││  ││Local  ││
-                    ││Cache  ││  ││Cache  ││  ││Cache  ││
-                    │└───────┘│  │└───────┘│  │└───────┘│
-                    └─────────┘  └─────────┘  └─────────┘
+                    ┌──────▼──┐  ┌──────▼──┐   ┌───▼─────┐
+                    │ Service │  │ Service │   │ Service │  ... (2,000)
+                    │ Instance│  │ Instance│   │ Instance│
+                    │ A-1     │  │ A-2     │   │ B-1     │
+                    │         │  │         │   │         │
+                    │┌───────┐│  │┌───────┐│   │┌───────┐│
+                    ││Config ││  ││Config ││   ││Config ││
+                    ││Client ││  ││Client ││   ││Client ││
+                    ││Library││  ││Library││   ││Library││
+                    │├───────┤│  │├───────┤│   │├───────┤│
+                    ││Local  ││  ││Local  ││   ││Local  ││
+                    ││Cache  ││  ││Cache  ││   ││Cache  ││
+                    │└───────┘│  │└───────┘│   │└───────┘│
+                    └─────────┘  └─────────┘   └─────────┘
 
 REQUEST FLOW (Config Write):
 
@@ -1198,8 +1198,8 @@ DATA MODEL:
     ├─────────────────────────────────────────────────────────────────────┤
     │ config_id       UUID PRIMARY KEY                                    │
     │ namespace_id    UUID NOT NULL REFERENCES config_namespaces          │
-    │ key             VARCHAR(512) NOT NULL                                │
-    │ value           JSONB NOT NULL                                       │
+    │ key             VARCHAR(512) NOT NULL                               │
+    │ value           JSONB NOT NULL                                      │
     │ value_type      VARCHAR(50) NOT NULL   -- INTEGER, STRING, BOOLEAN  │
     │ current_version INT NOT NULL                                        │
     │ schema_id       UUID REFERENCES config_schemas                      │
@@ -1216,16 +1216,16 @@ DATA MODEL:
     ├─────────────────────────────────────────────────────────────────────┤
     │ version_id      UUID PRIMARY KEY                                    │
     │ config_id       UUID NOT NULL REFERENCES config_current             │
-    │ namespace_id    UUID NOT NULL                                        │
-    │ key             VARCHAR(512) NOT NULL                                │
-    │ value           JSONB NOT NULL                                       │
+    │ namespace_id    UUID NOT NULL                                       │
+    │ key             VARCHAR(512) NOT NULL                               │
+    │ value           JSONB NOT NULL                                      │
     │ value_type      VARCHAR(50) NOT NULL                                │
     │ version         INT NOT NULL                                        │
-    │ previous_value  JSONB                     -- for easy diff display   │
-    │ author          VARCHAR(255) NOT NULL                                │
-    │ change_reason   TEXT NOT NULL                                        │
-    │ change_id       UUID UNIQUE               -- idempotency key from    │
-    │                                           -- client, dedup retries   │
+    │ previous_value  JSONB                     -- for easy diff display  │
+    │ author          VARCHAR(255) NOT NULL                               │
+    │ change_reason   TEXT NOT NULL                                       │
+    │ change_id       UUID UNIQUE               -- idempotency key from   │
+    │                                           -- client, dedup retries  │
     │ is_emergency    BOOLEAN DEFAULT FALSE                               │
     │ created_at      TIMESTAMP NOT NULL                                  │
     │                                                                     │
@@ -1252,7 +1252,7 @@ DATA MODEL:
     │                        config_event_outbox                          │
     ├─────────────────────────────────────────────────────────────────────┤
     │ event_id        UUID PRIMARY KEY                                    │
-    │ namespace_id    UUID NOT NULL                                        │
+    │ namespace_id    UUID NOT NULL                                       │
     │ event_payload   JSONB NOT NULL                                      │
     │ status          VARCHAR(50) DEFAULT 'PENDING' -- PENDING, PUBLISHED │
     │ retry_count     INT DEFAULT 0                                       │
@@ -1467,78 +1467,78 @@ FAILURE MODES:
 ┌──────────────────────────┬────────────────────────────────────────────────┐
 │ Failure Type             │ Handling Strategy                              │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Config Service down      │ Config reads: Unaffected (local cache).       │
+│ Config Service down      │ Config reads: Unaffected (local cache).        │
 │                          │ Config writes: Fail (503). Engineers cannot    │
-│                          │ make changes until service recovers.          │
-│                          │ Services continue operating on last-known-good│
-│                          │ config. This is the design goal: config       │
-│                          │ system failure does NOT cascade.              │
+│                          │ make changes until service recovers.           │
+│                          │ Services continue operating on last-known-good │
+│                          │ config. This is the design goal: config        │
+│                          │ system failure does NOT cascade.               │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ PostgreSQL down          │ Config writes: Fail. Same as above.           │
-│                          │ Config reads via API: Fail for history/diff.  │
-│                          │ Runtime reads: Unaffected (local cache).      │
-│                          │ Recovery: PostgreSQL failover (< 30 seconds). │
-│                          │ Config Service reconnects automatically.      │
+│ PostgreSQL down          │ Config writes: Fail. Same as above.            │
+│                          │ Config reads via API: Fail for history/diff.   │
+│                          │ Runtime reads: Unaffected (local cache).       │
+│                          │ Recovery: PostgreSQL failover (< 30 seconds).  │
+│                          │ Config Service reconnects automatically.       │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Message bus down         │ Config writes: Succeed (persisted to DB).     │
-│                          │ Propagation: Delayed. Outbox stores events.   │
-│                          │ Background poll catches up within 60 seconds. │
-│                          │ Impact: Instances stale for up to 60 seconds  │
-│                          │ instead of 5 seconds.                         │
+│ Message bus down         │ Config writes: Succeed (persisted to DB).      │
+│                          │ Propagation: Delayed. Outbox stores events.    │
+│                          │ Background poll catches up within 60 seconds.  │
+│                          │ Impact: Instances stale for up to 60 seconds   │
+│                          │ instead of 5 seconds.                          │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Network partition         │ Instances in partitioned zone: Serve stale   │
-│ (service ↔ config)       │ config from local cache. No config updates.  │
-│                          │ On partition heal: Background poll catches up.│
-│                          │ Alert if any instance is stale > 10 minutes.  │
+│ Network partition         │ Instances in partitioned zone: Serve stale    │
+│ (service ↔ config)       │ config from local cache. No config updates.    │
+│                          │ On partition heal: Background poll catches up. │
+│                          │ Alert if any instance is stale > 10 minutes.   │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Bad config pushed        │ Validation catches schema violations before   │
-│                          │ persist. If validation is bypassed (bug):     │
-│                          │ Config Client validates locally → rejects.    │
-│                          │ If client validation also fails: Rollback via │
-│                          │ API or automatic rollback trigger.            │
+│ Bad config pushed        │ Validation catches schema violations before    │
+│                          │ persist. If validation is bypassed (bug):      │
+│                          │ Config Client validates locally → rejects.     │
+│                          │ If client validation also fails: Rollback via  │
+│                          │ API or automatic rollback trigger.             │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Config Client crash      │ Service instance restarts. Config Client      │
-│                          │ reinitializes: loads from disk cache, then    │
-│                          │ fetches latest from Config Service.           │
-│                          │ If Config Service unreachable: disk cache     │
-│                          │ provides last-known-good config.              │
+│ Config Client crash      │ Service instance restarts. Config Client       │
+│                          │ reinitializes: loads from disk cache, then     │
+│                          │ fetches latest from Config Service.            │
+│                          │ If Config Service unreachable: disk cache      │
+│                          │ provides last-known-good config.               │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Thundering herd on       │ 2,000 instances deploy simultaneously → all   │
-│ Config Service           │ fetch snapshot at once = 2,000 requests.      │
-│                          │ Mitigation: Jittered startup delay            │
-│                          │ (random 0-5s before config fetch).            │
-│                          │ Config Service can handle ~1,000 QPS easily.  │
-│                          │ 2,000 requests over 5 seconds = 400 QPS.     │
+│ Thundering herd on       │ 2,000 instances deploy simultaneously → all    │
+│ Config Service           │ fetch snapshot at once = 2,000 requests.       │
+│                          │ Mitigation: Jittered startup delay             │
+│                          │ (random 0-5s before config fetch).             │
+│                          │ Config Service can handle ~1,000 QPS easily.   │
+│                          │ 2,000 requests over 5 seconds = 400 QPS.       │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Rapid-fire config storm  │ Engineer (or automation bug) pushes 20 config │
-│                          │ changes in 30 seconds. Each triggers event,   │
-│                          │ each triggers 2,000 instance fetches.         │
-│                          │ 20 changes × 2,000 fetches = 40,000 requests │
-│                          │ in 30 seconds = 1,333 QPS to Config API.     │
-│                          │ Config API handles it, but instances are      │
+│ Rapid-fire config storm  │ Engineer (or automation bug) pushes 20 config  │
+│                          │ changes in 30 seconds. Each triggers event,    │
+│                          │ each triggers 2,000 instance fetches.          │
+│                          │ 20 changes × 2,000 fetches = 40,000 requests   │
+│                          │ in 30 seconds = 1,333 QPS to Config API.       │
+│                          │ Config API handles it, but instances are       │
 │                          │ constantly fetching/swapping config.           │
-│                          │ Mitigation:                                   │
-│                          │ 1. Rate limit: 10 changes/min per namespace   │
-│                          │ 2. Config Client: Coalesce rapid events.      │
-│                          │    If events arrive < 2s apart, wait 2s then  │
+│                          │ Mitigation:                                    │
+│                          │ 1. Rate limit: 10 changes/min per namespace    │
+│                          │ 2. Config Client: Coalesce rapid events.       │
+│                          │    If events arrive < 2s apart, wait 2s then   │
 │                          │    fetch once (latest version only).           │
-│                          │ 3. Config API: Snapshot served from memory    │
-│                          │    cache, not DB per request.                 │
+│                          │ 3. Config API: Snapshot served from memory     │
+│                          │    cache, not DB per request.                  │
 ├──────────────────────────┼────────────────────────────────────────────────┤
-│ Config Client fetch      │ Config API is degraded (slow, not down).      │
-│ amplification            │ Every push event triggers a fetch. Fetches    │
-│                          │ take 5-10s (instead of 50ms). Retries pile up.│
-│                          │ 2,000 instances × 5 retries each = 10,000    │
-│                          │ concurrent requests overwhelming Config API.  │
-│                          │ Mitigation: Circuit breaker in Config Client. │
-│                          │ After 3 consecutive fetch failures:           │
-│                          │ → Open circuit for 30 seconds.               │
-│                          │ → Skip push-triggered fetches during open.    │
-│                          │ → Background poll still runs (60s interval).  │
-│                          │ → Circuit half-opens: Try one fetch.          │
-│                          │ → If succeeds: Close circuit, resume normal.  │
-│                          │ Prevents Config Client from amplifying        │
-│                          │ Config API degradation into a total failure.  │
+│ Config Client fetch      │ Config API is degraded (slow, not down).       │
+│ amplification            │ Every push event triggers a fetch. Fetches     │
+│                          │ take 5-10s (instead of 50ms). Retries pile up. │
+│                          │ 2,000 instances × 5 retries each = 10,000      │
+│                          │ concurrent requests overwhelming Config API.   │
+│                          │ Mitigation: Circuit breaker in Config Client.  │
+│                          │ After 3 consecutive fetch failures:            │
+│                          │ → Open circuit for 30 seconds.                 │
+│                          │ → Skip push-triggered fetches during open.     │
+│                          │ → Background poll still runs (60s interval).   │
+│                          │ → Circuit half-opens: Try one fetch.           │
+│                          │ → If succeeds: Close circuit, resume normal.   │
+│                          │ Prevents Config Client from amplifying         │
+│                          │ Config API degradation into a total failure.   │
 └──────────────────────────┴────────────────────────────────────────────────┘
 ```
 
@@ -1812,7 +1812,7 @@ COST BREAKDOWN (monthly):
 │ Component                │ Monthly Cost │ Notes                          │
 ├──────────────────────────┼──────────────┼────────────────────────────────┤
 │ Config API Service       │ $400         │ 2 instances (HA), small VMs    │
-│ (2× c5.large)           │              │ Low CPU: ~5% utilization       │
+│ (2× c5.large)            │              │ Low CPU: ~5% utilization       │
 ├──────────────────────────┼──────────────┼────────────────────────────────┤
 │ PostgreSQL               │ $300         │ db.r5.large primary +          │
 │ (primary + replica)      │              │ read replica. ~50 MB data.     │
@@ -2327,59 +2327,59 @@ CONFIGURATION MANAGEMENT SYSTEM — ARCHITECTURE:
     ┌──────────────────────────────────────────────────────────────────┐
     │                        CONFIG PLANE                              │
     │                                                                  │
-    │   ┌──────────┐   ┌──────────┐   ┌──────────────┐               │
-    │   │Config UI │   │Config CLI│   │Programmatic  │               │
-    │   │(Web App) │   │          │   │API Clients   │               │
-    │   └────┬─────┘   └────┬─────┘   └──────┬───────┘               │
+    │   ┌──────────┐   ┌──────────┐    ┌──────────────┐                │
+    │   │Config UI │   │Config CLI│    │Programmatic  │                │
+    │   │(Web App) │   │          │    │API Clients   │                │
+    │   └────┬─────┘   └────┬─────┘    └──────┬───────┘                │
     │        │              │                 │                        │
     │        └──────────────┼─────────────────┘                        │
     │                       │                                          │
     │                       ▼                                          │
     │        ┌──────────────────────────────────┐                      │
-    │        │         CONFIG API SERVICE        │                      │
+    │        │         CONFIG API SERVICE       │                      │
     │        │  ┌─────────────────────────────┐ │                      │
     │        │  │ Validation │ Versioning     │ │                      │
     │        │  │ RBAC       │ Audit Logging  │ │                      │
     │        │  │ Schema     │ Rollback       │ │                      │
     │        │  └─────────────────────────────┘ │                      │
     │        └───────┬──────────────┬───────────┘                      │
-    │                │              │                                   │
-    │         ┌──────▼──────┐  ┌───▼───────────────┐                  │
-    │         │ PostgreSQL  │  │ Message Bus        │                  │
-    │         │ (Config DB) │  │ (Kafka / Pub/Sub)  │                  │
-    │         │             │  │                    │                  │
-    │         │ • current   │  │ config-changes-*   │                  │
-    │         │ • versions  │  │ topics per namespace│                 │
-    │         │ • schemas   │  │                    │                  │
-    │         │ • outbox    │  │                    │                  │
-    │         └─────────────┘  └───┬───────────────┘                  │
+    │                │              │                                  │
+    │         ┌──────▼──────┐  ┌───-▼──────────────┐                   │
+    │         │ PostgreSQL  │  │ Message Bus       │                   │
+    │         │ (Config DB) │  │ (Kafka / Pub/Sub) │                   │
+    │         │             │  │                   │                   │
+    │         │ • current   │  │ config-changes-*  │                   │
+    │         │ • versions  │  │ topics per        │                   │
+    │         │ • schemas   │  │  namespace        │                   │
+    │         │ • outbox    │  │                   │                   │
+    │         └─────────────┘  └───┬───────────────┘                   │
     │                              │                                   │
     └──────────────────────────────┼───────────────────────────────────┘
                                    │
-    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─-- ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
                                    │
     ┌──────────────────────────────┼───────────────────────────────────┐
     │                         DATA PLANE                               │
     │                              │                                   │
-    │     ┌────────────────────────┼────────────────────────┐         │
-    │     │                        │                        │         │
-    │     ▼                        ▼                        ▼         │
-    │ ┌─────────────┐      ┌─────────────┐      ┌─────────────┐     │
-    │ │  Service A   │      │  Service A   │      │  Service B   │    │
-    │ │  Instance 1  │      │  Instance 2  │      │  Instance 1  │    │
-    │ │             │      │             │      │             │     │
-    │ │ ┌─────────┐ │      │ ┌─────────┐ │      │ ┌─────────┐ │     │
-    │ │ │ Config  │ │      │ │ Config  │ │      │ │ Config  │ │     │
-    │ │ │ Client  │ │      │ │ Client  │ │      │ │ Client  │ │     │
-    │ │ │ Library │ │      │ │ Library │ │      │ │ Library │ │     │
-    │ │ ├─────────┤ │      │ ├─────────┤ │      │ ├─────────┤ │     │
-    │ │ │  Local  │ │      │ │  Local  │ │      │ │  Local  │ │     │
-    │ │ │  Cache  │ │      │ │  Cache  │ │      │ │  Cache  │ │     │
-    │ │ ├─────────┤ │      │ ├─────────┤ │      │ ├─────────┤ │     │
-    │ │ │  Disk   │ │      │ │  Disk   │ │      │ │  Disk   │ │     │
-    │ │ │  Cache  │ │      │ │  Cache  │ │      │ │  Cache  │ │     │
-    │ │ └─────────┘ │      │ └─────────┘ │      │ └─────────┘ │     │
-    │ └─────────────┘      └─────────────┘      └─────────────┘     │
+    │     ┌────────────────────────┼────────────────────────┐          │
+    │     │                        │                        │          │
+    │     ▼                        ▼                        ▼          │
+    │ ┌─────────────┐      ┌─────────────┐      ┌─────────────┐        │
+    │ │  Service A  │      │  Service A  │      │  Service B  │        │
+    │ │  Instance 1 │      │  Instance 2 │      │  Instance 1 │        │
+    │ │             │      │             │      │             │        │
+    │ │ ┌─────────┐ │      │ ┌─────────┐ │      │ ┌─────────┐ │        │
+    │ │ │ Config  │ │      │ │ Config  │ │      │ │ Config  │ │        │
+    │ │ │ Client  │ │      │ │ Client  │ │      │ │ Client  │ │        │
+    │ │ │ Library │ │      │ │ Library │ │      │ │ Library │ │        │
+    │ │ ├─────────┤ │      │ ├─────────┤ │      │ ├─────────┤ │        │
+    │ │ │  Local  │ │      │ │  Local  │ │      │ │  Local  │ │        │
+    │ │ │  Cache  │ │      │ │  Cache  │ │      │ │  Cache  │ │        │
+    │ │ ├─────────┤ │      │ ├─────────┤ │      │ ├─────────┤ │        │
+    │ │ │  Disk   │ │      │ │  Disk   │ │      │ │  Disk   │ │        │
+    │ │ │  Cache  │ │      │ │  Cache  │ │      │ │  Cache  │ │        │
+    │ │ └─────────┘ │      │ └─────────┘ │      │ └─────────┘ │        │
+    │ └─────────────┘      └─────────────┘      └─────────────┘        │
     │                                                                  │
     │         ... × 2,000 instances across 50 services                 │
     └──────────────────────────────────────────────────────────────────┘
@@ -2403,13 +2403,13 @@ CONFIG CHANGE LIFECYCLE:
          │ 1. Submit config change
          │    {key: "max_batch_size", value: 200}
          ▼
-    ┌─────────────────────────────────────────────────────┐
-    │                CONFIG API SERVICE                     │
+    ┌─────────────────────────────────────────────────-────┐
+    │                CONFIG API SERVICE                    │
     │                                                      │
-    │  2. AUTHENTICATE: Valid OAuth2 token?                 │
+    │  2. AUTHENTICATE: Valid OAuth2 token?                │
     │     └─ No → 401 Unauthorized                         │
     │                                                      │
-    │  3. AUTHORIZE: User has write permission?             │
+    │  3. AUTHORIZE: User has write permission?            │
     │     └─ No → 403 Forbidden                            │
     │                                                      │
     │  4. VALIDATE:                                        │
@@ -2427,16 +2427,16 @@ CONFIG CHANGE LIFECYCLE:
     │     └─ Fail → store in outbox, retry async           │
     │                                                      │
     │  7. RESPOND: 200 {version: 48, propagation_est: 15s} │
-    └──────────────────────┬──────────────────────────────┘
+    └──────────────────────┬────────────────────────────-──┘
                            │
                            │ 8. Change event published to message bus
                            ▼
-    ┌─────────────────────────────────────────────────────┐
-    │              MESSAGE BUS (Kafka / Pub/Sub)           │
-    │                                                      │
-    │  Topic: config-changes-search-service                │
+    ┌─────────────────────────────────────────────--──────-──┐
+    │              MESSAGE BUS (Kafka / Pub/Sub)             │
+    │                                                        │
+    │  Topic: config-changes-search-service                  │
     │  Event: {version: 48, changed_keys: ["max_batch_size"]}│
-    └──────────┬───────────┬───────────┬──────────────────┘
+    └──────────┬───────────┬───────────┬─────────────────---─┘
                │           │           │
                ▼           ▼           ▼
     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
@@ -2448,7 +2448,7 @@ CONFIG CHANGE LIFECYCLE:
     │ 10. Version  │ │ 10. Version  │ │ 10. Version  │
     │    check:    │ │    check:    │ │    check:    │
     │    48 > 47?  │ │    48 > 47?  │ │    48 > 47?  │
-    │    Yes → fetch│ │    Yes → fetch│ │    Yes → fetch│
+    │   Yes → fetch│ │   Yes → fetch│ │   Yes → fetch│
     │              │ │              │ │              │
     │ 11. Fetch    │ │ 11. Fetch    │ │ 11. Fetch    │
     │    diff from │ │    diff from │ │    diff from │
@@ -3238,7 +3238,7 @@ AUTOMATIC CONFIG-INCIDENT CORRELATION (L5 Enrichment):
 ROLLOUT STRATEGY:
 
 ┌──────────────────────┬─────────────────────────────────────────────────┐
-│ Stage                │ Details                                          │
+│ Stage                │ Details                                         │
 ├──────────────────────┼─────────────────────────────────────────────────┤
 │ Stage 1: Canary      │ Deploy to 1 of 2 Config API instances           │
 │ (50% traffic)        │ Duration: 30 minutes                            │
@@ -3257,7 +3257,7 @@ ROLLOUT STRATEGY:
 ROLLBACK SAFETY:
 
 ┌──────────────────────┬─────────────────────────────────────────────────┐
-│ Aspect               │ Details                                          │
+│ Aspect               │ Details                                         │
 ├──────────────────────┼─────────────────────────────────────────────────┤
 │ Rollback trigger     │ Error rate > 1%, P99 > 2s, config operation     │
 │                      │ failure, health check failure                   │
@@ -3575,7 +3575,3 @@ ENRICHMENTS APPLIED (from 13-step L5 Review):
 UNAVOIDABLE GAPS:
 - None. All Senior-level signals covered after enrichment.
 ```
-
----
-
-*This chapter provides the foundation for confidently designing and owning a configuration management system as a Senior Software Engineer. The core insight: configuration is code that bypasses your CI/CD pipeline—your compiler, your tests, your staging environment—which means your config system must compensate for all of them. Every design decision flows from two principles: (1) config system failure must not cascade into service failure (local cache makes config reads a zero-network-cost HashMap lookup, services continue on last-known-good values if the config system is completely down), and (2) config changes are production deployments (schema validation catches type errors, automatic rollback catches semantic errors, kill switches provide emergency escape hatches, and full audit trails enable post-mortem learning). The system handles 5,000 config keys across 2,000 service instances, propagates changes within 15 seconds via push-based notification with a poll fallback, serves config reads at sub-microsecond latency from local cache, and degrades gracefully when any component fails—because in configuration management, a slightly stale config is acceptable, but an invalid config reaching production is not. Master the config plane / data plane separation (writes go to centralized service, reads are local cache), the push + poll hybrid (speed from push, reliability from poll, correctness from both), the semantic validation gap (schema catches types, monitoring catches behavior), the circuit breaker imperative (Config Client must not amplify Config API degradation into fleet-wide failure), the feature flag lifecycle (creating flags is easy, cleaning them up is the Senior engineer's job), the staged instance propagation (user-level rollout and instance-level rollout are different problems requiring different solutions), the config-incident correlation (the fastest way to debug a config-caused outage is automatic annotation on every alert), and the kill switch imperative (the #1 operational use case is disabling broken features in seconds, not minutes), and you can design, own, and operate a configuration management system at any scale.*
