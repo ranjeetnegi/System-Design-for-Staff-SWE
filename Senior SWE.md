@@ -41,11 +41,9 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 ## Section 4 — Data Systems & Global Scale
 
-Skim section [README](Section4/README.md) and use chapters as reference when a design problem touches databases, caching, event streams, or multi-region. No need to read cover-to-cover for Senior.
-
 | Chapter | Topic | Link |
 |---------|--------|------|
-| 21 | Databases at Staff Level | [Chapter 21](Section4/Chapter_21.md) |
+| 21 | Databases | [Chapter 21](Section4/Chapter_21.md) |
 | 22 | Caching at Scale | [Chapter 22](Section4/Chapter_22.md) |
 | 23 | Event-Driven Architectures | [Chapter 23](Section4/Chapter_23.md) |
 

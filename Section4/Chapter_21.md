@@ -1,4 +1,4 @@
-# Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
+# Chapter 21: Databases — Choosing, Using, and Evolving Data Stores
 
 ---
 

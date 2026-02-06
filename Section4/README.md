@@ -261,7 +261,7 @@ Caching trades consistency for latency. Events trade debuggability for decouplin
 
 | Chapter | Topic | Estimated Reading Time | Estimated Practice Time |
 |---------|-------|----------------------|------------------------|
-| Chapter 21 | Databases at Staff Level | 60–90 minutes | 1 hour applied exercises |
+| Chapter 21 | Databases | 60–90 minutes | 1 hour applied exercises |
 | Chapter 22 | Caching at Scale | 60–90 minutes | 1 hour applied exercises |
 | Chapter 23 | Event-Driven Architectures | 60–90 minutes | 1 hour applied exercises |
 | Chapter 24 | Multi-Region Systems | 60–90 minutes | 1 hour case studies |
