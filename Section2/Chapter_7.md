@@ -1,4 +1,4 @@
-# Chapter 6: The Staff-Level System Design Framework
+# Chapter 6: System Design Framework
 
 ---
 
@@ -6,7 +6,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                        │
+│                     SYSTEM DESIGN FRAMEWORK                                 │
 │                                                                             │
 │   Before you design ANYTHING, establish context through 5 phases:           │
 │                                                                             │
@@ -2160,7 +2160,7 @@ Goal: Understand that constraints are often more negotiable than they appear.
 
 # Conclusion
 
-The Staff-Level System Design Framework is simple:
+System Design Framework is simple:
 
 1. **Users & Use Cases**: Who are we building for and what are they trying to do?
 2. **Functional Requirements**: What must the system do?

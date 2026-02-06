@@ -93,7 +93,7 @@ A repeatable methodology for approaching any system design problem — from vagu
 
 | # | Chapter | Link |
 |---|---------|------|
-| 7 | The Staff-Level System Design Framework | [Chapter 7](Section2/Chapter_7.md) |
+| 7 | System Design Framework | [Chapter 7](Section2/Chapter_7.md) |
 | 8 | Phase 1 — Users & Use Cases | [Chapter 8](Section2/Chapter_8.md) |
 | 9 | Phase 2 — Functional Requirements | [Chapter 9](Section2/Chapter_9.md) |
 | 10 | Phase 3 — Scale: Capacity Planning and Growth | [Chapter 10](Section2/Chapter_10.md) |
@@ -125,7 +125,7 @@ Bridges theory and practice — databases, caches, event pipelines, multi-region
 
 | # | Chapter | Link |
 |---|---------|------|
-| 21 | Databases at Staff Level — Choosing, Using, and Evolving Data Stores | [Chapter 21](Section4/Chapter_21.md) |
+| 21 | Databases — Choosing, Using, and Evolving Data Stores | [Chapter 21](Section4/Chapter_21.md) |
 | 22 | Caching at Scale — Redis, CDN, and Edge Systems | [Chapter 22](Section4/Chapter_22.md) |
 | 23 | Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs | [Chapter 23](Section4/Chapter_23.md) |
 | 24 | Multi-Region Systems — Geo-Replication, Latency, and Failure | [Chapter 24](Section4/Chapter_24.md) |

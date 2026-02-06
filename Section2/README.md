@@ -68,7 +68,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 │                                                                             │
 │   Chapter 7                                                                 │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
-│   │  THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                           │    │
+│   │                  SYSTEM DESIGN FRAMEWORK                           │    │
 │   │  The complete 5-phase overview — why context before design         │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
@@ -121,7 +121,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ## Chapter Summaries
 
-### Chapter 7: The Staff-Level System Design Framework
+### Chapter 7: System Design Framework
 
 **Core Question**: What separates a structured, Staff-level approach from ad-hoc whiteboarding?
 

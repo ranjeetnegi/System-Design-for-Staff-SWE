@@ -16,7 +16,7 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 | Chapter | Topic | Link |
 |---------|--------|------|
-| 7 | The Staff-Level System Design Framework | [Chapter 7](Section2/Chapter_7.md) |
+| 7 | System Design Framework | [Chapter 7](Section2/Chapter_7.md) |
 | 8 | Phase 1 — Users & Use Cases | [Chapter 8](Section2/Chapter_8.md) |
 | 9 | Phase 2 — Functional Requirements | [Chapter 9](Section2/Chapter_9.md) |
 | 10 | Phase 3 — Scale & Capacity Planning | [Chapter 10](Section2/Chapter_10.md) |
