@@ -12,9 +12,7 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 ---
 
-## Phase 1 — Framework (Required)
-
-**Section 2 — System Design Framework**
+## Section 2 — System Design Framework
 
 | Chapter | Topic | Link |
 |---------|--------|------|
@@ -28,9 +26,7 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 ---
 
-## Phase 2 — Distributed Systems (Required)
-
-**Section 3 — Distributed Systems** (high-signal chapters)
+## Section 3 — Distributed Systems (high-signal chapters)
 
 | Chapter | Topic | Link |
 |---------|--------|------|
@@ -43,9 +39,7 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 ---
 
-## Phase 3 — Data Systems (Optional — Skim)
-
-**Section 4 — Data Systems & Global Scale**
+## Section 4 — Data Systems & Global Scale
 
 Skim section [README](Section4/README.md) and use chapters as reference when a design problem touches databases, caching, event streams, or multi-region. No need to read cover-to-cover for Senior.
 
@@ -57,9 +51,7 @@ Skim section [README](Section4/README.md) and use chapters as reference when a d
 
 ---
 
-## Phase 4 — Senior Design Problems (Required)
-
-**Section 5 — Senior-Level Design Problems**
+## Section 5 — Senior-Level Design Problems
 
 Practice end-to-end with these 13 problems. Each has a full walkthrough: requirements, scale, architecture, failure handling.
 
