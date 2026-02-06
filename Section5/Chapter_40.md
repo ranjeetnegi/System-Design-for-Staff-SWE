@@ -1081,10 +1081,49 @@ CONFIG CLIENT LIBRARY:
     → If validation fails: reject update, keep current cache, log error
     → Config Service should never send invalid config, but defense in depth
 
+    CIRCUIT BREAKER (PREVENTS FETCH AMPLIFICATION):
+
+    CircuitBreaker:
+        state: enum          // CLOSED, OPEN, HALF_OPEN
+        failureCount: int
+        lastFailureTime: timestamp
+        openDuration: 30s    // how long circuit stays open
+
+    function fetchWithCircuitBreaker(url):
+        if circuitBreaker.state == OPEN:
+            if now() - circuitBreaker.lastFailureTime > openDuration:
+                circuitBreaker.state = HALF_OPEN
+            else:
+                log.debug("Circuit open. Skipping fetch.")
+                return null  // Skip this fetch. Poll will catch up.
+
+        try:
+            result = httpGet(url, timeout=10s)
+            circuitBreaker.state = CLOSED
+            circuitBreaker.failureCount = 0
+            return result
+        catch (TimeoutException, ConnectionException):
+            circuitBreaker.failureCount++
+            circuitBreaker.lastFailureTime = now()
+            if circuitBreaker.failureCount >= 3:
+                circuitBreaker.state = OPEN
+                log.warn("Circuit breaker opened after 3 failures. " +
+                         "Skipping push-triggered fetches for 30s.")
+                metrics.increment("config.circuit_breaker.opened")
+            return null
+
+    // WHY THIS MATTERS FOR L5:
+    // Without a circuit breaker, a slow Config API causes all 2,000 instances
+    // to pile up retries simultaneously. Each retry adds load to the already-
+    // struggling API. This turns a degradation into a complete failure.
+    // The circuit breaker lets the Config API recover by reducing load during
+    // degradation. Background poll (60s) still catches up once API recovers.
+
     WHY THIS IS SUFFICIENT:
     - Two layers of config delivery (push + poll) ensure eventual consistency
     - Disk cache ensures service can start even if Config Service is down
     - Default values ensure code works even if config key is missing
+    - Circuit breaker prevents client-side fetch amplification
     - No single point of failure blocks service operation
 ```
 
@@ -1185,10 +1224,13 @@ DATA MODEL:
     │ previous_value  JSONB                     -- for easy diff display   │
     │ author          VARCHAR(255) NOT NULL                                │
     │ change_reason   TEXT NOT NULL                                        │
+    │ change_id       UUID UNIQUE               -- idempotency key from    │
+    │                                           -- client, dedup retries   │
     │ is_emergency    BOOLEAN DEFAULT FALSE                               │
     │ created_at      TIMESTAMP NOT NULL                                  │
     │                                                                     │
     │ UNIQUE INDEX idx_config_version (config_id, version)                │
+    │ UNIQUE INDEX idx_change_id (change_id) WHERE change_id IS NOT NULL  │
     │ INDEX idx_ns_created (namespace_id, created_at DESC)                │
     │ INDEX idx_author_created (author, created_at DESC)                  │
     └─────────────────────────────────────────────────────────────────────┘
@@ -1467,6 +1509,36 @@ FAILURE MODES:
 │                          │ (random 0-5s before config fetch).            │
 │                          │ Config Service can handle ~1,000 QPS easily.  │
 │                          │ 2,000 requests over 5 seconds = 400 QPS.     │
+├──────────────────────────┼────────────────────────────────────────────────┤
+│ Rapid-fire config storm  │ Engineer (or automation bug) pushes 20 config │
+│                          │ changes in 30 seconds. Each triggers event,   │
+│                          │ each triggers 2,000 instance fetches.         │
+│                          │ 20 changes × 2,000 fetches = 40,000 requests │
+│                          │ in 30 seconds = 1,333 QPS to Config API.     │
+│                          │ Config API handles it, but instances are      │
+│                          │ constantly fetching/swapping config.           │
+│                          │ Mitigation:                                   │
+│                          │ 1. Rate limit: 10 changes/min per namespace   │
+│                          │ 2. Config Client: Coalesce rapid events.      │
+│                          │    If events arrive < 2s apart, wait 2s then  │
+│                          │    fetch once (latest version only).           │
+│                          │ 3. Config API: Snapshot served from memory    │
+│                          │    cache, not DB per request.                 │
+├──────────────────────────┼────────────────────────────────────────────────┤
+│ Config Client fetch      │ Config API is degraded (slow, not down).      │
+│ amplification            │ Every push event triggers a fetch. Fetches    │
+│                          │ take 5-10s (instead of 50ms). Retries pile up.│
+│                          │ 2,000 instances × 5 retries each = 10,000    │
+│                          │ concurrent requests overwhelming Config API.  │
+│                          │ Mitigation: Circuit breaker in Config Client. │
+│                          │ After 3 consecutive fetch failures:           │
+│                          │ → Open circuit for 30 seconds.               │
+│                          │ → Skip push-triggered fetches during open.    │
+│                          │ → Background poll still runs (60s interval).  │
+│                          │ → Circuit half-opens: Try one fetch.          │
+│                          │ → If succeeds: Close circuit, resume normal.  │
+│                          │ Prevents Config Client from amplifying        │
+│                          │ Config API degradation into a total failure.  │
 └──────────────────────────┴────────────────────────────────────────────────┘
 ```
 
@@ -1940,6 +2012,103 @@ WHAT WE EXPLICITLY DON'T PLAN:
     - Secrets management (separate system, separate team)
     - Infrastructure config (Terraform, Kubernetes — different lifecycle)
     - Real-time config streaming (sub-second is not needed for V1/V2)
+```
+
+---
+
+# Feature Flag Lifecycle Management (L5 Enrichment)
+
+```
+FEATURE FLAG LIFECYCLE:
+
+    THE PROBLEM: FLAG DEBT
+
+    Feature flags are created constantly. Few are ever cleaned up.
+    After 12 months: 200 active flags, but only 60 are actually used.
+    140 flags are "done" — fully rolled out (100%) or abandoned — but
+    never removed from code or config.
+
+    WHY FLAG DEBT IS DANGEROUS:
+    1. Code complexity: Every flag adds a conditional branch.
+       140 dead flags = 140 branches that are always true or always false.
+       Engineers read and reason about code that never executes.
+    2. Interaction risk: Flag A enables feature X. Flag B (abandoned,
+       always-on) enables feature Y. Both touch the same code path.
+       Nobody remembers Flag B exists. Disabling Flag A to fix a bug
+       unexpectedly changes behavior because Flag B's code path
+       assumed Flag A was always on.
+    3. Testing burden: Test matrix grows with every flag. 10 flags =
+       1,024 combinations. Most are impossible in practice, but CI
+       doesn't know that.
+    4. Cognitive load: "Is this flag still active?" requires checking
+       config UI, code references, and asking the team. Time wasted.
+
+    FLAG LIFECYCLE STATES:
+
+    ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐
+    │  CREATED  │ ──▶ │  RAMPING  │ ──▶ │  FULLY ON │ ──▶ │  CLEANUP  │
+    │           │     │ (1%-99%)  │     │  (100%)   │     │  (remove) │
+    └───────────┘     └───────────┘     └───────────┘     └───────────┘
+         │                                    │
+         │            ┌───────────┐           │
+         └──────────▶ │  KILLED   │ ◀─────────┘
+                      │  (0%)     │
+                      └───────────┘
+
+    STALE FLAG DETECTION:
+
+    function detectStaleFlags():
+        for flag in getAllFlags():
+            // Flag at 100% for > 30 days and no rollout changes
+            if flag.rollout_percent == 100
+               AND flag.last_modified > 30 days ago:
+                markAsStale(flag, reason="Fully rolled out for 30+ days")
+                notify(flag.owner, "Flag '" + flag.name +
+                       "' has been at 100% for 30 days. "
+                       "Consider removing the flag and hardcoding the behavior.")
+
+            // Flag at 0% for > 14 days (likely abandoned experiment)
+            if flag.rollout_percent == 0
+               AND flag.last_modified > 14 days ago
+               AND flag.created_at > 14 days ago:
+                markAsStale(flag, reason="Disabled for 14+ days")
+                notify(flag.owner, "Flag '" + flag.name +
+                       "' has been at 0% for 14 days. "
+                       "Delete it if the experiment is abandoned.")
+
+            // Flag not modified for > 90 days (regardless of state)
+            if flag.last_modified > 90 days ago:
+                markAsStale(flag, reason="No changes for 90+ days")
+
+    CLEANUP PROCESS:
+
+    1. Weekly report: "Stale flags" email to namespace owners
+       - Flags at 100% for > 30 days (remove flag, hardcode behavior)
+       - Flags at 0% for > 14 days (delete flag)
+       - Flags unchanged for > 90 days (review and decide)
+
+    2. Quarterly cleanup sprint: Each team allocates 1 day per quarter
+       to clean up stale flags. Senior engineer reviews flag list,
+       creates cleanup tickets, removes flag from code AND config.
+
+    3. Flag expiration (V2): Flags can have an optional "expires_at"
+       date. After expiration: Flag evaluates to default_value.
+       Config UI shows warning: "This flag expired on DATE."
+       Forces cleanup by making stale flags visible.
+
+    WHY THIS MATTERS AT L5:
+    A mid-level engineer creates flags. A Senior engineer manages the
+    lifecycle. Creating flags is easy. Cleaning them up requires
+    understanding the system, the code, the dependencies, and the risk
+    of removal. Flag debt compounds silently until an incident exposes
+    a flag interaction nobody remembered existed.
+
+    SENIOR OWNERSHIP:
+    - Track flag count per namespace as a health metric
+    - Set a soft limit (e.g., max 20 active flags per service)
+    - Alert if flag count exceeds limit: "search-service has 25 active
+      flags. Review and clean up."
+    - Include flag cleanup in quarterly tech debt burn-down
 ```
 
 ---
@@ -2997,6 +3166,68 @@ APPLIED EXAMPLE: Config System Silent Failure
     → Synthetic canary config change every hour would have caught this
       on day 1: "Propagation time for canary change = 62 seconds.
       Expected: < 15 seconds."
+
+AUTOMATIC CONFIG-INCIDENT CORRELATION (L5 Enrichment):
+
+    THE PROBLEM:
+    During an incident, the on-call engineer asks: "Did anything change?"
+    They manually check: recent deployments, config changes, infra changes.
+    This takes 3-10 minutes. During a P0 incident, those minutes matter.
+
+    SOLUTION: Automatic correlation engine.
+
+    function correlateConfigWithMetrics(alert):
+        // When any alert fires, check for recent config changes
+        alertTime = alert.triggered_at
+        namespace = alert.service_name
+        recentChanges = getConfigChanges(
+            namespace=namespace,
+            since=alertTime - 10 minutes,
+            until=alertTime + 2 minutes)
+
+        if recentChanges.count > 0:
+            // Annotate the alert with config change context
+            for change in recentChanges:
+                alert.addAnnotation(
+                    "Config change detected: " + change.key +
+                    " changed from " + change.previous_value +
+                    " to " + change.value +
+                    " by " + change.author +
+                    " at " + change.created_at +
+                    " (" + timeDiff(change.created_at, alertTime) +
+                    " before alert)")
+
+            // If strong correlation (alert < 5 min after change):
+            if timeDiff(recentChanges[0].created_at, alertTime) < 5 minutes:
+                alert.addSuggestion(
+                    "SUGGESTED ACTION: Rollback config '" +
+                    recentChanges[0].key + "' to version " +
+                    (recentChanges[0].version - 1))
+
+    WHAT THIS GIVES THE ON-CALL ENGINEER:
+
+    ALERT: "api-gateway error rate > 5% (currently 12.3%)"
+    ANNOTATIONS:
+    → "Config change detected: request_timeout_ms changed from 5000 to 500
+       by eng@company.com at 14:23:01 (2 minutes before alert)"
+    → "SUGGESTED ACTION: Rollback config 'request_timeout_ms' to version 51"
+
+    Time saved: 3-10 minutes of manual investigation → instant correlation.
+    This is the difference between 5-minute MTTR and 15-minute MTTR.
+
+    WHY THIS MATTERS AT L5:
+    A Senior engineer builds the system to help FUTURE on-call engineers
+    debug faster. Automatic correlation is the highest-ROI debugging tool
+    for config-related incidents because config changes are the #1 cause
+    of production issues that pass all automated checks.
+
+    IMPLEMENTATION:
+    - Config Service exposes API: GET /api/v1/changes?namespace=X&since=T
+    - Alerting system (PagerDuty, OpsGenie) calls this API on alert fire
+    - Or: Config Service publishes change events to alerting system's
+      event timeline. Changes appear as annotations on metric dashboards.
+    - Grafana/Datadog: Overlay config change markers on metric graphs.
+      Visual: Vertical line on graph at time of config change.
 ```
 
 ---
@@ -3044,6 +3275,68 @@ ROLLBACK SAFETY:
 │ Rollback time        │ Config API: < 2 minutes (container restart)     │
 │                      │ Config value: < 15 seconds (propagation)        │
 └──────────────────────┴─────────────────────────────────────────────────┘
+
+CONFIG VALUE STAGED PROPAGATION (Instance Canary — L5 Enrichment):
+
+    PROBLEM:
+    Feature flag percentage rollout controls WHICH USERS see new behavior.
+    But all 2,000 instances receive the config change simultaneously.
+    If the config value itself is bad (e.g., a malformed JSON object that
+    crashes the service), ALL 2,000 instances crash at once.
+
+    Feature flag rollout ≠ instance rollout. You need both.
+
+    SOLUTION: Staged propagation to instance subsets.
+
+    PROPAGATION STAGES FOR SENSITIVE CONFIG CHANGES:
+
+    ┌──────────────┬───────────────────────────────────────────────────────┐
+    │ Stage        │ Details                                               │
+    ├──────────────┼───────────────────────────────────────────────────────┤
+    │ Stage 1:     │ Config change propagated to 1 canary instance per     │
+    │ Canary       │ service. Canary instance selected deterministically   │
+    │ (1 instance) │ (e.g., instance with lowest instance_id).             │
+    │              │ Bake time: 5 minutes.                                 │
+    │              │ Criteria: Instance error rate, latency, config parse  │
+    │              │ success. If any metric degrades → auto-rollback.      │
+    ├──────────────┼───────────────────────────────────────────────────────┤
+    │ Stage 2:     │ Propagated to 10% of instances.                       │
+    │ Partial      │ Bake time: 10 minutes.                                │
+    │ (10%)        │ Same criteria as Stage 1.                             │
+    ├──────────────┼───────────────────────────────────────────────────────┤
+    │ Stage 3:     │ Propagated to all instances.                          │
+    │ Full (100%)  │ Standard monitoring.                                  │
+    └──────────────┴───────────────────────────────────────────────────────┘
+
+    IMPLEMENTATION:
+
+    Config change event includes: {staged: true, stage: 1}
+    Config Client checks: Am I in the target stage?
+
+    function shouldApplyConfig(event, instanceId):
+        if not event.staged:
+            return true  // Non-staged: apply immediately (default)
+
+        if event.stage == 1:
+            return isCanaryInstance(instanceId)  // Lowest instance_id
+        if event.stage == 2:
+            return hash(instanceId) % 10 == 0    // 10% of instances
+        if event.stage == 3:
+            return true                           // All instances
+
+    WHEN TO USE STAGED PROPAGATION:
+    - Operational config changes (timeouts, batch sizes, pool sizes)
+    - Config keys marked as "high_impact" in schema
+    - Changes to config keys that previously caused incidents
+    - NOT needed for: Feature flags (already have user-level rollout)
+    - NOT needed for: Kill switches (need immediate propagation)
+
+    WHY THIS IS V1.1 (NOT V1):
+    - V1 achieves safety through validation + automatic rollback (reactive)
+    - Staged propagation adds proactive safety (prevent before damage)
+    - Additional complexity: Stage tracking, canary selection, bake timer
+    - V1 is sufficient for most config changes; staged propagation is
+      a hardening measure added after the first config-caused incident
 
 CONCRETE ROLLBACK SCENARIO:
 
@@ -3164,6 +3457,7 @@ WHAT DISTINGUISHES SOLID L5:
 
 ```
 ✓ This chapter MEETS Google Senior Software Engineer (L5) expectations.
+✓ Reviewed and enriched via 13-step Sr_MASTER_REVIWER process.
 
 SENIOR-LEVEL SIGNALS COVERED:
 
@@ -3197,6 +3491,9 @@ C. Failure Handling & Reliability:
 ✓ Explicit timeout budget for every operation
 ✓ Retry strategy with exponential backoff + jitter
 ✓ Outbox pattern for event publish failures
+✓ [ENRICHMENT] Rapid-fire config storm (event coalescing, rate limiting)
+✓ [ENRICHMENT] Config Client fetch amplification (circuit breaker)
+✓ [ENRICHMENT] Circuit breaker pseudo-code with CLOSED/OPEN/HALF_OPEN states
 
 D. Scale & Performance:
 ✓ Concrete numbers (5,000 keys, 50 writes/day, 2,000 instances)
@@ -3214,6 +3511,8 @@ E. Cost & Operability:
 ✓ 30% cost reduction scenario with reliability trade-offs
 ✓ On-call alerts (config drift, propagation stall, error rate)
 ✓ Misleading signals table (false confidence scenarios)
+✓ [ENRICHMENT] Automatic config-incident correlation engine
+✓ [ENRICHMENT] Config change annotations on alert dashboards
 
 F. Ownership & On-Call Reality:
 ✓ Authentication bypass incident (full post-mortem)
@@ -3223,6 +3522,9 @@ F. Ownership & On-Call Reality:
 ✓ Automatic rollback design
 ✓ Emergency bypass for approval workflow
 ✓ Synthetic canary config change for monitoring
+✓ [ENRICHMENT] Feature flag lifecycle management (stale flag detection)
+✓ [ENRICHMENT] Flag cleanup process (weekly reports, quarterly sprints)
+✓ [ENRICHMENT] Flag count health metric and soft limits
 
 G. Concurrency & Consistency:
 ✓ Optimistic concurrency control (version-based)
@@ -3230,6 +3532,7 @@ G. Concurrency & Consistency:
 ✓ Out-of-order event handling (version check)
 ✓ Bootstrap race condition (subscribe + fetch latest)
 ✓ Idempotency: change_id, event_id, version checks
+✓ [ENRICHMENT] change_id column added to config_versions data model
 ✓ Clock independence (monotonic version numbers)
 
 H. Interview Calibration:
@@ -3247,6 +3550,9 @@ I. Rollout & Operational Safety:
 ✓ Bad deploy scenario (validation bug, full walkthrough)
 ✓ Rushed decision scenario (feature flags without analytics, debt analysis)
 ✓ Config Client backward compatibility rules
+✓ [ENRICHMENT] Config value staged propagation (instance canary: 1 → 10% → 100%)
+✓ [ENRICHMENT] shouldApplyConfig() pseudo-code for staged rollout
+✓ [ENRICHMENT] Distinction: User-level rollout vs instance-level rollout
 
 Brainstorming (Part 18):
 ✓ Scale: 2×/5×/10× analysis with specific bottleneck identification
@@ -3258,10 +3564,18 @@ Brainstorming (Part 18):
 ✓ Deployment: Rollout stages, validation bug, rushed feature flags
 ✓ Interview: Clarifying questions, explicit non-goals, scope creep pushback
 
+ENRICHMENTS APPLIED (from 13-step L5 Review):
+1. Data model fix: change_id column added to config_versions (consistency gap)
+2. Rapid-fire config storm failure mode + event coalescing mitigation
+3. Config Client circuit breaker (prevents fetch amplification on degradation)
+4. Feature flag lifecycle management (stale flag detection, cleanup process)
+5. Config value staged propagation (instance canary for operational configs)
+6. Automatic config-incident correlation engine (MTTR reduction)
+
 UNAVOIDABLE GAPS:
 - None. All Senior-level signals covered after enrichment.
 ```
 
 ---
 
-*This chapter provides the foundation for confidently designing and owning a configuration management system as a Senior Software Engineer. The core insight: configuration is code that bypasses your CI/CD pipeline—your compiler, your tests, your staging environment—which means your config system must compensate for all of them. Every design decision flows from two principles: (1) config system failure must not cascade into service failure (local cache makes config reads a zero-network-cost HashMap lookup, services continue on last-known-good values if the config system is completely down), and (2) config changes are production deployments (schema validation catches type errors, automatic rollback catches semantic errors, kill switches provide emergency escape hatches, and full audit trails enable post-mortem learning). The system handles 5,000 config keys across 2,000 service instances, propagates changes within 15 seconds via push-based notification with a poll fallback, serves config reads at sub-microsecond latency from local cache, and degrades gracefully when any component fails—because in configuration management, a slightly stale config is acceptable, but an invalid config reaching production is not. Master the config plane / data plane separation (writes go to centralized service, reads are local cache), the push + poll hybrid (speed from push, reliability from poll, correctness from both), the semantic validation gap (schema catches types, monitoring catches behavior), and the kill switch imperative (the #1 operational use case is disabling broken features in seconds, not minutes), and you can design, own, and operate a configuration management system at any scale.*
+*This chapter provides the foundation for confidently designing and owning a configuration management system as a Senior Software Engineer. The core insight: configuration is code that bypasses your CI/CD pipeline—your compiler, your tests, your staging environment—which means your config system must compensate for all of them. Every design decision flows from two principles: (1) config system failure must not cascade into service failure (local cache makes config reads a zero-network-cost HashMap lookup, services continue on last-known-good values if the config system is completely down), and (2) config changes are production deployments (schema validation catches type errors, automatic rollback catches semantic errors, kill switches provide emergency escape hatches, and full audit trails enable post-mortem learning). The system handles 5,000 config keys across 2,000 service instances, propagates changes within 15 seconds via push-based notification with a poll fallback, serves config reads at sub-microsecond latency from local cache, and degrades gracefully when any component fails—because in configuration management, a slightly stale config is acceptable, but an invalid config reaching production is not. Master the config plane / data plane separation (writes go to centralized service, reads are local cache), the push + poll hybrid (speed from push, reliability from poll, correctness from both), the semantic validation gap (schema catches types, monitoring catches behavior), the circuit breaker imperative (Config Client must not amplify Config API degradation into fleet-wide failure), the feature flag lifecycle (creating flags is easy, cleaning them up is the Senior engineer's job), the staged instance propagation (user-level rollout and instance-level rollout are different problems requiring different solutions), the config-incident correlation (the fastest way to debug a config-caused outage is automatic annotation on every alert), and the kill switch imperative (the #1 operational use case is disabling broken features in seconds, not minutes), and you can design, own, and operate a configuration management system at any scale.*
