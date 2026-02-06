@@ -27,67 +27,67 @@ The chapters in this section answer the fundamental question: **What are the law
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SECTION 3: LEARNING PATH                                 │
-│                                                                            │
-│   ┌── Foundational Guarantees ──────────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 14                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  CONSISTENCY MODELS                                          │   │  │
-│   │  │  Strong → Causal → Eventual — what does each cost?           │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 15                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  REPLICATION AND SHARDING                                    │   │  │
-│   │  │  Scale reads, scale writes, don't lose data                  │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 16                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  LEADER ELECTION, COORDINATION, AND DISTRIBUTED LOCKS        │   │  │
-│   │  │  When your system needs a boss — and when it doesn't         │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                            │                                               │
-│                            ▼                                               │
-│   ┌── Resilience & Communication ───────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 17                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  BACKPRESSURE, RETRIES, AND IDEMPOTENCY                      │   │  │
-│   │  │  The stability triangle — preventing cascading failures       │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 18                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  QUEUES, LOGS, AND STREAMS                                   │   │  │
-│   │  │  Choosing the right asynchronous communication model          │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                            │                                               │
-│                            ▼                                               │
-│   ┌── Failure & Trade-offs ─────────────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 19                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  FAILURE MODELS AND PARTIAL FAILURES                         │   │  │
-│   │  │  Design for the middle, not the edges                        │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 20                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  CAP THEOREM — BEHAVIOR UNDER PARTITION                      │   │  │
-│   │  │  Applied case studies and Staff-level trade-offs              │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                                                                            │
+│                                                                             │
+│   ┌── Foundational Guarantees ──────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │  Chapter 14                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  CONSISTENCY MODELS                                          │   │   │
+│   │  │  Strong → Causal → Eventual — what does each cost?           │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 15                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  REPLICATION AND SHARDING                                    │   │   │
+│   │  │  Scale reads, scale writes, don't lose data                  │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 16                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  LEADER ELECTION, COORDINATION, AND DISTRIBUTED LOCKS        │   │   │
+│   │  │  When your system needs a boss — and when it doesn't         │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                            │                                                │
+│                            ▼                                                │
+│   ┌── Resilience & Communication ───────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │  Chapter 17                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  BACKPRESSURE, RETRIES, AND IDEMPOTENCY                      │   │   │
+│   │  │  The stability triangle — preventing cascading failures      │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 18                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  QUEUES, LOGS, AND STREAMS                                   │   │   │
+│   │  │  Choosing the right asynchronous communication model         │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                            │                                                │
+│                            ▼                                                │
+│   ┌── Failure & Trade-offs ─────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │  Chapter 19                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  FAILURE MODELS AND PARTIAL FAILURES                         │   │   │
+│   │  │  Design for the middle, not the edges                        │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 20                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  CAP THEOREM — BEHAVIOR UNDER PARTITION                      │   │   │
+│   │  │  Applied case studies and Staff-level trade-offs             │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -276,7 +276,3 @@ After completing Section 3, you'll be ready for:
 - **Section 4**: Data Systems & Global Scale — Apply distributed systems concepts to databases, caching, event-driven architectures, multi-region design, and system evolution
 - **Section 5**: Senior Design Problems — 13 complete system designs where consistency, replication, failure handling, and async patterns are integral to every architecture
 - **Section 6**: Staff-Level Design Problems — The same concepts at L6 scope: global coordination, cross-region consistency, platform-level resilience
-
----
-
-*This section is the technical foundation that everything else rests on. The concepts here don't go out of date—they are the physics of distributed systems. Master them once, apply them everywhere.*

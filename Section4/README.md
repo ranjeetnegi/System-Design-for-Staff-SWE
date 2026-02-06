@@ -27,67 +27,67 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SECTION 4: LEARNING PATH                                 │
-│                                                                            │
-│   ┌── Core Data Systems ────────────────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 21                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  DATABASES AT STAFF LEVEL                                    │   │  │
-│   │  │  Choosing, using, and evolving data stores                   │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 22                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  CACHING AT SCALE                                            │   │  │
-│   │  │  Redis, CDN, and edge systems — reliability, not just speed  │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 23                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  EVENT-DRIVEN ARCHITECTURES                                  │   │  │
-│   │  │  Kafka, streams, and when events make things worse           │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                            │                                               │
-│                            ▼                                               │
-│   ┌── Global Scale ─────────────────────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 24                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  MULTI-REGION SYSTEMS                                        │   │  │
-│   │  │  Geo-replication, latency, and regional failure               │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 25                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  DATA LOCALITY, COMPLIANCE, AND SYSTEM EVOLUTION             │   │  │
-│   │  │  Where data lives, who says so, and what it costs            │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                            │                                               │
-│                            ▼                                               │
-│   ┌── Long-Term Viability ──────────────────────────────────────────────┐  │
-│   │                                                                     │  │
-│   │  Chapter 26                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                    │   │  │
-│   │  │  Can we afford this at 10x? 100x?                            │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                            │                                        │  │
-│   │                            ▼                                        │  │
-│   │  Chapter 27                                                         │  │
-│   │  ┌──────────────────────────────────────────────────────────────┐   │  │
-│   │  │  SYSTEM EVOLUTION, MIGRATION, AND RISK MANAGEMENT            │   │  │
-│   │  │  Build it to change safely                                   │   │  │
-│   │  └──────────────────────────────────────────────────────────────┘   │  │
-│   │                                                                     │  │
-│   └─────────────────────────────────────────────────────────────────────┘  │
-│                                                                            │
+│                                                                             │
+│   ┌── Core Data Systems ────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │  Chapter 21                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  DATABASES AT STAFF LEVEL                                    │   │   │
+│   │  │  Choosing, using, and evolving data stores                   │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 22                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  CACHING AT SCALE                                            │   │   │
+│   │  │  Redis, CDN, and edge systems — reliability, not just speed  │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 23                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  EVENT-DRIVEN ARCHITECTURES                                  │   │   │
+│   │  │  Kafka, streams, and when events make things worse           │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                            │                                                │
+│                            ▼                                                │
+│   ┌── Global Scale ─────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │ 
+│   │  Chapter 24                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  MULTI-REGION SYSTEMS                                        │   │   │
+│   │  │  Geo-replication, latency, and regional failure              │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 25                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  DATA LOCALITY, COMPLIANCE, AND SYSTEM EVOLUTION             │   │   │
+│   │  │  Where data lives, who says so, and what it costs            │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                            │                                                │
+│                            ▼                                                │
+│   ┌── Long-Term Viability ──────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │  Chapter 26                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                    │   │   │
+│   │  │  Can we afford this at 10x? 100x?                            │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                            │                                        │   │
+│   │                            ▼                                        │   │
+│   │  Chapter 27                                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│   │  │  SYSTEM EVOLUTION, MIGRATION, AND RISK MANAGEMENT            │   │   │
+│   │  │  Build it to change safely                                   │   │   │
+│   │  └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -279,7 +279,3 @@ After completing Section 4, you'll be ready for:
 
 - **Section 5**: Senior Design Problems — 13 complete system designs where you'll choose databases, design cache strategies, reason about failure modes, and estimate costs using the concepts from this section
 - **Section 6**: Staff-Level Design Problems — The same problem domains elevated to global scale, multi-region topologies, cross-team platform concerns, and long-term evolution planning
-
----
-
-*This section is where distributed systems theory meets engineering practice. The concepts here don't just help you pass interviews—they're how Staff Engineers make decisions every day.*

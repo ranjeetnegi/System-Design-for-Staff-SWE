@@ -26,35 +26,35 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                THE 5-PHASE SYSTEM DESIGN FRAMEWORK                         │
-│                                                                            │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  Phase 1: USERS & USE CASES                                       │   │
-│   │  Who are we building for? What are they trying to do?             │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              ↓                                             │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  Phase 2: FUNCTIONAL REQUIREMENTS                                 │   │
-│   │  What must the system do? (Core, Important, Nice-to-have)         │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              ↓                                             │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  Phase 3: SCALE                                                   │   │
-│   │  How big is this problem? (Users, Data, Requests, Growth)         │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              ↓                                             │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  Phase 4: NON-FUNCTIONAL REQUIREMENTS                             │   │
-│   │  What qualities must it have? (Availability, Latency, Durability) │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              ↓                                             │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  Phase 5: ASSUMPTIONS & CONSTRAINTS                               │   │
-│   │  What's given? What limits us? (Infra, Team, Budget, Timeline)    │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              ↓                                             │
-│                    NOW you can start designing!                            │
-│                                                                            │
+│                THE 5-PHASE SYSTEM DESIGN FRAMEWORK                          │
+│                                                                             │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  Phase 1: USERS & USE CASES                                        │    │
+│   │  Who are we building for? What are they trying to do?              │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              ↓                                              │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  Phase 2: FUNCTIONAL REQUIREMENTS                                  │    │
+│   │  What must the system do? (Core, Important, Nice-to-have)          │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              ↓                                              │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  Phase 3: SCALE                                                    │    │
+│   │  How big is this problem? (Users, Data, Requests, Growth)          │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              ↓                                              │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  Phase 4: NON-FUNCTIONAL REQUIREMENTS                              │    │
+│   │  What qualities must it have? (Availability, Latency, Durability)  │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              ↓                                              │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  Phase 5: ASSUMPTIONS & CONSTRAINTS                                │    │
+│   │  What's given? What limits us? (Infra, Team, Budget, Timeline)     │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              ↓                                              │
+│                    NOW you can start designing!                             │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,55 +65,55 @@ The chapters in this section answer the fundamental question: **How do you syste
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SECTION 2: LEARNING PATH                                 │
-│                                                                            │
-│   Chapter 7                                                                │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                          │   │
-│   │  The complete 5-phase overview — why context before design        │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 8                                                                │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  PHASE 1 — USERS & USE CASES                                      │   │
-│   │  Identify all user types and what they're trying to accomplish     │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 9                                                                │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  PHASE 2 — FUNCTIONAL REQUIREMENTS                                │   │
-│   │  Define what the system does with Staff-level precision            │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 10                                                               │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  PHASE 3 — SCALE: CAPACITY PLANNING AND GROWTH                    │   │
-│   │  Translate vague scale into concrete numbers that drive design     │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 11                                                               │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                         │   │
-│   │  The hidden dimension: can we afford what we've designed?          │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 12                                                               │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  PHASE 4 & PHASE 5 — NFRs, ASSUMPTIONS, AND CONSTRAINTS          │   │
-│   │  Establish qualities, state assumptions, acknowledge limits        │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                              │                                             │
-│                              ▼                                             │
-│   Chapter 13                                                               │
-│   ┌────────────────────────────────────────────────────────────────────┐   │
-│   │  END-TO-END SYSTEM DESIGN USING THE 5-PHASE FRAMEWORK             │   │
-│   │  Full walkthrough: News Feed system from prompt to architecture    │   │
-│   └────────────────────────────────────────────────────────────────────┘   │
-│                                                                            │
+│                                                                             │
+│   Chapter 7                                                                 │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  THE STAFF-LEVEL SYSTEM DESIGN FRAMEWORK                           │    │
+│   │  The complete 5-phase overview — why context before design         │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 8                                                                 │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  PHASE 1 — USERS & USE CASES                                       │    │
+│   │  Identify all user types and what they're trying to accomplish     │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 9                                                                 │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  PHASE 2 — FUNCTIONAL REQUIREMENTS                                 │    │
+│   │  Define what the system does with Staff-level precision            │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 10                                                                │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  PHASE 3 — SCALE: CAPACITY PLANNING AND GROWTH                     │    │
+│   │  Translate vague scale into concrete numbers that drive design     │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 11                                                                │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                          │    │
+│   │  The hidden dimension: can we afford what we've designed?          │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 12                                                                │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  PHASE 4 & PHASE 5 — NFRs, ASSUMPTIONS, AND CONSTRAINTS            │    │
+│   │  Establish qualities, state assumptions, acknowledge limits        │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                              │                                              │
+│                              ▼                                              │
+│   Chapter 13                                                                │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │  END-TO-END SYSTEM DESIGN USING THE 5-PHASE FRAMEWORK              │    │
+│   │  Full walkthrough: News Feed system from prompt to architecture    │    │
+│   └────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -316,6 +316,3 @@ After completing Section 2, you'll be ready for:
 
 **Total Section**: ~7–9 hours reading + ~6–7 hours practice
 
----
-
-*This section is your operating system for system design interviews. Every problem in Sections 5 and 6 is approached through this framework—master it here, apply it everywhere.*
