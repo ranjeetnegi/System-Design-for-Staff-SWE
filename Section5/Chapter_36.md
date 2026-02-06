@@ -598,11 +598,11 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │                        ▼               ▼                                    │
 │               ┌─────────────────────────────────┐                           │
 │               │        ENQUEUE API              │                           │
-│               │  (Stateless, load-balanced)      │                          │
-│               │  - Validate payload              │                          │
-│               │  - Assign job_id                 │                          │
-│               │  - Write to job store            │                          │
-│               │  - Return ACK with job_id        │                          │
+│               │  (Stateless, load-balanced)     │                           │
+│               │  - Validate payload             │                           │
+│               │  - Assign job_id                │                           │
+│               │  - Write to job store           │                           │
+│               │  - Return ACK with job_id       │                           │
 │               └──────────────┬──────────────────┘                           │
 │                              │                                              │
 │                              ▼                                              │
@@ -623,10 +623,10 @@ At 10× (5,000 jobs/sec): Write throughput + row-level locking under
 │                              ▼                                              │
 │               ┌─────────────────────────────────┐                           │
 │               │       DISPATCHER                │                           │
-│               │  (Embedded in worker process)    │                          │
-│               │  - Polls job store for pending   │                          │
-│               │  - Claims jobs via atomic UPDATE  │                         │
-│               │  - Routes to handler by job type │                          │
+│               │  (Embedded in worker process)   │                           │
+│               │  - Polls job store for pending  │                           │
+│               │  - Claims jobs via atomic UPDATE│                           │
+│               │  - Routes to handler by job type│                           │
 │               └──────────────┬──────────────────┘                           │
 │                              │                                              │
 │                   ┌──────────┼──────────┐                                   │
@@ -1989,13 +1989,13 @@ STRONG L5 SIGNALS:
 │   │                                                              │          │
 │   │  ENQUEUE                                                     │          │
 │   │  ┌─────────┐                                                 │          │
-│   │  │ pending  │ ← initial state after INSERT                   │          │
-│   │  └────┬─────┘                                                │          │
+│   │  │ pending │ ← initial state after INSERT                    │          │
+│   │  └────┬────┘                                                 │          │
 │   │       │                                                      │          │
 │   │       │ Worker polls + claims (FOR UPDATE SKIP LOCKED)       │          │
 │   │       ▼                                                      │          │
 │   │  ┌────────────┐                                              │          │
-│   │  │ processing  │ ← lease_expiry set, worker_id assigned      │          │
+│   │  │ processing │ ← lease_expiry set, worker_id assigned       │          │
 │   │  └─────┬──────┘                                              │          │
 │   │        │                                                     │          │
 │   │        ├─── SUCCESS ──→ ┌───────────┐                        │          │
