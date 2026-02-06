@@ -1475,7 +1475,7 @@ DECISION TRADE-OFFS — COST, OPERABILITY, ON-CALL:
 | Read replica for status    | +$175/mo       | Offload read load        | Status API stays up during writes  |
 | Simpler architecture (1 DB)| -$350/mo       | Single place to debug    | One failover to understand         |
 | Autoscale workers          | -$350 off-peak | Variable capacity        | Must tune scale-up/scale-down      |
-| DLQ retention 30 days      | +$50/mo       | Full failure history      | Replay after fix without repro     |
+| DLQ retention 30 days      | +$50/mo        | Full failure history     | Replay after fix without repro     |
 
 L5 RELEVANCE: A Senior engineer explicitly weighs cost against operability.
 Cutting cost by removing the read replica saves $175/mo but makes status
@@ -1516,14 +1516,14 @@ OPERATIONAL BURDEN:
 ```
 THE FALSE CONFIDENCE PROBLEM:
 
-| Metric              | Looks Healthy        | Actually Broken                          |
-|---------------------|----------------------|------------------------------------------|
-| queue_depth         | 0                    | Jobs enqueued but never dispatched (bug in visible_after or index) |
-| processing_rate     | 1000/sec             | Jobs "completed" but handler failed after ACK (wrong status)       |
-| dlq_depth           | 0                    | Failures going to wrong partition; DLQ counter not incremented     |
-| jobs_completed_total| Steady increase      | Duplicate executions (lease expiry + slow ACK); business double-charged |
-| enqueue_error_rate  | 0%                   | Producers retrying; idempotency saving you; one 503 = lost job     |
-| oldest_pending_job  | 30s                 | One priority band starved; high-priority fine, low-priority stuck  |
+| Metric              | Looks Healthy        | Actually Broken                                                        |
+|---------------------|----------------------|------------------------------------------------------------------------|
+| queue_depth         | 0                    | Jobs enqueued but never dispatched (bug in visible_after or index)     |
+| processing_rate     | 1000/sec             | Jobs "completed" but handler failed after ACK (wrong status)           |
+| dlq_depth           | 0                    | Failures going to wrong partition; DLQ counter not incremented         |
+| jobs_completed_total| Steady increase      | Duplicate executions (lease expiry + slow ACK); business double-charged|
+| enqueue_error_rate  | 0%                   | Producers retrying; idempotency saving you; one 503 = lost job         |
+| oldest_pending_job  | 30s                  | One priority band starved; high-priority fine, low-priority stuck      |
 
 THE ACTUAL SIGNAL (Job Queue):
 
