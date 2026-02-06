@@ -54,24 +54,24 @@ You cannot improve what you cannot measure, and you cannot debug what you cannot
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    WHY BUILD A METRICS SYSTEM?                               │
+│                    WHY BUILD A METRICS SYSTEM?                              │
 │                                                                             │
 │   WITHOUT METRICS:                                                          │
 │   ├── SSH into each server and grep logs for errors (doesn't scale)         │
 │   ├── Discover problems from user complaints (too late)                     │
-│   ├── No quantitative capacity planning ("feels slow" vs "P99 = 800ms")    │
-│   ├── No automated alerting (human eyeballs on dashboards 24/7)            │
-│   └── Postmortems without data ("we think it started around 2 AM")         │
+│   ├── No quantitative capacity planning ("feels slow" vs "P99 = 800ms")     │
+│   ├── No automated alerting (human eyeballs on dashboards 24/7)             │
+│   └── Postmortems without data ("we think it started around 2 AM")          │
 │                                                                             │
 │   WITH METRICS:                                                             │
 │   ├── Real-time visibility into all services (dashboards)                   │
 │   ├── Automated alerting on anomalies (error rate, latency, saturation)     │
-│   ├── Quantified SLOs: "99.9% of requests under 200ms" (provable)          │
+│   ├── Quantified SLOs: "99.9% of requests under 200ms" (provable)           │
 │   ├── Capacity planning: "At current growth, we exhaust DB connections      │
 │   │   in 6 weeks"                                                           │
-│   ├── Incident investigation: "Latency spiked at 14:32, correlated with    │
+│   ├── Incident investigation: "Latency spiked at 14:32, correlated with     │
 │   │   deploy at 14:30"                                                      │
-│   └── Trend analysis: "Error rate increasing 0.1% per week since v2.3"     │
+│   └── Trend analysis: "Error rate increasing 0.1% per week since v2.3"      │
 │                                                                             │
 │   KEY INSIGHT:                                                              │
 │   Metrics are NOT logs. Logs are events (text, high cardinality, expensive  │
@@ -303,49 +303,49 @@ PARTIAL FAILURE: Storage write latency elevated
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    NON-FUNCTIONAL REQUIREMENTS                               │
+│                    NON-FUNCTIONAL REQUIREMENTS                              │
 │                                                                             │
 │   LATENCY:                                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Ingestion: < 30 seconds end-to-end (emit → queryable)             │   │
-│   │  Simple query (single series, 1h): P50 < 100ms, P99 < 500ms       │   │
-│   │  Complex query (aggregation across 100 series, 24h): P99 < 2s     │   │
-│   │  Alert evaluation: < 5 seconds per rule evaluation cycle           │   │
+│   │  Ingestion: < 30 seconds end-to-end (emit → queryable)              │   │
+│   │  Simple query (single series, 1h): P50 < 100ms, P99 < 500ms         │   │
+│   │  Complex query (aggregation across 100 series, 24h): P99 < 2s       │   │
+│   │  Alert evaluation: < 5 seconds per rule evaluation cycle            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   AVAILABILITY:                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Write path: 99.9% (brief drops acceptable; data can be buffered)  │   │
-│   │  Read path: 99.9% (dashboards and alerts must work)                │   │
-│   │  Alert evaluation: 99.95% (missed alerts are critical)             │   │
+│   │  Write path: 99.9% (brief drops acceptable; data can be buffered)   │   │
+│   │  Read path: 99.9% (dashboards and alerts must work)                 │   │
+│   │  Alert evaluation: 99.95% (missed alerts are critical)              │   │
 │   │                                                                     │   │
-│   │  WHY 99.9% not 99.99%:                                             │   │
-│   │  Metrics are best-effort signals, not transactional data.          │   │
-│   │  A few seconds of missing metrics is tolerable.                    │   │
-│   │  Losing a transaction or payment is not.                           │   │
+│   │  WHY 99.9% not 99.99%:                                              │   │
+│   │  Metrics are best-effort signals, not transactional data.           │   │
+│   │  A few seconds of missing metrics is tolerable.                     │   │
+│   │  Losing a transaction or payment is not.                            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   CONSISTENCY:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Eventual consistency (acceptable)                                  │   │
-│   │  - Metric emitted at T may be queryable at T+30s                   │   │
+│   │  - Metric emitted at T may be queryable at T+30s                    │   │
 │   │  - Two engineers querying at same time may see slightly different   │   │
-│   │    results for the last 30 seconds (acceptable)                    │   │
-│   │  - Older data (> 1 minute): consistent across readers              │   │
+│   │    results for the last 30 seconds (acceptable)                     │   │
+│   │  - Older data (> 1 minute): consistent across readers               │   │
 │   │                                                                     │   │
 │   │  WHY eventual is fine:                                              │   │
-│   │  Metrics are aggregates over time windows. A 15-second delay       │   │
-│   │  doesn't change the shape of the graph or the alert outcome.       │   │
+│   │  Metrics are aggregates over time windows. A 15-second delay        │   │
+│   │  doesn't change the shape of the graph or the alert outcome.        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   DURABILITY:                                                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Best-effort durability for raw metrics                             │   │
 │   │  - Losing a few data points during node failure: acceptable         │   │
-│   │  - Losing hours of data: NOT acceptable                            │   │
-│   │  - Replication factor: 2 (enough for single-node failure)          │   │
+│   │  - Losing hours of data: NOT acceptable                             │   │
+│   │  - Replication factor: 2 (enough for single-node failure)           │   │
 │   │                                                                     │   │
-│   │  Alert rules and dashboards: Stored durably (separate config DB)   │   │
+│   │  Alert rules and dashboards: Stored durably (separate config DB)    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   TRADE-OFFS ACCEPTED:                                                      │
@@ -442,62 +442,62 @@ MITIGATION:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    METRICS SYSTEM ARCHITECTURE                               │
+│                    METRICS SYSTEM ARCHITECTURE                              │
 │                                                                             │
 │   DATA SOURCES (applications, infrastructure)                               │
-│   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐               │
-│   │Service A │   │Service B │   │Service C │   │  Infra   │               │
-│   │ /metrics │   │ /metrics │   │ /metrics │   │  agents  │               │
-│   └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘               │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+│   │Service A │    │Service B │    │Service C │    │  Infra   │              │
+│   │ /metrics │    │ /metrics │    │ /metrics │    │  agents  │              │
+│   └────┬─────┘    └────┬─────┘    └────┬─────┘    └────┬─────┘              │
 │        └───────────────┼───────────────┼───────────────┘                    │
-│                        │ scrape (pull) every 15s                             │
+│                        │ scrape (pull) every 15s                            │
 │                        ▼                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                    COLLECTORS (stateless, horizontally scalable)     │   │
+│   │                    COLLECTORS (stateless, horizontally scalable)    │   │
 │   │                                                                     │   │
-│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐                   │   │
-│   │   │Collector 0 │  │Collector 1 │  │Collector 2 │                   │   │
-│   │   │(targets    │  │(targets    │  │(targets    │                   │   │
-│   │   │ 0-166)     │  │ 167-333)   │  │ 334-500)   │                   │   │
-│   │   └─────┬──────┘  └─────┬──────┘  └─────┬──────┘                   │   │
+│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐                    │   │
+│   │   │Collector 0 │  │Collector 1 │  │Collector 2 │                    │   │
+│   │   │(targets    │  │(targets    │  │(targets    │                    │   │
+│   │   │ 0-166)     │  │ 167-333)   │  │ 334-500)   │                    │   │
+│   │   └─────┬──────┘  └─────┬──────┘  └─────┬──────┘                    │   │
 │   │         └───────────────┼───────────────┘                           │   │
 │   └─────────────────────────┼───────────────────────────────────────────┘   │
-│                             │ write batches                                  │
-│                             ▼                                                │
+│                             │ write batches                                 │
+│                             ▼                                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │              WRITE PATH (ingestion router)                          │   │
 │   │              - Validate labels                                      │   │
 │   │              - Enforce cardinality limits                           │   │
 │   │              - Route to correct storage shard                       │   │
 │   └─────────────────────────┬───────────────────────────────────────────┘   │
-│                             │                                                │
-│                             ▼                                                │
+│                             │                                               │
+│                             ▼                                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │              TIME-SERIES STORAGE (sharded by metric hash)           │   │
 │   │                                                                     │   │
-│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐                   │   │
-│   │   │  Shard 0   │  │  Shard 1   │  │  Shard 2   │                   │   │
-│   │   │  (333K     │  │  (333K     │  │  (333K     │                   │   │
-│   │   │   series)  │  │   series)  │  │   series)  │                   │   │
-│   │   └────────────┘  └────────────┘  └────────────┘                   │   │
+│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐                    │   │
+│   │   │  Shard 0   │  │  Shard 1   │  │  Shard 2   │                    │   │
+│   │   │  (333K     │  │  (333K     │  │  (333K     │                    │   │
+│   │   │   series)  │  │   series)  │  │   series)  │                    │   │
+│   │   └────────────┘  └────────────┘  └────────────┘                    │   │
 │   │                                                                     │   │
-│   │   Each shard: In-memory write buffer + on-disk compressed blocks   │   │
+│   │   Each shard: In-memory write buffer + on-disk compressed blocks    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                             ▲                                                │
-│                             │ query                                          │
+│                             ▲                                               │
+│                             │ query                                         │
 │   ┌─────────────────────────┴───────────────────────────────────────────┐   │
-│   │              QUERY ENGINE (scatter-gather across shards)             │   │
+│   │              QUERY ENGINE (scatter-gather across shards)            │   │
 │   │              - Parse PromQL-like expression                         │   │
 │   │              - Fan out to relevant shards                           │   │
 │   │              - Merge and compute (rate, sum, quantile)              │   │
 │   └─────────────────────────┬───────────────────────────────────────────┘   │
-│                             ▲                                                │
+│                             ▲                                               │
 │              ┌──────────────┼──────────────┐                                │
-│              │              │              │                                  │
-│   ┌──────────┴──┐  ┌───────┴────┐  ┌─────┴──────┐                          │
-│   │ Dashboards  │  │   Alert    │  │  Ad-hoc    │                          │
-│   │ (Grafana)   │  │  Evaluator │  │  Queries   │                          │
-│   └─────────────┘  └────────────┘  └────────────┘                          │
+│              │              │              │                                │
+│   ┌──────────┴──┐   ┌───────┴────┐   ┌─────┴──────┐                         │
+│   │ Dashboards  │   │   Alert    │   │  Ad-hoc    │                         │
+│   │ (Grafana)   │   │  Evaluator │   │  Queries   │                         │
+│   └─────────────┘   └────────────┘   └────────────┘                         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1163,23 +1163,23 @@ RECOVERY:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│   FAILURE SCENARIO: CARDINALITY EXPLOSION FROM BAD INSTRUMENTATION         │
+│   FAILURE SCENARIO: CARDINALITY EXPLOSION FROM BAD INSTRUMENTATION          │
 │                                                                             │
 │   TRIGGER:                                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Developer adds metric with user_id label:                          │   │
 │   │  http_requests_total{user_id="abc123", endpoint="/api/users"}       │   │
-│   │  1M users × 10 endpoints = 10M new series (from 1M baseline)       │   │
+│   │  1M users × 10 endpoints = 10M new series (from 1M baseline)        │   │
 │   │  Deployed to production during morning traffic ramp.                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   WHAT BREAKS:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  T+0:    New metric deployed; series count starts growing           │   │
-│   │  T+5min: Series count: 1M → 3M (growing fast)                      │   │
-│   │  T+15min: Ingestion rate: 67K → 250K pts/sec; storage overloaded   │   │
+│   │  T+5min: Series count: 1M → 3M (growing fast)                       │   │
+│   │  T+15min: Ingestion rate: 67K → 250K pts/sec; storage overloaded    │   │
 │   │  T+20min: Shard memory usage spiking (head block too large)         │   │
-│   │  T+30min: Query latency degraded: 200ms → 5s (index scan larger)  │   │
+│   │  T+30min: Query latency degraded: 200ms → 5s (index scan larger)    │   │
 │   │  T+45min: OOM kill on shard node; writes failing                    │   │
 │   │                                                                     │   │
 │   │  SECONDARY EFFECTS:                                                 │   │
@@ -1190,9 +1190,9 @@ RECOVERY:
 │                                                                             │
 │   DETECTION:                                                                │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  - Alert: "active_series_count > 2M" (cardinality alert)           │   │
-│   │  - Alert: "ingestion_rate > 150K pts/sec"                          │   │
-│   │  - Alert: "query_latency_p99 > 3s"                                 │   │
+│   │  - Alert: "active_series_count > 2M" (cardinality alert)            │   │
+│   │  - Alert: "ingestion_rate > 150K pts/sec"                           │   │
+│   │  - Alert: "query_latency_p99 > 3s"                                  │   │
 │   │  - Correlation: New deployment in service X                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -1202,7 +1202,7 @@ RECOVERY:
 │   │  1. Identify: Which metric has exploding cardinality?               │   │
 │   │     → topk(10, count by (__name__) ({__name__=~".+"}))              │   │
 │   │  2. Drop the offending metric at ingestion (config update):         │   │
-│   │     drop: metric_name="http_requests_total" label="user_id"        │   │
+│   │     drop: metric_name="http_requests_total" label="user_id"         │   │
 │   │  3. Apply config: Collectors stop forwarding that metric            │   │
 │   │                                                                     │   │
 │   │  MITIGATION (10-30 min):                                            │   │
@@ -1259,22 +1259,22 @@ Alert notification (evaluator → PagerDuty):
 │                        METRICS INGESTION HOT PATH                           │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  1. Scrape: HTTP GET to target /metrics     ~50ms (network + parse)│   │
-│   │  2. Label validation + cardinality check    ~0.1ms per sample      │   │
-│   │  3. Hash series key → determine shard       ~0.01ms per sample     │   │
-│   │  4. Batch samples by shard                  ~0.1ms per batch       │   │
-│   │  5. Network: Collector → shard              ~1ms per batch         │   │
-│   │  6. WAL write (sequential, fsync batched)   ~1ms per batch         │   │
-│   │  7. Head block append (in-memory)           ~0.01ms per sample     │   │
+│   │  1. Scrape: HTTP GET to target /metrics     ~50ms (network + parse) │   │
+│   │  2. Label validation + cardinality check    ~0.1ms per sample       │   │
+│   │  3. Hash series key → determine shard       ~0.01ms per sample      │   │
+│   │  4. Batch samples by shard                  ~0.1ms per batch        │   │
+│   │  5. Network: Collector → shard              ~1ms per batch          │   │
+│   │  6. WAL write (sequential, fsync batched)   ~1ms per batch          │   │
+│   │  7. Head block append (in-memory)           ~0.01ms per sample      │   │
 │   │  ─────────────────────────────────────────────────                  │   │
-│   │  TOTAL per sample: ~0.1ms (batching amortizes fixed costs)         │   │
-│   │  TOTAL per scrape cycle: ~100ms for 500 targets                    │   │
+│   │  TOTAL per sample: ~0.1ms (batching amortizes fixed costs)          │   │
+│   │  TOTAL per scrape cycle: ~100ms for 500 targets                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   BIGGEST FACTORS:                                                          │
-│   - Scrape latency (depends on target; out of our control)                 │
-│   - WAL fsync (dominates write latency; batch to amortize)                 │
-│   - Head block memory (must fit in RAM; cardinality = memory)              │
+│   - Scrape latency (depends on target; out of our control)                  │
+│   - WAL fsync (dominates write latency; batch to amortize)                  │
+│   - Head block memory (must fit in RAM; cardinality = memory)               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -1285,18 +1285,18 @@ Alert notification (evaluator → PagerDuty):
 │   │  1. Parse query expression                  ~1ms                    │   │
 │   │  2. Label index lookup (inverted index)     ~5ms                    │   │
 │   │  3. Read head block (in-memory)             ~2-10ms                 │   │
-│   │  4. Read disk blocks (compressed)           ~10-50ms (if needed)   │   │
+│   │  4. Read disk blocks (compressed)           ~10-50ms (if needed)    │   │
 │   │  5. Decompress + scan data points           ~5-20ms                 │   │
 │   │  6. Compute function (rate, quantile)       ~2-10ms                 │   │
 │   │  7. Merge across shards (if multi-shard)    ~5ms                    │   │
 │   │  ─────────────────────────────────────────────────                  │   │
-│   │  TOTAL: ~30-100ms (single series), ~200-500ms (aggregation)        │   │
+│   │  TOTAL: ~30-100ms (single series), ~200-500ms (aggregation)         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   BIGGEST FACTORS:                                                          │
-│   - Number of series matched (label selectivity)                           │
-│   - Time range (longer = more blocks to read)                              │
-│   - Function complexity (histogram_quantile > rate > sum)                  │
+│   - Number of series matched (label selectivity)                            │
+│   - Time range (longer = more blocks to read)                               │
+│   - Function complexity (histogram_quantile > rate > sum)                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1410,17 +1410,17 @@ INTENTIONALLY DEFERRED:
 │                                                                             │
 │   2. STORAGE (30% of cost)                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  SSD: 300 GB × 3 (replication) × $0.10/GB = $90/month              │   │
-│   │  WAL: 50 GB × $0.10/GB = $5/month                                  │   │
+│   │  SSD: 300 GB × 3 (replication) × $0.10/GB = $90/month               │   │
+│   │  WAL: 50 GB × $0.10/GB = $5/month                                   │   │
 │   │  Total storage: ~$95/month                                          │   │
 │   │  (Storage is cheap relative to compute; RAM is the real cost)       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   3. RAM (critical resource, within compute cost)                           │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  1M series × ~1 KB per series (head block) = ~1 GB in-memory       │   │
+│   │  1M series × ~1 KB per series (head block) = ~1 GB in-memory        │   │
 │   │  With 2h head block: ~4 GB RAM per shard for data                   │   │
-│   │  Cardinality explosion to 10M: 40 GB RAM → OOM on 32 GB nodes     │   │
+│   │  Cardinality explosion to 10M: 40 GB RAM → OOM on 32 GB nodes       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   4. INFRASTRUCTURE (20% of cost)                                           │
@@ -1432,10 +1432,10 @@ INTENTIONALLY DEFERRED:
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   TOTAL MONTHLY COST: ~$3,400                                               │
-│   COST PER 1M ACTIVE SERIES: ~$3.40/month                                  │
+│   COST PER 1M ACTIVE SERIES: ~$3.40/month                                   │
 │                                                                             │
-│   KEY INSIGHT: Metrics cost is dominated by RAM (for head block / index).  │
-│   Cardinality directly controls cost: 2× series = 2× RAM = 2× cost.       │
+│   KEY INSIGHT: Metrics cost is dominated by RAM (for head block / index).   │
+│   Cardinality directly controls cost: 2× series = 2× RAM = 2× cost.         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1966,29 +1966,29 @@ L5 FIX: Proactively discuss "what happens when cardinality explodes,"
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    METRICS COLLECTION ARCHITECTURE                           │
+│                    METRICS COLLECTION ARCHITECTURE                          │
 │                                                                             │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                   │
-│   │Service A │  │Service B │  │Service C │  │  Infra   │                   │
-│   │ :9090    │  │ :9090    │  │ :9090    │  │  Agents  │                   │
-│   │ /metrics │  │ /metrics │  │ /metrics │  │ /metrics │                   │
-│   └──┬───────┘  └──┬───────┘  └──┬───────┘  └──┬───────┘                   │
-│      │              │             │              │                           │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌──────────┐                   │
+│   │Service A │  │Service B │  │Service C │   │  Infra   │                   │
+│   │ :9090    │  │ :9090    │  │ :9090    │   │  Agents  │                   │
+│   │ /metrics │  │ /metrics │  │ /metrics │   │ /metrics │                   │
+│   └──┬───────┘  └──┬───────┘  └──┬───────┘   └──┬───────┘                   │
+│      │             │             │              │                           │
 │      │◄─────── scrape (HTTP GET, every 15s) ───►│                           │
 │      └──────────────┼─────────────┼──────────────┘                          │
-│                     ▼             ▼                                          │
+│                     ▼             ▼                                         │
 │   ┌─────────────────────────────────────────────────────┐                   │
-│   │                COLLECTORS (×3)                       │                   │
+│   │                COLLECTORS (×3)                      │                   │
 │   │   Discover targets │ Scrape │ Validate │ Forward    │                   │
 │   └─────────────────────────────┬───────────────────────┘                   │
-│                                 │ batched writes                             │
-│                                 ▼                                            │
+│                                 │ batched writes                            │
+│                                 ▼                                           │
 │   ┌─────────────────────────────────────────────────────┐                   │
-│   │           INGESTION ROUTER (write path)              │                   │
+│   │           INGESTION ROUTER (write path)             │                   │
 │   │   Validate labels │ Cardinality check │ Route       │                   │
 │   └──────┬──────────────────┬──────────────────┬────────┘                   │
-│          │                  │                  │                              │
-│          ▼                  ▼                  ▼                              │
+│          │                  │                  │                            │
+│          ▼                  ▼                  ▼                            │
 │   ┌────────────┐    ┌────────────┐    ┌────────────┐                        │
 │   │  Shard 0   │    │  Shard 1   │    │  Shard 2   │                        │
 │   │ ┌────────┐ │    │ ┌────────┐ │    │ ┌────────┐ │                        │
@@ -2000,25 +2000,25 @@ L5 FIX: Proactively discuss "what happens when cardinality explodes,"
 │   │ │ Blocks │ │    │ │ Blocks │ │    │ │ Blocks │ │                        │
 │   │ └────────┘ │    │ └────────┘ │    │ └────────┘ │                        │
 │   └──────┬─────┘    └──────┬─────┘    └──────┬─────┘                        │
-│          └─────────────────┼─────────────────┘                               │
-│                            │ query (scatter-gather)                           │
-│                            ▼                                                 │
+│          └─────────────────┼─────────────────┘                              │
+│                            │ query (scatter-gather)                         │
+│                            ▼                                                │
 │   ┌─────────────────────────────────────────────────────┐                   │
-│   │             QUERY ENGINE (×2, stateless)             │                   │
+│   │             QUERY ENGINE (×2, stateless)            │                   │
 │   │   Parse │ Fan-out │ Merge │ Compute (rate, sum, ...)│                   │
 │   └──────┬──────────────────┬──────────────────┬────────┘                   │
-│          │                  │                  │                              │
-│          ▼                  ▼                  ▼                              │
+│          │                  │                  │                            │
+│          ▼                  ▼                  ▼                            │
 │   ┌──────────┐     ┌────────────┐     ┌──────────────┐                      │
 │   │Dashboards│     │   Alert    │     │   Ad-hoc     │                      │
 │   │(Grafana) │     │ Evaluator  │     │   Queries    │                      │
 │   └──────────┘     └─────┬──────┘     └──────────────┘                      │
-│                          │                                                   │
-│                          ▼                                                   │
-│                   ┌────────────┐                                             │
-│                   │ PagerDuty  │                                             │
-│                   │  / Slack   │                                             │
-│                   └────────────┘                                             │
+│                          │                                                  │
+│                          ▼                                                  │
+│                   ┌────────────┐                                            │
+│                   │ PagerDuty  │                                            │
+│                   │  / Slack   │                                            │
+│                   └────────────┘                                            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2029,11 +2029,11 @@ L5 FIX: Proactively discuss "what happens when cardinality explodes,"
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │               WRITE PATH + READ PATH DATA FLOW                              │
 │                                                                             │
-│   Application   Collector   Ingestion    Shard        Query      Dashboard │
-│       │            │        Router        │          Engine         │       │
+│   Application   Collector   Ingestion    Shard        Query      Dashboard  │
+│       │            │        Router         │         Engine         │       │
 │       │            │          │            │            │           │       │
-│       │ ◄── GET /metrics ──  │            │            │           │       │
-│       │ ── response ──────►  │            │            │           │       │
+│       │ ◄── GET /metrics ──-  │            │            │           │       │
+│       │ ── response ──────►   │            │            │           │       │
 │       │            │          │            │            │           │       │
 │       │            │ parse +  │            │            │           │       │
 │       │            │ validate │            │            │           │       │
@@ -2046,17 +2046,17 @@ L5 FIX: Proactively discuss "what happens when cardinality explodes,"
 │       │            │          │── route ──▶│            │           │       │
 │       │            │          │            │ WAL write  │           │       │
 │       │            │          │            │ Head append│           │       │
-│       │            │          │◀── ACK ───│            │           │       │
+│       │            │          │◀── ACK ──-─│            │           │       │
 │       │            │◀── ACK ──│            │            │           │       │
 │       │            │          │            │            │           │       │
-│       │            │          │            │     ◄── query ──────  │       │
-│       │            │          │            │ ◄── scatter ──────    │       │
-│       │            │          │            │ ── results ──────►    │       │
-│       │            │          │            │     ── merge+compute ▶│       │
-│       │            │          │            │            │── JSON ─▶│       │
+│       │            │          │            │     ◄── query ────-──  │       │
+│       │            │          │            │ ◄── scatter ─────-─    │       │
+│       │            │          │            │ ── results ─────-─►    │       │
+│       │            │          │            │     ── merge+compute -▶│       │
+│       │            │          │            │            │── JSON -─▶│       │
 │       │            │          │            │            │           │       │
 │                                                                             │
-│   WRITE TIMING: Scrape → queryable in 15-30 seconds                        │
+│   WRITE TIMING: Scrape → queryable in 15-30 seconds                         │
 │   QUERY TIMING: Request → results in 50-500ms                               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
