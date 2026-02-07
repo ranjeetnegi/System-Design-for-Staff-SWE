@@ -32,7 +32,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 │   │                                                                     │   │
 │   │  Chapter 21                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
-│   │  │  DATABASES AT STAFF LEVEL                                    │   │   │
+│   │  │  DATABASES                                                   │   │   │
 │   │  │  Choosing, using, and evolving data stores                   │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
@@ -95,7 +95,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ## Chapter Summaries
 
-### Chapter 21: Databases at Staff Level — Choosing, Using, and Evolving Data Stores
+### Chapter 21: Databases — Choosing, Using, and Evolving Data Stores
 
 **Core Question**: How do you choose a database—and when do you choose three?
 

@@ -535,6 +535,179 @@ FUNCTION design_system(requirements):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## How Migration Complexity Grows with System Scale
+
+Staff Engineers model migration complexity as a function of system size. The relationship is not linear—complexity grows faster than scale.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         MIGRATION COMPLEXITY: V1 → 10× → MULTI-YEAR GROWTH MODEL            │
+│                                                                             │
+│   V1 SYSTEM (Launch, ~1K users, single team):                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Migration characteristics:                                           │   │
+│   │  • Single service, single database                                    │   │
+│   │  • 1-2 engineers understand entire system                              │   │
+│   │  • All dependencies are explicit and documented                        │   │
+│   │  • Can coordinate changes synchronously                                │   │
+│   │  • Rollback: redeploy previous version                                │   │
+│   │                                                                     │   │
+│   │  Example migration: Schema change                                     │   │
+│   │  ├── Complexity: O(1) - single table                                  │   │
+│   │  ├── Coordination: 1 team, 1 deployment                                │   │
+│   │  ├── Timeline: 1-2 weeks                                              │   │
+│   │  ├── Risk: LOW (can test on copy, rollback is simple)                │   │
+│   │  └── Cost: ~1 engineer-week                                           │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   10× SYSTEM (Growth, ~10K users, 2-3 teams):                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Migration characteristics:                                           │   │
+│   │  • Multiple services, shared database                                │   │
+│   │  • 5-10 engineers, knowledge distributed                               │   │
+│   │  • Some dependencies implicit (shared code, shared DB)                │   │
+│   │  • Requires coordination across teams                                  │   │
+│   │  • Rollback: requires coordinated rollback                            │   │
+│   │                                                                     │   │
+│   │  Example migration: Database sharding                                  │   │
+│   │  ├── Complexity: O(n) where n = number of services                    │   │
+│   │  ├── Coordination: 3 teams, staged deployment                         │   │
+│   │  ├── Timeline: 2-3 months                                             │   │
+│   │  ├── Risk: MEDIUM (data migration required, dual-write period)        │   │
+│   │  └── Cost: ~6 engineer-months + infrastructure                        │   │
+│   │                                                                     │   │
+│   │  WHY COMPLEXITY INCREASED:                                            │   │
+│   │  • Must migrate data without downtime                                 │   │
+│   │  • Services must handle both old and new data locations               │   │
+│   │  • Coordination overhead: meetings, reviews, alignment                 │   │
+│   │  • Testing complexity: integration tests across services              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   100× SYSTEM (Mature, ~100K users, 5-10 teams):                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Migration characteristics:                                           │   │
+│   │  • Many services, multiple databases, cross-service dependencies       │   │
+│   │  • 20-50 engineers, knowledge silos exist                              │   │
+│   │  • Hidden dependencies (batch jobs, external clients, legacy code)  │   │
+│   │  • Requires multi-team coordination, may span quarters                │   │
+│   │  • Rollback: complex, may require data re-migration                   │   │
+│   │                                                                     │   │
+│   │  Example migration: Service decomposition (monolith → microservices) │   │
+│   │  ├── Complexity: O(n²) where n = number of services                   │   │
+│   │  │   └── Each service migration affects dependent services             │   │
+│   │  ├── Coordination: 8 teams, multi-quarter project                     │   │
+│   │  ├── Timeline: 6-12 months                                            │   │
+│   │  ├── Risk: HIGH (many failure modes, long tail of dependencies)        │   │
+│   │  └── Cost: ~40 engineer-months + dual-system costs                    │   │
+│   │                                                                     │   │
+│   │  WHY COMPLEXITY EXPLODED:                                             │   │
+│   │  • Hidden dependencies discovered during migration                    │   │
+│   │  • Long-tail consumers can't migrate on schedule                      │   │
+│   │  • Data consistency across services becomes critical                   │   │
+│   │  • Knowledge gaps: original designers may have left                   │   │
+│   │  • Testing: must validate across service boundaries                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   MULTI-YEAR SYSTEM (Legacy, ~1M+ users, 10+ teams, years of evolution):   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Migration characteristics:                                           │   │
+│   │  • Dozens of services, complex dependency graph                       │   │
+│   │  • 50-200 engineers, significant knowledge loss                        │   │
+│   │  • Unknown dependencies (undocumented integrations, deprecated APIs)  │   │
+│   │  • Requires org-level coordination, may span years                    │   │
+│   │  • Rollback: may be impossible (data transformed, old system gone)   │   │
+│   │                                                                     │   │
+│   │  Example migration: Technology stack migration (e.g., language, DB)   │   │
+│   │  ├── Complexity: O(n³) - exponential with system size                  │   │
+│   │  │   └── Each service migration reveals new dependencies              │   │
+│   │  ├── Coordination: 15+ teams, multi-year program                      │   │
+│   │  ├── Timeline: 18-36 months                                           │   │
+│   │  ├── Risk: CRITICAL (irreversible decisions, unknown blast radius)   │   │
+│   │  └── Cost: ~200+ engineer-months + extended dual-system costs         │   │
+│   │                                                                     │   │
+│   │  WHY COMPLEXITY IS EXPONENTIAL:                                        │   │
+│   │  • Dependency discovery is iterative—each migration reveals more      │   │
+│   │  • Knowledge debt: "why" decisions lost to time                       │   │
+│   │  • Technical debt compounds: workarounds built on workarounds         │   │
+│   │  • Organizational inertia: teams have competing priorities            │   │
+│   │  • Risk aversion increases with system age                             │   │
+│   │  • Long-tail problem: 5% of consumers take 50% of migration time     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   MATHEMATICAL MODEL:                                                       │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Migration Complexity = f(scale, teams, dependencies, time)          │   │
+│   │                                                                     │   │
+│   │  Base complexity: O(1) for V1                                        │   │
+│   │  10× scale: O(n) - linear growth                                    │   │
+│   │  100× scale: O(n²) - quadratic (coordination overhead)              │   │
+│   │  1000× scale: O(n³) - cubic (dependency discovery, knowledge loss)   │   │
+│   │                                                                     │   │
+│   │  Key factors:                                                        │   │
+│   │  • Number of services: n                                             │   │
+│   │  • Number of teams: coordination overhead ∝ teams²                   │   │
+│   │  • Hidden dependencies: discovered during migration (unpredictable)   │   │
+│   │  • Knowledge loss: increases with system age                          │   │
+│   │  • Long-tail consumers: migration time ∝ 1 / (1 - tail_percentage)   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  "The migration you should have done at 10× scale is 10× harder     │   │
+│   │   at 100× scale, and 100× harder at 1000× scale."                    │   │
+│   │                                                                     │   │
+│   │  This is why Staff Engineers:                                        │   │
+│   │  • Design for migration from day one                                 │   │
+│   │  • Prefer reversible decisions even if slower                         │   │
+│   │  • Document dependencies explicitly                                   │   │
+│   │  • Migrate incrementally, not in big-bang                              │   │
+│   │  • Accept that some migrations are multi-year programs                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Bottleneck Identification Across Scale
+
+```
+// Pseudocode: Identifying migration bottlenecks at different scales
+
+FUNCTION identify_migration_bottlenecks(system_scale):
+    bottlenecks = []
+    
+    IF system_scale == V1:
+        // Bottleneck: Engineering time
+        bottlenecks.add("Single engineer understands everything")
+        bottlenecks.add("Can move fast but risk is high if wrong")
+        
+    ELIF system_scale == 10X:
+        // Bottleneck: Coordination overhead
+        bottlenecks.add("Multiple teams must align")
+        bottlenecks.add("Dual-system running costs")
+        bottlenecks.add("Testing across service boundaries")
+        
+    ELIF system_scale == 100X:
+        // Bottleneck: Dependency discovery
+        bottlenecks.add("Hidden dependencies emerge during migration")
+        bottlenecks.add("Long-tail consumers block completion")
+        bottlenecks.add("Knowledge silos slow decision-making")
+        bottlenecks.add("Data consistency across services")
+        
+    ELIF system_scale == MULTI_YEAR:
+        // Bottleneck: Everything
+        bottlenecks.add("Unknown dependencies")
+        bottlenecks.add("Knowledge loss (original designers gone)")
+        bottlenecks.add("Technical debt compounds")
+        bottlenecks.add("Organizational inertia")
+        bottlenecks.add("Risk aversion")
+        bottlenecks.add("Long-tail consumers (5% take 50% of time)")
+        
+    RETURN bottlenecks
+
+STAFF PRACTICE:
+At each scale, identify the dominant bottleneck and design migration to minimize it.
+```
+
 ## One-Way Doors vs. Two-Way Doors
 
 This framing, popularized at Amazon, is critical for Staff-level decision making.
@@ -1447,6 +1620,178 @@ Staff Engineers quantify the cost of migration, not just the benefit.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Detailed Cost Driver Analysis
+
+Staff Engineers break down migration costs into three dominant categories. Understanding these drivers helps make informed trade-offs.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              MIGRATION COST DRIVERS: BREAKDOWN AND EXAMPLES                 │
+│                                                                             │
+│   COST DRIVER 1: DUAL-SYSTEM RUNNING COSTS                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What it is: Infrastructure costs of running both old and new      │   │
+│   │              systems simultaneously during migration                │   │
+│   │                                                                     │   │
+│   │  Components:                                                        │   │
+│   │  ├── Compute: New system instances (even if at lower capacity)     │   │
+│   │  ├── Storage: Duplicate data storage during dual-write              │   │
+│   │  ├── Network: Cross-system replication traffic                     │   │
+│   │  ├── Monitoring: Observability for both systems                    │   │
+│   │  └── Operational overhead: On-call for both systems               │   │
+│   │                                                                     │   │
+│   │  Example: Database migration                                        │   │
+│   │  ├── Old DB: $10K/month (baseline)                                 │   │
+│   │  ├── New DB: $12K/month (during migration)                          │   │
+│   │  ├── Dual-write overhead: +20% write amplification                 │   │
+│   │  ├── Replication: $2K/month (cross-region sync)                    │   │
+│   │  ├── Monitoring: $1K/month (additional dashboards/alerts)          │   │
+│   │  └── TOTAL: $25K/month during migration vs. $10K baseline          │   │
+│   │                                                                     │   │
+│   │  Duration multiplier:                                               │   │
+│   │  • 2-month migration: $30K additional                             │   │
+│   │  • 6-month migration: $90K additional                              │   │
+│   │  • 12-month migration: $180K additional                             │   │
+│   │                                                                     │   │
+│   │  Staff insight: Dual-system costs scale with migration duration.    │   │
+│   │                Long migrations = exponentially higher infra costs.  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   COST DRIVER 2: ENGINEERING TIME                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What it is: Human effort required to plan, implement, and execute   │   │
+│   │              the migration                                            │   │
+│   │                                                                     │   │
+│   │  Components:                                                        │   │
+│   │  ├── Planning: Design, risk analysis, coordination                  │   │
+│   │  ├── Implementation: Building migration tooling, dual-write logic    │   │
+│   │  ├── Execution: Running migration, monitoring, fixing issues         │   │
+│   │  ├── Testing: Validation, shadow mode, canary analysis               │   │
+│   │  └── Coordination: Meetings, reviews, cross-team alignment          │   │
+│   │                                                                     │   │
+│   │  Example: Service decomposition migration                            │   │
+│   │  ├── Planning phase (1 month):                                      │   │
+│   │  │   ├── Design doc: 1 engineer × 2 weeks = 0.5 engineer-months   │   │
+│   │  │   ├── Risk analysis: 1 engineer × 1 week = 0.25 engineer-months │   │
+│   │  │   └── Coordination: 3 engineers × 1 week = 0.75 engineer-months │   │
+│   │  │                                                                 │   │
+│   │  ├── Implementation (3 months):                                     │   │
+│   │  │   ├── New service: 2 engineers × 3 months = 6 engineer-months   │   │
+│   │  │   ├── Dual-write logic: 1 engineer × 1 month = 1 engineer-month │   │
+│   │  │   ├── Migration tooling: 1 engineer × 2 months = 2 engineer-months│   │
+│   │  │   └── Testing infrastructure: 1 engineer × 1 month = 1 engineer-month│   │
+│   │  │                                                                 │   │
+│   │  ├── Execution (2 months):                                          │   │
+│   │  │   ├── Migration runs: 1 engineer × 2 months = 2 engineer-months │   │
+│   │  │   ├── Monitoring/on-call: 2 engineers × 2 months = 4 engineer-months│   │
+│   │  │   └── Bug fixes: 1 engineer × 1 month = 1 engineer-month        │   │
+│   │  │                                                                 │   │
+│   │  └── TOTAL: ~18 engineer-months                                      │   │
+│   │      At $200K/engineer-year fully loaded: ~$300K                     │   │
+│   │                                                                     │   │
+│   │  Hidden costs:                                                       │   │
+│   │  ├── Context switching: Engineers lose velocity on other work       │   │
+│   │  ├── Knowledge transfer: Time to bring others up to speed            │   │
+│   │  ├── Rework: Fixing issues discovered during migration               │   │
+│   │  └── Coordination overhead: Meetings, reviews, alignment            │   │
+│   │                                                                     │   │
+│   │  Staff insight: Engineering time is often 2-3× the initial estimate. │   │
+│   │                Hidden costs (coordination, rework) add 30-50%.      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   COST DRIVER 3: OPPORTUNITY COST                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What it is: Value of work NOT done because team is focused on      │   │
+│   │              migration                                                │   │
+│   │                                                                     │   │
+│   │  Components:                                                        │   │
+│   │  ├── Features not built: Product velocity reduction                  │   │
+│   │  ├── Bugs not fixed: Technical debt accumulates                      │   │
+│   │  ├── Improvements deferred: System quality degrades                 │   │
+│   │  └── Team capacity: Engineers unavailable for other priorities      │   │
+│   │                                                                     │   │
+│   │  Example: 6-month migration with 5-engineer team                    │   │
+│   │  ├── Baseline: Team builds 2 features/month                        │   │
+│   │  ├── During migration: Team builds 0.5 features/month               │   │
+│   │  ├── Features deferred: 9 features (6 months × 1.5 features)        │   │
+│   │  │   └── Estimated value: $500K (if each feature = $55K)           │   │
+│   │  │                                                                 │   │
+│   │  ├── Technical debt:                                                │   │
+│   │  │   ├── Bugs accumulate: 20 bugs deferred                          │   │
+│   │  │   ├── Fix time: 2 engineer-months                                │   │
+│   │  │   └── Cost: $33K (at $200K/engineer-year)                        │   │
+│   │  │                                                                 │   │
+│   │  └── TOTAL opportunity cost: ~$533K                                  │   │
+│   │                                                                     │   │
+│   │  Quantification challenges:                                          │   │
+│   │  ├── Feature value is uncertain (may not have been built anyway)    │   │
+│   │  ├── Technical debt cost is deferred (not immediate)                │   │
+│   │  ├── Team velocity impact is hard to measure                        │   │
+│   │  └── Long-term impact of deferred work                              │   │
+│   │                                                                     │   │
+│   │  Staff insight: Opportunity cost is often the largest cost driver,   │   │
+│   │                but hardest to quantify. Use conservative estimates.│   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   COST DRIVER COMPARISON:                                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  For a typical 6-month migration:                                  │   │
+│   │                                                                     │   │
+│   │  ┌─────────────────────┬──────────────┬──────────────────────┐   │   │
+│   │  │  Cost Driver         │  Typical %    │  Can Be Reduced By    │   │   │
+│   │  ├─────────────────────┼──────────────┼──────────────────────┤   │   │
+│   │  │  Engineering time   │  40-50%      │  Better tooling,      │   │   │
+│   │  │                     │              │  automation            │   │   │
+│   │  ├─────────────────────┼──────────────┼──────────────────────┤   │   │
+│   │  │  Opportunity cost   │  30-40%      │  Faster migration,    │   │   │
+│   │  │                     │              │  parallel work         │   │   │
+│   │  ├─────────────────────┼──────────────┼──────────────────────┤   │   │
+│   │  │  Dual-system costs  │  10-20%      │  Shorter duration,    │   │   │
+│   │  │                     │              │  right-sizing          │   │   │
+│   │  └─────────────────────┴──────────────┴──────────────────────┘   │   │
+│   │                                                                     │   │
+│   │  STAFF RULE:                                                        │   │
+│   │  Focus optimization on engineering time (biggest driver).          │   │
+│   │  Accept dual-system costs as necessary for safety.                 │   │
+│   │  Minimize opportunity cost by keeping migration duration short.     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Over-Engineering Avoidance: When Migration Costs Exceed Benefits
+
+```
+// Pseudocode: Cost-benefit analysis for migration decisions
+
+FUNCTION should_we_migrate(current_system, target_system):
+    migration_cost = estimate_migration_cost(current_system, target_system)
+    migration_benefit = estimate_migration_benefit(target_system)
+    
+    // Include risk-adjusted cost
+    probability_of_failure = estimate_failure_probability(migration)
+    failure_cost = estimate_failure_cost(migration)
+    risk_adjusted_cost = migration_cost + (probability_of_failure * failure_cost)
+    
+    // Include opportunity cost
+    opportunity_cost = estimate_opportunity_cost(migration_duration)
+    total_cost = risk_adjusted_cost + opportunity_cost
+    
+    // Payback period
+    payback_period = total_cost / migration_benefit.annual_savings
+    
+    IF payback_period > 24 months:
+        RETURN "Defer migration—costs exceed benefits"
+    ELIF payback_period > 12 months:
+        RETURN "Consider migration—marginal benefit"
+    ELSE:
+        RETURN "Proceed with migration—clear benefit"
+
+STAFF INSIGHT:
+Not every migration is worth doing. Sometimes the cost of migration exceeds
+the benefit. Staff Engineers make this calculation explicitly, not implicitly.
+```
+
 ---
 
 # Part 5: Applied Migration Scenarios
@@ -1921,6 +2266,113 @@ IMPACT:
 ├── But: old DB no longer queried by application
 ├── Recovery requires: reading old DB, backfilling to new DB
 └── Trust impact: users saw messages "disappear"
+```
+
+### Cascading Failure Timeline: Structured Analysis
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         CASCADING FAILURE TIMELINE: PARTIAL ROLLOUT CORRUPTION               │
+│                                                                             │
+│   TRIGGER (T+0: Day 1, 14:32)                                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Event: Index rebuild operation on new DB during production traffic  │   │
+│   │  Root cause: Maintenance window scheduled without considering         │   │
+│   │             dual-write phase                                          │   │
+│   │  Initial impact: New DB write latency increases from 5ms → 200ms     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   PROPAGATION (T+0 to T+2h13m)                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  T+0:05: Write timeout threshold exceeded (100ms timeout)           │   │
+│   │         → Dual-write logic: log error, continue with old DB write    │   │
+│   │                                                                     │   │
+│   │  T+0:10: Error rate spikes to 15% of writes                         │   │
+│   │         → Errors logged but not alerted (log volume too high)        │   │
+│   │         → No monitoring dashboard shows dual-write failure rate      │   │
+│   │                                                                     │   │
+│   │  T+0:30: ~5,000 messages written to old DB only                     │   │
+│   │         → Data divergence begins                                      │   │
+│   │         → Users don't notice (most reads succeed from new DB)        │   │
+│   │                                                                     │   │
+│   │  T+1:00: ~15,000 messages now missing in new DB                     │   │
+│   │         → Reconciliation job not running (not implemented)           │   │
+│   │         → No automated detection of divergence                        │   │
+│   │                                                                     │   │
+│   │  T+2:00: ~40,000 messages missing                                    │   │
+│   │         → Index rebuild completes, latency normalizes                │   │
+│   │         → New writes succeed again                                    │   │
+│   │         → But historical gap remains                                  │   │
+│   │                                                                     │   │
+│   │  T+2:13: Index rebuild completes                                     │   │
+│   │         → Write failures stop                                         │   │
+│   │         → Final count: ~50,000 messages in old DB only               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   USER-VISIBLE IMPACT (T+48h: Day 3)                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  T+48h: User reports "messages from Tuesday are missing"             │   │
+│   │         → User tries to reference conversation from Day 1            │   │
+│   │         → Messages exist in old DB but not queried                  │   │
+│   │                                                                     │   │
+│   │  T+48h:05: Investigation begins                                       │   │
+│   │         → Check new DB: message not found                            │   │
+│   │         → Check old DB: message exists                               │   │
+│   │         → Realize data divergence occurred                           │   │
+│   │                                                                     │   │
+│   │  T+48h:30: Scope assessment                                          │   │
+│   │         → Query old DB for messages not in new DB                   │   │
+│   │         → Discover 50,000 messages affected                          │   │
+│   │         → Time window: 2h13m on Day 1                                │   │
+│   │                                                                     │   │
+│   │  T+49h: User-visible symptoms                                       │   │
+│   │         → Users see incomplete conversation threads                  │   │
+│   │         → Search results missing messages                            │   │
+│   │         → Trust degradation: "messages disappeared"                  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   CONTAINMENT (T+50h to T+72h)                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  T+50h: Emergency response                                           │   │
+│   │         → Implement read fallback: check old DB if new DB miss      │   │
+│   │         → Deploy hotfix to restore visibility                       │   │
+│   │         → Users can now see all messages again                      │   │
+│   │                                                                     │   │
+│   │  T+52h: Backfill job starts                                         │   │
+│   │         → Read 50,000 messages from old DB                           │   │
+│   │         → Write to new DB (idempotent)                               │   │
+│   │         → Estimated completion: 4 hours                              │   │
+│   │                                                                     │   │
+│   │  T+56h: Backfill completes                                          │   │
+│   │         → Verify: all messages now in both DBs                       │   │
+│   │         → Remove read fallback (no longer needed)                     │   │
+│   │                                                                     │   │
+│   │  T+72h: Post-mortem and fixes                                        │   │
+│   │         → Implement reconciliation job                              │   │
+│   │         → Add dual-write failure alerts                              │   │
+│   │         → Block maintenance during dual-write phase                  │   │
+│   │         → Add read fallback as standard during migration             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   STAFF INSIGHT:                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  The failure propagated silently for 2+ hours because:                │   │
+│   │  • No monitoring of dual-write success rate                          │   │
+│   │  • No reconciliation to detect divergence                            │   │
+│   │  • Read path didn't validate completeness                            │   │
+│   │                                                                     │   │
+│   │  Detection was delayed 48 hours because:                             │   │
+│   │  • Users don't immediately notice missing historical messages        │   │
+│   │  • No automated consistency checks                                   │   │
+│   │  • Old DB not queried after read cutover                             │   │
+│   │                                                                     │   │
+│   │  Containment took 22 hours because:                                  │   │
+│   │  • Backfill job had to be built ad-hoc                               │   │
+│   │  • No pre-planned recovery procedure                                 │   │
+│   │  • Required careful verification to avoid duplicates                 │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why the Failure Wasn't Obvious Beforehand
@@ -2512,6 +2964,170 @@ Technical migrations don't happen in a vacuum. Organizational structure directly
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Human Failure Modes: Concrete Examples
+
+Staff Engineers anticipate how humans fail during migrations. These failure modes are predictable and can be designed around.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              HUMAN FAILURE MODES IN MIGRATIONS: EXAMPLES                     │
+│                                                                             │
+│   FAILURE MODE 1: CONFIGURATION MISTAKES                                    │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Human error in configuration causes incorrect         │   │
+│   │                migration behavior                                    │   │
+│   │                                                                     │   │
+│   │  Example: Rate limiter migration                                    │   │
+│   │  ├── Engineer configures canary percentage: 10%                    │   │
+│   │  ├── Typo: Sets to 100% instead of 10%                              │   │
+│   │  ├── All traffic routed to new system immediately                   │   │
+│   │  ├── New system not ready for full load                              │   │
+│   │  ├── Latency spikes, errors increase                                │   │
+│   │  └── Impact: 30 minutes of degraded service before rollback         │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Configuration validation (reject > 50% without approval)       │   │
+│   │  ├── Two-person review for critical configs                         │   │
+│   │  ├── Gradual ramp enforced by tooling (can't skip steps)           │   │
+│   │  └── Automated rollback on error threshold                           │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE MODE 2: COMMUNICATION GAPS                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Information doesn't reach the right people, or        │   │
+│   │                people misunderstand the information                  │   │
+│   │                                                                     │   │
+│   │  Example: Database migration coordination                            │   │
+│   │  ├── Migration team emails: "Migration starts Monday"                │   │
+│   │  ├── Email sent to team@company.com (generic alias)                  │   │
+│   │  ├── On-call engineer doesn't check email over weekend               │   │
+│   │  ├── Monday: Migration starts, on-call engineer surprised           │   │
+│   │  ├── On-call engineer doesn't know migration is happening            │   │
+│   │  ├── Alerts fire, on-call engineer treats as incident                │   │
+│   │  ├── On-call engineer rolls back recent deployment (wrong action)    │   │
+│   │  └── Impact: Migration delayed 2 days, confusion                     │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Explicit confirmation required (not just "sent email")          │   │
+│   │  ├── Multiple communication channels (email + Slack + calendar)    │   │
+│   │  ├── Pre-migration briefing with all stakeholders                   │   │
+│   │  └── Runbook includes "if you see X, migration is in progress"     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE MODE 3: KNOWLEDGE SILOS                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Critical knowledge exists only in one person's head    │   │
+│   │                or one team's documentation                             │   │
+│   │                                                                     │   │
+│   │  Example: Service decomposition migration                            │   │
+│   │  ├── Original designer (Alice) built system 3 years ago             │   │
+│   │  ├── Alice left company 6 months ago                                 │   │
+│   │  ├── Migration team: "Why does this service call that service?"      │   │
+│   │  ├── No documentation of the dependency                              │   │
+│   │  ├── Current team: "We don't know, it's always been that way"        │   │
+│   │  ├── Migration team assumes dependency can be removed                │   │
+│   │  ├── Migration breaks critical business logic                        │   │
+│   │  ├── Root cause: Dependency was for fraud detection (undocumented)   │   │
+│   │  └── Impact: 2 weeks to rediscover and fix                          │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Knowledge transfer before key people leave                      │   │
+│   │  ├── Document "why" decisions, not just "what"                       │   │
+│   │  ├── Dependency mapping before migration                            │   │
+│   │  ├── Interview original designers if still available                 │   │
+│   │  └── Test removal of dependencies in staging first                  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE MODE 4: ASSUMPTION ERRORS                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Humans make incorrect assumptions about system         │   │
+│   │                behavior or dependencies                               │   │
+│   │                                                                     │   │
+│   │  Example: API gateway migration                                       │   │
+│   │  ├── Migration team: "All API calls go through gateway"              │   │
+│   │  ├── Assumption: Migrating gateway migrates all traffic              │   │
+│   │  ├── Reality: Mobile app has hardcoded IP for critical path          │   │
+│   │  ├── Mobile app bypasses gateway for payment processing              │   │
+│   │  ├── Migration team doesn't know about hardcoded IP                  │   │
+│   │  ├── Gateway migration completes, mobile app still works            │   │
+│   │  ├── 2 weeks later: Mobile app update removes hardcoded IP            │   │
+│   │  ├── Mobile app now uses new gateway (unexpected)                    │   │
+│   │  ├── New gateway has different rate limits (not configured)          │   │
+│   │  └── Impact: Mobile app users rate-limited, payment failures         │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Don't assume—verify dependencies explicitly                    │   │
+│   │  ├── Network-level analysis (not just code review)                    │   │
+│   │  ├── Test with actual clients (not just documented ones)             │   │
+│   │  └── Monitor for unexpected traffic patterns                         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE MODE 5: COORDINATION BREAKDOWN                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Multiple teams fail to coordinate, causing            │   │
+│   │                inconsistent state                                     │   │
+│   │                                                                     │   │
+│   │  Example: Multi-service schema migration                              │   │
+│   │  ├── Service A team: "We'll deploy new schema Monday"                 │   │
+│   │  ├── Service B team: "We'll deploy new schema Monday"                │   │
+│   │  ├── Service C team: "We'll deploy new schema Monday"                │   │
+│   │  ├── Monday: Service A deploys, B and C delayed (blockers)          │   │
+│   │  ├── Service A now writes new schema format                          │   │
+│   │  ├── Service B still reads old schema format                         │   │
+│   │  ├── Service B can't parse Service A's data                          │   │
+│   │  ├── Service B errors, user-facing failures                          │   │
+│   │  ├── Rollback Service A, wait for B and C                            │   │
+│   │  └── Impact: 4-hour outage, coordination failure                    │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Explicit coordination checkpoints                               │   │
+│   │  ├── Don't proceed until all teams confirm readiness                 │   │
+│   │  ├── Feature flags for backward compatibility                        │   │
+│   │  ├── Staged deployment (A → B → C, not simultaneous)                │   │
+│   │  └── Automated validation of cross-service compatibility             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE MODE 6: FATIGUE AND PRESSURE                                      │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What happens: Long migrations cause fatigue, pressure causes         │   │
+│   │                shortcuts                                              │   │
+│   │                                                                     │   │
+│   │  Example: 6-month database migration                                 │   │
+│   │  ├── Month 1-4: Careful, methodical migration                         │   │
+│   │  ├── Month 5: Team tired, wants to finish                            │   │
+│   │  ├── Pressure from management: "When will this be done?"             │   │
+│   │  ├── Team skips final validation step                                │   │
+│   │  ├── "We've tested everything, let's just cut over"                  │   │
+│   │  ├── Cutover happens, 95% of data migrates correctly                 │   │
+│   │  ├── 5% of data has edge case bug (not caught in testing)           │   │
+│   │  ├── Edge case affects premium customers                             │   │
+│   │  ├── Must pause migration, fix bug, resume                           │   │
+│   │  └── Impact: 2-week delay, customer trust impact                    │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                         │   │
+│   │  ├── Don't skip validation steps (enforce in tooling)               │   │
+│   │  ├── Rotate team members to prevent fatigue                          │   │
+│   │  ├── Set realistic timelines (don't promise aggressive dates)       │   │
+│   │  ├── Celebrate milestones to maintain morale                         │   │
+│   │  └── Accept that migrations take time—don't rush                    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   STAFF INSIGHT:                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Human failure modes are predictable. Design migrations to:         │   │
+│   │  • Minimize human decision points (automate where possible)           │   │
+│   │  • Validate assumptions explicitly (don't assume)                   │   │
+│   │  • Require explicit confirmation (not just communication)            │   │
+│   │  • Document knowledge (reduce silos)                                   │   │
+│   │  • Design for fatigue (long migrations need breaks)                  │   │
+│   │                                                                     │   │
+│   │  The best migration is one that can succeed even if humans make      │   │
+│   │  mistakes.                                                           │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## How Staff Engineers Coordinate Change Across Teams
 
 ```
@@ -2865,6 +3481,188 @@ FUNCTION send_notification(user, message):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Dangerous Assumptions About Evolution
+
+Staff Engineers recognize and challenge common assumptions that lead to migration failures. These assumptions feel reasonable in the moment but become costly over time.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         DANGEROUS ASSUMPTIONS ABOUT EVOLUTION: STAFF ENGINEER VIEW           │
+│                                                                             │
+│   ASSUMPTION 1: "We Can Migrate Later"                                      │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "Let's ship this feature now. We can refactor/migrate later."     │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                 │   │
+│   │  • "Later" never comes—there's always another feature              │   │
+│   │  • Technical debt compounds—each feature adds to migration cost     │   │
+│   │  • Users depend on current behavior—changing it breaks them        │   │
+│   │  • Knowledge is lost—original designers move on                     │   │
+│   │  • Migration cost grows exponentially with system size              │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── Year 1: "Let's use JSON blob for user preferences"            │   │
+│   │  ├── Year 2: "We'll migrate to proper schema later"                 │   │
+│   │  ├── Year 3: 50M users, 100 features depend on JSON structure      │   │
+│   │  ├── Year 4: Migration requires 6 months, affects all features    │   │
+│   │  └── Cost: 10× higher than if done in Year 1                        │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Design for migration from day one                                │   │
+│   │  • Accept slightly slower initial development                       │   │
+│   │  • Pay the migration cost upfront, not deferred                    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ASSUMPTION 2: "The Abstraction Will Hold"                                 │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "We'll create an abstraction layer. It will handle future        │   │
+│   │   changes."                                                         │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                │   │
+│   │  • Abstractions leak—details matter                                │   │
+│   │  • Future requirements don't fit the abstraction                    │   │
+│   │  • Abstraction becomes harder to change than what it abstracts     │   │
+│   │  • Teams work around abstraction instead of through it             │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── Created "StorageInterface" to abstract database                │   │
+│   │  ├── Assumption: Can swap databases without code changes           │   │
+│   │  ├── Reality: SQL queries leak through abstraction                  │   │
+│   │  ├── Reality: Performance requires database-specific optimizations │   │
+│   │  ├── Reality: Abstraction becomes bottleneck                        │   │
+│   │  └── Result: Abstraction removed, direct DB access restored        │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Prefer concrete, simple designs over clever abstractions        │   │
+│   │  • Abstract only when you have 3+ concrete examples                │   │
+│   │  • Make abstractions easy to remove if wrong                       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ASSUMPTION 3: "Teams Will Coordinate"                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "When we need to migrate, all teams will coordinate smoothly."    │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                │   │
+│   │  • Teams have competing priorities                                 │   │
+│   │  • Coordination overhead grows quadratically with team count       │   │
+│   │  • Some teams can't migrate on schedule (blockers, other work)     │   │
+│   │  • Long-tail consumers take 50% of migration time                 │   │
+│   │  • Organizational changes disrupt coordination                      │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── Migration requires 5 teams to update simultaneously           │   │
+│   │  ├── 4 teams ready on schedule                                     │   │
+│   │  ├── 1 team blocked by other priority                              │   │
+│   │  ├── Migration delayed 3 months waiting for last team             │   │
+│   │  ├── 4 teams lose momentum, context switching                       │   │
+│   │  └── Result: 6-month migration becomes 12-month migration          │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Design so migrations don't require coordination                 │   │
+│   │  • Version APIs—teams migrate independently                        │   │
+│   │  • Accept that some consumers will lag                             │   │
+│   │  • Plan for long-tail, don't assume everyone migrates quickly      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ASSUMPTION 4: "We Can Always Roll Back"                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "If something goes wrong, we'll just roll back."                  │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                │   │
+│   │  • Data transformations are often irreversible                      │   │
+│   │  • New system modifies data in ways old system can't read          │   │
+│   │  • Dependencies change—old system may be deleted                   │   │
+│   │  • Rollback requires re-migration (slow, risky)                    │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── Migrated database schema, added new columns                   │   │
+│   │  ├── New system writes data in new format                          │   │
+│   │  ├── Bug discovered: data corruption in edge case                 │   │
+│   │  ├── Attempt rollback: old system can't read new format           │   │
+│   │  ├── Must fix bug in new system (can't roll back)                 │   │
+│   │  └── Result: Extended outage while fixing, no rollback option      │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Design rollback before migration, not after                     │   │
+│   │  • Test rollback in staging before production                       │   │
+│   │  • Keep old system available until migration proven                │   │
+│   │  • Prefer reversible changes (feature flags, versioning)          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ASSUMPTION 5: "The System Won't Grow That Much"                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "We have 1K users. We don't need to design for 1M users."       │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                │   │
+│   │  • Successful systems grow                                         │   │
+│   │  • Migration complexity grows faster than scale                     │   │
+│   │  • Design decisions at 1K scale become constraints at 1M scale     │   │
+│   │  • "We'll migrate when we need to" becomes impossible              │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── V1: Single database, works fine for 1K users                  │   │
+│   │  ├── Year 2: 10K users, getting slow but manageable               │   │
+│   │  ├── Year 3: 100K users, hitting limits                           │   │
+│   │  ├── Year 4: 1M users, migration required but very expensive       │   │
+│   │  ├── Migration cost: 100× higher than if designed for scale       │   │
+│   │  └── Result: System becomes bottleneck, migration is critical       │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Design for 10× current scale, plan for 100×                      │   │
+│   │  • Make scaling decisions early (sharding, partitioning)           │   │
+│   │  • Accept complexity upfront to avoid migration later               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ASSUMPTION 6: "We'll Document It Later"                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  What people think:                                                │   │
+│   │  "The code is self-documenting. We'll write docs when we have     │   │
+│   │   time."                                                            │   │
+│   │                                                                     │   │
+│   │  Why it's dangerous:                                                │   │
+│   │  • "Later" never comes                                             │   │
+│   │  • Original designers leave—knowledge is lost                      │   │
+│   │  • Migration requires understanding "why" decisions                 │   │
+│   │  • Undocumented dependencies cause migration failures               │   │
+│   │                                                                     │   │
+│   │  Real example:                                                      │   │
+│   │  ├── System has undocumented batch job dependency                  │   │
+│   │  ├── Migration team doesn't know about batch job                   │   │
+│   │  ├── Migration completes, old system deleted                        │   │
+│   │  ├── Batch job fails (depended on old system)                       │   │
+│   │  ├── Revenue impact: $2M in delayed invoices                        │   │
+│   │  └── Root cause: Undocumented dependency                            │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                   │   │
+│   │  • Document "why" decisions, not just "what"                        │   │
+│   │  • Document dependencies explicitly                                 │   │
+│   │  • Keep documentation close to code                                 │   │
+│   │  • Treat documentation as part of migration planning                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  These assumptions feel reasonable in the moment but become        │   │
+│   │  expensive over time. Staff Engineers challenge these assumptions  │   │
+│   │  explicitly and design systems that don't rely on them.            │   │
+│   │                                                                     │   │
+│   │  The antidote to dangerous assumptions:                            │   │
+│   │  • Design for migration from day one                                │   │
+│   │  • Prefer concrete over abstract                                    │   │
+│   │  • Minimize coordination requirements                               │   │
+│   │  • Plan rollback before migration                                   │   │
+│   │  • Design for scale, not current size                                │   │
+│   │  • Document as you go, not later                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 9: Diagrams
@@ -3108,6 +3906,173 @@ FUNCTION send_notification(user, message):
 │   Reconciliation catches drift; shadow reads validate correctness.          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Diagram 5: Migration Failure Blast Radius Propagation
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         MIGRATION FAILURE BLAST RADIUS: CASCADING IMPACT                    │
+│                                                                             │
+│   SCENARIO: User Service migration fails during dual-write phase           │
+│                                                                             │
+│   INITIAL FAILURE (T+0):                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │                    ┌──────────────┐                                │   │
+│   │                    │ User Service │                                │   │
+│   │                    │  (MIGRATING) │                                │   │
+│   │                    │   ⚠️ FAILURE │                                │   │
+│   │                    └──────┬───────┘                                │   │
+│   │                           │                                         │   │
+│   │                    ┌──────▼───────┐                                │   │
+│   │                    │  Dual-Write   │                                │   │
+│   │                    │   Logic Bug   │                                │   │
+│   │                    │  Data Loss    │                                │   │
+│   │                    └───────────────┘                                │   │
+│   │                                                                     │   │
+│   │   Failure: 5% of user writes lost during dual-write window         │   │
+│   │   Impact: User data inconsistency                                   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   PROPAGATION (T+5min to T+30min):                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │   ┌──────────────┐         ┌──────────────┐         ┌──────────────┐ │
+│   │   │ User Service │────────▶│ Auth Service │────────▶│ API Gateway  │ │
+│   │   │  ⚠️ FAILURE  │         │   ⚠️ AFFECTED │         │   ⚠️ AFFECTED │ │
+│   │   └──────┬───────┘         └──────┬───────┘         └──────┬───────┘ │
+│   │          │                        │                        │         │
+│   │          │                        │                        │         │
+│   │   ┌──────▼───────┐         ┌──────▼───────┐         ┌──────▼───────┐ │
+│   │   │  Payment     │         │ Notification │         │  Search      │ │
+│   │   │  Service     │         │   Service     │         │  Service     │ │
+│   │   │  ⚠️ AFFECTED │         │   ⚠️ AFFECTED │         │  ⚠️ AFFECTED │ │
+│   │   └──────┬───────┘         └──────┬───────┘         └──────┬───────┘ │
+│   │          │                        │                        │         │
+│   │          └────────┬───────────────┴────────────────────────┘         │
+│   │                   │                                                 │
+│   │            ┌──────▼───────┐                                         │
+│   │            │   Frontend   │                                         │
+│   │            │   ⚠️ AFFECTED │                                         │
+│   │            └───────────────┘                                         │
+│   │                                                                     │   │
+│   │   Propagation path:                                                 │   │
+│   │   ├── T+5min:  Auth Service can't validate users (missing data)    │   │
+│   │   ├── T+10min: Payment Service fails (user lookup fails)            │   │
+│   │   ├── T+15min: API Gateway rate limits spike (auth failures)       │   │
+│   │   ├── T+20min: Notification Service errors (invalid user IDs)      │   │
+│   │   ├── T+25min: Search Service returns incomplete results            │   │
+│   │   └── T+30min: Frontend shows errors to users                      │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   USER-VISIBLE IMPACT (T+30min):                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │   │
+│   │   │   Mobile     │  │    Web       │  │    API        │            │   │
+│   │   │    App       │  │   Frontend    │  │   Clients     │            │   │
+│   │   │  ⚠️ ERRORS   │  │  ⚠️ ERRORS   │  │  ⚠️ ERRORS   │            │   │
+│   │   └──────────────┘  └──────────────┘  └──────────────┘            │   │
+│   │                                                                     │   │
+│   │   User-visible symptoms:                                             │   │
+│   │   ├── Login failures (15% of users)                               │   │
+│   │   ├── Payment processing errors (10% of transactions)              │   │
+│   │   ├── Missing notifications (20% of users)                           │   │
+│   │   ├── Incomplete search results (5% of queries)                      │   │
+│   │   └── Overall: 12% of user requests failing                         │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   CONTAINMENT (T+45min):                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │  CONTAINMENT ACTIONS:                                       │   │
+│   │   │  ├── T+35min: Detect failure (monitoring alerts)            │   │
+│   │   │  ├── T+40min: Rollback User Service migration (feature flag)│   │
+│   │   │  ├── T+42min: Route traffic back to old system              │   │
+│   │   │  ├── T+45min: User Service stabilized                        │   │
+│   │   │  └── T+60min: Dependent services recover                     │   │
+│   │   └─────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │  DATA RECOVERY (Post-containment):                           │   │
+│   │   │  ├── Reconcile lost writes from old DB                       │   │
+│   │   │  ├── Backfill missing data to new DB                         │   │
+│   │   │  └── Verify data consistency                                │   │
+│   │   └─────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   BLAST RADIUS ANALYSIS:                                                    │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                     │   │
+│   │   Direct impact:     User Service (1 service)                       │   │
+│   │   First-order:       Auth, Payment, Notification, Search (4)        │   │
+│   │   Second-order:      API Gateway, Frontend (2)                      │   │
+│   │   User impact:       12% of requests failing                         │   │
+│   │   Duration:          60 minutes (containment + recovery)             │   │
+│   │                                                                     │   │
+│   │   STAFF INSIGHT:                                                     │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │  A failure in one service propagates to all dependent       │   │
+│   │   │  services. The blast radius is not just the failing service │   │
+│   │   │  but the entire dependency graph.                            │   │
+│   │   │                                                              │   │
+│   │   │  Design migrations to:                                        │   │
+│   │   │  • Contain failures within service boundaries                 │   │
+│   │   │  • Add circuit breakers to prevent propagation               │   │
+│   │   │  • Monitor dependent services during migration                │   │
+│   │   │  • Plan rollback for entire dependency graph                 │   │
+│   │   └─────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Blast Radius Calculation Formula
+
+```
+// Pseudocode: Calculating migration failure blast radius
+
+FUNCTION calculate_blast_radius(failing_service):
+    direct_impact = [failing_service]
+    
+    // First-order dependencies (services that call failing service)
+    first_order = get_dependent_services(failing_service)
+    
+    // Second-order dependencies (services that call first-order services)
+    second_order = []
+    FOR service IN first_order:
+        second_order.extend(get_dependent_services(service))
+    
+    // User-facing services (services that users directly interact with)
+    user_facing = filter_user_facing_services(second_order + first_order)
+    
+    // Calculate user impact
+    total_requests = sum([s.daily_requests for s in user_facing])
+    affected_requests = sum([s.daily_requests * s.failure_rate 
+                            for s in user_facing])
+    user_impact_percentage = (affected_requests / total_requests) * 100
+    
+    RETURN {
+        direct_impact: len(direct_impact),
+        first_order_impact: len(first_order),
+        second_order_impact: len(second_order),
+        user_facing_impact: len(user_facing),
+        user_impact_percentage: user_impact_percentage,
+        total_services_affected: len(direct_impact + first_order + second_order)
+    }
+
+STAFF RULE:
+If blast_radius.total_services_affected > 3:
+    Require circuit breakers and failure isolation
+If blast_radius.user_impact_percentage > 5%:
+    Require staged rollout with extended monitoring
 ```
 
 ---

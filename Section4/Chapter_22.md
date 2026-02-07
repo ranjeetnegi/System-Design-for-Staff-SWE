@@ -1016,6 +1016,77 @@ FUNCTION get_with_stampede_prevention(key, fetch_function, ttl):
         RETURN fetch_function()
 ```
 
+### Cascading Failure Timeline: Cache Stampede in Production
+
+**Staff Engineer Insight**: Understanding the exact failure propagation timeline is critical for incident response and prevention. Here's a concrete example showing how a cache stampede cascades through the system:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         CACHE STAMPEDE: CASCADING FAILURE TIMELINE (Concrete Example)      │
+│                                                                             │
+│   Scenario: News feed homepage cache expires during peak traffic            │
+│   System: 100K req/s normal, 95% cache hit rate, DB capacity: 10K req/s   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  TRIGGER PHASE                                                      │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  T+0s:    Popular homepage cache key expires (TTL=60s reached)     │   │
+│   │  T+0.1s:  First 1,000 requests hit cache → MISS                     │   │
+│   │  T+0.2s:  All 1,000 requests simultaneously query database          │   │
+│   │  T+0.3s:  Database connection pool saturated (100 connections)      │   │
+│   │                                                                     │   │
+│   │  PROPAGATION PHASE                                                  │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  T+1s:    Database query latency increases: 10ms → 200ms            │   │
+│   │  T+2s:    Application servers: request queue depth = 500            │   │
+│   │  T+3s:    Database CPU: 40% → 95% (thrashing)                      │   │
+│   │  T+5s:    Database query timeout: 200ms → 5s (timeout threshold)    │   │
+│   │  T+7s:    Application threads blocked waiting for DB: 80%          │   │
+│   │  T+10s:   New cache writes fail (DB too slow to fetch data)        │   │
+│   │  T+12s:   Cache remains empty, 100% miss rate sustained             │   │
+│   │                                                                     │   │
+│   │  USER-VISIBLE IMPACT PHASE                                          │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  T+15s:   User-facing latency: p50=500ms, p99=5s                   │   │
+│   │  T+20s:   Error rate: 0.1% → 15% (timeouts)                         │   │
+│   │  T+25s:   Users see "Something went wrong" errors                  │   │
+│   │  T+30s:   Dependent services (recommendations, ads) start timing out│   │
+│   │  T+35s:   Load balancer health checks fail (app servers overloaded)│   │
+│   │  T+40s:   Traffic shifts to healthy regions → overloads them too     │   │
+│   │                                                                     │   │
+│   │  CONTAINMENT PHASE                                                  │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  T+45s:   On-call engineer receives alert: "DB p99 latency > 2s"    │   │
+│   │  T+50s:   Circuit breaker opens for DB (stops new requests)        │   │
+│   │  T+55s:   Rate limiter activated: 5K req/s max to DB              │   │
+│   │  T+60s:   Single-fetch lock implemented: only 1 DB query per key   │   │
+│   │  T+90s:   First successful cache write (lock winner)               │   │
+│   │  T+120s:  Cache hit rate: 0% → 30% (recovering)                    │   │
+│   │  T+180s:  Cache hit rate: 30% → 85% (near normal)                  │   │
+│   │  T+300s:  System fully recovered, cache hit rate: 95%              │   │
+│   │                                                                     │   │
+│   │  ROOT CAUSE ANALYSIS                                                │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why did this happen?                                              │   │
+│   │  • No lock mechanism for cache misses                               │   │
+│   │  • Synchronized TTL expiration (all keys expire at once)          │   │
+│   │  • No circuit breaker on database path                              │   │
+│   │  • Database sized for normal load, not stampede load               │   │
+│   │                                                                     │   │
+│   │  PREVENTION (Applied After Incident)                                │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  • Implemented single-fetch locks (see code above)                 │   │
+│   │  • Added jitter to TTL: TTL ± 10% random                            │   │
+│   │  • Circuit breaker on DB with 50% failure threshold                │   │
+│   │  • Database capacity increased 2× (headroom for stampedes)         │   │
+│   │  • Cache warming before traffic ramp                                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Takeaway**: The failure propagates from cache → database → application servers → user experience → dependent services. Each phase has specific symptoms and containment strategies. Staff Engineers design systems to detect and contain failures at each phase, not just prevent the initial trigger.
+
 ### Prevention: Probabilistic Early Recomputation
 
 Refresh cache before it expires, with some randomness to prevent synchronized expiration:
@@ -1664,6 +1735,160 @@ FUNCTION get_api_version(request):
 
 # Part 6: Failure & Evolution
 
+## Failure Propagation Through Cache Layers
+
+**Staff Engineer Insight**: Understanding failure propagation paths is critical for designing resilient systems. Failures don't happen in isolation—they cascade through cache layers.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         FAILURE PROPAGATION PATH THROUGH CACHE LAYERS                       │
+│                                                                             │
+│   Example: Multi-tier caching architecture (CDN → Redis → Database)        │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  NORMAL OPERATION                                                    │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │                                                                     │   │
+│   │  [User Request]                                                     │   │
+│   │       │                                                             │   │
+│   │       ▼                                                             │   │
+│   │  [CDN Edge] ──(60% hit)──→ [Response: 5ms]                         │   │
+│   │       │                                                             │   │
+│   │       └─(40% miss)──→ [App Server]                                  │   │
+│   │                          │                                          │   │
+│   │                          ▼                                          │   │
+│   │                     [Redis Cache] ──(85% hit)──→ [Response: 10ms]  │   │
+│   │                          │                                          │   │
+│   │                          └─(15% miss)──→ [Database]                │   │
+│   │                                              │                       │   │
+│   │                                              ▼                       │   │
+│   │                                         [Response: 50ms]            │   │
+│   │                                                                     │   │
+│   │  Overall: 60% CDN hit (5ms), 34% Redis hit (10ms), 6% DB (50ms)   │   │
+│   │  Average latency: ~12ms                                              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE SCENARIO 1: CDN Outage                                      │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │                                                                     │   │
+│   │  [User Request]                                                     │   │
+│   │       │                                                             │   │
+│   │       ▼                                                             │   │
+│   │  [CDN Edge] ──(FAILURE)──→ [Timeout: 5s]                           │   │
+│   │       │                                                             │   │
+│   │       └─(100% miss)──→ [App Server]                                 │   │
+│   │                          │                                          │   │
+│   │                          ▼                                          │   │
+│   │                     [Redis Cache] ──(85% hit)──→ [Response: 10ms]  │   │
+│   │                          │                                          │   │
+│   │                          └─(15% miss)──→ [Database]                │   │
+│   │                                              │                       │   │
+│   │                                              ▼                       │   │
+│   │                                         [Response: 50ms]            │   │
+│   │                                                                     │   │
+│   │  Impact:                                                             │   │
+│   │  • 60% of traffic loses CDN benefit (5ms → 10ms or 50ms)           │   │
+│   │  • App servers see 2.5× traffic increase (60% → 100%)               │   │
+│   │  • If app servers can't handle 2.5×: cascading failure             │   │
+│   │  • Containment: App servers must handle 2.5× load                    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE SCENARIO 2: Redis Outage                                    │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │                                                                     │   │
+│   │  [User Request]                                                     │   │
+│   │       │                                                             │   │
+│   │       ▼                                                             │   │
+│   │  [CDN Edge] ──(60% hit)──→ [Response: 5ms]                         │   │
+│   │       │                                                             │   │
+│   │       └─(40% miss)──→ [App Server]                                 │   │
+│   │                          │                                          │   │
+│   │                          ▼                                          │   │
+│   │                     [Redis Cache] ──(FAILURE)──→ [Timeout: 100ms] │   │
+│   │                          │                                          │   │
+│   │                          └─(100% miss)──→ [Database]               │   │
+│   │                                              │                       │   │
+│   │                                              ▼                       │   │
+│   │                                         [Response: 50ms]            │   │
+│   │                                                                     │   │
+│   │  Impact:                                                             │   │
+│   │  • 34% of traffic loses Redis benefit (10ms → 50ms)                │   │
+│   │  • Database sees 6.7× traffic increase (6% → 40% of total)         │   │
+│   │  • Database overloaded → timeouts → cascading failure               │   │
+│   │  • Containment: Circuit breaker on DB, rate limiting                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE SCENARIO 3: Database Outage                                │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │                                                                     │   │
+│   │  [User Request]                                                     │   │
+│   │       │                                                             │   │
+│   │       ▼                                                             │   │
+│   │  [CDN Edge] ──(60% hit)──→ [Response: 5ms]                         │   │
+│   │       │                                                             │   │
+│   │       └─(40% miss)──→ [App Server]                                 │   │
+│   │                          │                                          │   │
+│   │                          ▼                                          │   │
+│   │                     [Redis Cache] ──(85% hit)──→ [Response: 10ms]  │   │
+│   │                          │                                          │   │
+│   │                          └─(15% miss)──→ [Database]                │   │
+│   │                                              │                       │   │
+│   │                                              ▼                       │   │
+│   │                                         [FAILURE: 5s timeout]       │   │
+│   │                                                                     │   │
+│   │  Impact:                                                             │   │
+│   │  • 6% of requests fail completely (no fallback)                     │   │
+│   │  • Users see errors for cache misses                                │   │
+│   │  • Containment: Serve stale cache data (if acceptable)               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE SCENARIO 4: Cascading Failure (CDN → Redis → DB)           │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │                                                                     │   │
+│   │  Trigger: CDN outage                                                │   │
+│   │                                                                     │   │
+│   │  T+0s:   CDN fails → 100% traffic hits app servers                 │   │
+│   │  T+5s:   App servers overloaded (2.5× traffic)                      │   │
+│   │  T+10s:  App servers slow → Redis timeouts increase                 │   │
+│   │  T+15s:  Redis appears "down" (actually app servers slow)           │   │
+│   │  T+20s:  All traffic falls back to database                         │   │
+│   │  T+25s:  Database overloaded → timeouts                             │   │
+│   │  T+30s:  Full system outage                                          │   │
+│   │                                                                     │   │
+│   │  Root cause: CDN failure                                            │   │
+│   │  Propagation: CDN → App servers → Redis → Database                  │   │
+│   │  Blast radius: All user-facing requests                             │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • App servers sized for 3× normal load (headroom)                 │   │
+│   │  • Circuit breakers between each layer                              │   │
+│   │  • Rate limiting on database path                                   │   │
+│   │  • Graceful degradation (serve stale data)                          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   KEY INSIGHTS:                                                             │
+│   ──────────────────────────────────────────────────────────────────────   │
+│   1. Each cache layer failure increases load on next layer                 │   │
+│   2. Failure propagation is exponential (not linear)                       │   │
+│   3. Containment requires headroom at each layer                            │   │
+│   4. Circuit breakers prevent cascading failures                           │   │
+│   5. Stale data is better than no data (for most use cases)                │   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Design Principles for Failure Propagation**:
+
+1. **Headroom at each layer**: Each layer must handle failure of the layer above it
+2. **Circuit breakers**: Fail fast rather than cascade slowly
+3. **Graceful degradation**: Serve stale data rather than fail completely
+4. **Monitoring**: Detect failures at each layer before they propagate
+5. **Blast radius containment**: Limit impact of single-layer failures
+
 ## What Happens When Cache Goes Down
 
 ### Immediate Impact
@@ -1721,6 +1946,115 @@ CLASS CacheWithDegradation:
             this.circuit_breaker.record_failure()
             THROW ServiceDegradedError("High load, please retry")
 ```
+
+### Slow Cache Dependency: The Silent Killer
+
+**Staff Engineer Insight**: Total cache failure is obvious, but slow cache dependencies are insidious. When Redis latency increases from 1ms to 500ms, your system doesn't fail completely—it degrades slowly, making diagnosis harder.
+
+**The Problem**: Cache is "up" but slow, causing cascading timeouts:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         SLOW CACHE DEPENDENCY: PARTIAL FAILURE TIMELINE                    │
+│                                                                             │
+│   Scenario: Redis network partition causes latency spikes                  │
+│   Normal Redis latency: 1ms, Degraded latency: 500ms                       │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  T+0s:    Redis primary node loses network connectivity             │   │
+│   │  T+1s:    Redis Sentinel detects failure, starts failover           │   │
+│   │  T+2s:    Client connections timeout: 1ms → 100ms (timeout)         │   │
+│   │  T+3s:    Clients retry → hit replica (not yet promoted)           │   │
+│   │  T+5s:    Replica read latency: 1ms → 500ms (network issues)       │   │
+│   │  T+10s:   Application cache.get() calls: 1ms → 500ms                │   │
+│   │  T+15s:   Request latency increases: p50=50ms → p50=550ms            │   │
+│   │  T+20s:   Application thread pool exhausted (threads waiting on cache)│ │
+│   │  T+30s:   New requests queued, user-facing latency: p99=2s         │   │
+│   │  T+45s:   Some requests timeout (5s threshold) → hit database        │   │
+│   │  T+60s:   Database load increases: 5K → 15K req/s (timeout fallback)│   │
+│   │  T+90s:   Database CPU spikes, query latency increases              │   │
+│   │  T+120s:  Full system degradation (cache slow + DB overloaded)       │   │
+│   │                                                                     │   │
+│   │  Why This Is Worse Than Total Failure:                               │   │
+│   │  • No clear "cache is down" signal (it's "up" but slow)            │   │
+│   │  • Timeouts cause retries → amplifies load                          │   │
+│   │  • Fallback to DB happens gradually → DB overloads slowly           │   │
+│   │  • Harder to diagnose (is it cache? network? DB? all of them?)     │   │
+│   │  • Circuit breaker may not trigger (requests eventually succeed)    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Prevention: Aggressive Timeouts and Circuit Breakers**
+
+```
+CLASS CacheWithLatencyProtection:
+    CONSTRUCTOR(cache_client, db_client):
+        this.cache = cache_client
+        this.db = db_client
+        this.cache_timeout = 50 milliseconds  // Aggressive timeout
+        this.circuit_breaker = NEW CircuitBreaker(
+            failure_threshold = 10,
+            latency_threshold = 100 milliseconds,  // Trip if p50 > 100ms
+            timeout = 30 seconds
+        )
+    
+    FUNCTION get(key, fetch_function):
+        // Try cache with aggressive timeout
+        TRY:
+            WITH TIMEOUT(this.cache_timeout):
+                cached = this.cache.GET(key)
+            IF cached EXISTS:
+                this.circuit_breaker.record_success()
+                RETURN deserialize(cached)
+        CATCH (CacheError, TimeoutError):
+            // Cache slow or down - record failure
+            this.circuit_breaker.record_failure()
+            metrics.increment("cache.slow_or_down")
+        
+        // If circuit is open OR cache is consistently slow, skip cache
+        IF this.circuit_breaker.is_open():
+            log.warning("Cache circuit open, skipping cache for " + key)
+            RETURN fetch_function()  // Go straight to DB
+        
+        // Cache miss - try database
+        RETURN fetch_function()
+    
+    FUNCTION monitor_cache_health():
+        // Background task: monitor cache latency
+        WHILE true:
+            start = current_time()
+            TRY:
+                WITH TIMEOUT(100 milliseconds):
+                    this.cache.GET("__health_check__")
+                latency = current_time() - start
+                
+                IF latency > 50 milliseconds:
+                    metrics.histogram("cache.latency.degraded", latency)
+                    alert.warn("Cache latency elevated: " + latency + "ms")
+                
+                this.circuit_breaker.record_latency(latency)
+            CATCH Exception:
+                this.circuit_breaker.record_failure()
+            
+            SLEEP(10 seconds)
+```
+
+**Key Design Decisions**:
+
+1. **Aggressive timeouts (50ms)**: Fail fast rather than wait 500ms. Better to hit DB immediately than wait on slow cache.
+2. **Latency-based circuit breaker**: Trip not just on errors, but on sustained high latency.
+3. **Skip cache when degraded**: If cache is consistently slow, bypass it entirely rather than degrading the whole system.
+4. **Separate health check**: Monitor cache latency independently from request path.
+
+**Trade-offs**:
+- **Pro**: System degrades gracefully, doesn't cascade failures
+- **Pro**: Clear signal when cache is slow (circuit breaker state)
+- **Con**: Lower cache hit rate during degradation (but that's acceptable)
+- **Con**: More complex than simple cache-aside pattern
+
+**When to use**: Critical paths where cache latency directly impacts user experience (API gateway, rate limiters, session lookups).
 
 ### Redis High Availability Setup
 
@@ -1822,6 +2156,174 @@ For production systems, single Redis is unacceptable:
 ```
 
 **Add when**: Single Redis node is bottleneck, need multi-region.
+
+### V1 → 10× → 100× Growth Model: Bottleneck Identification Before Failure
+
+**Staff Engineer Insight**: Design caching strategy not just for current scale, but with explicit growth modeling. Identify bottlenecks BEFORE they become failures.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         CACHING EVOLUTION: V1 → 10× → 100× GROWTH MODEL                    │
+│                                                                             │
+│   Example: News feed API caching strategy evolution                         │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  V1: 10K users, 1K req/s                                            │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Architecture:                                                      │   │
+│   │  [App] → [PostgreSQL]                                               │   │
+│   │                                                                     │   │
+│   │  Metrics:                                                          │   │
+│   │  • DB CPU: 20%                                                     │   │
+│   │  • DB cost: $200/month                                             │   │
+│   │  • p99 latency: 50ms                                               │   │
+│   │  • No caching needed                                               │   │
+│   │                                                                     │   │
+│   │  Bottleneck Analysis (Projected to 10×):                           │   │
+│   │  • At 10K req/s: DB CPU would be 200% (impossible)                 │   │
+│   │  • At 10K req/s: DB cost would be $2,000/month                     │   │
+│   │  • At 10K req/s: p99 latency would be 500ms (SLO violation)        │   │
+│   │                                                                     │   │
+│   │  Decision: Add Redis cache BEFORE hitting 10× scale                │   │
+│   │  Trigger: When traffic reaches 5K req/s (50% of 10× threshold)     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  10×: 100K users, 10K req/s                                        │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Architecture:                                                      │   │
+│   │  [App] → [Redis] → [PostgreSQL]                                     │   │
+│   │                                                                     │   │
+│   │  Metrics:                                                          │   │
+│   │  • Cache hit rate: 90%                                             │   │
+│   │  • DB CPU: 25% (handles 1K req/s after cache)                      │   │
+│   │  • Redis CPU: 40%                                                  │   │
+│   │  • Redis memory: 8GB / 16GB                                        │   │
+│   │  • Total cost: $200 (DB) + $300 (Redis) = $500/month               │   │
+│   │  • p99 latency: 10ms (cache) / 50ms (DB miss)                      │   │
+│   │                                                                     │   │
+│   │  Bottleneck Analysis (Projected to 100×):                          │   │
+│   │  • At 100K req/s: Redis CPU would be 400% (impossible)              │   │
+│   │  • At 100K req/s: Redis memory would be 80GB (single node limit)   │   │
+│   │  • At 100K req/s: DB would see 10K req/s (still manageable)        │   │
+│   │  • At 100K req/s: Network bandwidth: 1Gbps → 10Gbps needed         │   │
+│   │                                                                     │   │
+│   │  Decision: Plan Redis Cluster BEFORE hitting 100× scale            │   │
+│   │  Trigger: When traffic reaches 50K req/s (50% of 100× threshold)   │   │
+│   │                                                                     │   │
+│   │  Pre-emptive Actions:                                               │   │
+│   │  • Test Redis Cluster in staging                                   │   │
+│   │  • Implement cache sharding logic                                   │   │
+│   │  • Add CDN for public feed endpoints                               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  100×: 1M users, 100K req/s                                       │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Architecture:                                                      │   │
+│   │  [CDN] → [App] → [Redis Cluster] → [PostgreSQL Cluster]            │   │
+│   │         ↓                                                            │   │
+│   │    [Local Cache]                                                    │   │
+│   │                                                                     │   │
+│   │  Metrics:                                                          │   │
+│   │  • CDN hit rate: 60% (public feeds)                                 │   │
+│   │  • Redis hit rate: 85% (personalized feeds)                         │   │
+│   │  • Local cache hit rate: 5% (ultra-hot data)                       │   │
+│   │  • DB CPU: 30% (handles 10K req/s after all caches)                │   │
+│   │  • Redis Cluster: 6 nodes, 30% CPU each                            │   │
+│   │  • Total cost: $1,000 (DB) + $1,800 (Redis) + $500 (CDN) = $3,300  │   │
+│   │  • p99 latency: 5ms (CDN) / 8ms (Redis) / 50ms (DB miss)           │   │
+│   │                                                                     │   │
+│   │  Bottleneck Analysis (Projected to 1000×):                         │   │
+│   │  • At 1M req/s: CDN bandwidth costs would be $50K/month            │   │
+│   │  • At 1M req/s: Redis Cluster would need 60 nodes                  │   │
+│   │  • At 1M req/s: Multi-region becomes mandatory                    │   │
+│   │  • At 1M req/s: Database sharding required                         │   │
+│   │                                                                     │   │
+│   │  Decision: Plan multi-region caching BEFORE hitting 1000×         │   │
+│   │  Trigger: When traffic reaches 500K req/s (50% of 1000× threshold) │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   KEY PRINCIPLES:                                                           │
+│   ──────────────────────────────────────────────────────────────────────   │
+│   1. Identify bottlenecks at 10× BEFORE they become failures at 10×      │   │
+│   2. Model costs at each scale point (V1, 10×, 100×, 1000×)             │   │
+│   3. Test next-tier architecture BEFORE you need it                        │   │
+│   4. Document capacity limits explicitly (CPU, memory, network, cost)      │   │
+│   5. Set trigger thresholds at 50% of next scale point                    │   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Bottleneck Identification Framework**:
+
+For each scale point, explicitly model:
+1. **CPU**: Can current architecture handle 10× CPU load?
+2. **Memory**: Will data fit in available memory at 10×?
+3. **Network**: Will bandwidth be sufficient at 10×?
+4. **Cost**: Is cost growth linear or exponential? Can we afford 10×?
+5. **Latency**: Will p99 latency meet SLO at 10×?
+6. **Operational complexity**: Can team operate this at 10×?
+
+**Example Bottleneck Analysis**:
+
+```
+FUNCTION analyze_cache_bottlenecks(current_traffic, cache_config):
+    // Model bottlenecks at 10× and 100× scale
+    projected_10x = current_traffic * 10
+    projected_100x = current_traffic * 100
+    
+    bottlenecks = []
+    
+    // CPU bottleneck
+    current_cpu = cache_config.cpu_utilization_percent
+    IF current_cpu * 10 > 100:
+        bottlenecks.append({
+            type: "CPU",
+            scale: "10×",
+            current: current_cpu + "%",
+            projected: (current_cpu * 10) + "%",
+            action: "Add Redis Cluster or increase node size"
+        })
+    
+    // Memory bottleneck
+    current_memory_gb = cache_config.memory_used_gb
+    max_memory_gb = cache_config.memory_max_gb
+    projected_memory_10x = current_memory_gb * 10
+    
+    IF projected_memory_10x > max_memory_gb:
+        bottlenecks.append({
+            type: "Memory",
+            scale: "10×",
+            current: current_memory_gb + "GB",
+            projected: projected_memory_10x + "GB",
+            max: max_memory_gb + "GB",
+            action: "Shard data across Redis Cluster"
+        })
+    
+    // Cost bottleneck
+    current_cost = cache_config.monthly_cost_usd
+    projected_cost_10x = current_cost * 10
+    
+    IF projected_cost_10x > cache_config.cost_budget_usd:
+        bottlenecks.append({
+            type: "Cost",
+            scale: "10×",
+            current: "$" + current_cost + "/month",
+            projected: "$" + projected_cost_10x + "/month",
+            budget: "$" + cache_config.cost_budget_usd + "/month",
+            action: "Optimize TTLs, compress data, or use cheaper tier"
+        })
+    
+    RETURN bottlenecks
+```
+
+**When to Evolve**: Set explicit thresholds, not vague "when needed":
+
+- **Add Redis**: When DB CPU > 50% OR traffic > 50% of DB capacity
+- **Add CDN**: When global users > 3 regions OR CDN cost < origin cost
+- **Add Redis Cluster**: When single node CPU > 60% OR memory > 70%
+- **Add local cache**: When Redis p99 latency > 10ms AND hit rate > 95%
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -3709,6 +4211,240 @@ CLASS TieredCache:
         RETURN data
 ```
 
+### Top 2 Cost Drivers: What Actually Costs Money
+
+**Staff Engineer Insight**: At scale, 80% of cache costs come from 2 sources. Optimize these first.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         CACHE COST ANALYSIS: TOP 2 DRIVERS (80/20 Rule)                    │
+│                                                                             │
+│   Example: 100M requests/day, 90% hit rate, 10KB average value size       │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  COST DRIVER #1: MEMORY (60% of total cost)                        │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why it dominates:                                                 │   │
+│   │  • Memory is the most expensive component of Redis/ElastiCache     │   │
+│   │  • Memory scales linearly with data size                            │   │
+│   │  • Can't easily "scale down" memory (unlike CPU)                   │   │
+│   │                                                                     │   │
+│   │  Cost breakdown:                                                   │   │
+│   │  • 100M requests/day × 10% miss rate = 10M cache writes/day       │   │
+│   │  • 10M writes × 10KB = 100GB/day written                          │   │
+│   │  • With 24h TTL: ~100GB memory needed                              │   │
+│   │  • AWS ElastiCache r6g.xlarge (26GB): $400/month                   │   │
+│   │  • Need 4 nodes: $1,600/month                                      │   │
+│   │                                                                     │   │
+│   │  Optimization strategies:                                          │   │
+│   │  1. Compress values: 10KB → 3KB = 70% memory reduction             │   │
+│   │     → 1 node instead of 4 = $1,200/month savings                   │   │
+│   │  2. Shorter TTLs: 24h → 1h = 96% memory reduction                 │   │
+│   │     → But increases DB load (trade-off)                            │   │
+│   │  3. Evict cold data aggressively: LRU with maxmemory-policy          │   │
+│   │  4. Don't cache everything: Only cache hot data (top 20%)          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  COST DRIVER #2: NETWORK BANDWIDTH (20% of total cost)             │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why it matters:                                                    │   │
+│   │  • CDN bandwidth costs scale with traffic                          │   │
+│   │  • Cross-region cache replication bandwidth                        │   │
+│   │  • Data transfer out of cloud (egress costs)                       │   │
+│   │                                                                     │   │
+│   │  Cost breakdown:                                                   │   │
+│   │  • 100M requests/day × 10KB = 1TB/day = 30TB/month                 │   │
+│   │  • CDN bandwidth: $0.01-0.10/GB                                     │   │
+│   │  • 30TB × $0.05/GB = $1,500/month                                  │   │
+│   │  • Cloud egress: $0.09/GB (first 10TB free)                        │   │
+│   │  • 20TB × $0.09/GB = $1,800/month                                  │   │
+│   │                                                                     │   │
+│   │  Optimization strategies:                                          │   │
+│   │  1. Higher cache hit rate: 90% → 95% = 50% bandwidth reduction    │   │
+│   │     → $750-900/month savings                                       │   │
+│   │  2. Compress responses: 10KB → 3KB = 70% bandwidth reduction     │   │
+│   │  3. Use regional CDN: Lower egress costs                            │   │
+│   │  4. Cache at edge: Reduce origin bandwidth                         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   Other costs (20% combined):                                               │
+│   • CPU: Usually not a bottleneck, scales well                             │   │
+│   • Storage: Included in memory costs                                       │   │
+│   • Requests: Negligible for Redis, small for CDN                          │   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cost Scaling Model: How Costs Grow
+
+**Staff Engineer Insight**: Model cost growth explicitly. Is it linear, sub-linear, or exponential?
+
+```
+FUNCTION model_cache_costs(traffic_req_per_sec, hit_rate, avg_value_size_kb):
+    // Model costs at different scale points
+    scale_points = [1, 10, 100, 1000]  // 1×, 10×, 100×, 1000×
+    
+    costs = []
+    
+    FOR EACH scale IN scale_points:
+        traffic = traffic_req_per_sec * scale
+        daily_requests = traffic * 86400  // requests per day
+        
+        // Memory cost (dominant)
+        cache_writes_per_day = daily_requests * (1 - hit_rate)
+        memory_needed_gb = (cache_writes_per_day * avg_value_size_kb / 1024 / 1024) * ttl_days
+        memory_cost = (memory_needed_gb / 26) * 400  // $400 per 26GB node
+        
+        // Bandwidth cost
+        bandwidth_gb_per_month = (daily_requests * avg_value_size_kb / 1024 / 1024) * 30
+        bandwidth_cost = bandwidth_gb_per_month * 0.05  // $0.05/GB CDN
+        
+        total_cost = memory_cost + bandwidth_cost
+        
+        costs.append({
+            scale: scale + "×",
+            traffic_req_per_sec: traffic,
+            memory_cost: "$" + memory_cost + "/month",
+            bandwidth_cost: "$" + bandwidth_cost + "/month",
+            total_cost: "$" + total_cost + "/month",
+            cost_per_request: "$" + (total_cost / (daily_requests * 30) * 1000000) + " per 1M requests"
+        })
+    
+    RETURN costs
+
+// Example output:
+// Scale | Traffic | Memory Cost | Bandwidth Cost | Total Cost | Cost/1M reqs
+// 1×    | 1K/s    | $400        | $150           | $550       | $0.21
+// 10×   | 10K/s   | $4,000      | $1,500         | $5,500     | $0.21 (linear)
+// 100×  | 100K/s  | $40,000     | $15,000        | $55,000    | $0.21 (linear)
+// 1000× | 1M/s    | $400,000    | $150,000       | $550,000   | $0.21 (linear)
+
+// Key insight: Cache costs scale LINEARLY with traffic
+// This is why caching is cost-effective: DB costs scale worse (connection pools, etc.)
+```
+
+**Cost Scaling Characteristics**:
+
+1. **Memory costs**: Linear with data size (not traffic directly, but data size grows with traffic)
+2. **Bandwidth costs**: Linear with traffic volume
+3. **CPU costs**: Sub-linear (can handle 2-3× traffic on same CPU)
+4. **Total**: Approximately linear with traffic
+
+**When caching becomes expensive**: When hit rate is low (<70%). At 50% hit rate, you're paying for cache AND database.
+
+### What Staff Engineers Do NOT Build
+
+**Staff Engineer Insight**: The best optimization is not building unnecessary complexity. Here's what Staff Engineers intentionally avoid:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         WHAT STAFF ENGINEERS DO NOT BUILD                                    │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  1. DO NOT: Cache Everything                                         │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why: Low hit rate = wasted memory + complexity                    │   │
+│   │                                                                     │   │
+│   │  Example mistake:                                                   │   │
+│   │  • Cache user search queries (unique per user)                     │   │
+│   │  • Hit rate: 5% (queries rarely repeated)                         │   │
+│   │  • Cost: $2,000/month for cache, saves $200/month in DB            │   │
+│   │  • Net: -$1,800/month (losing money)                               │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                    │   │
+│   │  • Only cache data with >70% hit rate potential                    │   │
+│   │  • Measure hit rate BEFORE adding cache                            │   │
+│   │  • If hit rate < 50%, don't cache (not worth complexity)          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  2. DO NOT: Over-Engineer Cache Invalidation                        │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why: Complex invalidation is bug-prone and expensive              │   │
+│   │                                                                     │   │
+│   │  Example mistake:                                                   │   │
+│   │  • Build distributed invalidation system with event bus            │   │
+│   │  • Complex: 5 services, 3 message queues, eventual consistency    │   │
+│   │  • Cost: 2 engineers × 3 months = $120K                            │   │
+│   │  • Benefit: 1ms faster cache updates                              │   │
+│   │  • ROI: Negative (1ms not worth $120K)                              │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                    │   │
+│   │  • Start with TTL (simplest)                                        │   │
+│   │  • Only add invalidation if staleness causes business problems     │   │
+│   │  • Prefer versioned keys over distributed invalidation              │   │
+│   │  • Accept 5-minute staleness if it saves 3 months of engineering   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  3. DO NOT: Build Custom Cache Infrastructure                       │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why: Redis/Memcached/CDN exist and are battle-tested              │   │
+│   │                                                                     │   │
+│   │  Example mistake:                                                   │   │
+│   │  • Build custom distributed cache in application code               │   │
+│   │  • 6 months of development, ongoing maintenance                    │   │
+│   │  • Bugs: Memory leaks, race conditions, consistency issues          │   │
+│   │  • Cost: $200K+ engineering time                                   │   │
+│   │  • Benefit: None (Redis does this better)                          │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                    │   │
+│   │  • Use Redis for application cache                                  │   │
+│   │  • Use CDN for static/public content                                │   │
+│   │  • Use managed services (ElastiCache, Cloud CDN)                    │   │
+│   │  • Only build custom if existing solutions don't fit (rare)        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  4. DO NOT: Cache Security-Critical Data                           │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why: Stale security data = security vulnerability                  │   │
+│   │                                                                     │   │
+│   │  Example mistake:                                                   │   │
+│   │  • Cache user permissions with 1-hour TTL                            │   │
+│   │  • User's permissions revoked → still cached for 1 hour              │   │
+│   │  • User accesses data they shouldn't (security breach)              │   │
+│   │  • Cost: Security incident, potential legal liability                │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                    │   │
+│   │  • Never cache: Permissions, auth tokens, PII                        │   │
+│   │  • Cache with immediate invalidation: User profile (non-security)   │   │
+│   │  • Accept performance hit for security-critical paths               │   │
+│   │  • Use cache for performance, not for security bypass                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  5. DO NOT: Optimize Prematurely                                     │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Why: Optimize when you have data, not speculation                  │   │
+│   │                                                                     │   │
+│   │  Example mistake:                                                   │   │
+│   │  • Add Redis cluster for 1K req/s traffic                           │   │
+│   │  • Cost: $2,000/month                                               │   │
+│   │  • Benefit: None (single Redis node handles 100K req/s)             │   │
+│   │  • Over-engineering: 100× more complex than needed                  │   │
+│   │                                                                     │   │
+│   │  Staff approach:                                                    │   │
+│   │  • Start simple: Single Redis node                                  │   │
+│   │  • Measure: Hit rate, latency, costs                                │   │
+│   │  • Optimize when metrics show bottleneck                            │   │
+│   │  • Rule: Don't optimize until you have data proving need            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Decision Framework**: Before adding any cache optimization, ask:
+
+1. **Do we have data?** (hit rate, latency, costs)
+2. **Is the problem real?** (not hypothetical)
+3. **Is the ROI positive?** (savings > engineering cost)
+4. **Can we measure impact?** (before/after metrics)
+5. **Is it the simplest solution?** (avoid over-engineering)
+
+If any answer is "no", don't build it.
+
 ### Optimization 4: Eviction Policy Tuning
 
 ```
@@ -4556,6 +5292,256 @@ Without cache standards, every team:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Ownership Boundaries: Who Owns What
+
+**Staff Engineer Insight**: Unclear ownership causes incidents. Define explicit boundaries for cache infrastructure, cache clients, and cache usage.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         CACHE OWNERSHIP BOUNDARIES                                            │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  PLATFORM TEAM (Infrastructure Ownership)                           │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Owns:                                                             │   │
+│   │  • Redis cluster provisioning, scaling, monitoring                 │   │
+│   │  • CDN configuration and edge location management                  │   │
+│   │  • Cache infrastructure SLAs (uptime, latency)                     │   │
+│   │  • Capacity planning for shared cache clusters                     │   │
+│   │  • Security: Network isolation, authentication                      │   │
+│   │  • Incident response: Cache infrastructure failures                │   │
+│   │                                                                     │   │
+│   │  Does NOT own:                                                     │   │
+│   │  • What data teams cache (application decision)                     │   │
+│   │  • Cache key naming (application decision)                          │   │
+│   │  • TTL values (application decision)                               │   │
+│   │  • Cache invalidation logic (application decision)                 │   │
+│   │                                                                     │   │
+│   │  Escalation path:                                                  │   │
+│   │  • "Redis cluster is down" → Platform team                         │   │
+│   │  • "Cache hit rate is low" → Application team                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  PLATFORM LIBRARIES TEAM (Client Ownership)                         │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Owns:                                                             │   │
+│   │  • Standard cache client library                                    │   │
+│   │  • Key naming validation                                            │   │
+│   │  • Default timeouts, retries, circuit breakers                     │   │
+│   │  • Standard metrics and observability                              │   │
+│   │  • Documentation and examples                                      │   │
+│   │                                                                     │   │
+│   │  Does NOT own:                                                     │   │
+│   │  • Application-specific cache logic                                │   │
+│   │  • Business logic for cache invalidation                           │   │
+│   │  • Cache key design (validates format, not content)                │   │
+│   │                                                                     │   │
+│   │  Escalation path:                                                  │   │
+│   │  • "Cache client bug" → Libraries team                             │   │
+│   │  • "How do I cache X?" → Libraries team (documentation)            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  APPLICATION TEAMS (Usage Ownership)                               │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Owns:                                                             │   │
+│   │  • What to cache (data selection)                                  │   │
+│   │  • Cache key design (content, not format)                          │   │
+│   │  • TTL values (staleness tolerance)                                │   │
+│   │  • Cache invalidation logic (when to invalidate)                  │   │
+│   │  • Cache hit rate targets                                          │   │
+│   │  • Application-specific cache patterns                             │   │
+│   │                                                                     │   │
+│   │  Does NOT own:                                                     │   │
+│   │  • Cache infrastructure (uses Platform team's clusters)            │   │
+│   │  • Cache client implementation (uses Libraries team's client)        │   │
+│   │  • Cache infrastructure SLAs (Platform team responsibility)        │   │
+│   │                                                                     │   │
+│   │  Escalation path:                                                  │   │
+│   │  • "My cache hit rate is low" → Application team (optimize usage)    │   │
+│   │  • "Cache client doesn't support X" → Libraries team (feature req) │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   SHARED RESPONSIBILITY:                                                    │
+│   • Cache capacity planning (Platform provides capacity, Apps forecast)   │   │
+│   • Cost optimization (Platform optimizes infra, Apps optimize usage)       │   │
+│   • Incident response (Platform fixes infra, Apps fix usage bugs)         │   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Common Ownership Conflicts**:
+
+1. **"Cache is slow"**: 
+   - Platform team: "Your keys are too large, optimize your data"
+   - Application team: "Your Redis cluster is overloaded, scale it"
+   - **Resolution**: Define SLAs. Platform guarantees <5ms p99 for standard-sized keys. Apps guarantee key size <10KB.
+
+2. **"Cache hit rate is low"**:
+   - Platform team: "Not our problem, optimize your caching strategy"
+   - Application team: "Cache client doesn't support our use case"
+   - **Resolution**: Libraries team provides guidance. Apps own hit rate, Libraries provide tools.
+
+3. **"Cache costs are high"**:
+   - Platform team: "Apps are caching too much"
+   - Application team: "Platform charges too much"
+   - **Resolution**: Shared cost model. Platform shows per-team costs. Apps optimize usage.
+
+### Human Failure Modes: How Teams Fail with Caching
+
+**Staff Engineer Insight**: Most cache incidents are caused by human error, not infrastructure failure. Design systems to prevent common mistakes.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│         HUMAN FAILURE MODES IN CACHING                                       │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #1: Copy-Paste Cache Keys                            │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Engineer copies cache key from another service                  │   │
+│   │  • Forgets to change service name in key                            │   │
+│   │  • Two services share same cache key → data corruption              │   │
+│   │                                                                     │   │
+│   │  Example:                                                           │   │
+│   │  Service A: "v1:user-service:profile:123"                          │   │
+│   │  Service B: "v1:user-service:profile:123" (copied, forgot to change)│ │
+│   │  Result: Service B overwrites Service A's cache                    │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Cache client validates service name matches application name     │   │
+│   │  • Code review checklist: "Did you change service name?"            │   │
+│   │  • Automated test: Verify cache keys are unique per service         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #2: Infinite TTL                                      │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Engineer sets TTL = 0 (infinite) for "performance"                │   │
+│   │  • Data becomes stale, users see wrong data                          │   │
+│   │  • No way to invalidate (no invalidation logic)                    │   │
+│   │  • Requires emergency cache purge                                   │   │
+│   │                                                                     │   │
+│   │  Example:                                                           │   │
+│   │  cache.SET("user:123", data, TTL = 0)  // Infinite TTL             │   │
+│   │  User updates profile → cache never updates                         │   │
+│   │  Users see stale profile for days/weeks                            │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Cache client enforces max TTL (e.g., 7 days)                     │   │
+│   │  • Code review: Flag TTL = 0 or TTL > max                           │   │
+│   │  • Monitoring: Alert on keys with TTL > threshold                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #3: Cache Stampede During Deploy                     │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Deploy clears cache (intentional or bug)                         │   │
+│   │  • All traffic hits cold cache → 100% miss rate                    │   │
+│   │  • Database overloaded, service degrades                            │   │
+│   │                                                                     │   │
+│   │  Example:                                                           │   │
+│   │  Deploy script: redis.FLUSHALL()  // Clears all cache              │   │
+│   │  Traffic: 100K req/s → all miss → DB sees 100K req/s               │   │
+│   │  Database capacity: 10K req/s → overloaded                         │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Never flush cache in production (use versioned keys instead)    │   │
+│   │  • Gradual traffic shift (10% → 50% → 100%)                        │   │
+│   │  • Cache warming before traffic ramp                                │   │
+│   │  • Circuit breaker on database path                                 │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #4: Wrong Cache for Use Case                          │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Engineer uses Redis for session storage (fine)                  │   │
+│   │  • Later uses same Redis for rate limiting (fine)                  │   │
+│   │  • Then uses same Redis for job queue (wrong!)                     │   │
+│   │  • Job queue blocks Redis → sessions and rate limits fail           │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Separate Redis clusters per use case (sessions, cache, queues) │   │
+│   │  • Documentation: "Which Redis cluster should I use?"              │   │
+│   │  • Code review: Verify Redis cluster matches use case               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #5: No Monitoring                                     │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Cache hit rate drops from 90% → 50%                             │   │
+│   │  • No alerts configured                                             │   │
+│   │  • Database costs increase 2×                                       │   │
+│   │  • Discovered 2 weeks later in cost review                          │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Required metrics: hit rate, latency, error rate                 │   │
+│   │  • Alerts: hit rate < threshold, latency > threshold               │   │
+│   │  • Cost alerts: cache costs increase > 20%                          │   │
+│   │  • Dashboard: Cache health visible to all teams                    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  FAILURE MODE #6: Cache Key Collisions                              │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  What happens:                                                      │   │
+│   │  • Two different data types use same key format                     │   │
+│   │  • Key collision → wrong data returned                              │   │
+│   │  • Hard to debug (data looks valid, just wrong type)                │   │
+│   │                                                                     │   │
+│   │  Example:                                                           │   │
+│   │  Service A: "user:123" = UserProfile                               │   │
+│   │  Service B: "user:123" = UserSettings                              │   │
+│   │  Result: Service A gets UserSettings, deserialization fails         │   │
+│   │                                                                     │   │
+│   │  Prevention:                                                        │   │
+│   │  • Enforce key naming standard: "v1:service:entity:id"              │   │
+│   │  • Cache client validates key format                                │   │
+│   │  • Code review: Verify key uniqueness                               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Prevention Strategy**: Build guardrails into cache client:
+
+```
+CLASS StandardCacheClient:
+    // ... existing code ...
+    
+    FUNCTION set(key, value, ttl):
+        // Validate TTL
+        IF ttl == 0:
+            THROW InvalidTTLError("TTL cannot be 0 (infinite). Max: " + MAX_TTL)
+        IF ttl > MAX_TTL:
+            THROW InvalidTTLError("TTL exceeds maximum: " + MAX_TTL)
+        
+        // Validate key format
+        IF NOT this.validate_key_format(key):
+            THROW InvalidKeyError("Key must match format: v{version}:{service}:{entity}:{id}")
+        
+        // Check for collisions (in development)
+        IF ENVIRONMENT == "development":
+            existing = this.cache.GET(key)
+            IF existing EXISTS AND NOT this.is_same_type(existing, value):
+                log.warning("Potential key collision: " + key)
+        
+        // Set with monitoring
+        this.cache.SET(key, serialize(value), TTL = ttl)
+        this.metrics.increment("cache.set", {service: this.service})
+    
+    FUNCTION validate_key_format(key):
+        // Enforce: v{version}:{service}:{entity}:{id}
+        RETURN KEY_PATTERN.matches(key) AND 
+               key.starts_with("v") AND
+               this.service IN key  // Service name must be in key
+```
+
 ### Building Consensus
 
 Staff Engineers drive adoption through:
@@ -4565,6 +5551,8 @@ Staff Engineers drive adoption through:
 3. **Code review**: Catch deviations early
 4. **Metrics dashboards**: Show value of standards (debugging time saved)
 5. **Incident postmortems**: Reference standards violations as root causes
+6. **Ownership clarity**: Define who owns what (prevents finger-pointing)
+7. **Human failure prevention**: Build guardrails into tools (prevents mistakes)
 
 ```
 // Shared cache client that enforces standards

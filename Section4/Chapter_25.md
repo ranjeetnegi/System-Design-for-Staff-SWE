@@ -682,6 +682,127 @@ CLASS DeletionService:
         manifest.external_services = get_external_services_with_user_data(user_id)
         
         RETURN manifest
+    
+    FUNCTION handle_partial_deletion_failure(manifest_id, failed_store):
+        // What happens when deletion succeeds in primary DB but fails elsewhere?
+        
+        manifest = load_manifest(manifest_id)
+        
+        // Check which stores succeeded vs failed
+        successful_stores = manifest.stores.filter(status="complete")
+        failed_stores = manifest.stores.filter(status="failed")
+        
+        // Critical: Primary data deletion succeeded
+        IF "primary_db" IN successful_stores:
+            // User-visible deletion is complete
+            // But compliance requires ALL copies deleted
+            
+            // Strategy 1: Retry with exponential backoff
+            FOR store IN failed_stores:
+                retry_count = store.retry_count
+                IF retry_count < MAX_RETRIES:
+                    schedule_retry(store, delay=exponential_backoff(retry_count))
+                ELSE:
+                    // Strategy 2: Escalate to manual intervention
+                    alert_team(store.owner_team, manifest_id, store.name)
+                    mark_for_manual_review(manifest_id, store.name)
+            
+            // Strategy 3: Track partial completion for audit
+            manifest.status = "partial_complete"
+            manifest.completion_percentage = calculate_completion(manifest)
+            manifest.failed_stores = failed_stores
+            save_manifest(manifest)
+            
+            // Strategy 4: For critical failures, block new data creation
+            IF failed_store IN CRITICAL_STORES:
+                block_user_data_creation(manifest.user_id)
+        
+        ELSE:
+            // Primary deletion failed - this is critical
+            // Rollback any partial deletions if possible
+            rollback_deletion(manifest_id)
+            RAISE CriticalDeletionFailure(manifest_id)
+    
+    FUNCTION verify_deletion_completeness(manifest_id):
+        manifest = load_manifest(manifest_id)
+        
+        // Verify each store independently
+        verification_results = []
+        
+        FOR store IN manifest.stores:
+            IF store.status == "complete":
+                // Double-check: verify deletion actually happened
+                still_exists = store.verify_deletion(manifest.user_id)
+                
+                IF still_exists:
+                    // False positive: marked complete but data still exists
+                    manifest.update(store.name, status="failed", reason="verification_failed")
+                    verification_results.append({
+                        store: store.name,
+                        status: "FAILED_VERIFICATION",
+                        action: "retry_deletion"
+                    })
+                ELSE:
+                    verification_results.append({
+                        store: store.name,
+                        status: "VERIFIED_DELETED"
+                    })
+            ELSE:
+                verification_results.append({
+                    store: store.name,
+                    status: "NOT_ATTEMPTED" OR "FAILED",
+                    requires_action: TRUE
+                })
+        
+        // Overall status
+        all_verified = all(r.status == "VERIFIED_DELETED" FOR r IN verification_results)
+        
+        IF all_verified:
+            manifest.status = "verified_complete"
+        ELSE:
+            manifest.status = "partial_complete"
+            manifest.verification_failures = verification_results
+        
+        save_manifest(manifest)
+        RETURN verification_results
+
+// Example: Partial deletion failure scenario
+FUNCTION example_partial_deletion_failure():
+    // User requests deletion
+    manifest_id = delete_user("user_123")
+    
+    // Phase 1: Primary DB deletion succeeds
+    delete_from_store("primary_db", "user_123")  // ✅ Success
+    
+    // Phase 2: Cache deletion succeeds
+    delete_from_store("redis_cache", "user_123")  // ✅ Success
+    
+    // Phase 3: Analytics deletion fails (pipeline down)
+    TRY:
+        delete_from_store("analytics_warehouse", "user_123")
+    EXCEPT AnalyticsPipelineDown:
+        // ❌ Failure: Analytics pipeline is unavailable
+        mark_failed(manifest_id, "analytics_warehouse")
+        
+        // What happens now?
+        // 1. User-visible deletion is complete (primary DB cleared)
+        // 2. But compliance violation: analytics still has user data
+        // 3. System must retry and verify
+        
+        handle_partial_deletion_failure(manifest_id, "analytics_warehouse")
+    
+    // Phase 4: Backup deletion (always deferred)
+    // Backups are immutable - cannot delete immediately
+    // Must wait for backup expiration OR create exclusion list
+    schedule_backup_exclusion("user_123", manifest_id)
+    
+    // Result: Deletion is PARTIAL
+    // - Primary: ✅ Deleted
+    // - Cache: ✅ Deleted  
+    // - Analytics: ❌ Failed (will retry)
+    // - Backups: ⏳ Scheduled for exclusion
+    
+    // Compliance status: NON-COMPLIANT until all phases complete
 ```
 
 ### Implication 2: Retention and Expiration
@@ -845,6 +966,274 @@ CLASS ComplianceMiddleware:
         
         RETURN allowed
 ```
+
+---
+
+# Part 4.5: Cost as a First-Class Constraint
+
+## Why Cost Matters for Data Locality
+
+Data locality compliance isn't free. Staff Engineers must understand and optimize the dominant cost drivers, or systems become unsustainable. Cost overruns from poor locality design can kill products.
+
+## The Three Dominant Cost Drivers
+
+### Cost Driver 1: Data Replication Across Regions
+
+**The problem**: Regional data isolation means duplicating infrastructure.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    COST OF REGIONAL REPLICATION                              │
+│                                                                             │
+│   SINGLE REGION (Baseline):                                                 │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • 1 database cluster: $2,000/month                                │   │
+│   │  • 1 cache cluster: $500/month                                      │   │
+│   │  • 1 analytics warehouse: $1,000/month                             │   │
+│   │  • 1 log storage: $300/month                                        │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Total: $3,800/month                                                 │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   THREE REGIONS (US, EU, AP):                                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • 3 database clusters: $6,000/month (3x)                         │   │
+│   │  • 3 cache clusters: $1,500/month (3x)                            │   │
+│   │  • 3 analytics warehouses: $3,000/month (3x)                        │   │
+│   │  • 3 log storages: $900/month (3x)                                  │   │
+│   │  • Cross-region coordination: $500/month (new)                        │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Total: $11,900/month (3.1x baseline)                                │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   COST MULTIPLIER: Linear with number of regions                            │
+│   • 1 region: 1x                                                           │
+│   • 3 regions: ~3x                                                        │
+│   • 10 regions: ~10x                                                       │   │
+│                                                                             │
+│   OPTIMIZATION OPPORTUNITIES:                                               │
+│   • Shared non-user-data services (config, routing)                         │
+│   • Regional data only where required (not all data needs isolation)        │
+│   • Right-size each region (not all regions need same capacity)            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**:
+- ✅ Full compliance with data residency
+- ❌ 3x infrastructure cost
+- ❌ Operational complexity (3x monitoring, 3x deployments)
+
+**When Staff Engineers optimize**: Not all data needs regional isolation. Separate user data (regional) from operational data (global).
+
+---
+
+### Cost Driver 2: Compliance Tooling and Operations
+
+**The problem**: Compliance requires tooling, monitoring, and human oversight.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  COST OF COMPLIANCE TOOLING                                 │
+│                                                                             │
+│   INFRASTRUCTURE COSTS:                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Policy engine service: $500/month (compute)                     │   │
+│   │  • Deletion orchestration service: $300/month                      │   │
+│   │  • Audit logging infrastructure: $400/month                         │   │
+│   │  • Data lineage tracking: $600/month                               │   │
+│   │  • Compliance monitoring/alerting: $200/month                      │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Subtotal: $2,000/month                                              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   OPERATIONAL COSTS:                                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Compliance engineer time: 0.5 FTE = $7,500/month                │   │
+│   │  • Regular audits: 0.25 FTE = $3,750/month                          │   │
+│   │  • Incident response: 0.1 FTE = $1,500/month                       │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Subtotal: $12,750/month                                             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   TOTAL COMPLIANCE COST: $14,750/month                                      │
+│                                                                             │
+│   AS % OF INFRASTRUCTURE:                                                   │
+│   • Single region ($3,800): 388% (compliance costs more than infra!)      │   │
+│   • Three regions ($11,900): 124% (still significant)                      │   │
+│                                                                             │
+│   KEY INSIGHT: Compliance tooling costs are FIXED, not per-region           │
+│   • Policy engine: Same cost for 1 region or 10 regions                    │   │
+│   • Deletion service: Same cost regardless of region count                 │   │
+│   • This makes compliance MORE cost-effective at scale                      │   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**:
+- ✅ Automated compliance reduces risk
+- ❌ Upfront tooling cost ($2K/month)
+- ❌ Ongoing operational overhead ($12.7K/month)
+- ✅ Cost per region decreases as regions increase (fixed costs amortized)
+
+**When Staff Engineers optimize**: Build compliance tooling once, reuse across regions. Don't rebuild per region.
+
+---
+
+### Cost Driver 3: Deletion Pipeline Overhead
+
+**The problem**: Complete deletion requires coordination across many systems, each with different deletion mechanisms.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    COST OF DELETION PIPELINE                                │
+│                                                                             │
+│   DIRECT COSTS (per deletion request):                                       │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Primary DB deletion: 10ms, $0.0001                               │   │
+│   │  • Cache invalidation: 5ms, $0.00005                                │   │
+│   │  • Search index update: 50ms, $0.0005                                │   │
+│   │  • Analytics anonymization: 200ms, $0.002                            │   │
+│   │  • Log cleanup (batch): Queued, $0.001                               │   │
+│   │  • Backup exclusion: Metadata update, $0.0001                          │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Per deletion: ~$0.00375 (negligible)                                 │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   INDIRECT COSTS (system overhead):                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Deletion orchestration service: $300/month (always running)     │   │
+│   │  • Deletion queue processing: $100/month (compute)                  │   │
+│   │  • Verification jobs: $50/month (periodic checks)                   │   │
+│   │  • Retry logic for failed deletions: $50/month                       │   │
+│   │  ────────────────────────────────────────────────────────────────   │   │
+│   │  Subtotal: $500/month (fixed cost)                                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   SCALE-DEPENDENT COSTS:                                                    │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  At 1,000 deletions/month: $0.50/month (direct) + $500 (fixed)    │   │
+│   │  = $500.50/month                                                     │   │
+│   │                                                                     │   │
+│   │  At 100,000 deletions/month: $375/month (direct) + $500 (fixed)    │   │
+│   │  = $875/month                                                        │   │
+│   │                                                                     │   │
+│   │  At 1M deletions/month: $3,750/month (direct) + $500 (fixed)       │   │
+│   │  = $4,250/month                                                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   BOTTLENECK COSTS (when deletion fails):                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Manual intervention: $500/incident (engineer time)                │   │
+│   │  • Compliance violation risk: Priceless (regulatory fines)            │   │
+│   │  • Customer trust impact: Unquantifiable                             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   KEY INSIGHT: Fixed costs dominate at low scale, variable costs at high    │
+│   scale. Design deletion pipeline to handle both efficiently.              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**:
+- ✅ Complete deletion ensures compliance
+- ❌ Fixed overhead ($500/month) even with zero deletions
+- ❌ Variable cost scales with deletion volume
+- ❌ Failure handling adds operational burden
+
+**When Staff Engineers optimize**: Batch deletions, async processing, idempotent retries. Don't block user requests on slow deletion stores.
+
+---
+
+## Total Cost of Ownership Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              TOTAL COST OF OWNERSHIP: DATA LOCALITY COMPLIANCE              │
+│                                                                             │
+│   SCENARIO: 1M users, 3 regions (US, EU, AP)                               │
+│                                                                             │
+│   INFRASTRUCTURE (Regional Replication):                                    │
+│   • Database clusters (3x): $6,000/month                                    │
+│   • Cache clusters (3x): $1,500/month                                        │
+│   • Analytics warehouses (3x): $3,000/month                                 │
+│   • Log storage (3x): $900/month                                            │
+│   • Cross-region coordination: $500/month                                    │
+│   ────────────────────────────────────────────────────────────────────────   │
+│   Infrastructure subtotal: $11,900/month                                    │
+│                                                                             │
+│   COMPLIANCE TOOLING:                                                       │
+│   • Policy engine: $500/month                                               │
+│   • Deletion orchestration: $300/month                                     │
+│   • Audit logging: $400/month                                               │
+│   • Data lineage: $600/month                                                │
+│   • Monitoring: $200/month                                                  │
+│   ────────────────────────────────────────────────────────────────────────   │
+│   Tooling subtotal: $2,000/month                                            │
+│                                                                             │
+│   OPERATIONS:                                                               │
+│   • Compliance engineering: $7,500/month                                    │
+│   • Audits: $3,750/month                                                    │
+│   • Incident response: $1,500/month                                         │
+│   ────────────────────────────────────────────────────────────────────────   │
+│   Operations subtotal: $12,750/month                                        │
+│                                                                             │
+│   DELETION PIPELINE:                                                        │
+│   • Fixed overhead: $500/month                                               │
+│   • Variable (100K deletions/month): $375/month                             │
+│   ────────────────────────────────────────────────────────────────────────   │
+│   Deletion subtotal: $875/month                                            │
+│                                                                             │
+│   ────────────────────────────────────────────────────────────────────────   │
+│   TOTAL: $27,525/month                                                      │
+│                                                                             │
+│   COST PER USER: $0.0275/user/month                                         │
+│   COST PER REGION: $9,175/region/month                                      │
+│                                                                             │
+│   COMPARISON TO NON-COMPLIANT (Single Region):                             │
+│   • Single region cost: $3,800/month                                       │
+│   • Compliance multiplier: 7.2x                                              │
+│                                                                             │
+│   BUT: Non-compliant system cannot serve EU/AP markets                     │
+│   Revenue opportunity cost >> compliance cost                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Cost Optimization Strategies
+
+**1. Right-size regional infrastructure**
+- Not all regions need same capacity
+- US might be 10x larger than AP region
+- Cost scales with actual usage, not uniform allocation
+
+**2. Share non-user-data services globally**
+- Configuration service: Global (no user data)
+- Feature flags: Global (no user data)
+- Routing metadata: Global (no user data)
+- Only user data needs regional isolation
+
+**3. Optimize deletion pipeline**
+- Batch deletions (don't process one-by-one)
+- Async processing (don't block on slow stores)
+- Smart retries (exponential backoff, circuit breakers)
+- Verification jobs run periodically, not per-deletion
+
+**4. Policy-driven compliance (reduces operational overhead)**
+- Automated policy enforcement (less manual review)
+- Self-service compliance checks (less engineer time)
+- Automated audit reports (less manual auditing)
+
+**5. Avoid over-engineering**
+- Don't regionalize data that doesn't need it
+- Don't build deletion for data that can be anonymized
+- Don't add compliance tooling before you need it
+
+**Staff Engineer's Cost Decision Framework**:
+1. What data ACTUALLY needs regional isolation? (Not everything)
+2. Can we share infrastructure for non-user-data? (Usually yes)
+3. Can we defer compliance tooling until we have revenue? (Sometimes yes, but risky)
+4. What's the cost of NOT being compliant? (Lost revenue, fines, reputation)
 
 ---
 
@@ -1206,6 +1595,218 @@ Systems must evolve when:
 - **Products expand** (new features with different data needs)
 - **Organizational changes** (acquisitions, spin-offs)
 
+## Growth Model: V1 → 10× → Multi-Year Evolution
+
+Understanding how compliance requirements evolve as systems scale is critical for Staff Engineers. Here's a concrete growth model:
+
+### V1: Single Region, No Compliance Requirements (0-1 year)
+
+**Scale**: 10K users, single US region
+**Compliance**: None (pre-GDPR, or US-only)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        V1 ARCHITECTURE                                       │
+│                                                                             │
+│   US-EAST-1 (Single Region)                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Single database (all users)                                      │   │
+│   │  • Global cache (no locality concerns)                              │   │
+│   │  • Centralized logging (all logs in one place)                      │   │
+│   │  • Single analytics warehouse                                       │   │
+│   │  • Simple deletion: DELETE FROM users WHERE id = ?                 │   │
+│   │                                                                     │   │
+│   │  Cost: $1,000/month                                                  │   │
+│   │  Complexity: Low                                                     │   │
+│   │  Compliance: N/A                                                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   DESIGN DECISIONS:                                                          │
+│   • No region attribute in data model                                       │
+│   • No data classification framework                                        │
+│   • No deletion manifest system                                             │
+│   • Hardcoded region logic (if any)                                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why this works**: Simple, fast to build, low cost. No compliance overhead.
+
+**Why this fails later**: Adding GDPR support requires rewriting the data layer.
+
+---
+
+### 10× Growth: GDPR Introduced (Year 1-2)
+
+**Scale**: 100K users, EU expansion required
+**Compliance**: GDPR (EU users' data must stay in EU)
+
+**Trigger**: "We need to launch in Europe, but GDPR requires EU data residency."
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    10× ARCHITECTURE (GDPR ADDED)                             │
+│                                                                             │
+│   US-EAST-1                    EU-WEST-1                                    │
+│   ┌──────────────────┐         ┌──────────────────┐                         │
+│   │  US User Data   │         │  EU User Data    │                         │
+│   │  Database       │         │  Database        │                         │
+│   └──────────────────┘         └──────────────────┘                         │
+│   ┌──────────────────┐         ┌──────────────────┐                         │
+│   │  US Logs        │         │  EU Logs         │                         │
+│   └──────────────────┘         └──────────────────┘                         │
+│   ┌──────────────────┐         ┌──────────────────┐                         │
+│   │  US Analytics    │         │  EU Analytics     │                         │
+│   └──────────────────┘         └──────────────────┘                         │
+│                                                                             │
+│   NEW REQUIREMENTS:                                                          │
+│   • Region attribute added to user records                                  │
+│   • Deletion must cover all EU stores                                       │
+│   • Right to be forgotten implemented                                       │
+│   • Data portability export added                                           │
+│                                                                             │
+│   Cost: $5,000/month (2x infrastructure + compliance tooling)              │
+│   Complexity: Medium (regional partitioning)                                  │
+│   Compliance: GDPR (EU only)                                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Migration effort**: 3-4 engineering months
+- Add region attribute to existing users (batch migration)
+- Deploy EU infrastructure
+- Migrate EU users to EU region
+- Implement deletion manifest system
+- Add GDPR compliance endpoints
+
+**Bottlenecks identified**:
+- Analytics: Still centralized? Must be regionalized
+- Logs: Centralized logging violates GDPR
+- Caches: Global cache must become regional
+
+**Design decisions made**:
+- ✅ Region as first-class attribute (enables future flexibility)
+- ✅ Deletion manifest system (handles multi-store deletion)
+- ❌ Still using hardcoded region checks (will need to change)
+
+---
+
+### 10× Growth Again: CCPA Added (Year 2-3)
+
+**Scale**: 1M users, California expansion
+**Compliance**: GDPR (EU) + CCPA (California)
+
+**Trigger**: "California users need CCPA rights, but CCPA has different requirements than GDPR."
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                 10× ARCHITECTURE (GDPR + CCPA)                               │
+│                                                                             │
+│   US-EAST-1 (CA Users)    EU-WEST-1          US-WEST-1 (Non-CA US)         │
+│   ┌──────────────────┐    ┌──────────────┐   ┌──────────────────┐        │
+│   │  CA User Data    │    │  EU User Data│   │  Other US Users   │        │
+│   │  (CCPA rules)   │    │  (GDPR rules)│   │  (No special req)│        │
+│   └──────────────────┘    └──────────────┘   └──────────────────┘        │
+│                                                                             │
+│   NEW REQUIREMENTS:                                                          │
+│   • CCPA: "Do Not Sell" opt-out mechanism                                    │
+│   • CCPA: Different deletion timeline (45 days vs GDPR's "without delay")   │
+│   • CCPA: Different data portability format                                  │
+│   • Policy engine needed (can't hardcode GDPR vs CCPA)                       │
+│                                                                             │
+│   Cost: $8,000/month (3 regions + policy engine)                            │
+│   Complexity: High (policy-driven compliance)                                │
+│   Compliance: GDPR + CCPA (different rules per region)                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Migration effort**: 2 engineering months
+- Policy engine to handle multiple regulations
+- CCPA-specific endpoints (Do Not Sell, different deletion flow)
+- Region classification: CA users → US-EAST-1 with CCPA rules
+
+**Bottlenecks identified**:
+- Hardcoded GDPR logic must become policy-driven
+- Deletion timelines differ (GDPR immediate, CCPA 45 days)
+- Data portability formats differ
+
+**Design decisions made**:
+- ✅ Policy engine (enables adding more regulations)
+- ✅ Configurable deletion timelines per regulation
+- ✅ Region + regulation mapping (CA → CCPA, EU → GDPR)
+
+---
+
+### Multi-Year Growth: Data Residency Requirements (Year 3-5)
+
+**Scale**: 10M users, global expansion
+**Compliance**: GDPR + CCPA + Country-specific data residency
+
+**Trigger**: "Enterprise customers in India/Singapore require data to stay in-country. Some countries require all data local, others allow regional."
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              MULTI-YEAR ARCHITECTURE (GLOBAL DATA RESIDENCY)                 │
+│                                                                             │
+│   US-EAST-1      EU-WEST-1      AP-SOUTHEAST-1   IN-MUMBAI-1                │
+│   (CA: CCPA)     (EU: GDPR)     (SG: Regional)    (IN: In-country)          │
+│   ┌──────────┐   ┌──────────┐   ┌──────────┐    ┌──────────┐             │
+│   │ US Data  │   │ EU Data  │   │ SG Data  │    │ IN Data  │             │
+│   └──────────┘   └──────────┘   └──────────┘    └──────────┘             │
+│                                                                             │
+│   COMPLEXITY EXPLOSION:                                                      │
+│   • 15+ regions, each with different compliance rules                        │
+│   • Some countries: All data must be in-country (India, Russia)              │
+│   • Some countries: Regional OK (Singapore → AP region)                     │
+│   • Some countries: No special requirements (US non-CA)                       │
+│   • Enterprise customers: Custom data residency contracts                    │
+│                                                                             │
+│   NEW REQUIREMENTS:                                                          │
+│   • Data residency mapping: Country → Required region(s)                    │
+│   • Enterprise overrides: Customer X requires data in region Y              │
+│   • Cross-region restrictions: Some countries forbid cross-border flows     │
+│   • Audit requirements: Prove data location at any time                      │
+│                                                                             │
+│   Cost: $50,000/month (15 regions + compliance infrastructure)             │
+│   Complexity: Very High (policy-driven, multi-tenant)                       │
+│   Compliance: 10+ regulations, enterprise contracts                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Migration effort**: 6-12 engineering months
+- Policy engine extended for country-specific rules
+- Enterprise customer data residency contracts
+- Data residency audit system
+- Cross-region flow restrictions
+
+**Bottlenecks identified**:
+- Policy engine becomes critical path (all requests check it)
+- Deletion must respect country-specific timelines
+- Analytics: Can't aggregate across some country boundaries
+
+**Design decisions made**:
+- ✅ Policy engine as core service (not library)
+- ✅ Data residency as first-class concept (not just region)
+- ✅ Audit system tracks data location changes
+- ✅ Enterprise overrides in policy engine
+
+---
+
+### Growth Model Summary
+
+| Phase | Users | Regions | Compliance | Cost | Complexity | Migration Risk |
+|-------|-------|---------|------------|------|------------|----------------|
+| V1 | 10K | 1 | None | $1K/mo | Low | N/A |
+| 10× (GDPR) | 100K | 2 | GDPR | $5K/mo | Medium | Medium (3-4 months) |
+| 10× (CCPA) | 1M | 3 | GDPR + CCPA | $8K/mo | High | Low (2 months, policy-driven) |
+| Multi-year | 10M | 15+ | 10+ regulations | $50K/mo | Very High | High (6-12 months) |
+
+**Key Insight**: Systems designed with policy-driven compliance (V1 → 10×) adapt more easily to new regulations. Systems with hardcoded logic require rewrites.
+
+**Staff Engineer's Decision Point**: At V1, invest 20% more to make compliance policy-driven. This pays off 10x when regulations multiply.
+
 ## Designing for Change
 
 ### Principle 1: Backward Compatibility
@@ -1400,23 +2001,122 @@ use_store(region_policy.data_store)
 
 **Background**: A global e-commerce platform stores user data in regional databases. During a major incident affecting the EU database, an engineer temporarily routes EU traffic to the US cluster.
 
-### Timeline
+### Cascading Failure Timeline: Trigger → Propagation → Impact → Containment
 
 ```
-T+0:     EU database becomes unresponsive
-T+5min:  Pager fires, on-call engineer investigates
-T+15min: Engineer identifies issue: EU database needs restart
-T+20min: Engineer makes decision: "Users are down, let's route to US temporarily"
-         → Redirects EU users to US cluster
-T+30min: EU users can access the service again
-T+45min: EU database comes back online
-T+60min: Traffic restored to EU
-T+2hrs:  Incident resolved, post-mortem scheduled
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PHASE 1: TRIGGER (T+0 to T+20min)                               │
+│                                                                             │
+│   T+0:     EU database becomes unresponsive                                 │
+│            • Root cause: Database connection pool exhaustion                 │
+│            • Initial symptom: High latency, then timeouts                   │
+│                                                                             │
+│   T+5min:  Pager fires, on-call engineer investigates                       │
+│            • Monitoring shows 100% error rate for EU region                  │
+│            • Health checks failing                                          │
+│                                                                             │
+│   T+15min: Engineer identifies issue: EU database needs restart              │
+│            • Diagnosis: Connection pool deadlock                             │
+│            • Estimated recovery: 30-45 minutes                              │
+│                                                                             │
+│   T+20min: Engineer makes decision: "Users are down, let's route to US"     │
+│            • DECISION POINT: Availability vs Compliance                      │
+│            • Engineer chooses availability (violates compliance)            │
+│            • Manual routing change: EU traffic → US cluster                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-T+1week: Security review discovers:
-         → 500,000 EU users had data processed in US
-         → For 45 minutes, EU personal data was stored in US
-         → This is a data residency violation
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PHASE 2: PROPAGATION (T+20min to T+60min)                       │
+│                                                                             │
+│   T+20min: Traffic routing changed                                          │
+│            • Load balancer now routes EU users to US                         │
+│            • First EU user requests arrive in US                            │
+│                                                                             │
+│   T+22min: Data starts flowing to US stores                                 │
+│            • User profile reads: EU user data in US cache                   │
+│            • Session creation: EU sessions stored in US                     │
+│            • Write operations: EU user data written to US DB                │
+│                                                                             │
+│   T+25min: Derived data generation begins                                    │
+│            • Application logs: EU user IDs logged in US log aggregator      │
+│            • Analytics events: EU user events sent to US analytics          │
+│            • Search indexes: EU user content indexed in US                   │
+│                                                                             │
+│   T+30min: EU users can access service again                                │
+│            • Service appears "healthy" from user perspective                 │
+│            • But compliance boundary is violated                             │
+│                                                                             │
+│   T+35min: Cascading data copies accumulate                                  │
+│            • US cache: 50,000 EU user profiles cached                       │
+│            • US logs: 200,000 log entries with EU user data                 │
+│            • US analytics: 500,000 events from EU users                     │
+│                                                                             │
+│   T+45min: EU database comes back online                                    │
+│            • Database restarted successfully                                 │
+│            • But traffic still routed to US (manual change not reverted)   │
+│                                                                             │
+│   T+60min: Traffic restored to EU                                            │
+│            • Engineer reverts routing change                                 │
+│            • EU traffic returns to EU region                                 │
+│            • But damage is done: 45 minutes of violations                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PHASE 3: USER-VISIBLE IMPACT (T+60min to T+2hrs)                │
+│                                                                             │
+│   T+60min: Service appears normal to users                                  │
+│            • EU users experienced brief outage (T+0 to T+30min)              │
+│            • Then service worked normally (T+30min to T+60min)               │
+│            • Users unaware of compliance violation                          │
+│                                                                             │
+│   T+2hrs:  Incident marked "resolved"                                        │
+│            • Post-mortem scheduled                                          │
+│            • No compliance review conducted                                  │
+│            • System appears fully recovered                                  │
+│                                                                             │
+│   HIDDEN IMPACT (not user-visible):                                         │
+│   • 500,000 EU users' data processed in US                                  │
+│   • EU personal data stored in US caches (24hr TTL)                          │
+│   • EU user data in US logs (90 day retention)                             │
+│   • EU events in US analytics warehouse (2 year retention)                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PHASE 4: CONTAINMENT & REMEDIATION (T+1week onwards)            │
+│                                                                             │
+│   T+1week: Security review discovers violation                              │
+│            • Routine audit reveals EU data in US stores                      │
+│            • Investigation traces to incident                                │
+│                                                                             │
+│   T+1week+1day: Immediate containment begins                                 │
+│            • Purge US caches of EU user data                                 │
+│            • Delete EU user data from US logs                                │
+│            • Anonymize EU events in US analytics                             │
+│            • Estimated cleanup: 2-3 days                                     │
+│                                                                             │
+│   T+1week+3days: Documentation and reporting                                │
+│            • Incident report filed with regulators                           │
+│            • Assessment of notification requirements                         │
+│            • Update incident response procedures                             │
+│                                                                             │
+│   T+1week+1month: Long-term remediation                                      │
+│            • Implement compliance-aware routing guardrails                    │
+│            • Add automated detection of cross-region violations              │
+│            • Train on-call engineers on compliance constraints               │
+│            • Cost: 2 engineering months                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+KEY INSIGHT: The violation wasn't a single event—it was a cascade:
+  1. Database failure (technical)
+   → 2. Manual routing decision (human)
+   → 3. Data flowing to wrong region (system)
+   → 4. Copies accumulating in caches/logs/analytics (derived data)
+   → 5. Violation undetected for a week (process gap)
+   → 6. Expensive remediation (organizational cost)
 ```
 
 ### Impact Analysis
@@ -1807,6 +2507,230 @@ CLASS DeletionOrchestrator:
 │   ├── System health data             ├── User content                       │
 │   ├── Anonymized counts              ├── Activity logs with user IDs        │
 │   └── Configuration                  └── Caches, replicas, backups          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Diagram 3: Data Lineage and Flow — Where Copies Live
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              DATA LINEAGE: TRACING ALL COPIES OF USER DATA                  │
+│                                                                             │
+│   USER ACTION: User updates profile (user_id: 12345, region: EU)          │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ PRIMARY STORAGE (EU-WEST-1)                                        │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │  User Database                                               │   │   │
+│   │ │  • users table: user_id, email, name                         │   │   │
+│   │ │  • profiles table: bio, avatar_url                           │   │   │
+│   │ │  Location: EU-WEST-1 (primary)                              │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ├────────────────────────────────────────────────────┐              │
+│         │                                                    │              │
+│         ▼                                                    ▼              │
+│   ┌──────────────────┐                            ┌──────────────────┐   │
+│   │ REPLICAS         │                            │ CACHES           │   │
+│   │ (EU-WEST-1)      │                            │ (EU-WEST-1)      │   │
+│   │ ┌──────────────┐ │                            │ ┌──────────────┐ │   │
+│   │ │ Read Replica │ │                            │ │ Redis Cache  │ │   │
+│   │ │ • users      │ │                            │ │ • Profile    │ │   │
+│   │ │ • profiles   │ │                            │ │ • TTL: 1hr   │ │   │
+│   │ └──────────────┘ │                            │ └──────────────┘ │   │
+│   │ ┌──────────────┐ │                            │ ┌──────────────┐ │   │
+│   │ │ EU-CENTRAL-1 │ │                            │ │ CDN Cache    │ │   │
+│   │ │ Read Replica │ │                            │ │ • Avatar URL  │ │   │
+│   │ └──────────────┘ │                            │ │ • TTL: 24hr  │ │   │
+│   └──────────────────┘                            │ └──────────────┘ │   │
+│         │                                         └──────────────────┘   │
+│         │                                                    │              │
+│         ├────────────────────────────────────────────────────┘              │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ DERIVED DATA (EU-WEST-1)                                           │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ Application Logs                                             │   │   │
+│   │ │ • Request logs: user_id, action, timestamp                   │   │   │
+│   │ │ • Error logs: user_id, error context                         │   │   │
+│   │ │ Location: EU-WEST-1 log storage                             │   │   │
+│   │ │ Retention: 90 days                                           │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ Analytics Pipeline                                            │   │   │
+│   │ │ • Event stream: user_id, event_type, properties               │   │   │
+│   │ │ • Aggregated metrics: user behavior patterns                  │   │   │
+│   │ │ Location: EU-WEST-1 analytics warehouse                      │   │   │
+│   │ │ Retention: 2 years                                           │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ Search Index                                                 │   │   │
+│   │ │ • User profile indexed for search                            │   │   │
+│   │ │ • User-generated content indexed                             │   │   │
+│   │ │ Location: EU-WEST-1 search cluster                           │   │   │
+│   │ │ Updates: Async (within minutes)                              │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ ML Training Data                                              │   │   │
+│   │ │ • User behavior snapshots for model training                  │   │   │
+│   │ │ • Feature vectors derived from user data                       │   │   │
+│   │ │ Location: EU-WEST-1 ML data store                            │   │   │
+│   │ │ Retention: Until next training cycle                          │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ BACKUPS & ARCHIVES (EU-WEST-1)                                    │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ Daily Backups                                                │   │   │
+│   │ │ • Full database snapshots                                    │   │   │
+│   │ │ • Contains user_id: 12345                                    │   │   │
+│   │ │ Location: EU-WEST-1 backup storage                           │   │   │
+│   │ │ Retention: 30 days                                          │   │   │
+│   │ │ Immutable: Cannot delete, only exclude from restore          │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │ │ Weekly Archives                                               │   │   │
+│   │ │ • Long-term storage                                           │   │   │
+│   │ │ • Contains user_id: 12345                                    │   │   │
+│   │ │ Location: EU-WEST-1 archive storage                          │   │   │
+│   │ │ Retention: 1 year                                            │   │   │
+│   │ └─────────────────────────────────────────────────────────────┘   │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   COMPLIANCE REQUIREMENT:                                                   │
+│   All copies of user_id: 12345 must be tracked and deletable              │
+│   • Primary: ✅ Tracked                                                    │
+│   • Replicas: ✅ Tracked                                                   │
+│   • Caches: ✅ Tracked (TTL-based deletion)                                 │
+│   • Logs: ✅ Tracked (retention-based deletion)                             │
+│   • Analytics: ✅ Tracked (anonymization or deletion)                       │
+│   • Search: ✅ Tracked                                                     │
+│   • ML Data: ✅ Tracked                                                    │
+│   • Backups: ✅ Tracked (exclusion list)                                    │
+│                                                                             │
+│   DELETION CHALLENGE:                                                       │
+│   Each store has different deletion mechanism and timeline                 │
+│   → Deletion manifest tracks all stores and coordinates deletion           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Diagram 4: Deletion Propagation Across All Data Stores
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              DELETION PROPAGATION: MULTI-PHASE DELETION FLOW                  │
+│                                                                             │
+│   USER REQUEST: Delete user_id: 12345                                       │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ DELETION ORCHESTRATOR                                              │   │
+│   │ Creates deletion manifest: {user_id: 12345, stores: [...]}        │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ├────────────────────────────────────────────────────┐              │
+│         │                                                    │              │
+│         ▼                                                    ▼              │
+│   ┌──────────────────┐                            ┌──────────────────┐   │
+│   │ PHASE 1: IMMEDIATE│                            │ PHASE 2: ASYNC   │   │
+│   │ (Synchronous)      │                            │ (Queued)         │   │
+│   │                    │                            │                  │   │
+│   │ ┌──────────────┐  │                            │ ┌──────────────┐ │   │
+│   │ │ Primary DB   │  │                            │ │ Redis Cache  │ │   │
+│   │ │ DELETE FROM  │  │                            │ │ INVALIDATE   │ │   │
+│   │ │ users WHERE  │  │                            │ │ (TTL: 1hr)   │ │   │
+│   │ │ id = 12345   │  │                            │ └──────────────┘ │   │
+│   │ │ ✅ Success   │  │                            │ ┌──────────────┐ │   │
+│   │ └──────────────┘  │                            │ │ CDN Cache    │ │   │
+│   │                    │                            │ │ PURGE        │ │   │
+│   │ ┌──────────────┐  │                            │ │ (TTL: 24hr)  │ │   │
+│   │ │ Session Store│  │                            │ └──────────────┘ │   │
+│   │ │ DELETE WHERE │  │                            │ ┌──────────────┐ │   │
+│   │ │ user_id =    │  │                            │ │ Search Index │ │   │
+│   │ │ 12345        │  │                            │ │ REMOVE +     │ │   │
+│   │ │ ✅ Success   │  │                            │ │ REINDEX      │ │   │
+│   │ └──────────────┘  │                            │ │ (Minutes)    │ │   │
+│   └──────────────────┘                            │ └──────────────┘ │   │
+│         │                                         └──────────────────┘   │
+│         │                                                    │              │
+│         ├────────────────────────────────────────────────────┘              │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ PHASE 3: DEFERRED (Batch Processing)                              │   │
+│   │                                                                    │   │
+│   │ ┌──────────────────────────────────────────────────────────────┐ │   │
+│   │ │ Analytics Warehouse                                           │ │   │
+│   │ │ • Anonymize events (remove user_id, keep aggregates)          │ │   │
+│   │ │ • Processed in next batch job (within 24 hours)               │ │   │
+│   │ │ Status: ⏳ Queued                                             │ │   │
+│   │ └──────────────────────────────────────────────────────────────┘ │   │
+│   │ ┌──────────────────────────────────────────────────────────────┐ │   │
+│   │ │ Application Logs                                              │ │   │
+│   │ │ • Accelerate expiration (from 90 days to immediate)         │ │   │
+│   │ │ • Processed in next log cleanup job (within 6 hours)          │ │   │
+│   │ │ Status: ⏳ Scheduled                                          │ │   │
+│   │ └──────────────────────────────────────────────────────────────┘ │   │
+│   │ ┌──────────────────────────────────────────────────────────────┐ │   │
+│   │ │ ML Training Data                                              │ │   │
+│   │ │ • Remove from next training dataset                           │ │   │
+│   │ │ • Processed before next model training (within 7 days)        │ │   │
+│   │ │ Status: ⏳ Scheduled                                          │ │   │
+│   │ └──────────────────────────────────────────────────────────────┘ │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ PHASE 4: EVENTUAL (Immutable Stores)                              │   │
+│   │                                                                    │   │
+│   │ ┌──────────────────────────────────────────────────────────────┐ │   │
+│   │ │ Daily Backups                                                 │ │   │
+│   │ │ • Cannot delete (immutable)                                   │ │   │
+│   │ │ • Add to backup exclusion list                                │ │   │
+│   │ │ • Excluded from restore operations                            │ │   │
+│   │ │ • Natural expiration: 30 days                                 │ │   │
+│   │ │ Status: ✅ Excluded                                           │ │   │
+│   │ └──────────────────────────────────────────────────────────────┘ │   │
+│   │ ┌──────────────────────────────────────────────────────────────┐ │   │
+│   │ │ Weekly Archives                                               │ │   │
+│   │ │ • Cannot delete (immutable)                                   │ │   │
+│   │ │ • Add to archive exclusion list                               │ │   │
+│   │ │ • Natural expiration: 1 year                                   │ │   │
+│   │ │ Status: ✅ Excluded                                           │ │   │
+│   │ └──────────────────────────────────────────────────────────────┘ │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│         │                                                                   │
+│         ▼                                                                   │
+│   ┌───────────────────────────────────────────────────────────────────┐   │
+│   │ VERIFICATION (Ongoing)                                            │   │
+│   │                                                                    │   │
+│   │ Periodic checks (every 6 hours):                                  │   │
+│   │ • Verify deletion completed in all stores                          │   │
+│   │ • Retry failed deletions                                           │   │
+│   │ • Alert if deletion incomplete after 7 days                        │   │
+│   │                                                                    │   │
+│   │ Manifest Status:                                                   │   │
+│   │ • Immediate: ✅ Complete (2/2 stores)                               │   │
+│   │ • Async: ✅ Complete (3/3 stores)                                  │   │
+│   │ • Deferred: ⏳ In Progress (3/3 queued)                            │   │
+│   │ • Eventual: ✅ Excluded (2/2 stores)                                │   │
+│   │                                                                    │   │
+│   │ Overall: PARTIAL (will complete when deferred phases finish)      │   │
+│   └───────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   FAILURE HANDLING:                                                         │
+│   If any phase fails:                                                       │
+│   1. Retry with exponential backoff                                        │
+│   2. Escalate to store owner team after 3 retries                         │
+│   3. Block new data creation for this user until deletion completes         │
+│   4. Alert compliance team if incomplete after SLA                          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
