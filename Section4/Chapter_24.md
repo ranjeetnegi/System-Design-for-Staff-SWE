@@ -78,17 +78,17 @@ The application code runs in multiple geographic locations. Each region handles 
 │                    MULTI-REGION DEPLOYMENT (COMPUTE)                        │
 │                                                                             │
 │      US-EAST                EU-WEST               AP-NORTHEAST              │
-│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐             │
-│   │  App Servers │      │  App Servers │      │  App Servers │             │
-│   │  (stateless) │      │  (stateless) │      │  (stateless) │             │
-│   └──────────────┘      └──────────────┘      └──────────────┘             │
+│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐              │
+│   │  App Servers │      │  App Servers │      │  App Servers │              │
+│   │  (stateless) │      │  (stateless) │      │  (stateless) │              │
+│   └──────────────┘      └──────────────┘      └──────────────┘              │
 │          │                     │                     │                      │
 │          └─────────────────────┼─────────────────────┘                      │
 │                                │                                            │
 │                                ▼                                            │
 │                    ┌─────────────────────┐                                  │
-│                    │  Single Primary DB   │                                  │
-│                    │    (US-EAST)         │                                  │
+│                    │  Single Primary DB  │                                  │
+│                    │    (US-EAST)        │                                  │
 │                    └─────────────────────┘                                  │
 │                                                                             │
 │   COMPUTE is distributed, but DATA is centralized.                          │
@@ -107,15 +107,15 @@ Data is replicated across regions. This is where multi-region becomes genuinely 
 │                    MULTI-REGION DATA (REPLICATED STATE)                     │
 │                                                                             │
 │      US-EAST                EU-WEST               AP-NORTHEAST              │
-│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐             │
-│   │  App Servers │      │  App Servers │      │  App Servers │             │
-│   └──────┬───────┘      └──────┬───────┘      └──────┬───────┘             │
+│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐              │
+│   │  App Servers │      │  App Servers │      │  App Servers │              │
+│   └──────┬───────┘      └──────┬───────┘      └──────┬───────┘              │
 │          │                     │                     │                      │
 │          ▼                     ▼                     ▼                      │
-│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐             │
-│   │   Database   │◀────▶│   Database   │◀────▶│   Database   │             │
-│   │   (replica)  │      │   (replica)  │      │   (replica)  │             │
-│   └──────────────┘      └──────────────┘      └──────────────┘             │
+│   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐              │
+│   │   Database   │◀────▶│   Database   │◀────▶│   Database   │              │
+│   │   (replica)  │      │   (replica)  │      │   (replica)  │              │
+│   └──────────────┘      └──────────────┘      └──────────────┘              │
 │                                                                             │
 │   DATA is distributed. Now what?                                            │
 │   • Are all replicas equal (active-active)?                                 │
@@ -373,7 +373,7 @@ When regions can't communicate, you face the CAP theorem directly:
 │                                                                             │
 │      US-EAST                         EU-WEST                                │
 │   ┌──────────────┐               ┌──────────────┐                           │
-│   │   Active     │  ─── X ───   │   Active     │                           │
+│   │   Active     │  ─── X ───    │   Active     │                           │
 │   │   Region     │   partition   │   Region     │                           │
 │   └──────────────┘               └──────────────┘                           │
 │                                                                             │
@@ -492,14 +492,14 @@ because replication is N×(N-1) for active-active.
 │                                                                             │
 │   ❌ AVOID: Synchronous cross-region writes for non-critical data           │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  WHY: Adds 100-300ms latency AND doubles network cost              │   │
-│   │  INSTEAD: Async replication with eventual consistency                │   │
+│   │  WHY: Adds 100-300ms latency AND doubles network cost               │   │
+│   │  INSTEAD: Async replication with eventual consistency               │   │
 │   │  SAVINGS: 50% reduction in cross-region traffic                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   ❌ AVOID: Full active-active for read-heavy workloads                    │
+│   ❌ AVOID: Full active-active for read-heavy workloads                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  WHY: Read replicas give 80% of benefit at 40% of cost             │   │
+│   │  WHY: Read replicas give 80% of benefit at 40% of cost              │   │
 │   │  INSTEAD: Active-passive or read-local/write-central                │   │
 │   │  SAVINGS: $50-100K/month for typical workloads                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
@@ -507,21 +507,21 @@ because replication is N×(N-1) for active-active.
 │   ❌ AVOID: Replicating everything to every region                          │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  WHY: Most data is regional (users access local data)               │   │
-│   │  INSTEAD: Regional data partitioning + selective replication         │   │
-│   │  SAVINGS: 60-70% reduction in replication traffic                    │   │
+│   │  INSTEAD: Regional data partitioning + selective replication        │   │
+│   │  SAVINGS: 60-70% reduction in replication traffic                   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   ❌ AVOID: Over-provisioning for theoretical peak                         │
+│   ❌ AVOID: Over-provisioning for theoretical peak                          │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  WHY: Failover capacity ≠ 2x normal capacity                        │   │
 │   │  INSTEAD: 1.5x headroom + graceful degradation                      │   │
 │   │  SAVINGS: 25-30% reduction in compute costs                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   ❌ AVOID: Multi-region for internal/admin tools                          │
+│   ❌ AVOID: Multi-region for internal/admin tools                           │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  WHY: 500 employees can tolerate single-region reliability           │   │
-│   │  INSTEAD: Single region + cross-region backup                        │   │
+│   │  WHY: 500 employees can tolerate single-region reliability          │   │
+│   │  INSTEAD: Single region + cross-region backup                       │   │
 │   │  SAVINGS: $30-50K/month + operational simplicity                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -957,8 +957,8 @@ Getting users to the right region is the first step in multi-region architecture
 │                    GLOBAL TRAFFIC ROUTING STACK                             │
 │                                                                             │
 │   USER ────▶ DNS ────▶ CDN/EDGE ────▶ LOAD BALANCER ────▶ APPLICATION       │
-│               │            │                │                  │             │
-│               ▼            ▼                ▼                  ▼             │
+│               │            │                │                  │            │
+│               ▼            ▼                ▼                  ▼            │
 │          Geo-based    Caching +        Regional          Business           │
 │          resolution   Edge compute     routing           logic              │
 │                                                                             │
@@ -1199,7 +1199,7 @@ CLASS MultiRegionClient:
 │   │  TOTAL: 41ms                                                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   LESSON: "Route to nearest" isn't always best. Consider data locality.    │
+│   LESSON: "Route to nearest" isn't always best. Consider data locality.     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1345,29 +1345,29 @@ DANGER ZONE:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CASCADING FAILURE TIMELINE: STEP-BY-STEP                  │
+│                    CASCADING FAILURE TIMELINE: STEP-BY-STEP                 │
 │                                                                             │
 │   TRIGGER PHASE (T+0 to T+30s)                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+0s:   US-EAST power grid failure begins                         │   │
-│   │  T+5s:   US-EAST datacenter loses primary power                    │   │
-│   │  T+10s:  Generators fail to start (maintenance issue)              │   │
+│   │  T+0s:   US-EAST power grid failure begins                          │   │
+│   │  T+5s:   US-EAST datacenter loses primary power                     │   │
+│   │  T+10s:  Generators fail to start (maintenance issue)               │   │
 │   │  T+15s:  US-EAST servers begin graceful shutdown                    │   │
-│   │  T+20s:  Health checks from EU-WEST/AP-NORTHEAST start failing     │   │
-│   │  T+30s:  US-EAST marked as "unhealthy" by monitoring               │   │
+│   │  T+20s:  Health checks from EU-WEST/AP-NORTHEAST start failing      │   │
+│   │  T+30s:  US-EAST marked as "unhealthy" by monitoring                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   PROPAGATION PHASE (T+30s to T+2min)                                       │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+30s:  EU-WEST and AP-NORTHEAST detect US-EAST down              │   │
-│   │          → Attempt to contact global rate limiter in US-EAST       │   │
-│   │          → Timeout after 5s (rate limiter unreachable)            │   │
+│   │  T+30s:  EU-WEST and AP-NORTHEAST detect US-EAST down               │   │
+│   │          → Attempt to contact global rate limiter in US-EAST        │   │
+│   │          → Timeout after 5s (rate limiter unreachable)              │   │
 │   │                                                                     │   │
 │   │  T+35s:  EU-WEST API servers: "Rate limiter timeout"                │   │
-│   │          → Fallback logic: "Reject all requests" (fail-closed)     │   │
+│   │          → Fallback logic: "Reject all requests" (fail-closed)      │   │
 │   │          → 50% of EU-WEST requests start failing                    │   │
 │   │                                                                     │   │
-│   │  T+40s:  AP-NORTHEAST: Same pattern                                  │   │
+│   │  T+40s:  AP-NORTHEAST: Same pattern                                 │   │
 │   │          → 50% of AP-NORTHEAST requests start failing               │   │
 │   │                                                                     │   │
 │   │  T+45s:  DNS failover begins (automated)                            │   │
@@ -1375,19 +1375,19 @@ DANGER ZONE:
 │   │                                                                     │   │
 │   │  T+60s:  Traffic spike hits EU-WEST: 1.5x normal load               │   │
 │   │          → EU-WEST already degraded (rate limiter timeouts)         │   │
-│   │          → Queue depth increases                                     │   │
+│   │          → Queue depth increases                                    │   │
 │   │                                                                     │   │
 │   │  T+90s:  EU-WEST queue depth > threshold                            │   │
 │   │          → Load balancer starts rejecting requests (503 errors)     │   │
 │   │          → Error rate: 30%                                          │   │
 │   │                                                                     │   │
-│   │  T+2min: AP-NORTHEAST: Same pattern                                  │   │
-│   │          → Both healthy regions now degraded                         │   │
+│   │  T+2min: AP-NORTHEAST: Same pattern                                 │   │
+│   │          → Both healthy regions now degraded                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   USER-VISIBLE IMPACT PHASE (T+2min to T+5min)                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+2min:  Users in EU-WEST see intermittent failures               │   │
+│   │  T+2min:  Users in EU-WEST see intermittent failures                │   │
 │   │           → "Service temporarily unavailable"                       │   │
 │   │           → Retry storms begin (users retry failed requests)        │   │
 │   │                                                                     │   │
@@ -1395,12 +1395,12 @@ DANGER ZONE:
 │   │           → EU-WEST error rate: 50%                                 │   │
 │   │           → AP-NORTHEAST error rate: 40%                            │   │
 │   │                                                                     │   │
-│   │  T+4min:  Customer support tickets spike                           │   │
+│   │  T+4min:  Customer support tickets spike                            │   │
 │   │           → "Can't complete checkout"                               │   │
 │   │           → "Payment failed"                                        │   │
 │   │           → Social media complaints begin                           │   │
 │   │                                                                     │   │
-│   │  T+5min:  Global availability drops to 60%                         │   │
+│   │  T+5min:  Global availability drops to 60%                          │   │
 │   │           → Business impact: $50K/hour revenue loss                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -1416,22 +1416,22 @@ DANGER ZONE:
 │   │           → EU-WEST and AP-NORTHEAST switch to local rate limiters  │   │
 │   │           → Rate limiter timeouts stop                              │   │
 │   │                                                                     │   │
-│   │  T+8min:  EU-WEST error rate drops: 50% → 10%                      │   │
+│   │  T+8min:  EU-WEST error rate drops: 50% → 10%                       │   │
 │   │           → Queue depth starts decreasing                           │   │
 │   │                                                                     │   │
 │   │  T+9min:  AP-NORTHEAST error rate drops: 40% → 8%                   │   │
-│   │           → Both regions recovering                                │   │
+│   │           → Both regions recovering                                 │   │
 │   │                                                                     │   │
-│   │  T+10min: Global availability: 60% → 85%                             │   │
+│   │  T+10min: Global availability: 60% → 85%                            │   │
 │   │           → Retry storms subside                                    │   │
 │   │           → Normal operation resumes (without US-EAST)              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   POST-MORTEM INSIGHTS:                                                     │
-│   • Single point of failure (rate limiter) caused global impact            │   │
-│   • Fail-closed behavior amplified the failure                             │   │
-│   • Retry storms made recovery slower                                      │   │
-│   • Regional fallback existed but wasn't enabled                            │   │
+│   • Single point of failure (rate limiter) caused global impact             │
+│   • Fail-closed behavior amplified the failure                              │
+│   • Retry storms made recovery slower                                       │
+│   • Regional fallback existed but wasn't enabled                            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1675,70 +1675,70 @@ FUNCTION handle_slow_region(region):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    SLOW DEPENDENCY PROPAGATION: 100ms → 2s                   │
+│                    SLOW DEPENDENCY PROPAGATION: 100ms → 2s                  │
 │                                                                             │
 │   BASELINE (Normal Operation):                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  EU-WEST → US-EAST: 100ms RTT                                       │   │
-│   │  Request flow:                                                       │   │
+│   │  Request flow:                                                      │   │
 │   │    User in EU → EU-WEST API (20ms)                                  │   │
 │   │    EU-WEST → US-EAST (for user data): 100ms                         │   │
 │   │    US-EAST → EU-WEST (response): 100ms                              │   │
-│   │    EU-WEST → User: 20ms                                              │   │
-│   │    TOTAL: 240ms (acceptable)                                         │   │
+│   │    EU-WEST → User: 20ms                                             │   │
+│   │    TOTAL: 240ms (acceptable)                                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   DEGRADED STATE (Latency = 2s):                                             │
+│   DEGRADED STATE (Latency = 2s):                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  EU-WEST → US-EAST: 2000ms RTT                                      │   │
-│   │  Request flow:                                                       │   │
+│   │  Request flow:                                                      │   │
 │   │    User in EU → EU-WEST API (20ms)                                  │   │
 │   │    EU-WEST → US-EAST (for user data): 2000ms                        │   │
 │   │    US-EAST → EU-WEST (response): 2000ms                             │   │
-│   │    EU-WEST → User: 20ms                                              │   │
-│   │    TOTAL: 4040ms (unacceptable)                                      │   │
+│   │    EU-WEST → User: 20ms                                             │   │
+│   │    TOTAL: 4040ms (unacceptable)                                     │   │
 │   │                                                                     │   │
-│   │  BUT WAIT - IT GETS WORSE:                                           │   │
+│   │  BUT WAIT - IT GETS WORSE:                                          │   │
 │   │                                                                     │   │
 │   │  If request requires 3 cross-region calls (common pattern):         │   │
-│   │    Call 1: 2000ms                                                    │   │
-│   │    Call 2: 2000ms                                                    │   │
-│   │    Call 3: 2000ms                                                    │   │
+│   │    Call 1: 2000ms                                                   │   │
+│   │    Call 2: 2000ms                                                   │   │
+│   │    Call 3: 2000ms                                                   │   │
 │   │    TOTAL: 6000ms+ (6 seconds per request!)                          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   PROPAGATION EFFECTS:                                                       │
+│   PROPAGATION EFFECTS:                                                      │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+0s:    Cross-region latency spikes to 2s                        │   │
+│   │  T+0s:    Cross-region latency spikes to 2s                         │   │
 │   │                                                                     │   │
-│   │  T+1s:    EU-WEST API servers:                                     │   │
+│   │  T+1s:    EU-WEST API servers:                                      │   │
 │   │           → Connection pool exhausted (connections held for 2s)     │   │
-│   │           → New requests queue waiting for available connections     │   │
+│   │           → New requests queue waiting for available connections    │   │
 │   │           → Queue depth: 10 → 50 → 200 requests                     │   │
 │   │                                                                     │   │
-│   │  T+5s:    EU-WEST API servers:                                     │   │
-│   │           → Request timeouts (5s timeout)                            │   │
+│   │  T+5s:    EU-WEST API servers:                                      │   │
+│   │           → Request timeouts (5s timeout)                           │   │
 │   │           → Retries triggered (exponential backoff)                 │   │
 │   │           → Load amplification: 1 request → 3 retries = 4x load     │   │
 │   │           → Error rate: 0% → 30%                                    │   │
 │   │                                                                     │   │
-│   │  T+10s:   EU-WEST database:                                        │   │
-│   │           → Connection pool exhausted (waiting for US-EAST)          │   │
-│   │           → Local queries also slow (shared connection pool)         │   │
+│   │  T+10s:   EU-WEST database:                                         │   │
+│   │           → Connection pool exhausted (waiting for US-EAST)         │   │
+│   │           → Local queries also slow (shared connection pool)        │   │
 │   │           → Cascading degradation: Even local requests affected     │   │
 │   │                                                                     │   │
 │   │  T+30s:   US-EAST (the "slow" region):                              │   │
-│   │           → Receives retry storms from EU-WEST                       │   │
-│   │           → Load increases 3-4x (original + retries)                 │   │
+│   │           → Receives retry storms from EU-WEST                      │   │
+│   │           → Load increases 3-4x (original + retries)                │   │
 │   │           → US-EAST also degrades (overloaded)                      │   │
-│   │           → Latency increases further: 2s → 3s → 4s                  │   │
-│   │           → Positive feedback loop: Worse latency → More retries     │   │
+│   │           → Latency increases further: 2s → 3s → 4s                 │   │
+│   │           → Positive feedback loop: Worse latency → More retries    │   │
 │   │                                                                     │   │
-│   │  T+60s:   Global impact:                                           │   │
+│   │  T+60s:   Global impact:                                            │   │
 │   │           → EU-WEST: 50% error rate                                 │   │
 │   │           → US-EAST: 40% error rate (overloaded by retries)         │   │
 │   │           → AP-NORTHEAST: 20% error rate (affected by US-EAST)      │   │
-│   │           → Single slow dependency → Global degradation              │   │
+│   │           → Single slow dependency → Global degradation             │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -1950,9 +1950,9 @@ CLASS DataPlaneServer:
 │                    NAIVE DESIGN: SINGLE PRIMARY, GLOBAL READS               │
 │                                                                             │
 │   US-EAST (Primary)         EU-WEST              AP-NORTHEAST               │
-│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐          │
-│   │   API Servers   │   │   API Servers   │   │   API Servers   │          │
-│   └────────┬────────┘   └────────┬────────┘   └────────┬────────┘          │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐           │
+│   │   API Servers   │   │   API Servers   │   │   API Servers   │           │
+│   └────────┬────────┘   └────────┬────────┘   └────────┬────────┘           │
 │            │                     │                     │                    │
 │            │              ALL WRITES                   │                    │
 │            │◀────────────────────┼─────────────────────│                    │
@@ -1988,24 +1988,24 @@ CLASS DataPlaneServer:
 │   Shard by user region. Keep user's data close to user.                     │
 │                                                                             │
 │   US-EAST                   EU-WEST                  AP-NORTHEAST           │
-│   ┌─────────────────┐   ┌─────────────────┐      ┌─────────────────┐       │
-│   │   API Servers   │   │   API Servers   │      │   API Servers   │       │
-│   └────────┬────────┘   └────────┬────────┘      └────────┬────────┘       │
+│   ┌─────────────────┐   ┌─────────────────┐      ┌─────────────────┐        │
+│   │   API Servers   │   │   API Servers   │      │   API Servers   │        │
+│   └────────┬────────┘   └────────┬────────┘      └────────┬────────┘        │
 │            │                     │                        │                 │
 │            ▼                     ▼                        ▼                 │
-│   ┌─────────────────┐   ┌─────────────────┐      ┌─────────────────┐       │
-│   │  Regional DB    │   │  Regional DB    │      │  Regional DB    │       │
-│   │  (US users)     │   │  (EU users)     │      │  (AP users)     │       │
-│   └─────────────────┘   └─────────────────┘      └─────────────────┘       │
+│   ┌─────────────────┐   ┌─────────────────┐      ┌─────────────────┐        │
+│   │  Regional DB    │   │  Regional DB    │      │  Regional DB    │        │
+│   │  (US users)     │   │  (EU users)     │      │  (AP users)     │        │
+│   └─────────────────┘   └─────────────────┘      └─────────────────┘        │
 │            │                     │                        │                 │
 │            └─────────────────────┼────────────────────────┘                 │
 │                                  │                                          │
 │                                  ▼                                          │
-│                    ┌──────────────────────────┐                             │
-│                    │  Global Index (read-only) │                             │
-│                    │  Username → Region mapping │                            │
-│                    │  Cached aggressively       │                            │
-│                    └──────────────────────────┘                             │
+│                    ┌─────────────────────────-─┐                            │
+│                    │  Global Index (read-only) │                            │
+│                    │  Username → Region mapping│                            │
+│                    │  Cached aggressively      │                            │
+│                    └──────────────────────────-┘                            │
 │                                                                             │
 │   ROUTING LOGIC:                                                            │
 │   1. Look up user's home region (cached)                                    │
@@ -2410,17 +2410,17 @@ System State:
 
 Architecture:
 ┌─────────────────────────────────────┐
-│  Single Region (US-EAST)             │
-│  ┌──────────┐  ┌──────────┐        │
-│  │   API-1   │  │   API-2   │        │
-│  └────┬─────┘  └────┬─────┘        │
-│       │             │                │
-│       └──────┬──────┘                │
-│              │                       │
-│         ┌────▼─────┐                 │
-│         │ Database │                 │
-│         │ (sharded)│                 │
-│         └──────────┘                 │
+│  Single Region (US-EAST)            │
+│  ┌──────────┐  ┌──────────┐         │
+│  │   API-1  │  │   API-2  │         │
+│  └────┬─────┘  └────┬─────┘         │
+│       │             │               │
+│       └──────┬──────┘               │
+│              │                      │
+│         ┌────▼─────┐                │
+│         │ Database │                │
+│         │ (sharded)│                │
+│         └──────────┘                │
 └─────────────────────────────────────┘
 
 Bottleneck Analysis:
@@ -2498,15 +2498,15 @@ System State:
 
 Architecture:
 ┌─────────────────────────────────────┐
-│  US-EAST (Primary) + EU-WEST (Replica)│
-│  ┌──────────┐      ┌──────────┐    │
-│  │   API-US  │      │   API-EU  │    │
-│  └────┬─────┘      └────┬─────┘    │
-│       │                 │          │
-│  ┌────▼─────┐      ┌────▼─────┐    │
-│  │   DB-US  │──────▶│   DB-EU  │    │
-│  │ (Primary)│ Repl  │ (Replica)│    │
-│  └──────────┘      └──────────┘    │
+│  US-EAST (Primary)+EU-WEST (Replica)│
+│  ┌──────────┐      ┌──────────┐     │
+│  │   API-US │      │   API-EU │     │
+│  └────┬─────┘      └────┬─────┘     │
+│       │                 │           │
+│  ┌────▼─────┐      ┌────▼─────┐     │
+│  │   DB-US  │─────▶│   DB-EU  │     │
+│  │ (Primary)│ Repl │ (Replica)│     │
+│  └──────────┘      └──────────┘     │
 └─────────────────────────────────────┘
 
 Bottleneck Analysis:
@@ -2543,7 +2543,7 @@ System State:
 
 Architecture:
 ┌─────────────────────────────────────┐
-│  US-EAST  │  EU-WEST  │  AP-NORTHEAST│
+│  US-EAST  │  EU-WEST │  AP-NORTHEAST│
 │  ┌──────┐ │ ┌──────┐ │ ┌──────┐     │
 │  │ API  │ │ │ API  │ │ │ API  │     │
 │  └──┬───┘ │ └──┬───┘ │ └──┬───┘     │
@@ -2710,7 +2710,7 @@ FUNCTION evaluate_multiregion_complexity(system):
 │   │  • Monitor for conflicts and anomalies                              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   EACH PHASE: Stable state before proceeding. Rollback plan ready.         │
+│   EACH PHASE: Stable state before proceeding. Rollback plan ready.          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2733,34 +2733,34 @@ FUNCTION evaluate_multiregion_complexity(system):
 │           ┌─────────────────────────┼─────────────────────────┐             │
 │           │                         │                         │             │
 │           ▼                         ▼                         ▼             │
-│   ┌───────────────┐         ┌───────────────┐         ┌───────────────┐    │
-│   │   US-EAST     │         │   EU-WEST     │         │  AP-NORTHEAST │    │
-│   │               │         │               │         │               │    │
-│   │ ┌───────────┐ │         │ ┌───────────┐ │         │ ┌───────────┐ │    │
-│   │ │  CDN Edge │ │         │ │  CDN Edge │ │         │ │  CDN Edge │ │    │
-│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │    │
-│   │       │       │         │       │       │         │       │       │    │
-│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │    │
-│   │ │    LB     │ │         │ │    LB     │ │         │ │    LB     │ │    │
-│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │    │
-│   │       │       │         │       │       │         │       │       │    │
-│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │    │
-│   │ │    API    │ │         │ │    API    │ │         │ │    API    │ │    │
-│   │ │  Servers  │ │         │ │  Servers  │ │         │ │  Servers  │ │    │
-│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │    │
-│   │       │       │         │       │       │         │       │       │    │
-│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │    │
-│   │ │   Cache   │ │         │ │   Cache   │ │         │ │   Cache   │ │    │
-│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │    │
-│   │       │       │         │       │       │         │       │       │    │
-│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │    │
-│   │ │ Database  │◀┼─────────┼▶│ Database  │◀┼─────────┼▶│ Database  │ │    │
-│   │ │ (Primary  │ │   Async │ │ (Replica) │ │   Async │ │ (Replica) │ │    │
-│   │ │  for US)  │ │   Repl  │ │ (Primary  │ │   Repl  │ │ (Primary  │ │    │
-│   │ │           │ │         │ │  for EU)  │ │         │ │  for AP)  │ │    │
-│   │ └───────────┘ │         │ └───────────┘ │         │ └───────────┘ │    │
-│   │               │         │               │         │               │    │
-│   └───────────────┘         └───────────────┘         └───────────────┘    │
+│   ┌───────────────┐         ┌───────────────┐         ┌───────────────┐     │
+│   │   US-EAST     │         │   EU-WEST     │         │  AP-NORTHEAST │     │
+│   │               │         │               │         │               │     │
+│   │ ┌───────────┐ │         │ ┌───────────┐ │         │ ┌───────────┐ │     │
+│   │ │  CDN Edge │ │         │ │  CDN Edge │ │         │ │  CDN Edge │ │     │
+│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │     │
+│   │       │       │         │       │       │         │       │       │     │
+│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │     │
+│   │ │    LB     │ │         │ │    LB     │ │         │ │    LB     │ │     │
+│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │     │
+│   │       │       │         │       │       │         │       │       │     │
+│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │     │
+│   │ │    API    │ │         │ │    API    │ │         │ │    API    │ │     │
+│   │ │  Servers  │ │         │ │  Servers  │ │         │ │  Servers  │ │     │
+│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │     │
+│   │       │       │         │       │       │         │       │       │     │
+│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │     │
+│   │ │   Cache   │ │         │ │   Cache   │ │         │ │   Cache   │ │     │
+│   │ └─────┬─────┘ │         │ └─────┬─────┘ │         │ └─────┬─────┘ │     │
+│   │       │       │         │       │       │         │       │       │     │
+│   │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │         │ ┌─────▼─────┐ │     │
+│   │ │ Database  │◀┼─────────┼▶│ Database  │◀┼─────────┼▶│ Database  │ │     │
+│   │ │ (Primary  │ │   Async │ │ (Replica) │ │   Async │ │ (Replica) │ │     │
+│   │ │  for US)  │ │   Repl  │ │ (Primary  │ │   Repl  │ │ (Primary  │ │     │
+│   │ │           │ │         │ │  for EU)  │ │         │ │  for AP)  │ │     │
+│   │ └───────────┘ │         │ └───────────┘ │         │ └───────────┘ │     │
+│   │               │         │               │         │               │     │
+│   └───────────────┘         └───────────────┘         └───────────────┘     │
 │                                                                             │
 │   KEY: Each region is primary for its local users' data.                    │
 │        Replication is asynchronous for availability.                        │
@@ -2802,12 +2802,12 @@ FUNCTION evaluate_multiregion_complexity(system):
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │                                                                    │    │
 │   │  US-EAST                EU-WEST               AP-NORTHEAST         │    │
-│   │  ┌──────────┐          ┌──────────┐          ┌──────────┐         │    │
-│   │  │    DB    │─────────▶│    DB    │          │    DB    │         │    │
-│   │  └──────────┘   80ms   └──────────┘          └──────────┘         │    │
-│   │       │                                           ▲               │    │
-│   │       │                                           │               │    │
-│   │       └───────────────────────────────────────────┘               │    │
+│   │  ┌──────────┐          ┌──────────┐          ┌──────────┐          │    │
+│   │  │    DB    │─────────▶│    DB    │          │    DB    │          │    │
+│   │  └──────────┘   80ms   └──────────┘          └──────────┘          │    │
+│   │       │                                           ▲                │    │
+│   │       │                                           │                │    │
+│   │       └───────────────────────────────────────────┘                │    │
 │   │                         150ms                                      │    │
 │   │                                                                    │    │
 │   │  Replication happens AFTER user acknowledgment                     │    │
@@ -2818,7 +2818,7 @@ FUNCTION evaluate_multiregion_complexity(system):
 │   TRADE-OFF:                                                                │
 │   • User sees fast response                                                 │
 │   • Other regions see update 100-200ms later                                │
-│   • If US-EAST fails before replication: data loss (RPO > 0)               │
+│   • If US-EAST fails before replication: data loss (RPO > 0)                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2885,73 +2885,73 @@ FUNCTION evaluate_multiregion_complexity(system):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CASCADING FAILURE PROPAGATION PATHS                       │
+│                    CASCADING FAILURE PROPAGATION PATHS                      │
 │                                                                             │
-│   SCENARIO: US-EAST region failure with global dependencies                  │
+│   SCENARIO: US-EAST region failure with global dependencies                 │
 │                                                                             │
 │   INITIAL FAILURE (T+0):                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                                                                    │   │
-│   │                    ┌──────────────┐                               │   │
-│   │                    │   US-EAST     │                               │   │
-│   │                    │   ✗ FAILED    │                               │   │
-│   │                    └──────┬───────┘                               │   │
-│   │                           │                                        │   │
-│   │                    [Power Grid Failure]                            │   │
-│   │                                                                    │   │
+│   │                                                                     │   │
+│   │                    ┌──────────────┐                                 │   │
+│   │                    │   US-EAST    │                                 │   │
+│   │                    │   ✗ FAILED   │                                 │   │
+│   │                    └──────┬───────┘                                 │   │
+│   │                           │                                         │   │
+│   │                    [Power Grid Failure]                             │   │
+│   │                                                                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                           │                                                  │
-│                           │ PROPAGATION PATH 1: Direct Dependency            │
-│                           ▼                                                  │
+│                           │                                                 │
+│                           │ PROPAGATION PATH 1: Direct Dependency           │
+│                           ▼                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  EU-WEST                            AP-NORTHEAST                    │   │
 │   │  ┌──────────┐                       ┌──────────┐                    │   │
 │   │  │   API    │                       │   API    │                    │   │
 │   │  └────┬─────┘                       └────┬─────┘                    │   │
-│   │       │                                 │                           │   │
-│   │       │ Calls global rate limiter      │ Calls global rate limiter │   │
-│   │       │ in US-EAST (unreachable)       │ in US-EAST (unreachable) │   │
-│   │       │                                 │                           │   │
-│   │       ▼                                 ▼                           │   │
-│   │  ┌──────────┐                       ┌──────────┐                    │   │
-│   │  │ Timeout  │                       │ Timeout  │                    │   │
-│   │  │ 5s wait  │                       │ 5s wait  │                    │   │
-│   │  └──────────┘                       └──────────┘                    │   │
-│   │                                                                    │   │
-│   │  IMPACT: Connection pool exhausted, requests queue                │   │
+│   │       │                                  │                          │   │
+│   │       │ Calls global rate limiter        │ Calls global rate limiter│   │
+│   │       │ in US-EAST (unreachable)         │ in US-EAST (unreachable) │   │
+│   │       │                                  │                          │   │
+│   │       ▼                                  ▼                          │   │
+│   │  ┌──────────┐                        ┌──────────┐                   │   │
+│   │  │ Timeout  │                        │ Timeout  │                   │   │
+│   │  │ 5s wait  │                        │ 5s wait  │                   │   │
+│   │  └──────────┘                        └──────────┘                   │   │
+│   │                                                                     │   │
+│   │  IMPACT: Connection pool exhausted, requests queue                  │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                           │                                                  │
-│                           │ PROPAGATION PATH 2: Traffic Shift                │
-│                           ▼                                                  │
+│                           │                                                 │
+│                           │ PROPAGATION PATH 2: Traffic Shift               │
+│                           ▼                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  DNS Failover: US traffic redirected to EU-WEST and AP-NORTHEAST     │   │
-│   │                                                                    │   │
+│   │  DNS Failover: US traffic redirected to EU-WEST and AP-NORTHEAST    │   │
+│   │                                                                     │   │
 │   │  EU-WEST:                                                           │   │
 │   │  ┌──────────┐                                                       │   │
-│   │  │   API    │ ← Normal EU traffic + US traffic (1.5× load)        │   │
+│   │  │   API    │ ← Normal EU traffic + US traffic (1.5× load)          │   │
 │   │  └────┬─────┘                                                       │   │
 │   │       │                                                             │   │
 │   │       ▼                                                             │   │
 │   │  ┌──────────┐                                                       │   │
-│   │  │ Overload │ ← Capacity exceeded                                  │   │
+│   │  │ Overload │ ← Capacity exceeded                                   │   │
 │   │  └──────────┘                                                       │   │
-│   │                                                                    │   │
+│   │                                                                     │   │
 │   │  AP-NORTHEAST:                                                      │   │
 │   │  ┌──────────┐                                                       │   │
-│   │  │   API    │ ← Normal AP traffic + US traffic (1.3× load)        │   │
+│   │  │   API    │ ← Normal AP traffic + US traffic (1.3× load)          │   │
 │   │  └────┬─────┘                                                       │   │
 │   │       │                                                             │   │
 │   │       ▼                                                             │   │
 │   │  ┌──────────┐                                                       │   │
-│   │  │ Overload │ ← Capacity exceeded                                  │   │
+│   │  │ Overload │ ← Capacity exceeded                                   │   │
 │   │  └──────────┘                                                       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                           │                                                  │
-│                           │ PROPAGATION PATH 3: Retry Storms                 │
-│                           ▼                                                  │
+│                           │                                                 │
+│                           │ PROPAGATION PATH 3: Retry Storms                │
+│                           ▼                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  User requests fail → Retry → More load → More failures             │   │
-│   │                                                                    │   │
+│   │                                                                     │   │
 │   │  EU-WEST:                                                           │   │
 │   │  ┌──────────┐                                                       │   │
 │   │  │   API    │ ← Original requests + Retries (3× amplification)      │   │
@@ -2962,21 +2962,21 @@ FUNCTION evaluate_multiregion_complexity(system):
 │   │  │ Critical │ ← Complete overload, rejecting all requests           │   │
 │   │  │ Overload │                                                       │   │
 │   │  └──────────┘                                                       │   │
-│   │                                                                    │   │
-│   │  AP-NORTHEAST: Same pattern                                        │   │
+│   │                                                                     │   │
+│   │  AP-NORTHEAST: Same pattern                                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
-│                           │                                                  │
-│                           │ FINAL STATE: Global Degradation                  │
-│                           ▼                                                  │
+│                           │                                                 │
+│                           │ FINAL STATE: Global Degradation                 │
+│                           ▼                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  GLOBAL IMPACT:                                                      │   │
-│   │                                                                    │   │
-│   │  US-EAST:     ✗ Complete outage (100% failure)                     │   │
-│   │  EU-WEST:     ⚠ Degraded (50% error rate)                          │   │
-│   │  AP-NORTHEAST: ⚠ Degraded (40% error rate)                         │   │
-│   │                                                                    │   │
-│   │  Global availability: 60% (down from 99.99%)                      │   │
-│   │  User impact: Millions of users affected                           │   │
+│   │  GLOBAL IMPACT:                                                     │   │
+│   │                                                                     │   │
+│   │  US-EAST:     ✗ Complete outage (100% failure)                      │   │
+│   │  EU-WEST:     ⚠ Degraded (50% error rate)                           │   │
+│   │  AP-NORTHEAST: ⚠ Degraded (40% error rate)                          │   │
+│   │                                                                     │   │
+│   │  Global availability: 60% (down from 99.99%)                        │   │
+│   │  User impact: Millions of users affected                            │   │
 │   │  Business impact: $500K/hour revenue loss                           │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -2985,11 +2985,11 @@ FUNCTION evaluate_multiregion_complexity(system):
 │   │  1. Single point of failure (rate limiter) → Global impact          │   │
 │   │  2. Traffic shift → Overload healthy regions                        │   │
 │   │  3. Retry storms → Amplify the failure                              │   │
-│   │  4. Cascading degradation: One failure → Multiple failures         │   │
+│   │  4. Cascading degradation: One failure → Multiple failures          │   │
 │   │                                                                     │   │
 │   │  PREVENTION:                                                        │   │
 │   │  • Regional rate limiters (no global singleton)                     │   │
-│   │  • Capacity headroom (1.5-2× normal traffic)                         │   │
+│   │  • Capacity headroom (1.5-2× normal traffic)                        │   │
 │   │  • Circuit breakers (stop retries when overloaded)                  │   │
 │   │  • Graceful degradation (reduce functionality, don't fail hard)     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
@@ -3073,132 +3073,132 @@ A major e-commerce platform operated active-active across US-EAST and EU-WEST. B
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    INCIDENT TIMELINE: STEP-BY-STEP BREAKDOWN                  │
+│                    INCIDENT TIMELINE: STEP-BY-STEP BREAKDOWN                │
 │                                                                             │
 │   TRIGGER PHASE (T+0 to T+5min)                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+0:      Submarine cable fault detected (US-EAST ↔ EU-WEST)        │   │
-│   │            → Network partition begins                                 │   │
-│   │            → Cross-region latency spikes: 100ms → 5000ms+            │   │
-│   │            → Packet loss: 0% → 80%                                    │   │
+│   │  T+0:      Submarine cable fault detected (US-EAST ↔ EU-WEST)       │   │
+│   │            → Network partition begins                               │   │
+│   │            → Cross-region latency spikes: 100ms → 5000ms+           │   │
+│   │            → Packet loss: 0% → 80%                                  │   │
 │   │                                                                     │   │
-│   │  T+30s:    Health checks start failing intermittently                 │   │
-│   │            → Some packets get through (partial partition)             │   │
-│   │            → System doesn't detect full isolation                      │   │
+│   │  T+30s:    Health checks start failing intermittently               │   │
+│   │            → Some packets get through (partial partition)           │   │
+│   │            → System doesn't detect full isolation                   │   │
 │   │                                                                     │   │
-│   │  T+2min:   Replication lag begins increasing                          │   │
-│   │            → US-EAST → EU-WEST: Lag = 5s                              │   │
-│   │            → EU-WEST → US-EAST: Lag = 5s                              │   │
-│   │            → Monitoring alerts: "Replication lag > 3s"                │   │
+│   │  T+2min:   Replication lag begins increasing                        │   │
+│   │            → US-EAST → EU-WEST: Lag = 5s                            │   │
+│   │            → EU-WEST → US-EAST: Lag = 5s                            │   │
+│   │            → Monitoring alerts: "Replication lag > 3s"              │   │
 │   │                                                                     │   │
-│   │  T+5min:   Replication lag: 10s+                                      │   │
-│   │            → Monitoring escalates: "Critical replication lag"         │   │
-│   │            → On-call engineer paged (automated alert)                │   │
+│   │  T+5min:   Replication lag: 10s+                                    │   │
+│   │            → Monitoring escalates: "Critical replication lag"       │   │
+│   │            → On-call engineer paged (automated alert)               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   PROPAGATION PHASE (T+5min to T+30min)                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  T+5min:    On-call engineer investigates                           │   │
-│   │             → Reviews dashboards: "High replication lag"             │   │
-│   │             → Assumes transient network issue                        │   │
-│   │             → Decision: "Wait and see" (no action taken)             │   │
+│   │             → Reviews dashboards: "High replication lag"            │   │
+│   │             → Assumes transient network issue                       │   │
+│   │             → Decision: "Wait and see" (no action taken)            │   │
 │   │                                                                     │   │
-│   │  T+10min:   Both regions continue operating independently            │   │
-│   │             → US-EAST: Accepting orders normally                     │   │
-│   │             → EU-WEST: Accepting orders normally                     │   │
-│   │             → Each region checks LOCAL inventory only                 │   │
-│   │             → No cross-region coordination                            │   │
+│   │  T+10min:   Both regions continue operating independently           │   │
+│   │             → US-EAST: Accepting orders normally                    │   │
+│   │             → EU-WEST: Accepting orders normally                    │   │
+│   │             → Each region checks LOCAL inventory only               │   │
+│   │             → No cross-region coordination                          │   │
 │   │                                                                     │   │
 │   │  T+15min:   Orders accumulate in both regions                       │   │
 │   │             → US-EAST: 250 orders for "Limited Edition Widget"      │   │
-│   │                        (Local inventory: 600 units)                  │   │
-│   │             → EU-WEST: 200 orders for same item                      │   │
-│   │                        (Local inventory: 600 units - STALE!)         │   │
-│   │             → Total orders: 450 (within 600 limit)                   │   │
-│   │             → But inventory is shared across regions!                │   │
+│   │                        (Local inventory: 600 units)                 │   │
+│   │             → EU-WEST: 200 orders for same item                     │   │
+│   │                        (Local inventory: 600 units - STALE!)        │   │
+│   │             → Total orders: 450 (within 600 limit)                  │   │
+│   │             → But inventory is shared across regions!               │   │
 │   │                                                                     │   │
-│   │  T+20min:   More orders come in                                      │   │
+│   │  T+20min:   More orders come in                                     │   │
 │   │             → US-EAST: 500 total orders (sold 500 units)            │   │
 │   │             → EU-WEST: 400 total orders (sold 400 units)            │   │
-│   │             → Combined: 900 orders for 600 units                     │   │
-│   │             → Oversold by 300 units (50% oversell!)                  │   │
+│   │             → Combined: 900 orders for 600 units                    │   │
+│   │             → Oversold by 300 units (50% oversell!)                 │   │
 │   │                                                                     │   │
-│   │  T+25min:   Network team identifies submarine cable issue            │   │
-│   │             → Estimated repair time: 30 minutes                      │   │
-│   │             → On-call engineer: "We'll wait for repair"              │   │
-│   │             → No decision to stop accepting orders                   │   │
+│   │  T+25min:   Network team identifies submarine cable issue           │   │
+│   │             → Estimated repair time: 30 minutes                     │   │
+│   │             → On-call engineer: "We'll wait for repair"             │   │
+│   │             → No decision to stop accepting orders                  │   │
 │   │                                                                     │   │
 │   │  T+30min:   Partition heals (cable repaired)                        │   │
-│   │             → Replication resumes                                     │   │
-│   │             → Queued writes begin replicating                        │   │
+│   │             → Replication resumes                                   │   │
+│   │             → Queued writes begin replicating                       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   USER-VISIBLE IMPACT PHASE (T+30min to T+45min)                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+31min:   CONFLICT STORM begins                                    │   │
-│   │             → Replication detects 15,000 conflicting orders            │   │
-│   │             → Conflict resolution system overwhelmed                  │   │
-│   │             → Resolution queue backs up: 15,000 → 20,000 → 30,000     │   │
+│   │  T+31min:   CONFLICT STORM begins                                   │   │
+│   │             → Replication detects 15,000 conflicting orders         │   │
+│   │             → Conflict resolution system overwhelmed                │   │
+│   │             → Resolution queue backs up: 15,000 → 20,000 → 30,000   │   │
 │   │                                                                     │   │
-│   │  T+32min:   Inventory reconciliation begins                          │   │
-│   │             → System detects oversell: 300 units                      │   │
+│   │  T+32min:   Inventory reconciliation begins                         │   │
+│   │             → System detects oversell: 300 units                    │   │
 │   │             → Alert: "CRITICAL: Inventory oversold"                 │   │
-│   │             → On-call engineer paged (second alert)                  │   │
+│   │             → On-call engineer paged (second alert)                 │   │
 │   │                                                                     │   │
-│   │  T+35min:   Customer impact begins                                   │   │
-│   │             → 300 customers receive "Order cancelled - oversold"      │   │
-│   │             → Customer support tickets spike: 500 → 2000             │   │
-│   │             → Social media complaints begin                           │   │
-│   │             → Business impact: $150K in cancelled orders              │   │
+│   │  T+35min:   Customer impact begins                                  │   │
+│   │             → 300 customers receive "Order cancelled - oversold"    │   │
+│   │             → Customer support tickets spike: 500 → 2000            │   │
+│   │             → Social media complaints begin                         │   │
+│   │             → Business impact: $150K in cancelled orders            │   │
 │   │                                                                     │   │
-│   │  T+40min:   Conflict resolution system crashes                       │   │
-│   │             → Too many conflicts to process                           │   │
-│   │             → Manual intervention required                            │   │
-│   │             → Engineering team escalates to Staff engineer            │   │
+│   │  T+40min:   Conflict resolution system crashes                      │   │
+│   │             → Too many conflicts to process                         │   │
+│   │             → Manual intervention required                          │   │
+│   │             → Engineering team escalates to Staff engineer          │   │
 │   │                                                                     │   │
-│   │  T+45min:   Staff engineer takes over                                │   │
-│   │             → Decision: Stop conflict resolution                     │   │
-│   │             → Manually reconcile inventory                           │   │
-│   │             → Cancel oversold orders (300 orders)                     │   │
+│   │  T+45min:   Staff engineer takes over                               │   │
+│   │             → Decision: Stop conflict resolution                    │   │
+│   │             → Manually reconcile inventory                          │   │
+│   │             → Cancel oversold orders (300 orders)                   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   CONTAINMENT PHASE (T+45min to T+2hours)                                    │
+│   CONTAINMENT PHASE (T+45min to T+2hours)                                   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  T+45min:   Manual reconciliation begins                             │   │
-│   │             → Review 15,000 conflicts                                 │   │
-│   │             → Identify 300 oversold orders                            │   │
-│   │             → Cancel oversold orders                                  │   │
+│   │  T+45min:   Manual reconciliation begins                            │   │
+│   │             → Review 15,000 conflicts                               │   │
+│   │             → Identify 300 oversold orders                          │   │
+│   │             → Cancel oversold orders                                │   │
 │   │                                                                     │   │
-│   │  T+1hour:   Customer notifications sent                              │   │
-│   │             → 300 customers: "Order cancelled, refund issued"          │   │
-│   │             → 14,700 customers: "Order confirmed"                    │   │
-│   │             → Customer support handles complaints                     │   │
+│   │  T+1hour:   Customer notifications sent                             │   │
+│   │             → 300 customers: "Order cancelled, refund issued"       │   │
+│   │             → 14,700 customers: "Order confirmed"                   │   │
+│   │             → Customer support handles complaints                   │   │
 │   │                                                                     │   │
-│   │  T+1.5hours: System stabilized                                       │   │
-│   │             → Conflict resolution queue cleared                       │   │
-│   │             → Inventory reconciled                                    │   │
-│   │             → Normal operation resumes                                │   │
+│   │  T+1.5hours: System stabilized                                      │   │
+│   │             → Conflict resolution queue cleared                     │   │
+│   │             → Inventory reconciled                                  │   │
+│   │             → Normal operation resumes                              │   │
 │   │                                                                     │   │
 │   │  T+2hours:  Post-mortem begins                                      │   │
-│   │             → Root cause: Local inventory checks during partition     │   │
-│   │             → Fix: Global inventory locks for limited items           │   │
+│   │             → Root cause: Local inventory checks during partition   │   │
+│   │             → Fix: Global inventory locks for limited items         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   THE CONFLICT DETAILS:                                                      │
+│   THE CONFLICT DETAILS:                                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Item: "Limited Edition Widget" (SKU: WIDGET-001)                    │   │
-│   │  Actual inventory: 600 units                                         │   │
+│   │  Item: "Limited Edition Widget" (SKU: WIDGET-001)                   │   │
+│   │  Actual inventory: 600 units                                        │   │
 │   │                                                                     │   │
 │   │  During partition (T+10min to T+30min):                             │   │
-│   │  • US-EAST: Sees 600 units (local), sells 500 units                  │   │
-│   │  • EU-WEST: Sees 600 units (STALE - not updated), sells 400 units  │   │
+│   │  • US-EAST: Sees 600 units (local), sells 500 units                 │   │
+│   │  • EU-WEST: Sees 600 units (STALE - not updated), sells 400 units   │   │
 │   │  • Combined: 900 units "sold" for 600 actual units                  │   │
-│   │  • Oversold by: 300 units (50% oversell)                             │   │
+│   │  • Oversold by: 300 units (50% oversell)                            │   │
 │   │                                                                     │   │
-│   │  Impact:                                                             │   │
-│   │  • 300 customers: Order cancelled                                     │   │
-│   │  • $150K: Revenue lost (cancelled orders)                             │   │
-│   │  • 2 hours: System recovery time                                     │   │
+│   │  Impact:                                                            │   │
+│   │  • 300 customers: Order cancelled                                   │   │
+│   │  • $150K: Revenue lost (cancelled orders)                           │   │
+│   │  • 2 hours: System recovery time                                    │   │
 │   │  • Reputation damage: Negative reviews, social media backlash       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -3377,43 +3377,43 @@ Multi-region systems don't just have technical challenges—they have organizati
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FOLLOW-THE-SUN ON-CALL MODEL                            │
+│                    FOLLOW-THE-SUN ON-CALL MODEL                             │
 │                                                                             │
 │   SINGLE REGION:                                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  • One on-call rotation (US team)                                   │   │
-│   │  • Incidents during US business hours: Immediate response            │   │
+│   │  • Incidents during US business hours: Immediate response           │   │
 │   │  • Incidents during US off-hours: Pager duty (wake up)              │   │
-│   │  • Team size: 5 engineers                                            │   │
+│   │  • Team size: 5 engineers                                           │   │
 │   │  • On-call burden: 1 week/month per engineer                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   MULTI-REGION (Follow-the-Sun):                                           │
+│   MULTI-REGION (Follow-the-Sun):                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  • Three on-call rotations (US, EU, APAC)                            │   │
-│   │  • Each region handles incidents during their business hours         │   │
-│   │  • Escalation for global issues (wake up other regions)              │   │
+│   │  • Three on-call rotations (US, EU, APAC)                           │   │
+│   │  • Each region handles incidents during their business hours        │   │
+│   │  • Escalation for global issues (wake up other regions)             │   │
 │   │  • Team size: 15 engineers (5 per region)                           │   │
-│   │  • On-call burden: 1 week/month per engineer                       │   │
+│   │  • On-call burden: 1 week/month per engineer                        │   │
 │   │  • BUT: Global incidents require coordination across time zones     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   THE CHALLENGES:                                                           │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  1. Time zone coordination                                           │   │
+│   │  1. Time zone coordination                                          │   │
 │   │     • US engineer: "It's 3am here, can EU handle this?"             │   │
-│   │     • EU engineer: "US is sleeping, should I wake them?"             │   │
+│   │     • EU engineer: "US is sleeping, should I wake them?"            │   │
 │   │     • APAC engineer: "Both US and EU are offline"                   │   │
 │   │                                                                     │   │
-│   │  2. Knowledge transfer                                               │   │
-│   │     • US engineer fixes issue, documents in US timezone              │   │
-│   │     • EU engineer reads docs next day, context lost                  │   │
+│   │  2. Knowledge transfer                                              │   │
+│   │     • US engineer fixes issue, documents in US timezone             │   │
+│   │     • EU engineer reads docs next day, context lost                 │   │
 │   │     • APAC engineer: "What happened? I wasn't in the loop"          │   │
 │   │                                                                     │   │
-│   │  3. Escalation complexity                                            │   │
-│   │     • Local issue: Handle locally                                    │   │
-│   │     • Global issue: Who owns it? US? EU? APAC?                         │   │
-│   │     • Cross-region issue: Which region's on-call handles?             │   │
+│   │  3. Escalation complexity                                           │   │
+│   │     • Local issue: Handle locally                                   │   │
+│   │     • Global issue: Who owns it? US? EU? APAC?                      │   │
+│   │     • Cross-region issue: Which region's on-call handles?           │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3479,22 +3479,22 @@ CLASS FollowTheSunOnCall:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    CROSS-REGION DEBUGGING COMPLEXITY                        │
 │                                                                             │
-│   SINGLE REGION DEBUGGING:                                                 │
+│   SINGLE REGION DEBUGGING:                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Request ID: abc123                                                │   │
+│   │  Request ID: abc123                                                 │   │
 │   │  Logs: All in one place (US-EAST)                                   │   │
 │   │  Timeline: Clear, sequential                                        │   │
 │   │  Debugging time: 10 minutes                                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   MULTI-REGION DEBUGGING:                                                  │
+│   MULTI-REGION DEBUGGING:                                                   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Request ID: abc123                                                │   │
+│   │  Request ID: abc123                                                 │   │
 │   │  User in EU, but data in US                                         │   │
 │   │                                                                     │   │
 │   │  Timeline (with timezone confusion):                                │   │
 │   │  T+0ms:    EU-WEST receives request (2024-01-15 14:00:00 CET)       │   │
-│   │  T+20ms:   EU-WEST calls US-EAST (2024-01-15 08:00:00 EST)         │   │
+│   │  T+20ms:   EU-WEST calls US-EAST (2024-01-15 08:00:00 EST)          │   │
 │   │  T+120ms:  US-EAST processes (2024-01-15 08:00:00 EST)              │   │
 │   │  T+220ms:  US-EAST calls AP-NORTHEAST (2024-01-15 22:00:00 JST)     │   │
 │   │  T+320ms:  AP-NORTHEAST responds (2024-01-15 22:00:00 JST)          │   │
@@ -3506,11 +3506,11 @@ CLASS FollowTheSunOnCall:
 │   │  • US-EAST logs (EST timezone)                                      │   │
 │   │  • AP-NORTHEAST logs (JST timezone)                                 │   │
 │   │                                                                     │   │
-│   │  Debugging challenges:                                             │   │
-│   │  • Timezone conversion errors                                        │   │
-│   │  • Log correlation across regions                                    │   │
+│   │  Debugging challenges:                                              │   │
+│   │  • Timezone conversion errors                                       │   │
+│   │  • Log correlation across regions                                   │   │
 │   │  • Network latency vs processing time                               │   │
-│   │  • Which region caused the error?                                    │   │
+│   │  • Which region caused the error?                                   │   │
 │   │                                                                     │   │
 │   │  Debugging time: 2-4 hours (20-40× longer!)                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
@@ -3583,26 +3583,26 @@ trace = tracer.query_trace("abc123")
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    OWNERSHIP BOUNDARIES IN MULTI-REGION                     │
 │                                                                             │
-│   SINGLE REGION OWNERSHIP:                                                 │
+│   SINGLE REGION OWNERSHIP:                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  • API Team: Owns API servers                                      │   │
-│   │  • Database Team: Owns database                                    │   │
-│   │  • Infrastructure Team: Owns infrastructure                          │   │
-│   │  • Clear boundaries, clear escalation                              │   │
+│   │  • API Team: Owns API servers                                       │   │
+│   │  • Database Team: Owns database                                     │   │
+│   │  • Infrastructure Team: Owns infrastructure                         │   │
+│   │  • Clear boundaries, clear escalation                               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   MULTI-REGION OWNERSHIP (The Gray Areas):                                 │
+│   MULTI-REGION OWNERSHIP (The Gray Areas):                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  • API Team: Owns API servers... but in which regions?             │   │
-│   │  • Database Team: Owns database... but replication?                  │   │
-│   │  • Infrastructure Team: Owns infrastructure... but cross-region?     │   │
-│   │  • NEW: Multi-Region Team: Owns... everything?                       │   │
+│   │  • API Team: Owns API servers... but in which regions?              │   │
+│   │  • Database Team: Owns database... but replication?                 │   │
+│   │  • Infrastructure Team: Owns infrastructure... but cross-region?    │   │
+│   │  • NEW: Multi-Region Team: Owns... everything?                      │   │
 │   │                                                                     │   │
 │   │  THE PROBLEMS:                                                      │   │
-│   │  1. Replication lag: API Team or Database Team?                      │   │
+│   │  1. Replication lag: API Team or Database Team?                     │   │
 │   │  2. Cross-region routing: API Team or Infrastructure Team?          │   │
-│   │  3. Conflict resolution: Database Team or Application Team?          │   │
-│   │  4. Failover decisions: Who makes the call?                          │   │
+│   │  3. Conflict resolution: Database Team or Application Team?         │   │
+│   │  4. Failover decisions: Who makes the call?                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3662,52 +3662,52 @@ OWNERSHIP_MATRIX = {
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    HUMAN FAILURE MODES IN MULTI-REGION                      │
 │                                                                             │
-│   FAILURE MODE 1: Timezone Confusion                                       │
+│   FAILURE MODE 1: Timezone Confusion                                        │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Scenario: US engineer deploys at 2pm EST                          │   │
+│   │  Scenario: US engineer deploys at 2pm EST                           │   │
 │   │           EU engineer sees deployment at 8pm CET (same time)        │   │
-│   │           APAC engineer sees deployment at 1am JST (next day)        │   │
+│   │           APAC engineer sees deployment at 1am JST (next day)       │   │
 │   │                                                                     │   │
-│   │  Problem: "When did this deploy?"                                  │   │
+│   │  Problem: "When did this deploy?"                                   │   │
 │   │  Impact: Debugging timeline confusion                               │   │
 │   │  Fix: Always use UTC for timestamps                                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   FAILURE MODE 2: Regional Knowledge Silos                                 │
+│   FAILURE MODE 2: Regional Knowledge Silos                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  Scenario: US engineer fixes issue in US-EAST                      │   │
+│   │  Scenario: US engineer fixes issue in US-EAST                       │   │
 │   │           EU engineer doesn't know about fix                        │   │
-│   │           Same issue occurs in EU-WEST                             │   │
+│   │           Same issue occurs in EU-WEST                              │   │
 │   │           EU engineer reinvents the fix                             │   │
 │   │                                                                     │   │
-│   │  Problem: Knowledge doesn't propagate across regions                 │   │
-│   │  Impact: Duplicate work, inconsistent fixes                        │   │
-│   │  Fix: Centralized runbook, post-mortem sharing                     │   │
+│   │  Problem: Knowledge doesn't propagate across regions                │   │
+│   │  Impact: Duplicate work, inconsistent fixes                         │   │
+│   │  Fix: Centralized runbook, post-mortem sharing                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   FAILURE MODE 3: Escalation Confusion                                     │
+│   FAILURE MODE 3: Escalation Confusion                                      │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Scenario: Global incident occurs                                   │   │
 │   │           US on-call: "EU should handle it"                         │   │
 │   │           EU on-call: "US should handle it"                         │   │
 │   │           APAC on-call: "Not my region"                             │   │
-│   │           Result: No one handles it for 30 minutes                   │   │
+│   │           Result: No one handles it for 30 minutes                  │   │
 │   │                                                                     │   │
 │   │  Problem: Unclear ownership for global issues                       │   │
 │   │  Impact: Extended incident duration                                 │   │
 │   │  Fix: Clear escalation matrix, Staff Engineer as tie-breaker        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   FAILURE MODE 4: Configuration Drift                                     │
+│   FAILURE MODE 4: Configuration Drift                                       │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Scenario: US engineer updates config in US-EAST                    │   │
 │   │           Forgets to update EU-WEST and AP-NORTHEAST                │   │
-│   │           Regions have different behavior                            │   │
-│   │           Inconsistent user experience                               │   │
+│   │           Regions have different behavior                           │   │
+│   │           Inconsistent user experience                              │   │
 │   │                                                                     │   │
 │   │  Problem: Manual configuration management across regions            │   │
 │   │  Impact: Configuration drift, inconsistent behavior                 │   │
-│   │  Fix: Infrastructure as Code, automated config sync                  │   │
+│   │  Fix: Infrastructure as Code, automated config sync                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3766,37 +3766,6 @@ CLASS MultiRegionOperations:
 ```
 
 **Key Staff Insight**: "Multi-region systems require organizational design, not just technical design. The human factors often cause more incidents than the technical factors."
-
----
-
-# Part 12: Final Verification — L6 Readiness Checklist
-
-## Does This Chapter Meet L6 Expectations?
-
-| L6 Criterion | Coverage | Assessment |
-|--------------|----------|------------|
-| **Judgment & Decision-Making** | L5/L6 contrast, explicit trade-offs, alternatives rejected | ✅ Strong |
-| **Failure & Degradation Thinking** | 4 failure scenarios, blast radius, partition handling | ✅ Strong |
-| **Scale & Evolution** | Evolution journey, incremental adoption, when to simplify | ✅ Strong |
-| **Staff-Level Signals** | L5/L6 table, Staff phrases, common mistakes | ✅ Strong |
-| **Real-World Grounding** | 3 system examples, incident case study | ✅ Strong |
-| **Interview Calibration** | Probing questions, phrases, L5 mistake | ✅ Strong |
-| **Diagrams** | 3 conceptual diagrams | ✅ Strong |
-
-## Staff-Level Signals Covered
-
-✅ Multi-region as trade-off, not upgrade
-✅ When NOT to use multi-region
-✅ Replication model selection with explicit WHY
-✅ Conflict resolution strategies
-✅ Failure scenarios with user impact
-✅ Blast radius containment
-✅ Control plane vs data plane separation
-✅ Evolution from single-region to global
-✅ When to simplify/rollback
-✅ Real-world incident with lessons learned
-
-## This chapter now meets Google Staff Engineer (L6) expectations.
 
 ---
 

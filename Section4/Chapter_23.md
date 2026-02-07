@@ -253,7 +253,7 @@ When multiple operations must succeed or fail together, events make consistency 
 │   EVENT-DRIVEN (With Saga):                                                 │
 │   Publish DebitAccountA(100, txn_id=123)                                    │
 │   Account A service debits, publishes DebitCompleted(txn_id=123)            │
-│   Saga coordinator sees completion, publishes CreditAccountB(100, txn_id)  │
+│   Saga coordinator sees completion, publishes CreditAccountB(100, txn_id)   │
 │   Account B service credits, publishes CreditCompleted(txn_id=123)          │
 │   Saga coordinator marks transaction complete                               │
 │   ...                                                                       │
@@ -336,7 +336,7 @@ This is the hidden cost that teams consistently underestimate.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    COUPLING TRANSFORMATION, NOT ELIMINATION                  │
+│                    COUPLING TRANSFORMATION, NOT ELIMINATION                 │
 │                                                                             │
 │   SYNC COUPLING (Explicit):                                                 │
 │                                                                             │
@@ -399,7 +399,7 @@ Kafka is fundamentally different. It's a **distributed log**: an append-only, or
 │                                                                             │
 │   DISTRIBUTED LOG (Kafka):                                                  │
 │                                                                             │
-│   Producer ──▶ [M1][M2][M3][M4][M5][M6][M7][M8][M9]...                       │
+│   Producer ──▶ [M1][M2][M3][M4][M5][M6][M7][M8][M9]...                      │
 │                 ▲              ▲                   ▲                        │
 │                 │              │                   │                        │
 │           Consumer A     Consumer B          Consumer C                     │
@@ -675,7 +675,7 @@ Consumer lag is the difference between the latest message in a partition and the
 │                    CONSUMER LAG VISUALIZATION                               │
 │                                                                             │
 │   Partition 0:                                                              │
-│   [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15]...                  │
+│   [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15]...                 │
 │                        ↑                               ↑                    │
 │                   Consumer                         Latest                   │
 │                   Position                         Message                  │
@@ -695,7 +695,7 @@ Consumer lag is the difference between the latest message in a partition and the
 │       └────────────────────────▶ Time                                       │
 │                                                                             │
 │   Concerning patterns:                                                      │
-│   - Lag increasing over time → Consumer can't keep up (will never catch up)│
+│   - Lag increasing over time → Consumer can't keep up (will never catch up) │
 │   - Lag stable but high → Consumer is keeping up but far behind             │
 │   - Lag spikes during business hours → Capacity planning issue              │
 │                                                                             │
@@ -757,7 +757,7 @@ Lag in one system can cascade to others:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    LAG PROPAGATION CASCADE                                  │
 │                                                                             │
-│   Orders Topic → Order Processor → Fulfillment Topic → Shipping Service    │
+│   Orders Topic → Order Processor → Fulfillment Topic → Shipping Service     │
 │                       │                                      │              │
 │                       ▼                                      ▼              │
 │                  Lag: 10 min                            Lag: 10 min         │
@@ -1474,35 +1474,35 @@ GOOD REASON 5: Failure isolation is critical
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    OWNERSHIP BOUNDARIES: WHO OWNS WHAT?                    │
+│                    OWNERSHIP BOUNDARIES: WHO OWNS WHAT?                     │
 │                                                                             │
 │   QUESTION 1: Who owns the event schema?                                    │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   BAD: "Everyone owns it" or "The platform team"                            │
-│   - Schema changes break consumers randomly                                  │
+│   - Schema changes break consumers randomly                                 │
 │   - No versioning strategy                                                  │
-│   - Breaking changes deployed without coordination                           │
+│   - Breaking changes deployed without coordination                          │
 │                                                                             │
-│   GOOD: Producer team owns schema, consumers depend on it                    │
-│   - Order Team owns OrderPlaced event schema                                 │
+│   GOOD: Producer team owns schema, consumers depend on it                   │
+│   - Order Team owns OrderPlaced event schema                                │
 │   - Payment Team consumes OrderPlaced (depends on Order Team)               │
-│   - Order Team commits to backwards compatibility                            │
-│   - Order Team announces breaking changes 30 days in advance                 │
+│   - Order Team commits to backwards compatibility                           │
+│   - Order Team announces breaking changes 30 days in advance                │
 │                                                                             │
-│   OWNERSHIP MODEL:                                                           │
+│   OWNERSHIP MODEL:                                                          │
 │   - Producer = Schema Owner (defines contract)                              │
-│   - Consumer = Schema Dependent (must adapt to changes)                       │
-│   - Platform Team = Infrastructure Owner (Kafka, not schemas)              │
+│   - Consumer = Schema Dependent (must adapt to changes)                     │
+│   - Platform Team = Infrastructure Owner (Kafka, not schemas)               │
 │                                                                             │
 │   QUESTION 2: Who gets paged when consumer lag spikes?                      │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
-│   BAD: "The platform team" (they don't know why lag is high)              │
-│   - Platform team pages consumer team: "Your lag is high"                  │
-│   - Consumer team: "It's not our fault, database is slow"                  │
-│   - Database team: "It's not our fault, queries are fine"                  │
-│   - Hours wasted in blame game                                               │
+│   BAD: "The platform team" (they don't know why lag is high)                │
+│   - Platform team pages consumer team: "Your lag is high"                   │
+│   - Consumer team: "It's not our fault, database is slow"                   │
+│   - Database team: "It's not our fault, queries are fine"                   │
+│   - Hours wasted in blame game                                              │
 │                                                                             │
 │   GOOD: Consumer team owns lag, platform team owns Kafka health             │
 │   - Alert: "inventory-consumer lag > 10K" → Page Inventory Team             │
@@ -1515,7 +1515,7 @@ GOOD REASON 5: Failure isolation is critical
 │   - Platform Team = Owns Kafka availability (brokers, network)              │
 │   - Producer Team = Owns producer throughput (if producer is slow)          │
 │                                                                             │
-│   QUESTION 3: Who owns event versioning and compatibility?                 │
+│   QUESTION 3: Who owns event versioning and compatibility?                  │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   BAD: "We'll figure it out when we need it"                                │
@@ -1523,8 +1523,8 @@ GOOD REASON 5: Failure isolation is critical
 │   - No deprecation process                                                  │
 │   - Consumers stuck on old versions forever                                 │
 │                                                                             │
-│   GOOD: Producer team owns versioning, platform team provides tooling      │
-│   - Producer team: Defines versioning strategy (semantic versioning)         │
+│   GOOD: Producer team owns versioning, platform team provides tooling       │
+│   - Producer team: Defines versioning strategy (semantic versioning)        │
 │   - Producer team: Maintains compatibility (backwards compatible changes)   │
 │   - Platform team: Provides schema registry (tooling, not policy)           │
 │   - Platform team: Enforces compatibility rules (automated checks)          │
@@ -1537,18 +1537,18 @@ GOOD REASON 5: Failure isolation is critical
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   BAD: "Nobody" or "The platform team"                                      │
-│   - DLQ fills up, nobody notices                                             │
-│   - Messages sit in DLQ for weeks                                             │
+│   - DLQ fills up, nobody notices                                            │
+│   - Messages sit in DLQ for weeks                                           │
 │   - No playbook for DLQ investigation                                       │
 │                                                                             │
 │   GOOD: Consumer team owns DLQ, platform team provides infrastructure       │
-│   - Consumer team: Monitors DLQ size (alert on any messages)                 │
+│   - Consumer team: Monitors DLQ size (alert on any messages)                │
 │   - Consumer team: Investigates DLQ messages (why did they fail?)           │
-│   - Consumer team: Fixes bugs and replays                                    │
+│   - Consumer team: Fixes bugs and replays                                   │
 │   - Platform team: Provides DLQ topic infrastructure                        │
 │                                                                             │
 │   OWNERSHIP MODEL:                                                          │
-│   - Consumer Team = DLQ owner (their processing failed)                       │
+│   - Consumer Team = DLQ owner (their processing failed)                     │
 │   - Platform Team = DLQ infrastructure (topic, monitoring hooks)            │
 │                                                                             │
 │   QUESTION 5: Who owns cross-service event dependencies?                    │
@@ -1559,16 +1559,16 @@ GOOD REASON 5: Failure isolation is critical
 │   - Payment Team breaks (didn't know about change)                          │
 │   - Blame game: "You should have checked" vs "You should have told us"      │
 │                                                                             │
-│   GOOD: Dependency graph tracked, change coordination required               │
+│   GOOD: Dependency graph tracked, change coordination required              │
 │   - Event catalog: Lists all events, producers, consumers                   │
-│   - Change process: Producer announces changes, consumers acknowledge        │
+│   - Change process: Producer announces changes, consumers acknowledge       │
 │   - Breaking changes: Require approval from all consumers                   │
 │   - Non-breaking changes: Notification only (consumers adapt when ready)    │
 │                                                                             │
 │   OWNERSHIP MODEL:                                                          │
-│   - Producer Team = Change initiator (proposes changes)                      │
+│   - Producer Team = Change initiator (proposes changes)                     │
 │   - Consumer Teams = Change approvers (must approve breaking changes)       │
-│   - Platform Team = Dependency tracking (maintains catalog)                  │
+│   - Platform Team = Dependency tracking (maintains catalog)                 │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1577,7 +1577,7 @@ GOOD REASON 5: Failure isolation is critical
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    OWNERSHIP PATTERNS IN PRACTICE                          │
+│                    OWNERSHIP PATTERNS IN PRACTICE                           │
 │                                                                             │
 │   PATTERN 1: PRODUCER-OWNED SCHEMAS                                         │
 │   ────────────────────────────────────────────────────────────────────────  │
@@ -1585,17 +1585,17 @@ GOOD REASON 5: Failure isolation is critical
 │   Order Team publishes OrderPlaced event:                                   │
 │   - Order Team owns the schema (defines fields, types)                      │
 │   - Order Team commits to backwards compatibility                           │
-│   - Order Team maintains changelog (what changed, when, why)                 │
+│   - Order Team maintains changelog (what changed, when, why)                │
 │   - Order Team announces breaking changes 30 days in advance                │
 │                                                                             │
-│   Payment Team consumes OrderPlaced:                                         │
+│   Payment Team consumes OrderPlaced:                                        │
 │   - Payment Team depends on Order Team's schema                             │
 │   - Payment Team must adapt to non-breaking changes                         │
 │   - Payment Team must approve breaking changes (can block if needed)        │
 │                                                                             │
-│   Platform Team:                                                             │
+│   Platform Team:                                                            │
 │   - Provides schema registry (tooling)                                      │
-│   - Enforces compatibility rules (automated)                                 │
+│   - Enforces compatibility rules (automated)                                │
 │   - Does NOT own business schemas                                           │
 │                                                                             │
 │   PATTERN 2: CONSUMER-OWNED LAG                                             │
@@ -1604,26 +1604,26 @@ GOOD REASON 5: Failure isolation is critical
 │   Inventory Service consumer lag spikes:                                    │
 │   - Alert fires: "inventory-consumer lag > 10K"                             │
 │   - Pages: Inventory Team (not Platform Team)                               │
-│   - Inventory Team investigates:                                             │
+│   - Inventory Team investigates:                                            │
 │     * Is processing slow? (their code)                                      │
 │     * Is database slow? (their database)                                    │
-│     * Is Kafka slow? (check with Platform Team)                            │
+│     * Is Kafka slow? (check with Platform Team)                             │
 │                                                                             │
-│   Platform Team:                                                             │
+│   Platform Team:                                                            │
 │   - Owns Kafka broker health (CPU, disk, network)                           │
-│   - Owns Kafka availability (brokers down, partitions unavailable)           │
+│   - Owns Kafka availability (brokers down, partitions unavailable)          │
 │   - Does NOT own consumer lag (that's consumer's processing)                │
 │                                                                             │
 │   PATTERN 3: SHARED OWNERSHIP FOR INFRASTRUCTURE                            │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
-│   Kafka cluster capacity:                                                    │
+│   Kafka cluster capacity:                                                   │
 │   - Platform Team: Owns broker capacity (adds brokers when needed)          │
 │   - Producer Teams: Owns topic capacity (requests partitions)               │
 │   - Consumer Teams: Owns consumer capacity (scales consumers)               │
 │                                                                             │
-│   Coordination:                                                              │
-│   - Platform Team: Provides capacity planning guidance                       │
+│   Coordination:                                                             │
+│   - Platform Team: Provides capacity planning guidance                      │
 │   - Teams: Request capacity changes through Platform Team                   │
 │   - Platform Team: Approves/rejects based on cluster capacity               │
 │                                                                             │
@@ -1632,13 +1632,13 @@ GOOD REASON 5: Failure isolation is critical
 │                                                                             │
 │   Event Catalog (maintained by Platform Team, content by Producer Teams):   │
 │   - Event name: OrderPlaced                                                 │
-│   - Owner: Order Team (order-team@company.com)                             │
-│   - Schema: { order_id, user_id, amount_cents, ... }                       │
+│   - Owner: Order Team (order-team@company.com)                              │
+│   - Schema: { order_id, user_id, amount_cents, ... }                        │
 │   - Consumers: Payment Team, Inventory Team, Analytics Team                 │
 │   - Versioning: Semantic (v1, v2, v3)                                       │
 │   - Compatibility: Backwards compatible (new fields only)                   │
 │                                                                             │
-│   Change Process:                                                            │
+│   Change Process:                                                           │
 │   1. Order Team proposes schema change                                      │
 │   2. Catalog notifies all consumers                                         │
 │   3. If breaking change: Consumers must approve                             │
@@ -1787,7 +1787,7 @@ If you can't answer all 8, you're not ready for production.
 │              ▼               ▼               ▼                              │
 │   ┌─────────────────┐ ┌─────────────┐ ┌─────────────┐                       │
 │   │  Email Workers  │ │Push Workers │ │ SMS Workers │                       │
-│   │  (per priority) │ │(per priority)│ │             │                       │
+│   │  (per priority) │ │(per priority)│ │             │                      │
 │   └────────┬────────┘ └──────┬──────┘ └──────┬──────┘                       │
 │            │                 │               │                              │
 │            ▼                 ▼               ▼                              │
@@ -2007,7 +2007,7 @@ FUNCTION process_email(message):
 │                                                                             │
 │   Time 0:00 - Post created, event published                                 │
 │   Time 0:01 - Fan-out worker starts processing                              │
-│   Time 0:01 to 0:30 - Writing to 500K feeds (batch of 1000 every 50ms)     │
+│   Time 0:01 to 0:30 - Writing to 500K feeds (batch of 1000 every 50ms)      │
 │                                                                             │
 │   PROBLEM: Followers checking feed in first 30 seconds might not see post   │
 │                                                                             │
@@ -2064,7 +2064,7 @@ FUNCTION process_email(message):
 │   │  ┌──────┐ ┌──────┐ ┌──────┐     ┌──────┐                            │   │
 │   │  │Agent │ │Agent │ │Agent │ ... │Agent │                            │   │
 │   │  └──┬───┘ └──┬───┘ └──┬───┘     └──┬───┘                            │   │
-│   │     └────────┴────────┴───────────┴──────▶ Collectors (Load Balanced)│   │
+│   │     └────────┴────────┴─────────-──┴────▶ Collectors (Load Balanced)│   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
@@ -2332,8 +2332,8 @@ Staff Engineers think in timelines, not just failure modes. Here's what happens 
 │                    CASCADING FAILURE TIMELINE: CONSUMER LAG CASCADE         │
 │                                                                             │
 │   SYSTEM: Order processing pipeline                                         │
-│   - Order Service publishes OrderPlaced events (1000 events/sec)          │
-│   - Inventory Service consumes and decrements stock                        │
+│   - Order Service publishes OrderPlaced events (1000 events/sec)            │
+│   - Inventory Service consumes and decrements stock                         │
 │   - Kafka topic: 10 partitions, replication factor 3                        │
 │   - Consumer: 10 instances (1 per partition)                                │
 │                                                                             │
@@ -2341,91 +2341,91 @@ Staff Engineers think in timelines, not just failure modes. Here's what happens 
 │                                                                             │
 │   T=0:00 (TRIGGER)                                                          │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Inventory Service's database starts slow queries (index corruption)     │
+│   Inventory Service's database starts slow queries (index corruption)       │
 │   Consumer processing time: 10ms → 500ms per event                          │
-│   Consumer throughput: 100 events/sec → 2 events/sec                       │
+│   Consumer throughput: 100 events/sec → 2 events/sec                        │
 │                                                                             │
 │   T=0:05 (PROPAGATION PHASE 1: Lag Accumulation)                            │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Producer: Still publishing 1000 events/sec (unaware of problem)         │
-│   Consumer: Processing 2 events/sec per partition = 20 events/sec total   │
-│   Lag: (1000 - 20) * 5 seconds = 4,900 events                             │
-│   Kafka: Events accumulating in partition logs                               │
-│   Impact: None yet (lag is internal to Kafka)                              │
+│   Producer: Still publishing 1000 events/sec (unaware of problem)           │
+│   Consumer: Processing 2 events/sec per partition = 20 events/sec total     │
+│   Lag: (1000 - 20) * 5 seconds = 4,900 events                               │
+│   Kafka: Events accumulating in partition logs                              │
+│   Impact: None yet (lag is internal to Kafka)                               │
 │                                                                             │
 │   T=0:15 (PROPAGATION PHASE 2: Lag Becomes Visible)                         │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Lag: (1000 - 20) * 15 seconds = 14,700 events                            │
-│   Monitoring alert fires: "Consumer lag > 10,000 for 5 minutes"           │
+│   Lag: (1000 - 20) * 15 seconds = 14,700 events                             │
+│   Monitoring alert fires: "Consumer lag > 10,000 for 5 minutes"             │
 │   On-call engineer paged                                                    │
-│   Impact: Operations team aware, investigating                             │
+│   Impact: Operations team aware, investigating                              │
 │                                                                             │
 │   T=1:00 (PROPAGATION PHASE 3: Downstream Impact)                           │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Lag: (1000 - 20) * 60 seconds = 58,800 events                            │
+│   Lag: (1000 - 20) * 60 seconds = 58,800 events                             │
 │   Inventory counts are stale (not updated for 1 minute)                     │
-│   Users see "in stock" but orders fail (inventory already decremented)     │
-│   Customer support tickets spike                                           │
+│   Users see "in stock" but orders fail (inventory already decremented)      │
+│   Customer support tickets spike                                            │
 │   Impact: User-visible degradation (incorrect inventory display)            │
 │                                                                             │
-│   T=5:00 (PROPAGATION PHASE 4: Partition Storage Pressure)                 │
+│   T=5:00 (PROPAGATION PHASE 4: Partition Storage Pressure)                  │
 │   ────────────────────────────────────────────────────────────────────────  │
 │   Lag: (1000 - 20) * 300 seconds = 294,000 events                           │
-│   Kafka partition storage: 294K events * 500 bytes = 147 MB per partition │
-│   Total across 10 partitions: 1.47 GB (within limits, but growing)         │
-│   Retention: 7 days = 604,800 seconds                                        │
+│   Kafka partition storage: 294K events * 500 bytes = 147 MB per partition   │
+│   Total across 10 partitions: 1.47 GB (within limits, but growing)          │
+│   Retention: 7 days = 604,800 seconds                                       │
 │   If lag continues, will hit retention limit in ~7 hours                    │
-│   Impact: Risk of data loss if lag exceeds retention                      │
+│   Impact: Risk of data loss if lag exceeds retention                        │
 │                                                                             │
 │   T=10:00 (PROPAGATION PHASE 5: Producer Blocking Risk)                     │
 │   ────────────────────────────────────────────────────────────────────────  │
 │   Lag: (1000 - 20) * 600 seconds = 588,000 events                           │
 │   Kafka broker memory: Producer buffers filling up                          │
-│   Producer config: max.block.ms = 60000 (1 minute)                         │
+│   Producer config: max.block.ms = 60000 (1 minute)                          │
 │   Producer config: buffer.memory = 32 MB                                    │
 │                                                                             │
 │   IF buffer.memory fills:                                                   │
-│   - Producer blocks on send() (waits for buffer space)                     │
+│   - Producer blocks on send() (waits for buffer space)                      │
 │   - Order Service API calls hang (waiting for Kafka publish)                │
-│   - User requests timeout                                                    │
+│   - User requests timeout                                                   │
 │   - Cascading failure: Order Service appears down                           │
 │                                                                             │
 │   Impact: Producer-side blocking (if buffer limits hit)                     │
 │                                                                             │
-│   T=30:00 (CONTAINMENT: Circuit Breaker Activates)                           │
+│   T=30:00 (CONTAINMENT: Circuit Breaker Activates)                          │
 │   ────────────────────────────────────────────────────────────────────────  │
 │   Lag: (1000 - 20) * 1800 seconds = 1,764,000 events                        │
-│   Operations team: Identifies database issue, applies fix                    │
-│   Consumer: Still processing old events (30 minutes behind)                  │
+│   Operations team: Identifies database issue, applies fix                   │
+│   Consumer: Still processing old events (30 minutes behind)                 │
 │                                                                             │
 │   CONTAINMENT ACTIONS:                                                      │
 │   1. Circuit breaker opens: Stop calling slow database                      │
-│   2. Consumer publishes to DLQ: "events requiring DB unavailable"            │
-│   3. Consumer continues processing: New events (no DB dependency)            │
-│   4. Lag stops growing: Consumer catches up on new events                  │
+│   2. Consumer publishes to DLQ: "events requiring DB unavailable"           │
+│   3. Consumer continues processing: New events (no DB dependency)           │
+│   4. Lag stops growing: Consumer catches up on new events                   │
 │   5. DLQ replay: After DB fix, replay DLQ events                            │
 │                                                                             │
-│   Impact: Lag growth contained, system partially functional                  │
+│   Impact: Lag growth contained, system partially functional                 │
 │                                                                             │
 │   T=60:00 (RECOVERY: Catch-Up Phase)                                        │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Database: Fixed, queries back to 10ms                                    │
-│   Consumer: Processing at 100 events/sec again                             │
+│   Database: Fixed, queries back to 10ms                                     │
+│   Consumer: Processing at 100 events/sec again                              │
 │   Catch-up rate: 100 - 20 = 80 events/sec excess capacity                   │
-│   Time to catch up: 1,764,000 / 80 = 22,050 seconds ≈ 6 hours              │
+│   Time to catch up: 1,764,000 / 80 = 22,050 seconds ≈ 6 hours               │
 │                                                                             │
-│   Impact: System recovering, but 6-hour catch-up window                    │
+│   Impact: System recovering, but 6-hour catch-up window                     │
 │                                                                             │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   KEY INSIGHTS:                                                             │
-│   1. Producer doesn't know consumer is slow (asynchronous decoupling)      │
-│   2. Lag accumulates linearly (production rate - consumption rate)         │
+│   1. Producer doesn't know consumer is slow (asynchronous decoupling)       │
+│   2. Lag accumulates linearly (production rate - consumption rate)          │
 │   3. User-visible impact appears BEFORE producer blocking                   │
 │   4. Producer blocking is LAST (if buffer limits configured)                │
-│   5. Recovery time >> failure time (catch-up is slower than accumulation)  │
+│   5. Recovery time >> failure time (catch-up is slower than accumulation)   │
 │                                                                             │
-│   STAFF ENGINEER QUESTION:                                                 │
+│   STAFF ENGINEER QUESTION:                                                  │
 │   "What's our max acceptable lag? At what lag do we fail fast vs continue?" │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -2739,32 +2739,32 @@ IMPORTANT: Keep event topic for a while (retention)
 │   SCENARIO: Database slowdown in Service C                                  │
 │                                                                             │
 │   T=0 (Normal):                                                             │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐              │
-│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]       │
-│   │ (OK)    │     │ lag: 0  │     │ (OK)    │     │ (OK)    │  (OK)        │
-│   └─────────┘     └─────────┘     └─────────┘     └─────────┘              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐               │
+│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]        │
+│   │ (OK)    │     │ lag: 0  │     │ (OK)    │     │ (OK)    │  (OK)         │
+│   └─────────┘     └─────────┘     └─────────┘     └─────────┘               │
 │                                                                             │
 │   T=5min (DB Slow):                                                         │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐              │
-│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]       │
-│   │ (OK)    │     │ lag: 0  │     │ (OK)    │     │ (SLOW)  │  (SLOW)      │
-│   └─────────┘     └─────────┘     └─────────┘     └─────────┘              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐               │
+│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]        │
+│   │ (OK)    │     │ lag: 0  │     │ (OK)    │     │ (SLOW)  │  (SLOW)       │
+│   └─────────┘     └─────────┘     └─────────┘     └─────────┘               │
 │                                                                             │
 │   T=10min (Lag Building):                                                   │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐              │
-│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]       │
-│   │ (OK)    │     │ lag: 5K │     │ (OK)    │     │ lag:10K │  (SLOW)      │
-│   └─────────┘     └─────────┘     └─────────┘     └─────────┘              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐               │
+│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]        │
+│   │ (OK)    │     │ lag: 5K │     │ (OK)    │     │ lag:10K │  (SLOW)       │
+│   └─────────┘     └─────────┘     └─────────┘     └─────────┘               │
 │                                                    ▲                        │
 │                                                    │                        │
 │                                               Processing                    │
 │                                               backed up                     │
 │                                                                             │
 │   T=30min (Cascade):                                                        │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐              │
-│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]       │
-│   │ (OK)    │     │ lag:50K │     │ lag:30K │     │ lag:50K │  (SLOW)      │
-│   └─────────┘     └─────────┘     └─────────┘     └─────────┘              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐               │
+│   │Service A│────▶│  Kafka  │────▶│Service B│────▶│Service C│──▶[DB]        │
+│   │ (OK)    │     │ lag:50K │     │ lag:30K │     │ lag:50K │  (SLOW)       │
+│   └─────────┘     └─────────┘     └─────────┘     └─────────┘               │
 │       ▲                                                                     │
 │       │                                                                     │
 │   Still producing,                                                          │
@@ -2773,10 +2773,10 @@ IMPORTANT: Keep event topic for a while (retention)
 │                                                                             │
 │   CONTAINMENT STRATEGY:                                                     │
 │                                                                             │
-│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐              │
-│   │Service A│────▶│  Kafka  │────▶│Service B│     │Service C│──▶[DB]       │
-│   │ (OK)    │     │         │     │         │     │         │              │
-│   └─────────┘     └─────────┘     └────┬────┘     └─────────┘              │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐               │
+│   │Service A│────▶│  Kafka  │────▶│Service B│     │Service C│──▶[DB]        │
+│   │ (OK)    │     │         │     │         │     │         │               │
+│   └─────────┘     └─────────┘     └────┬────┘     └─────────┘               │
 │                                        │                                    │
 │                                        │ Circuit                            │
 │                                        │ Breaker                            │
@@ -2962,25 +2962,25 @@ When you need transaction-like behavior across services, you use Sagas.
 │                                                                             │
 │   CHOREOGRAPHY SAGA (Decentralized):                                        │
 │                                                                             │
-│   ┌─────────┐  OrderCreated  ┌─────────┐  InventoryReserved  ┌─────────┐   │
-│   │ Order   │───────────────▶│Inventory│────────────────────▶│ Payment │   │
-│   │ Service │                │ Service │                     │ Service │   │
-│   └─────────┘                └─────────┘                     └────┬────┘   │
-│        ▲                          │                               │        │
-│        │                          │ (if fails)                    │        │
-│        │                          ▼                               ▼        │
-│        │                   ┌─────────────┐                 PaymentCharged  │
-│        │                   │Compensation:│                        │        │
-│        │                   │ Release     │                        │        │
-│        │                   │ Inventory   │                        ▼        │
-│        │                   └─────────────┘                  ┌─────────┐    │
-│        │                                                    │Shipping │    │
-│        │◀───────────────── OrderCancelled ─────────────────│ Service │    │
-│                            (if any step fails)              └─────────┘    │
+│   ┌─────────┐  OrderCreated  ┌─────────┐  InventoryReserved  ┌─────────┐    │
+│   │ Order   │───────────────▶│Inventory│────────────────────▶│ Payment │    │
+│   │ Service │                │ Service │                     │ Service │    │
+│   └─────────┘                └─────────┘                     └────┬────┘    │ 
+│        ▲                          │                               │         │ 
+│        │                          │ (if fails)                    │         │
+│        │                          ▼                               ▼         │
+│        │                   ┌─────────────┐                 PaymentCharged   │
+│        │                   │Compensation:│                        │         │
+│        │                   │ Release     │                        │         │
+│        │                   │ Inventory   │                        ▼         │
+│        │                   └─────────────┘                  ┌─────────┐     │
+│        │                                                    │Shipping │     │
+│        │◀───────────────── OrderCancelled ───────────────── │ Service │     │
+│                            (if any step fails)              └─────────┘     │
 │                                                                             │
-│   Each service listens for events and triggers next step or compensation.  │
+│   Each service listens for events and triggers next step or compensation.   │
 │                                                                             │
-│   ORCHESTRATION SAGA (Centralized):                                        │
+│   ORCHESTRATION SAGA (Centralized):                                         │
 │                                                                             │
 │        ┌───────────────────────────────────────────────────────┐            │
 │        │              SAGA ORCHESTRATOR                        │            │
@@ -3451,12 +3451,12 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 │                                                                             │
 │   EXAMPLE: E-commerce platform, 100M events/day, 7-day retention            │
 │                                                                             │
-│   COST DRIVER 1: BROKER STORAGE (Largest Component)                        │
+│   COST DRIVER 1: BROKER STORAGE (Largest Component)                         │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Event volume: 100M events/day * 500 bytes = 50 GB/day                      │
-│   Retention: 7 days                                                          │
-│   Replication: 3x (for durability)                                           │
-│   Total storage: 50 GB * 7 * 3 = 1,050 GB = 1.05 TB                        │
+│   Event volume: 100M events/day * 500 bytes = 50 GB/day                     │
+│   Retention: 7 days                                                         │
+│   Replication: 3x (for durability)                                          │
+│   Total storage: 50 GB * 7 * 3 = 1,050 GB = 1.05 TB                         │
 │                                                                             │
 │   Storage cost (AWS EBS gp3): $0.08/GB-month                                │
 │   Monthly storage: 1.05 TB * $0.08 * 1024 = $86/month                       │
@@ -3465,21 +3465,21 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 │   Storage: 10.5 TB * $0.08 * 1024 = $860/month                              │
 │                                                                             │
 │   Storage scales linearly with:                                             │
-│   - Event volume (events/day)                                                 │
-│   - Event size (bytes per event)                                             │
-│   - Retention period (days)                                                   │
-│   - Replication factor (copies)                                               │
+│   - Event volume (events/day)                                               │
+│   - Event size (bytes per event)                                            │
+│   - Retention period (days)                                                 │
+│   - Replication factor (copies)                                             │
 │                                                                             │
-│   OPTIMIZATION:                                                              │
-│   - Compression: gzip reduces 50-70% (trade: CPU)                          │
+│   OPTIMIZATION:                                                             │
+│   - Compression: gzip reduces 50-70% (trade: CPU)                           │
 │   - Tiered storage: Hot (SSD) + Cold (S3) for old data                      │
-│   - Reduce retention: 7 days → 3 days (if replay not needed)                 │
+│   - Reduce retention: 7 days → 3 days (if replay not needed)                │
 │                                                                             │
-│   COST DRIVER 2: NETWORK EGRESS (Cross-AZ Replication)                       │
+│   COST DRIVER 2: NETWORK EGRESS (Cross-AZ Replication)                      │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Replication factor 3: Each event replicated 2x across AZs                  │
+│   Replication factor 3: Each event replicated 2x across AZs                 │
 │   Daily egress: 50 GB * 2 = 100 GB/day                                      │
-│   Monthly egress: 100 GB * 30 = 3 TB/month                                   │
+│   Monthly egress: 100 GB * 30 = 3 TB/month                                  │
 │                                                                             │
 │   AWS cost: $0.02/GB for cross-AZ transfer                                  │
 │   Monthly egress: 3 TB * $0.02 * 1024 = $61/month                           │
@@ -3487,65 +3487,65 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 │   At 1B events/day:                                                         │
 │   Egress: 30 TB/month * $0.02 * 1024 = $614/month                           │
 │                                                                             │
-│   OPTIMIZATION:                                                              │
+│   OPTIMIZATION:                                                             │
 │   - Single-AZ deployment (trade: durability)                                │
 │   - Compression reduces egress (compressed before replication)              │
-│   - Regional topics (replicate only critical events)                         │
+│   - Regional topics (replicate only critical events)                        │
 │                                                                             │
-│   COST DRIVER 3: BROKER COMPUTE (CPU/Memory)                                 │
+│   COST DRIVER 3: BROKER COMPUTE (CPU/Memory)                                │
 │   ────────────────────────────────────────────────────────────────────────  │
 │   Kafka brokers: 3 brokers (for replication)                                │
 │   Instance: m5.xlarge (4 vCPU, 16 GB RAM)                                   │
-│   Cost: $0.192/hour * 3 brokers * 730 hours = $420/month                   │
+│   Cost: $0.192/hour * 3 brokers * 730 hours = $420/month                    │
 │                                                                             │
 │   Compute scales with:                                                      │
-│   - Throughput (events/sec) - CPU for serialization                          │
-│   - Partition count - Memory for partition metadata                          │
-│   - Consumer group count - CPU for coordination                               │
+│   - Throughput (events/sec) - CPU for serialization                         │
+│   - Partition count - Memory for partition metadata                         │
+│   - Consumer group count - CPU for coordination                             │
 │                                                                             │
-│   OPTIMIZATION:                                                              │
+│   OPTIMIZATION:                                                             │
 │   - Right-size instances (don't over-provision)                             │
-│   - Use spot instances for non-critical clusters                             │
-│   - Consolidate topics (fewer brokers, more partitions)                       │
+│   - Use spot instances for non-critical clusters                            │
+│   - Consolidate topics (fewer brokers, more partitions                      │
 │                                                                             │
 │   COST DRIVER 4: ZOOKEEPER/KRAFT COORDINATION                               │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Zookeeper: 3 nodes (for quorum)                                            │
+│   Zookeeper: 3 nodes (for quorum)                                           │
 │   Instance: m5.large (2 vCPU, 8 GB RAM)                                     │
 │   Cost: $0.096/hour * 3 * 730 = $210/month                                  │
 │                                                                             │
 │   OR KRaft (Kafka Raft): No separate ZK cluster needed                      │
 │   Cost: $0 (embedded in brokers)                                            │
 │                                                                             │
-│   OPTIMIZATION:                                                              │
+│   OPTIMIZATION:                                                             │
 │   - Migrate to KRaft (eliminates ZK cost)                                   │
 │   - Use smaller instances for ZK (if still on ZK)                           │
 │                                                                             │
-│   COST DRIVER 5: CONSUMER INFRASTRUCTURE                                     │
+│   COST DRIVER 5: CONSUMER INFRASTRUCTURE                                    │
 │   ────────────────────────────────────────────────────────────────────────  │
-│   Consumer instances: 50 instances (for parallelism)                         │
+│   Consumer instances: 50 instances (for parallelism)                        │
 │   Instance: c5.large (2 vCPU, 4 GB RAM)                                     │
-│   Cost: $0.085/hour * 50 * 730 = $3,102/month                              │
+│   Cost: $0.085/hour * 50 * 730 = $3,102/month                               │
 │                                                                             │
-│   Consumer cost often EXCEEDS Kafka broker cost!                             │
+│   Consumer cost often EXCEEDS Kafka broker cost!                            │
 │                                                                             │
-│   OPTIMIZATION:                                                              │
-│   - Batch processing (reduce per-event overhead)                             │
-│   - Async I/O (process multiple events concurrently)                          │
+│   OPTIMIZATION:                                                             │
+│   - Batch processing (reduce per-event overhead)                            │
+│   - Async I/O (process multiple events concurrently)                        │
 │   - Right-size consumers (don't need 1 per partition if processing is fast) │
 │                                                                             │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
-│   TOTAL MONTHLY COST (100M events/day):                                      │
-│   - Storage: $86                                                              │
-│   - Egress: $61                                                              │
-│   - Brokers: $420                                                            │
+│   TOTAL MONTHLY COST (100M events/day):                                     │
+│   - Storage: $86                                                            │
+│   - Egress: $61                                                             │
+│   - Brokers: $420                                                           │
 │   - ZK/KRaft: $210 (or $0 with KRaft)                                       │
-│   - Consumers: $3,102                                                        │
+│   - Consumers: $3,102                                                       │
 │   TOTAL: ~$3,879/month                                                      │
 │                                                                             │
 │   At 1B events/day (10x):                                                   │
-│   TOTAL: ~$38,790/month (mostly consumers scale linearly)                  │
+│   TOTAL: ~$38,790/month (mostly consumers scale linearly)                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3554,49 +3554,49 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    COST OPTIMIZATION DECISION TREE                         │
+│                    COST OPTIMIZATION DECISION TREE                          │
 │                                                                             │
-│   QUESTION 1: Can you reduce event volume?                                 │
-│   ──────────────────────────────────────────────────────────────────────── │
-│   YES → Sample events (1 in 10 for analytics)                              │
+│   QUESTION 1: Can you reduce event volume?                                  │
+│   ────────────────────────────────────────────────────────────────────────  │
+│   YES → Sample events (1 in 10 for analytics)                               │
 │        → Aggregate before publishing (batch metrics)                        │
 │        → Filter at source (don't publish low-value events)                  │
-│        → Impact: 10x reduction = 10x cost reduction                        │
+│        → Impact: 10x reduction = 10x cost reduction                         │
 │                                                                             │
-│   NO → Continue to Question 2                                                │
+│   NO → Continue to Question 2                                               │
 │                                                                             │
-│   QUESTION 2: Can you reduce retention?                                    │
-│   ──────────────────────────────────────────────────────────────────────── │
-│   YES → Reduce retention: 7 days → 3 days (if replay not needed)           │
-│        → Impact: 50% storage reduction                                     │
+│   QUESTION 2: Can you reduce retention?                                     │
+│   ────────────────────────────────────────────────────────────────────────  │
+│   YES → Reduce retention: 7 days → 3 days (if replay not needed)            │
+│        → Impact: 50% storage reduction                                      │
 │                                                                             │
-│   NO → Continue to Question 3                                              │
+│   NO → Continue to Question 3                                               │
 │                                                                             │
-│   QUESTION 3: Can you reduce replication?                                  │
-│   ──────────────────────────────────────────────────────────────────────── │
-│   YES (for non-critical) → RF=3 → RF=2 (trade: durability)                 │
-│        → Impact: 33% storage + egress reduction                            │
+│   QUESTION 3: Can you reduce replication?                                   │
+│   ────────────────────────────────────────────────────────────────────────  │
+│   YES (for non-critical) → RF=3 → RF=2 (trade: durability)                  │
+│        → Impact: 33% storage + egress reduction                             │
 │                                                                             │
-│   NO → Continue to Question 4                                              │
+│   NO → Continue to Question 4                                               │
 │                                                                             │
-│   QUESTION 4: Can you optimize consumer processing?                          │
-│   ──────────────────────────────────────────────────────────────────────── │
+│   QUESTION 4: Can you optimize consumer processing?                         │
+│   ────────────────────────────────────────────────────────────────────────  │
 │   YES → Batch database writes (100 events per transaction)                  │
 │        → Async I/O (process 10 events concurrently)                         │
-│        → Impact: 10x fewer consumer instances needed                       │
+│        → Impact: 10x fewer consumer instances needed                        │
 │                                                                             │
-│   NO → Continue to Question 5                                              │
+│   NO → Continue to Question 5                                               │
 │                                                                             │
 │   QUESTION 5: Can you use tiered storage?                                   │
-│   ──────────────────────────────────────────────────────────────────────── │
+│   ────────────────────────────────────────────────────────────────────────  │
 │   YES → Hot storage (SSD): Last 24 hours                                    │
 │        → Cold storage (S3): Older data                                      │
-│        → Impact: 80% storage cost reduction for old data                   │
+│        → Impact: 80% storage cost reduction for old data                    │
 │                                                                             │
-│   NO → Accept cost or reconsider architecture                              │
+│   NO → Accept cost or reconsider architecture                               │
 │                                                                             │
 │   STAFF ENGINEER RULE:                                                      │
-│   The cheapest event is the one you don't publish.                         │
+│   The cheapest event is the one you don't publish.                          │
 │   The second cheapest is the one you compress.                              │
 │   The third cheapest is the one you delete quickly.                         │
 │                                                                             │
@@ -3611,11 +3611,11 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 │                                                                             │
 │   SCALE 1: < 1M events/day                                                  │
 │   Cost: < $500/month                                                        │
-│   Status: Negligible cost, don't optimize                                  │
+│   Status: Negligible cost, don't optimize                                   │
 │                                                                             │
 │   SCALE 2: 1M - 10M events/day                                              │
 │   Cost: $500 - $5,000/month                                                 │
-│   Status: Monitor, optimize if > $2K/month                                 │
+│   Status: Monitor, optimize if > $2K/month                                  │
 │                                                                             │
 │   SCALE 3: 10M - 100M events/day                                            │
 │   Cost: $5,000 - $50,000/month                                              │
@@ -3624,17 +3624,17 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 │                                                                             │
 │   SCALE 4: 100M - 1B events/day                                             │
 │   Cost: $50,000 - $500,000/month                                            │
-│   Status: Cost is a first-class constraint                                 │
-│   Actions: Sampling, tiered storage, dedicated clusters per domain         │
+│   Status: Cost is a first-class constraint                                  │
+│   Actions: Sampling, tiered storage, dedicated clusters per domain          │
 │                                                                             │
 │   SCALE 5: > 1B events/day                                                  │
 │   Cost: > $500,000/month                                                    │
 │   Status: Re-evaluate architecture                                          │
-│   Questions: Do you need all events? Can you aggregate? Alternative tools? │
+│   Questions: Do you need all events? Can you aggregate? Alternative tools?  │
 │                                                                             │
 │   STAFF ENGINEER INSIGHT:                                                   │
-│   At $100K+/month, Kafka cost exceeds most application infrastructure.     │
-│   This is when you need dedicated platform team and cost reviews.          │
+│   At $100K+/month, Kafka cost exceeds most application infrastructure.      │
+│   This is when you need dedicated platform team and cost reviews.           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

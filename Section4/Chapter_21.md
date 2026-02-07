@@ -251,130 +251,130 @@ Understanding how data flows through your system is critical for identifying bot
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    READ FLOW: User Profile Service                          │
 │                                                                             │
-│   Request: GET /api/users/12345                                            │
+│   Request: GET /api/users/12345                                             │
 │                                                                             │
-│   ┌─────────────┐                                                          │
-│   │   Client    │                                                          │
-│   └──────┬──────┘                                                          │
+│   ┌─────────────┐                                                           │
+│   │   Client    │                                                           │
+│   └──────┬──────┘                                                           │
 │          │                                                                  │
 │          │ HTTP Request                                                     │
 │          ▼                                                                  │
-│   ┌─────────────────┐                                                      │
-│   │  Load Balancer  │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
+│   ┌─────────────────┐                                                       │
+│   │  Load Balancer  │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
 │            │ Route to healthy instance                                      │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  API Service     │                                                      │
-│   │  (Instance 1)    │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  API Service    │                                                       │
+│   │  (Instance 1)   │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
 │            │ 1. Check cache first                                           │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  Redis Cache    │  Cache Hit? ──YES──→ Return cached data             │
-│   │  (Session Store)│                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Cache Miss                                                      │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  Connection Pool │  Get connection (wait if pool exhausted)            │
-│   │  (PgBouncer)     │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  Redis Cache    │  Cache Hit? ──YES──→ Return cached data               │
+│   │  (Session Store)│                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Cache Miss                                                     │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  Connection Pool│  Get connection (wait if pool exhausted)              │
+│   │  (PgBouncer)    │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
 │            │ Route to read replica (not primary)                            │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  PostgreSQL      │  Execute: SELECT * FROM users WHERE id = 12345     │
-│   │  Read Replica    │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Return user data                                                │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  API Service     │  Serialize response, set cache TTL                  │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PostgreSQL     │  Execute: SELECT * FROM users WHERE id = 12345        │
+│   │  Read Replica   │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Return user data                                               │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  API Service    │  Serialize response, set cache TTL                    │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
 │            │ Write to cache (async, don't block response)                   │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  Redis Cache    │  SET user:12345 <data> EX 3600                      │
-│   └─────────────────┘                                                      │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  Redis Cache    │  SET user:12345 <data> EX 3600                        │
+│   └─────────────────┘                                                       │
 │                                                                             │
-│   Response: HTTP 200 OK {user data}                                        │
+│   Response: HTTP 200 OK {user data}                                         │
 │                                                                             │
-│   Failure Points (L6 Thinking):                                            │
+│   Failure Points (L6 Thinking):                                             │
 │   • Redis down: Cache miss → hit database (acceptable degradation)          │
-│   • Connection pool exhausted: Request fails (need circuit breaker)          │
-│   • Read replica lag: Stale data (acceptable for reads)                      │
-│   • Database timeout: Return error or cached data (graceful degradation)     │
+│   • Connection pool exhausted: Request fails (need circuit breaker)         │
+│   • Read replica lag: Stale data (acceptable for reads)                     │
+│   • Database timeout: Return error or cached data (graceful degradation)    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    WRITE FLOW: User Profile Update                         │
+│                    WRITE FLOW: User Profile Update                          │
 │                                                                             │
-│   Request: PUT /api/users/12345 {email: "new@example.com"}                   │
+│   Request: PUT /api/users/12345 {email: "new@example.com"}                  │
 │                                                                             │
-│   ┌─────────────┐                                                          │
-│   │   Client    │                                                          │
-│   └──────┬──────┘                                                          │
+│   ┌─────────────┐                                                           │
+│   │   Client    │                                                           │
+│   └──────┬──────┘                                                           │
 │          │                                                                  │
 │          │ HTTP Request                                                     │
 │          ▼                                                                  │
-│   ┌─────────────────┐                                                      │
-│   │  Load Balancer  │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Route to instance                                               │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  API Service     │  1. Validate input                                   │
-│   │  (Instance 1)    │  2. Check authorization                               │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Begin transaction                                                │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  Connection Pool │  Get connection to PRIMARY (writes go to primary)   │
-│   │  (PgBouncer)     │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Transaction: BEGIN                                              │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  PostgreSQL      │  UPDATE users SET email = 'new@example.com'         │
-│   │  Primary         │       WHERE id = 12345                              │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
-│            │ Commit transaction                                              │
-│            │ (WAL written, data persisted)                                   │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  PostgreSQL      │  Transaction committed                               │
-│   │  Primary         │                                                      │
-│   └────────┬────────┘                                                      │
-│            │                                                                 │
+│   ┌─────────────────┐                                                       │
+│   │  Load Balancer  │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Route to instance                                              │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  API Service    │  1. Validate input                                    │
+│   │  (Instance 1)   │  2. Check authorization                               │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Begin transaction                                              │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  Connection Pool│  Get connection to PRIMARY (writes go to primary)     │
+│   │  (PgBouncer)    │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Transaction: BEGIN                                             │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PostgreSQL     │  UPDATE users SET email = 'new@example.com'           │
+│   │  Primary        │       WHERE id = 12345                                │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
+│            │ Commit transaction                                             │
+│            │ (WAL written, data persisted)                                  │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PostgreSQL     │  Transaction committed                                │
+│   │  Primary        │                                                       │
+│   └────────┬────────┘                                                       │
+│            │                                                                │
 │            │ Async: Invalidate cache                                        │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  Redis Cache    │  DEL user:12345 (remove stale data)                 │
-│   └─────────────────┘                                                      │
-│            │                                                                 │
-│            │ Async: Stream to replicas                                       │
-│            ▼                                                                 │
-│   ┌─────────────────┐                                                      │
-│   │  PostgreSQL      │  Replication lag: 50ms (eventual consistency)       │
-│   │  Read Replicas   │                                                      │
-│   └─────────────────┘                                                      │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  Redis Cache    │  DEL user:12345 (remove stale data)                   │
+│   └─────────────────┘                                                       │
+│            │                                                                │
+│            │ Async: Stream to replicas                                      │
+│            ▼                                                                │
+│   ┌─────────────────┐                                                       │
+│   │  PostgreSQL     │  Replication lag: 50ms (eventual consistency)         │
+│   │  Read Replicas  │                                                       │
+│   └─────────────────┘                                                       │
 │                                                                             │
-│   Response: HTTP 200 OK {updated user data}                                │
+│   Response: HTTP 200 OK {updated user data}                                 │
 │                                                                             │
-│   Failure Points (L6 Thinking):                                            │
+│   Failure Points (L6 Thinking):                                             │
 │   • Primary down: Write fails (need failover to replica)                    │
-│   • Transaction timeout: Rollback, return error                              │
+│   • Transaction timeout: Rollback, return error                             │
 │   • Cache invalidation fails: Stale cache (acceptable, TTL expires)         │
 │   • Replication lag: Reads might be stale (acceptable for most use cases)   │
 │                                                                             │
@@ -2201,39 +2201,40 @@ Partial failures occur when a database component degrades rather than completely
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    SLOW DEPENDENCY PARTIAL FAILURE                           │
+│                    SLOW DEPENDENCY PARTIAL FAILURE                          │
 │                                                                             │
 │   Normal Operation:                                                         │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   [API Request] → [Service] → [PostgreSQL: 10ms] → Response          │   │
-│   │   Total latency: 15ms                                                 │   │
+│   │   [API Request] → [Service] → [PostgreSQL: 10ms] → Response         │   │
+│   │   Total latency: 15ms                                               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Partial Failure (Disk I/O Saturated):                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   [API Request] → [Service] → [PostgreSQL: 2000ms] → Timeout       │   │
+│   │   [API Request] → [Service] → [PostgreSQL: 2000ms] → Timeout        │   │
 │   │   • PostgreSQL is "up" (health checks pass)                         │   │
-│   │   • But queries are 200× slower                                      │   │
-│   │   • Service waits for timeout (30 seconds)                           │   │
-│   │   • Connection pool fills up (all connections waiting)               │   │
-│   │   • New requests fail (no available connections)                      │   │
+│   │   • But queries are 200× slower                                     │   │
+│   │   • Service waits for timeout (30 seconds)                          │   │
+│   │   • Connection pool fills up (all connections waiting)              │   │
+│   │   • New requests fail (no available connections)                    │   │
 │   │                                                                     │   │
-│   │   User Impact:                                                       │   │
-│   │   • First 100 requests: Slow but succeed (2-30 seconds)              │   │
+│   │   User Impact:                                                      │   │
+│   │   • First 100 requests: Slow but succeed (2-30 seconds)             │   │
 │   │   • Next 1000 requests: Fail immediately (connection pool full)     │   │
 │   │   • Appears as "intermittent failures" to users                     │   │
 │   │                                                                     │   │
-│   │   Detection Challenge:                                               │   │
-│   │   • Average latency might look okay (if most queries still fast)     │   │
+│   │   Detection Challenge:                                              │   │
+│   │   • Average latency might look okay (if most queries still fast)    │   │
 │   │   • p99 latency spikes, but p50 might be normal                     │   │
-│   │   • Error rate increases, but not obviously correlated               │   │
+│   │   • Error rate increases, but not obviously correlated              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   L6 Mitigation:                                                            │
-│   • Set aggressive query timeouts (100ms, not 30s)                         │   │
-│   • Monitor p95/p99 latency, not just average                              │   │
-│   • Circuit breaker on slow queries (fail fast)                            │   │
-│   • Graceful degradation (serve cached data, skip non-critical queries)   │   │
+|   ┌─────────────────────────────────────────────────────────────────────┐   |
+│   • Set aggressive query timeouts (100ms, not 30s)                      │   │
+│   • Monitor p95/p99 latency, not just average                           │   │
+│   • Circuit breaker on slow queries (fail fast)                         │   │
+│   • Graceful degradation (serve cached data, skip non-critical queries) │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -2247,43 +2248,44 @@ Partial failures occur when a database component degrades rather than completely
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    DEGRADED CONSISTENCY PARTIAL FAILURE                      │
+│                    DEGRADED CONSISTENCY PARTIAL FAILURE                     │
 │                                                                             │
 │   Normal Operation (Replication Lag: <100ms):                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Write: [User updates profile] → Primary → Replica (100ms lag)    │   │
+│   │   Write: [User updates profile] → Primary → Replica (100ms lag)     │   │
 │   │   Read:  [User views profile] → Replica → Returns latest data       │   │
-│   │   User experience: Consistent                                        │   │
+│   │   User experience: Consistent                                       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Partial Failure (Replication Lag: 30 seconds):                           │
+│   Partial Failure (Replication Lag: 30 seconds):                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Write: [User changes email] → Primary (succeeds immediately)     │   │
-│   │   Read:  [User views profile] → Replica → Returns OLD email        │   │
+│   │   Write: [User changes email] → Primary (succeeds immediately)      │   │
+│   │   Read:  [User views profile] → Replica → Returns OLD email         │   │
 │   │                                                                     │   │
-│   │   User Impact:                                                       │   │
+│   │   User Impact:                                                      │   │
 │   │   • User updates email, then immediately views profile              │   │
 │   │   • Profile shows old email (confusing!)                            │   │
-│   │   • User tries again, sees same old email                            │   │
-│   │   • User reports "bug" - data not saving                              │   │
+│   │   • User tries again, sees same old email                           │   │
+│   │   • User reports "bug" - data not saving                            │   │
 │   │                                                                     │   │
-│   │   Why This Happens:                                                  │   │
+│   │   Why This Happens:                                                 │   │
 │   │   • Replica is overloaded (can't keep up with write rate)           │   │
 │   │   • Network issues between primary and replica                      │   │
-│   │   • Replica is running expensive queries (blocking replication)      │   │
+│   │   • Replica is running expensive queries (blocking replication)     │   │
 │   │                                                                     │   │
-│   │   Detection Challenge:                                               │   │
+│   │   Detection Challenge:                                              │   │
 │   │   • Database is "up" (both primary and replica responding)          │   │
 │   │   • Error rate is zero (no failures)                                │   │
 │   │   • But user experience is broken (stale data)                      │   │
-│   │   • Only detected via user complaints or replication lag metrics     │   │
+│   │   • Only detected via user complaints or replication lag metrics    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   L6 Mitigation:                                                            │
-│   • Monitor replication lag (alert if >1 second for critical data)        │   │
-│   • Route reads to primary for "read-after-write" patterns                 │   │
-│   • Use session consistency (same user always reads from same replica)     │   │
-│   • Graceful degradation: Show "updating..." indicator during lag         │   │
+│   L6 Mitigation:                                                            |
+|   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   • Monitor replication lag (alert if >1 second for critical data)      │   │
+│   • Route reads to primary for "read-after-write" patterns              │   │
+│   • Use session consistency (same user always reads from same replica)  │   │
+│   • Graceful degradation: Show "updating..." indicator during lag       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -2297,46 +2299,46 @@ Partial failures occur when a database component degrades rather than completely
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    RESOURCE EXHAUSTION PARTIAL FAILURE                        │
+│                    RESOURCE EXHAUSTION PARTIAL FAILURE                      │
 │                                                                             │
 │   Normal Operation:                                                         │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │   Connection Pool: 500 max connections                              │   │
 │   │   Active: 200 (40% utilization)                                     │   │
-│   │   New requests: Get connection immediately                         │   │
+│   │   New requests: Get connection immediately                          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Partial Failure (Connection Pool Exhausted):                             │
+│   Partial Failure (Connection Pool Exhausted):                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │   Connection Pool: 500 max connections                              │   │
-│   │   Active: 500/500 (100% utilization)                               │   │
+│   │   Active: 500/500 (100% utilization)                                │   │
 │   │   • All connections in use (some slow queries holding them)         │   │
-│   │   • New requests: Fail immediately (no connections available)        │   │
+│   │   • New requests: Fail immediately (no connections available)       │   │
 │   │   • Existing requests: Still work (they have connections)           │   │
 │   │                                                                     │   │
-│   │   User Impact:                                                       │   │
-│   │   • User A (has connection): Request succeeds (slowly)             │   │
-│   │   • User B (needs new connection): Request fails immediately       │   │
+│   │   User Impact:                                                      │   │
+│   │   • User A (has connection): Request succeeds (slowly)              │   │
+│   │   • User B (needs new connection): Request fails immediately        │   │
 │   │   • Appears as "intermittent failures" (50% success rate)           │   │
-│   │   • No clear pattern (seems random)                                  │   │
+│   │   • No clear pattern (seems random)                                 │   │
 │   │                                                                     │   │
-│   │   Why This Happens:                                                  │   │
+│   │   Why This Happens:                                                 │   │
 │   │   • Slow queries hold connections longer than expected              │   │
 │   │   • Connection leak (connections not returned to pool)              │   │
 │   │   • Traffic spike (more requests than pool can handle)              │   │
 │   │   • Deadlock or long-running transaction                            │   │
 │   │                                                                     │   │
-│   │   Detection Challenge:                                               │   │
-│   │   • Database CPU/memory look fine (not the bottleneck)               │   │
-│   │   • Error messages say "connection pool exhausted" (clear!)          │   │
-│   │   • But root cause (slow queries) might not be obvious               │   │
+│   │   Detection Challenge:                                              │   │
+│   │   • Database CPU/memory look fine (not the bottleneck)              │   │
+│   │   • Error messages say "connection pool exhausted" (clear!)         │   │
+│   │   • But root cause (slow queries) might not be obvious              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   L6 Mitigation:                                                            │
-│   • Monitor connection pool utilization (alert at 80%)                     │   │
-│   • Set query timeouts (prevent slow queries from holding connections)     │   │
-│   • Connection pool per service (isolate blast radius)                     │   │
-│   • Circuit breaker when pool exhausted (fail fast, don't wait)            │   │
+│   • Monitor connection pool utilization (alert at 80%)                  │   │
+│   • Set query timeouts (prevent slow queries from holding connections)  │   │
+│   • Connection pool per service (isolate blast radius)                  │   │
+│   • Circuit breaker when pool exhausted (fail fast, don't wait)         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -2736,14 +2738,14 @@ When evolving databases, you need a migration strategy:
 │                    YES          NO                                          │
 │                     │            │                                          │
 │                     ▼            ▼                                          │
-│        ┌────────────────┐  ┌────────────────┐                               │
-│        │ Scale > 10TB   │  │  Access pattern│                               │
-│        │ or > 100K w/s? │  │  is key-value? │                               │
-│        └────────────────┘  └────────────────┘                               │
-│           │         │         │         │                                   │
-│          YES       NO        YES       NO                                   │
-│           │         │         │         │                                   │
-│           ▼         ▼         ▼         ▼                                   │
+│        ┌────────────────┐      ┌────────────────┐                           │
+│        │ Scale > 10TB   │      │  Access pattern│                           │
+│        │ or > 100K w/s? │      │  is key-value? │                           │
+│        └────────────────┘      └────────────────┘                           │
+│           │         │             │        │                                │
+│          YES       NO             YES       NO                              │
+│           │         │             │         │                               │
+│           ▼         ▼             ▼         ▼                               │
 │   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐                   │
 │   │ NewSQL   │ │PostgreSQL│ │Key-Value │ │Need secondary│                   │
 │   │(Spanner, │ │ MySQL    │ │(Redis,   │ │   queries?   │                   │
@@ -3060,78 +3062,78 @@ Understanding cascading failures requires seeing them as a sequence of phases. E
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    CASCADING FAILURE TIMELINE STRUCTURE                      │
+│                    CASCADING FAILURE TIMELINE STRUCTURE                     │
 │                                                                             │
 │   PHASE 1: TRIGGER (T+0 to T+5 seconds)                                     │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Initial failure event:                                             │   │
-│   │   • Component fails (network blip, node crash, overload)             │   │
+│   │   Initial failure event:                                            │   │
+│   │   • Component fails (network blip, node crash, overload)            │   │
 │   │   • Duration: Usually seconds (3-5 seconds typical)                 │   │
-│   │   • Impact: Direct users of that component affected                  │   │
+│   │   • Impact: Direct users of that component affected                 │   │
 │   │                                                                     │   │
-│   │   Example: Redis cluster network partition for 3 seconds             │   │
+│   │   Example: Redis cluster network partition for 3 seconds            │   │
 │   │   • Cache misses spike from 5% to 100%                              │   │
 │   │   • Requests that hit Redis fail                                    │   │
-│   │   • But: Most requests retry or fall back to database              │   │
+│   │   • But: Most requests retry or fall back to database               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   PHASE 2: PROPAGATION (T+5 to T+30 seconds)                                │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Failure spreads to dependent systems:                              │   │
-│   │   • Downstream systems receive unexpected load                        │   │
-│   │   • Resource exhaustion begins (connections, memory, CPU)             │   │
-│   │   • Latency increases as systems struggle                            │   │
+│   │   Failure spreads to dependent systems:                             │   │
+│   │   • Downstream systems receive unexpected load                      │   │
+│   │   • Resource exhaustion begins (connections, memory, CPU)           │   │
+│   │   • Latency increases as systems struggle                           │   │
 │   │                                                                     │   │
-│   │   Example: PostgreSQL receives 20× normal load                        │   │
-│   │   • Connection pool fills (500 → 500/500 in seconds)                 │   │
+│   │   Example: PostgreSQL receives 20× normal load                      │   │
+│   │   • Connection pool fills (500 → 500/500 in seconds)                │   │
 │   │   • Query latency increases (10ms → 500ms → timeout)                │   │
-│   │   • CPU spikes to 95%+                                               │   │
-│   │   • Replication lag increases (replicas can't keep up)               │   │
+│   │   • CPU spikes to 95%+                                              │   │
+│   │   • Replication lag increases (replicas can't keep up)              │   │
 │   │                                                                     │   │
-│   │   Key insight: This phase is where containment should happen,        │   │
-│   │                but often doesn't because monitoring lags reality.    │   │
+│   │   Key insight: This phase is where containment should happen,       │   │
+│   │                but often doesn't because monitoring lags reality.   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   PHASE 3: USER-VISIBLE IMPACT (T+30 to T+120 seconds)                       │
+│   PHASE 3: USER-VISIBLE IMPACT (T+30 to T+120 seconds)                      │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   End users begin experiencing failures:                              │   │
+│   │   End users begin experiencing failures:                            │   │
 │   │   • Request timeouts (30s+ wait times)                              │   │
-│   │   • Error rates spike (5xx responses)                                │   │
-│   │   • Partial functionality loss                                       │   │
+│   │   • Error rates spike (5xx responses)                               │   │
+│   │   • Partial functionality loss                                      │   │
 │   │   • Health checks fail, load balancers mark services unhealthy      │   │
 │   │                                                                     │   │
-│   │   Example: User profile service becomes unavailable                  │   │
-│   │   • All requests timeout (waiting for PostgreSQL)                    │   │
+│   │   Example: User profile service becomes unavailable                 │   │
+│   │   • All requests timeout (waiting for PostgreSQL)                   │   │
 │   │   • Health checks fail → load balancer stops routing                │   │
 │   │   • Auto-scaler sees "unhealthy" → spins up MORE servers            │   │
 │   │   • New servers immediately hit same overloaded database            │   │
 │   │   • Cascade amplifies: more servers = more load = worse failure     │   │
 │   │                                                                     │   │
 │   │   Staff Engineer insight: Auto-scaling during cascades makes        │   │
-│   │                           things worse. Need circuit breakers.       │   │
+│   │                           things worse. Need circuit breakers.      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   PHASE 4: CONTAINMENT (T+120 seconds to T+300+ seconds)                      │
+│   PHASE 4: CONTAINMENT (T+120 seconds to T+300+ seconds)                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Human intervention or automated systems begin recovery:             │   │
-│   │   • On-call engineer pages                                            │   │
-│   │   • Root cause identified (often takes 5-10 minutes)                 │   │
-│   │   • Mitigation applied (circuit breakers, load shedding, failover)    │   │
-│   │   • Systems begin recovery                                            │   │
+│   │   Human intervention or automated systems begin recovery:           │   │
+│   │   • On-call engineer pages                                          │   │
+│   │   • Root cause identified (often takes 5-10 minutes)                │   │
+│   │   • Mitigation applied (circuit breakers, load shedding, failover)  │   │
+│   │   • Systems begin recovery                                          │   │
 │   │                                                                     │   │
-│   │   Example: Recovery actions                                           │   │
-│   │   • Enable circuit breaker on PostgreSQL (fail fast, don't wait)     │   │
-│   │   • Shed non-critical load (analytics, background jobs)              │   │
-│   │   • Promote read replica to handle some read traffic                 │   │
-│   │   • Gradually restore full functionality                              │   │
+│   │   Example: Recovery actions                                         │   │
+│   │   • Enable circuit breaker on PostgreSQL (fail fast, don't wait)    │   │
+│   │   • Shed non-critical load (analytics, background jobs)             │   │
+│   │   • Promote read replica to handle some read traffic                │   │
+│   │   • Gradually restore full functionality                            │   │
 │   │                                                                     │   │
-│   │   Total outage duration: 47 minutes                                  │   │
-│   │   • 3 seconds: Initial trigger                                       │   │
-│   │   • 27 seconds: Propagation and amplification                        │   │
+│   │   Total outage duration: 47 minutes                                 │   │
+│   │   • 3 seconds: Initial trigger                                      │   │
+│   │   • 27 seconds: Propagation and amplification                       │   │
 │   │   • 90 seconds: User-visible impact                                 │   │
-│   │   • 45 minutes: Containment and recovery                             │   │
+│   │   • 45 minutes: Containment and recovery                            │   │
 │   │                                                                     │   │
-│   │   L6 Prevention: Design systems to contain in Phase 2, not Phase 4.    │   │
+│   │   L6 Prevention: Design systems to contain in Phase 2, not Phase 4. │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3204,95 +3206,95 @@ Staff Engineers visualize failure propagation to understand blast radius and des
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FAILURE PROPAGATION PATH DIAGRAM                        │
+│                    FAILURE PROPAGATION PATH DIAGRAM                         │
 │                                                                             │
-│   Initial Trigger: Redis Network Partition (3 seconds)                    │
+│   Initial Trigger: Redis Network Partition (3 seconds)                      │
 │                                                                             │
-│   T+0s:  [Redis Cluster] ✗ Network partition                              │
+│   T+0s:  [Redis Cluster] ✗ Network partition                                │
 │          │                                                                  │
 │          │ All cache requests fail                                          │
 │          ▼                                                                  │
-│   T+1s:  [API Service] Cache miss rate: 5% → 100%                         │
+│   T+1s:  [API Service] Cache miss rate: 5% → 100%                           │
 │          │                                                                  │
-│          │ Fallback: Hit database directly                                 │
+│          │ Fallback: Hit database directly                                  │
 │          ▼                                                                  │
-│   T+3s:  [PostgreSQL] Request rate: 50/sec → 1000/sec (20× spike)       │
+│   T+3s:  [PostgreSQL] Request rate: 50/sec → 1000/sec (20× spike)           │
 │          │                                                                  │
-│          │ Connection pool: 200/500 → 500/500 (exhausted)                  │
-│          │ Query latency: 10ms → 500ms → timeout                         │
+│          │ Connection pool: 200/500 → 500/500 (exhausted)                   │
+│          │ Query latency: 10ms → 500ms → timeout                            │
 │          │ CPU: 40% → 95%                                                   │
 │          │                                                                  │
-│          ├─→ [User Profile Service] Waiting for DB connections             │
-│          │   • Requests queue (30s timeout)                                │
-│          │   • Health checks fail                                          │
+│          ├─→ [User Profile Service] Waiting for DB connections              │
+│          │   • Requests queue (30s timeout)                                 │
+│          │   • Health checks fail                                           │
 │          │                                                                  │
-│          ├─→ [Order Service] Waiting for DB connections                   │
-│          │   • Checkout requests timeout                                  │
-│          │   • Health checks fail                                          │
+│          ├─→ [Order Service] Waiting for DB connections                     │
+│          │   • Checkout requests timeout                                    │
+│          │   • Health checks fail                                           │
 │          │                                                                  │
-│          ├─→ [Feed Service] Waiting for DB connections                   │
-│          │   • Feed generation timeout                                     │
-│          │   • Health checks fail                                          │
+│          ├─→ [Feed Service] Waiting for DB connections                      │
+│          │   • Feed generation timeout                                      │
+│          │   • Health checks fail                                           │
 │          │                                                                  │
 │          ▼                                                                  │
-│   T+15s: [Load Balancer] Health checks failing                             │
+│   T+15s: [Load Balancer] Health checks failing                              │
 │          │                                                                  │
-│          │ Marks services as unhealthy                                     │
-│          │ Stops routing traffic                                           │
+│          │ Marks services as unhealthy                                      │
+│          │ Stops routing traffic                                            │
 │          │                                                                  │
-│          ├─→ [Auto-scaler] Sees "unhealthy" services                       │
-│          │   • Spins up 10 new instances                                   │
+│          ├─→ [Auto-scaler] Sees "unhealthy" services                        │
+│          │   • Spins up 10 new instances                                    │
 │          │   • New instances immediately hit PostgreSQL                     │
-│          │   • Amplifies the problem (more load)                           │
+│          │   • Amplifies the problem (more load)                            │
 │          │                                                                  │
 │          ▼                                                                  │
-│   T+30s: [All Services] Complete failure                                 │
+│   T+30s: [All Services] Complete failure                                    │
 │          │                                                                  │
-│          │ • User Profile Service: Down                                    │
-│          │ • Order Service: Down                                           │
-│          │ • Feed Service: Down                                           │
-│          │ • All dependent services: Down                                 │
-│          │                                                                  │
-│          ▼                                                                  │
-│   T+60s: [On-Call Engineer] Paged                                          │
-│          │                                                                  │
-│          │ Identifies root cause (PostgreSQL overload)                     │
-│          │ Enables circuit breaker (fail fast, don't wait)                │
+│          │ • User Profile Service: Down                                     │
+│          │ • Order Service: Down                                            │
+│          │ • Feed Service: Down                                             │
+│          │ • All dependent services: Down                                   │
 │          │                                                                  │
 │          ▼                                                                  │
-│   T+120s: [Recovery] Circuit breaker active                                │
+│   T+60s: [On-Call Engineer] Paged                                           │
 │          │                                                                  │
-│          │ • Requests fail fast (no 30s wait)                              │
-│          │ • PostgreSQL load decreases                                    │
+│          │ Identifies root cause (PostgreSQL overload)                      │
+│          │ Enables circuit breaker (fail fast, don't wait)                  │
+│          │                                                                  │
+│          ▼                                                                  │
+│   T+120s: [Recovery] Circuit breaker active                                 │
+│          │                                                                  │
+│          │ • Requests fail fast (no 30s wait)                               │
+│          │ • PostgreSQL load decreases                                      │
 │          │ • Services begin responding (with errors, but fast)              │
 │          │                                                                  │
 │          ▼                                                                  │
-│   T+300s: [Full Recovery] Redis partition heals                            │
+│   T+300s: [Full Recovery] Redis partition heals                             │
 │          │                                                                  │
-│          │ • Cache begins working                                          │
-│          │ • Circuit breaker resets                                        │
-│          │ • Normal operation resumes                                      │
+│          │ • Cache begins working                                           │
+│          │ • Circuit breaker resets                                         │
+│          │ • Normal operation resumes                                       │
 │                                                                             │
-│   Blast Radius Analysis:                                                   │
+│   Blast Radius Analysis:                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Direct Impact:                                                     │   │
+│   │   Direct Impact:                                                    │   │
 │   │   • Redis: 3-second partition (minor)                               │   │
 │   │                                                                     │   │
-│   │   Cascading Impact:                                                  │   │
+│   │   Cascading Impact:                                                 │   │
 │   │   • PostgreSQL: Overloaded for 5 minutes                            │   │
 │   │   • All services using PostgreSQL: Down for 2 minutes               │   │
 │   │   • All users: Unable to use platform for 2 minutes                 │   │
 │   │                                                                     │   │
-│   │   Containment Points (L6 Design):                                    │   │
+│   │   Containment Points (L6 Design):                                   │   │
 │   │   • Circuit breaker at T+60s (should be T+5s)                       │   │
 │   │   • Rate limiting on database (should prevent overload)             │   │
-│   │   • Graceful degradation (should serve stale cache)                  │   │
+│   │   • Graceful degradation (should serve stale cache)                 │   │
 │   │                                                                     │   │
-│   │   Prevention (L6 Design):                                            │   │
-│   │   • Stale-while-revalidate: Serve old cache during Redis failure     │   │
+│   │   Prevention (L6 Design):                                           │   │
+│   │   • Stale-while-revalidate: Serve old cache during Redis failure    │   │
 │   │   • Circuit breaker: Fail fast when PostgreSQL slow                 │   │
 │   │   • Rate limiting: Shed load before PostgreSQL overloads            │   │
-│   │   • Monitoring: Alert on connection pool utilization (80%)           │   │
+│   │   • Monitoring: Alert on connection pool utilization (80%)          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3634,40 +3636,40 @@ Staff Engineers identify and challenge assumptions that lead to capacity crises.
 │   Assumption 1: "Linear Growth"                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │   What you assume: Traffic grows 10% per month, predictably         │   │
-│   │   Reality: Growth is non-linear and event-driven                     │   │
+│   │   Reality: Growth is non-linear and event-driven                    │   │
 │   │   • Viral content: 100× traffic spike in hours                      │   │
-│   │   • Marketing campaigns: 5× traffic spike                          │   │
-│   │   • Product launches: Unknown multiplier                           │   │
-│   │   • Seasonal peaks: 3× normal (Black Friday, New Year)             │   │
+│   │   • Marketing campaigns: 5× traffic spike                           │   │
+│   │   • Product launches: Unknown multiplier                            │   │
+│   │   • Seasonal peaks: 3× normal (Black Friday, New Year)              │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Plan for 2-3× normal traffic, design load          │   │
+│   │   L6 Approach: Plan for 2-3× normal traffic, design load            │   │
 │   │                shedding for 10× spikes                              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Assumption 2: "Average Metrics Tell the Story"                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What you assume: "CPU is 50% on average, we're fine"               │   │
-│   │   Reality: Averages hide spikes and hot partitions                 │   │
+│   │   What you assume: "CPU is 50% on average, we're fine"              │   │
+│   │   Reality: Averages hide spikes and hot partitions                  │   │
 │   │   • Average CPU: 50%                                                │   │
-│   │   • Peak CPU: 95% (during traffic spikes)                          │   │
+│   │   • Peak CPU: 95% (during traffic spikes)                           │   │
 │   │   • One hot partition: 200% (overloaded)                            │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Monitor p95/p99, not averages. Track per-node       │   │
-│   │                metrics, not cluster aggregates                       │   │
+│   │   L6 Approach: Monitor p95/p99, not averages. Track per-node        │   │
+│   │                metrics, not cluster aggregates                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Assumption 3: "Storage Scales Linearly"                                    │
+│   Assumption 3: "Storage Scales Linearly"                                   │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What you assume: 1TB today, 2TB next year, simple                │   │
-│   │   Reality: Storage growth accelerates and has hidden costs           │   │
-│   │   • Data grows: 1TB → 2TB → 5TB → 15TB (exponential)              │   │
-│   │   • Indexes grow faster than data (2-3× multiplier)                  │   │
-│   │   • Backups grow: 1TB → 2TB → 5TB (same as data)                   │   │
-│   │   • Replication: 3× storage (RF=3)                                │   │
-│   │   • Vacuum/compaction overhead: 20-30% additional                  │   │
+│   │   What you assume: 1TB today, 2TB next year, simple                 │   │
+│   │   Reality: Storage growth accelerates and has hidden costs          │   │
+│   │   • Data grows: 1TB → 2TB → 5TB → 15TB (exponential)                │   │
+│   │   • Indexes grow faster than data (2-3× multiplier)                 │   │
+│   │   • Backups grow: 1TB → 2TB → 5TB (same as data)                    │   │
+│   │   • Replication: 3× storage (RF=3)                                  │   │
+│   │   • Vacuum/compaction overhead: 20-30% additional                   │   │
 │   │                                                                     │   │
 │   │   L6 Approach: Model storage as: data × (1 + index_overhead) ×      │   │
-│   │                replication_factor × (1 + compaction_overhead)        │   │
+│   │                replication_factor × (1 + compaction_overhead)       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Assumption 4: "Adding Nodes Solves Everything"                            │
@@ -3675,26 +3677,26 @@ Staff Engineers identify and challenge assumptions that lead to capacity crises.
 │   │   What you assume: "When we hit limits, we'll add nodes"            │   │
 │   │   Reality: Adding nodes has limits and costs                        │   │
 │   │   • Network overhead: More nodes = more coordination traffic        │   │
-│   │   • Rebalancing cost: Moving data takes days/weeks                   │   │
-│   │   • Diminishing returns: 3 nodes → 6 nodes ≠ 2× capacity           │   │
-│   │   • Operational complexity: More nodes = more failure modes          │   │
+│   │   • Rebalancing cost: Moving data takes days/weeks                  │   │
+│   │   • Diminishing returns: 3 nodes → 6 nodes ≠ 2× capacity            │   │
+│   │   • Operational complexity: More nodes = more failure modes         │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Vertical scaling first (cheaper, simpler).            │   │
-│   │                Horizontal scaling only when vertical hits limits     │   │
+│   │   L6 Approach: Vertical scaling first (cheaper, simpler).           │   │
+│   │                Horizontal scaling only when vertical hits limits    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Assumption 5: "We Can Migrate Quickly"                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What you assume: "If this database doesn't work, we'll migrate"    │   │
-│   │   Reality: Migrations take months and have risks                     │   │
-│   │   • Schema migration: Weeks to months                                │   │
-│   │   • Data migration: Days to weeks (for TB-scale)                      │   │
-│   │   • Application changes: Weeks                                       │   │
-│   │   • Testing: Weeks                                                   │   │
-│   │   • Rollback plan: Often impossible                                  │   │
+│   │   What you assume: "If this database doesn't work, we'll migrate"   │   │
+│   │   Reality: Migrations take months and have risks                    │   │
+│   │   • Schema migration: Weeks to months                               │   │
+│   │   • Data migration: Days to weeks (for TB-scale)                    │   │
+│   │   • Application changes: Weeks                                      │   │
+│   │   • Testing: Weeks                                                  │   │
+│   │   • Rollback plan: Often impossible                                 │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Choose database for 3-year horizon, not 3-month       │   │
-│   │                horizon. Migration is expensive—avoid if possible   │   │
+│   │   L6 Approach: Choose database for 3-year horizon, not 3-month      │   │
+│   │                horizon. Migration is expensive—avoid if possible    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -3706,79 +3708,79 @@ Staff Engineers identify bottlenecks in order of likelihood. This helps prioriti
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    WHAT FAILS FIRST AT SCALE (Bottleneck Order)              │
+│                    WHAT FAILS FIRST AT SCALE (Bottleneck Order)             │
 │                                                                             │
-│   At 2× Scale:                                                               │
+│   At 2× Scale:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   1. Connection Pool (most common)                                    │   │
-│   │      • Symptoms: "Connection pool exhausted" errors                  │   │
-│   │      • Why: Applications create too many connections                  │   │
+│   │   1. Connection Pool (most common)                                  │   │
+│   │      • Symptoms: "Connection pool exhausted" errors                 │   │
+│   │      • Why: Applications create too many connections                │   │
 │   │      • Fix: Connection pooling (PgBouncer, app-level)               │   │
 │   │                                                                     │   │
-│   │   2. Missing Indexes                                                  │   │
-│   │      • Symptoms: Slow queries, high CPU                              │   │
-│   │      • Why: Queries that worked at small scale scan tables           │   │
-│   │      • Fix: Add indexes on frequently queried columns                 │   │
+│   │   2. Missing Indexes                                                │   │
+│   │      • Symptoms: Slow queries, high CPU                             │   │
+│   │      • Why: Queries that worked at small scale scan tables          │   │
+│   │      • Fix: Add indexes on frequently queried columns               │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   At 5× Scale:                                                               │
+│   At 5× Scale:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   1. Disk I/O Saturation                                             │   │
+│   │   1. Disk I/O Saturation                                            │   │
 │   │      • Symptoms: Write latency increases, replication lag           │   │
 │   │      • Why: Disk can't keep up with write rate                      │   │
-│   │      • Fix: Faster disks (NVMe), more write replicas, batching       │   │
+│   │      • Fix: Faster disks (NVMe), more write replicas, batching      │   │
 │   │                                                                     │   │
-│   │   2. Memory Pressure                                                  │   │
+│   │   2. Memory Pressure                                                │   │
 │   │      • Symptoms: OOM kills, swap usage, query performance degrades  │   │
 │   │      • Why: Working set exceeds available RAM                       │   │
 │   │      • Fix: Increase instance memory, optimize queries, cache       │   │
 │   │                                                                     │   │
-│   │   3. Hot Partitions                                                   │   │
+│   │   3. Hot Partitions                                                 │   │
 │   │      • Symptoms: One node overloaded, others idle                   │   │
 │   │      • Why: Poor partition key design (skewed distribution)         │   │
 │   │      • Fix: Redesign partition key, add salting                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   At 10× Scale:                                                              │
+│   At 10× Scale:                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   1. Single-Node Write Throughput                                    │   │
+│   │   1. Single-Node Write Throughput                                   │   │
 │   │      • Symptoms: Write latency spikes, queue buildup                │   │
 │   │      • Why: Single primary can't handle write volume                │   │
-│   │      • Fix: Sharding, write partitioning, or specialized stores    │   │
+│   │      • Fix: Sharding, write partitioning, or specialized stores     │   │
 │   │                                                                     │   │
-│   │   2. Network Bandwidth                                                │   │
-│   │      • Symptoms: Replication lag, slow cross-region queries          │   │
-│   │      • Why: Network becomes bottleneck for data transfer             │   │
-│   │      • Fix: Regional deployments, data locality optimization         │   │
+│   │   2. Network Bandwidth                                              │   │
+│   │      • Symptoms: Replication lag, slow cross-region queries         │   │
+│   │      • Why: Network becomes bottleneck for data transfer            │   │
+│   │      • Fix: Regional deployments, data locality optimization        │   │
 │   │                                                                     │   │
-│   │   3. Query Planner Limits                                             │   │
-│   │      • Symptoms: Complex queries timeout or use wrong plans          │   │
+│   │   3. Query Planner Limits                                           │   │
+│   │      • Symptoms: Complex queries timeout or use wrong plans         │   │
 │   │      • Why: Query planner can't optimize for large datasets         │   │
 │   │      • Fix: Denormalize, pre-compute, materialized views            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   At 50×+ Scale:                                                             │
+│   At 50×+ Scale:                                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   1. Distributed Coordination Overhead                                │   │
-│   │      • Symptoms: Transaction latency increases, coordination fails    │   │
+│   │   1. Distributed Coordination Overhead                              │   │
+│   │      • Symptoms: Transaction latency increases, coordination fails  │   │
 │   │      • Why: Cross-partition transactions are expensive              │   │
-│   │      • Fix: Redesign data model to minimize cross-partition ops      │   │
+│   │      • Fix: Redesign data model to minimize cross-partition ops     │   │
 │   │                                                                     │   │
-│   │   2. Schema Evolution Becomes Impossible                              │   │
-│   │      • Symptoms: Migrations take weeks, cause outages                │   │
+│   │   2. Schema Evolution Becomes Impossible                            │   │
+│   │      • Symptoms: Migrations take weeks, cause outages               │   │
 │   │      • Why: Schema changes on TB-scale data are slow                │   │
-│   │      • Fix: Schema-on-read, versioned schemas, gradual migration     │   │
+│   │      • Fix: Schema-on-read, versioned schemas, gradual migration    │   │
 │   │                                                                     │   │
-│   │   3. Operational Complexity Explodes                                  │   │
-│   │      • Symptoms: Incidents increase, recovery takes longer            │   │
-│   │      • Why: More components = more failure modes                     │   │
-│   │      • Fix: Automation, standardization, runbooks                    │   │
+│   │   3. Operational Complexity Explodes                                │   │
+│   │      • Symptoms: Incidents increase, recovery takes longer          │   │
+│   │      • Why: More components = more failure modes                    │   │
+│   │      • Fix: Automation, standardization, runbooks                   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Staff Engineer Insight: The bottleneck that fails first depends on your    │
+│   Staff Engineer Insight: The bottleneck that fails first depends on your   │
 │                          workload. Read-heavy fails at connection pool.     │
-│                          Write-heavy fails at disk I/O. Identify YOUR        │
-│                          bottleneck before it becomes a crisis.              │
+│                          Write-heavy fails at disk I/O. Identify YOUR       │
+│                          bottleneck before it becomes a crisis.             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -4631,20 +4633,20 @@ Staff Engineers identify the dominant cost drivers because optimizing the wrong 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    TOP 2 DATABASE COST DRIVERS                              │
 │                                                                             │
-│   #1: OPERATIONAL OVERHEAD (60-70% of total cost)                          │
+│   #1: OPERATIONAL OVERHEAD (60-70% of total cost)                           │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What it includes:                                                  │   │
+│   │   What it includes:                                                 │   │
 │   │   • On-call engineer time (incidents, debugging)                    │   │
 │   │   • DBA time (tuning, optimization, migrations)                     │   │
-│   │   • Infrastructure setup and maintenance                           │   │
+│   │   • Infrastructure setup and maintenance                            │   │
 │   │   • Monitoring and alerting setup                                   │   │
 │   │   • Security patches and compliance                                 │   │
-│   │   • Documentation and runbooks                                       │   │
+│   │   • Documentation and runbooks                                      │   │
 │   │                                                                     │   │
 │   │   Why it's #1:                                                      │   │
 │   │   • Engineer time costs $150-300/hour                               │   │
 │   │   • One incident can cost $10K+ in engineer time                    │   │
-│   │   • Ongoing maintenance is 20-40% of engineer time                   │   │
+│   │   • Ongoing maintenance is 20-40% of engineer time                  │   │
 │   │   • Self-hosted databases require more operational time             │   │
 │   │                                                                     │   │
 │   │   Example:                                                          │   │
@@ -4652,23 +4654,23 @@ Staff Engineers identify the dominant cost drivers because optimizing the wrong 
 │   │   • But: 20 hours/month DBA time = $3K-6K/month                     │   │
 │   │   • Total: $5K-8K/month (operational overhead dominates)            │   │
 │   │                                                                     │   │
-│   │   L6 Insight: Managed services (RDS, DynamoDB) reduce operational    │   │
+│   │   L6 Insight: Managed services (RDS, DynamoDB) reduce operational   │   │
 │   │               overhead, even if infrastructure costs more.          │   │
-│   │               For small teams, managed is often cheaper overall.     │   │
+│   │               For small teams, managed is often cheaper overall.    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   #2: STORAGE COSTS (20-30% of total cost, but scales fastest)              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What it includes:                                                  │   │
+│   │   What it includes:                                                 │   │
 │   │   • Primary storage (data + indexes)                                │   │
-│   │   • Replication storage (RF=3 means 3× data)                         │   │
-│   │   • Backup storage (retention policies)                            │   │
+│   │   • Replication storage (RF=3 means 3× data)                        │   │
+│   │   • Backup storage (retention policies)                             │   │
 │   │   • Snapshot storage (point-in-time recovery)                       │   │
 │   │   • Archive storage (cold data)                                     │   │
 │   │                                                                     │   │
 │   │   Why it's #2:                                                      │   │
 │   │   • Storage costs scale linearly with data growth                   │   │
-│   │   • Data grows faster than compute needs (2-3× per year typical)     │   │
+│   │   • Data grows faster than compute needs (2-3× per year typical)    │   │
 │   │   • Replication multiplies storage (RF=3 = 3× cost)                 │   │
 │   │   • Backups add 50-100% more storage                                │   │
 │   │   • Indexes can double storage requirements                         │   │
@@ -4677,19 +4679,19 @@ Staff Engineers identify the dominant cost drivers because optimizing the wrong 
 │   │   • Primary data: 1TB                                               │   │
 │   │   • Indexes: 500GB (50% overhead)                                   │   │
 │   │   • Replication (RF=3): 4.5TB × 3 = 13.5TB                          │   │
-│   │   • Backups (30-day retention): +4.5TB                               │   │
+│   │   • Backups (30-day retention): +4.5TB                              │   │
 │   │   • Total: 18TB                                                     │   │
-│   │   • Cost: 18TB × $0.10/GB/month = $1,800/month                     │   │
+│   │   • Cost: 18TB × $0.10/GB/month = $1,800/month                      │   │
 │   │                                                                     │   │
-│   │   L6 Insight: Storage costs compound. 1TB today becomes 10TB in      │   │
+│   │   L6 Insight: Storage costs compound. 1TB today becomes 10TB in     │   │
 │   │               3 years. Plan for data lifecycle (archive old data)   │   │
-│   │               and optimize indexes (they're expensive).            │   │
+│   │               and optimize indexes (they're expensive).             │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   What's NOT in top 2:                                                     │
-│   • Compute costs (usually 10-15% of total)                                │   │
-│   • Network costs (usually <5% of total)                                   │   │
-│   • Licensing (varies, but often <10% for open-source)                     │   │
+│   What's NOT in top 2:                                                      │
+│   • Compute costs (usually 10-15% of total)                                 │
+│   • Network costs (usually <5% of total)                                    │
+│   • Licensing (varies, but often <10% for open-source)                      │
 │                                                                             │
 │   Staff Engineer Insight: Optimize operational overhead first (use          │
 │                          managed services, automate). Then optimize         │
@@ -4709,71 +4711,71 @@ Staff Engineers model how costs scale because linear thinking leads to budget su
 │                                                                             │
 │   Scenario: User profile service, starting at 1M users                      │
 │                                                                             │
-│   ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────┐ │
-│   │ Scale        │ Users        │ Data Size    │ Monthly Cost │ Cost/User│ │
-│   ├──────────────┼──────────────┼──────────────┼──────────────┼──────────┤ │
-│   │ 1× (baseline)│ 1M           │ 100GB        │ $500         │ $0.0005  │ │
-│   │ 2×           │ 2M           │ 250GB        │ $1,200       │ $0.0006  │ │
-│   │ 5×           │ 5M           │ 1TB          │ $4,500       │ $0.0009  │ │
-│   │ 10×          │ 10M          │ 3TB          │ $15,000      │ $0.0015  │ │
-│   │ 50×          │ 50M          │ 20TB         │ $120,000     │ $0.0024  │ │
-│   └──────────────┴──────────────┴──────────────┴──────────────┴──────────┘ │
+│   ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────┐  │
+│   │ Scale        │ Users        │ Data Size    │ Monthly Cost │ Cost/User│  │
+│   ├──────────────┼──────────────┼──────────────┼──────────────┼──────────┤  │
+│   │ 1× (baseline)│ 1M           │ 100GB        │ $500         │ $0.0005  │  │
+│   │ 2×           │ 2M           │ 250GB        │ $1,200       │ $0.0006  │  │
+│   │ 5×           │ 5M           │ 1TB          │ $4,500       │ $0.0009  │  │
+│   │ 10×          │ 10M          │ 3TB          │ $15,000      │ $0.0015  │  │
+│   │ 50×          │ 50M          │ 20TB         │ $120,000     │ $0.0024  │  │
+│   └──────────────┴──────────────┴──────────────┴──────────────┴──────────┘  │
 │                                                                             │
-│   Why cost per user increases:                                             │
+│   Why cost per user increases:                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │   1. Storage scales faster than users (indexes, replication)        │   │
 │   │      • 1M users: 100GB data + 50GB indexes = 150GB                  │   │
-│   │      • 10M users: 2TB data + 1TB indexes = 3TB (20×, not 10×)      │   │
+│   │      • 10M users: 2TB data + 1TB indexes = 3TB (20×, not 10×)       │   │
 │   │                                                                     │   │
 │   │   2. Operational overhead doesn't scale linearly                    │   │
 │   │      • 1M users: 1 DBA, 1 on-call engineer                          │   │
 │   │      • 10M users: 2 DBAs, 2 on-call engineers (more complex)        │   │
 │   │      • 50M users: 5 DBAs, 3 on-call engineers (specialized)         │   │
 │   │                                                                     │   │
-│   │   3. Infrastructure needs scale non-linearly                       │   │
+│   │   3. Infrastructure needs scale non-linearly                        │   │
 │   │      • 1M users: Single region, 2 replicas                          │   │
-│   │      • 10M users: Multi-region, 6 replicas (3× regions)            │   │
-│   │      • 50M users: Multi-region, 15 replicas + specialized infra    │   │
+│   │      • 10M users: Multi-region, 6 replicas (3× regions)             │   │
+│   │      • 50M users: Multi-region, 15 replicas + specialized infra     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Cost Breakdown at 10× Scale:                                            │
+│   Cost Breakdown at 10× Scale:                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │   Operational overhead: $8,000/month (53%)                          │   │
-│   │   • 2 DBAs × $10K/month = $20K/year = $1.7K/month                  │   │
+│   │   • 2 DBAs × $10K/month = $20K/year = $1.7K/month                   │   │
 │   │   • On-call burden: $2K/month                                       │   │
-│   │   • Infrastructure setup/maintenance: $4K/month                   │   │
+│   │   • Infrastructure setup/maintenance: $4K/month                     │   │
 │   │   • Monitoring/alerting: $300/month                                 │   │
 │   │                                                                     │   │
-│   │   Storage: $5,000/month (33%)                                        │   │
-│   │   • Primary data: 2TB × $0.10/GB = $200/month                      │   │
-│   │   • Indexes: 1TB × $0.10/GB = $100/month                           │   │
-│   │   • Replication (RF=3): 3TB × 3 × $0.10/GB = $900/month            │   │
-│   │   • Backups: 3TB × $0.05/GB = $150/month                           │   │
-│   │   • Archive: 5TB × $0.01/GB = $50/month                            │   │
+│   │   Storage: $5,000/month (33%)                                       │   │
+│   │   • Primary data: 2TB × $0.10/GB = $200/month                       │   │
+│   │   • Indexes: 1TB × $0.10/GB = $100/month                            │   │
+│   │   • Replication (RF=3): 3TB × 3 × $0.10/GB = $900/month             │   │
+│   │   • Backups: 3TB × $0.05/GB = $150/month                            │   │
+│   │   • Archive: 5TB × $0.01/GB = $50/month                             │   │
 │   │   • Total storage: ~$1,300/month (but scales to $5K with growth)    │   │
 │   │                                                                     │   │
 │   │   Compute: $2,000/month (13%)                                       │   │
-│   │   • Primary: 1 instance × $1K/month                                │   │
-│   │   • Replicas: 2 instances × $500/month = $1K/month                 │   │
+│   │   • Primary: 1 instance × $1K/month                                 │   │
+│   │   • Replicas: 2 instances × $500/month = $1K/month                  │   │
 │   │                                                                     │   │
-│   │   Total: $15,000/month                                               │   │
+│   │   Total: $15,000/month                                              │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   L6 Cost Optimization Strategy:                                           │
+│   L6 Cost Optimization Strategy:                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   1. Reduce operational overhead (biggest win)                       │   │
-│   │      • Use managed services (RDS, DynamoDB)                        │   │
-│   │      • Automate common tasks (migrations, backups)                 │   │
+│   │   1. Reduce operational overhead (biggest win)                      │   │
+│   │      • Use managed services (RDS, DynamoDB)                         │   │
+│   │      • Automate common tasks (migrations, backups)                  │   │
 │   │      • Standardize on one database (reduce expertise needed)        │   │
 │   │                                                                     │   │
 │   │   2. Optimize storage (scales fastest)                              │   │
 │   │      • Archive old data (move to S3/Glacier)                        │   │
 │   │      • Optimize indexes (remove unused, partial indexes)            │   │
-│   │      • Compress data (PostgreSQL compression, columnar formats)      │   │
+│   │      • Compress data (PostgreSQL compression, columnar formats)     │   │
 │   │                                                                     │   │
 │   │   3. Right-size compute (smallest impact, but easy)                 │   │
 │   │      • Use reserved instances (30-40% discount)                     │   │
-│   │      • Scale down non-critical replicas                            │   │
+│   │      • Scale down non-critical replicas                             │   │
 │   │      • Use spot instances for batch workloads                       │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -4795,49 +4797,49 @@ Staff Engineers avoid over-engineering by explicitly choosing what NOT to build:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    WHAT L6 ENGINEERS INTENTIONALLY DON'T BUILD              │
 │                                                                             │
-│   Don't Build: Multi-Region from Day One                                   │
+│   Don't Build: Multi-Region from Day One                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Why: Multi-region adds 3-5× complexity and cost                     │   │
-│   │   • Data replication across regions (latency, consistency)        │   │
-│   │   • Conflict resolution (which region wins?)                           │   │
-│   │   • Failover complexity (automatic vs manual)                        │   │
-│   │   • 3× storage cost (data in 3 regions)                              │   │
+│   │   Why: Multi-region adds 3-5× complexity and cost                   │   │
+│   │   • Data replication across regions (latency, consistency)          │   │
+│   │   • Conflict resolution (which region wins?)                        │   │
+│   │   • Failover complexity (automatic vs manual)                       │   │
+│   │   • 3× storage cost (data in 3 regions)                             │   │
 │   │                                                                     │   │
-│   │   When to build:                                                     │   │
-│   │   • Regulatory requirement (data must be in-region)                  │   │
+│   │   When to build:                                                    │   │
+│   │   • Regulatory requirement (data must be in-region)                 │   │
 │   │   • Latency requirement (<50ms globally)                            │   │
 │   │   • Scale requirement (single region can't handle load)             │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Start single-region. Add multi-region when            │   │
+│   │   L6 Approach: Start single-region. Add multi-region when           │   │
 │   │                requirements demand it, not "just in case."          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Don't Build: Sharding Before You Need It                                   │
+│   Don't Build: Sharding Before You Need It                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Why: Sharding adds operational complexity and limits flexibility   │   │
-│   │   • Cross-shard queries become impossible                            │   │
-│   │   • Rebalancing is painful (days/weeks)                              │   │
-│   │   • Application must know shard routing                              │   │
-│   │   • More failure modes (what if one shard fails?)                    │   │
+│   │   Why: Sharding adds operational complexity and limits flexibility  │   │
+│   │   • Cross-shard queries become impossible                           │   │
+│   │   • Rebalancing is painful (days/weeks)                             │   │
+│   │   • Application must know shard routing                             │   │
+│   │   • More failure modes (what if one shard fails?)                   │   │
 │   │                                                                     │   │
-│   │   When to build:                                                     │   │
-│   │   • Single-node limits hit (10-50K writes/sec)                       │   │
+│   │   When to build:                                                    │   │
+│   │   • Single-node limits hit (10-50K writes/sec)                      │   │
 │   │   • Data size exceeds single-node capacity (10-50TB)                │   │
-│   │   • Vertical scaling is cost-prohibitive                             │   │
+│   │   • Vertical scaling is cost-prohibitive                            │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Use read replicas, caching, partitioning first.     │   │
+│   │   L6 Approach: Use read replicas, caching, partitioning first.      │   │
 │   │                Shard only when you've exhausted simpler options.    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Don't Build: Custom Database Solutions                                     │
+│   Don't Build: Custom Database Solutions                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Why: Building databases is hard, maintaining them is harder        │   │
+│   │   Why: Building databases is hard, maintaining them is harder       │   │
 │   │   • Query optimization is decades of research                       │   │
 │   │   • Failure modes are subtle and hard to debug                      │   │
 │   │   • Operational burden is enormous                                  │   │
-│   │   • Team expertise is rare                                           │   │
+│   │   • Team expertise is rare                                          │   │
 │   │                                                                     │   │
-│   │   When to build:                                                     │   │
+│   │   When to build:                                                    │   │
 │   │   • No existing solution fits (extremely rare)                      │   │
 │   │   • You have database experts on staff                              │   │
 │   │   • You can commit to long-term maintenance                         │   │
@@ -4846,26 +4848,26 @@ Staff Engineers avoid over-engineering by explicitly choosing what NOT to build:
 │   │                layer, not database layer.                           │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Don't Build: Perfect Consistency Everywhere                                │
+│   Don't Build: Perfect Consistency Everywhere                               │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   Why: Strong consistency is expensive and often unnecessary         │   │
+│   │   Why: Strong consistency is expensive and often unnecessary        │   │
 │   │   • Cross-region consistency adds latency (100-300ms)               │   │
 │   │   • Distributed transactions are slow (10-100ms)                    │   │
 │   │   • Availability suffers (can't write if quorum unavailable)        │   │
 │   │                                                                     │   │
-│   │   When to build:                                                     │   │
-│   │   • Financial transactions (money must be consistent)                │   │
-│   │   • Critical state changes (account deletion)                        │   │
-│   │   • Regulatory requirements                                          │   │
+│   │   When to build:                                                    │   │
+│   │   • Financial transactions (money must be consistent)               │   │
+│   │   • Critical state changes (account deletion)                       │   │
+│   │   • Regulatory requirements                                         │   │
 │   │                                                                     │   │
-│   │   L6 Approach: Use eventual consistency for most data. Strong        │   │
-│   │                consistency only where business requires it.          │   │
+│   │   L6 Approach: Use eventual consistency for most data. Strong       │   │
+│   │                consistency only where business requires it.         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Staff Engineer Principle: "Perfect is the enemy of good." Build what      │
-│                             you need today. Evolve as requirements change.    │
-│                             Over-engineering costs more than under-          │
-│                             engineering.                                   │
+│                             you need today. Evolve as requirements change.  │
+│                             Over-engineering costs more than under-         │
+│                             engineering.                                    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -5280,146 +5282,146 @@ Staff Engineers design systems accounting for human error because it's the most 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    HUMAN FAILURE MODES IN DATABASE OPERATIONS                │
+│                    HUMAN FAILURE MODES IN DATABASE OPERATIONS               │
 │                                                                             │
 │   Failure Mode 1: Misconfiguration During Setup                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What happens:                                                       │   │
-│   │   • Engineer sets up database with wrong configuration               │   │
-│   │   • Example: PostgreSQL max_connections = 100 (too low)            │   │
-│   │   • Example: Redis eviction policy = noeviction (memory fills up)    │   │
+│   │   What happens:                                                     │   │
+│   │   • Engineer sets up database with wrong configuration              │   │
+│   │   • Example: PostgreSQL max_connections = 100 (too low)             │   │
+│   │   • Example: Redis eviction policy = noeviction (memory fills up)   │   │
 │   │   • Example: Cassandra replication factor = 1 (no redundancy)       │   │
 │   │                                                                     │   │
-│   │   Why it happens:                                                    │   │
+│   │   Why it happens:                                                   │   │
 │   │   • Copy-paste from documentation (wrong defaults)                  │   │
 │   │   • Testing on small dataset (works fine, breaks at scale)          │   │
-│   │   • Assumptions about requirements (didn't ask)                      │   │
+│   │   • Assumptions about requirements (didn't ask)                     │   │
 │   │                                                                     │   │
-│   │   Impact:                                                            │   │
+│   │   Impact:                                                           │   │
 │   │   • System works initially, fails under load                        │   │
-│   │   • Hard to detect (works in staging, breaks in production)          │   │
-│   │   • Recovery requires downtime (change config, restart)              │   │
+│   │   • Hard to detect (works in staging, breaks in production)         │   │
+│   │   • Recovery requires downtime (change config, restart)             │   │
 │   │                                                                     │   │
-│   │   L6 Prevention:                                                     │   │
+│   │   L6 Prevention:                                                    │   │
 │   │   • Infrastructure as Code (IaC) with peer review                   │   │
 │   │   • Configuration validation (fail fast on bad config)              │   │
-│   │   • Load testing in staging (catch config issues early)              │   │
+│   │   • Load testing in staging (catch config issues early)             │   │
 │   │   • Runbooks with explicit configuration checks                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Failure Mode 2: Schema Migration Mistakes                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What happens:                                                       │   │
+│   │   What happens:                                                     │   │
 │   │   • Engineer runs migration that locks table for hours              │   │
 │   │   • Example: ALTER TABLE ADD COLUMN with DEFAULT (rewrites table)   │   │
-│   │   • Example: CREATE INDEX without CONCURRENTLY (locks writes)         │   │
+│   │   • Example: CREATE INDEX without CONCURRENTLY (locks writes)       │   │
 │   │   • Example: DROP COLUMN on large table (takes hours)               │   │
 │   │                                                                     │   │
-│   │   Why it happens:                                                    │   │
-│   │   • Migration works on small test dataset (100 rows)                 │   │
-│   │   • Assumes production is same size (it's not, 100M rows)            │   │
-│   │   • Doesn't understand locking behavior                              │   │
-│   │   • No rollback plan (can't undo once started)                        │   │
+│   │   Why it happens:                                                   │   │
+│   │   • Migration works on small test dataset (100 rows)                │   │
+│   │   • Assumes production is same size (it's not, 100M rows)           │   │
+│   │   • Doesn't understand locking behavior                             │   │
+│   │   • No rollback plan (can't undo once started)                      │   │
 │   │                                                                     │   │
-│   │   Impact:                                                            │   │
-│   │   • Production outage (writes blocked for hours)                     │   │
-│   │   • Can't rollback (migration partially applied)                      │   │
-│   │   • Requires manual intervention (kill migration, restore backup)     │   │
+│   │   Impact:                                                           │   │
+│   │   • Production outage (writes blocked for hours)                    │   │
+│   │   • Can't rollback (migration partially applied)                    │   │
+│   │   • Requires manual intervention (kill migration, restore backup)   │   │
 │   │                                                                     │   │
-│   │   L6 Prevention:                                                     │   │
-│   │   • Test migrations on production-size data in staging               │   │
-│   │   • Use safe migration patterns (ADD COLUMN nullable, backfill)      │   │
+│   │   L6 Prevention:                                                    │   │
+│   │   • Test migrations on production-size data in staging              │   │
+│   │   • Use safe migration patterns (ADD COLUMN nullable, backfill)     │   │
 │   │   • Migration review process (Staff Engineer approval)              │   │
-│   │   • Rollback plan documented before migration                        │   │
+│   │   • Rollback plan documented before migration                       │   │
 │   │   • Gradual rollout (migrate 10% of data, verify, then 100%)        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Failure Mode 3: Operational Runbook Errors                                │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What happens:                                                       │   │
+│   │   What happens:                                                     │   │
 │   │   • On-call engineer follows runbook incorrectly                    │   │
 │   │   • Example: Promotes wrong replica (async, data loss)              │   │
 │   │   • Example: Kills wrong process (kills primary instead of replica) │   │
 │   │   • Example: Runs command on wrong environment (prod vs staging)    │   │
 │   │                                                                     │   │
-│   │   Why it happens:                                                    │   │
-│   │   • Runbook is unclear or outdated                                   │   │
+│   │   Why it happens:                                                   │   │
+│   │   • Runbook is unclear or outdated                                  │   │
 │   │   • Stress during incident (2 AM, pressure to fix quickly)          │   │
-│   │   • Copy-paste error (wrong hostname, wrong command)                 │   │
+│   │   • Copy-paste error (wrong hostname, wrong command)                │   │
 │   │   • Assumptions (didn't verify before executing)                    │   │
 │   │                                                                     │   │
-│   │   Impact:                                                            │   │
-│   │   • Makes incident worse (extends outage)                            │   │
-│   │   • Data loss (wrong replica promotion)                               │   │
-│   │   • Requires recovery (restore from backup, re-sync replicas)        │   │
+│   │   Impact:                                                           │   │
+│   │   • Makes incident worse (extends outage)                           │   │
+│   │   • Data loss (wrong replica promotion)                             │   │
+│   │   • Requires recovery (restore from backup, re-sync replicas)       │   │
 │   │                                                                     │   │
-│   │   L6 Prevention:                                                     │   │
-│   │   • Clear, step-by-step runbooks with verification steps             │   │
-│   │   • Confirmation prompts ("Are you sure? Type 'yes' to confirm")     │   │
-│   │   • Automation for common operations (reduce human error)            │   │
-│   │   • Runbook testing (practice incidents in staging)                   │   │
-│   │   • Two-person verification for critical operations                  │   │
+│   │   L6 Prevention:                                                    │   │
+│   │   • Clear, step-by-step runbooks with verification steps            │   │
+│   │   • Confirmation prompts ("Are you sure? Type 'yes' to confirm")    │   │
+│   │   • Automation for common operations (reduce human error)           │   │
+│   │   • Runbook testing (practice incidents in staging)                 │   │
+│   │   • Two-person verification for critical operations                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   Failure Mode 4: Cross-Team Communication Breakdown                       │
+│   Failure Mode 4: Cross-Team Communication Breakdown                        │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What happens:                                                       │   │
-│   │   • Team A changes database schema without telling Team B            │   │
-│   │   • Example: Adds NOT NULL column (breaks Team B's writes)           │   │
+│   │   What happens:                                                     │   │
+│   │   • Team A changes database schema without telling Team B           │   │
+│   │   • Example: Adds NOT NULL column (breaks Team B's writes)          │   │
 │   │   • Example: Drops column (breaks Team B's reads)                   │   │
-│   │   • Example: Changes index (breaks Team B's query performance)       │   │
+│   │   • Example: Changes index (breaks Team B's query performance)      │   │
 │   │                                                                     │   │
-│   │   Why it happens:                                                    │   │
-│   │   • Teams don't communicate (assume they own the database)           │   │
+│   │   Why it happens:                                                   │   │
+│   │   • Teams don't communicate (assume they own the database)          │   │
 │   │   • No change notification process                                  │   │
 │   │   • Shared database, but no shared ownership                        │   │
-│   │   • Assumptions about who uses what                                  │   │
+│   │   • Assumptions about who uses what                                 │   │
 │   │                                                                     │   │
-│   │   Impact:                                                            │   │
-│   │   • Team B's service breaks (unexpected errors)                      │   │
+│   │   Impact:                                                           │   │
+│   │   • Team B's service breaks (unexpected errors)                     │   │
 │   │   • Blame game (Team A: "Why are you using our database?")          │   │
-│   │   • Requires rollback or emergency fix (Team B updates code)         │   │
+│   │   • Requires rollback or emergency fix (Team B updates code)        │   │
 │   │                                                                     │   │
-│   │   L6 Prevention:                                                     │   │
-│   │   • Database ownership model (who owns what)                         │   │
-│   │   • Change notification process (RFC, Slack, email)                  │   │
-│   │   • Schema change review (all stakeholders notified)                 │   │
-│   │   • Deprecation process (warn before breaking changes)               │   │
-│   │   • Database standards (prevent breaking changes)                    │   │
+│   │   L6 Prevention:                                                    │   │
+│   │   • Database ownership model (who owns what)                        │   │
+│   │   • Change notification process (RFC, Slack, email)                 │   │
+│   │   • Schema change review (all stakeholders notified)                │   │
+│   │   • Deprecation process (warn before breaking changes)              │   │
+│   │   • Database standards (prevent breaking changes)                   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Failure Mode 5: Knowledge Gaps                                            │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │   What happens:                                                      │   │
-│   │   • Engineer doesn't understand database behavior                    │   │
+│   │   What happens:                                                     │   │
+│   │   • Engineer doesn't understand database behavior                   │   │
 │   │   • Example: Assumes PostgreSQL handles 1M connections (it doesn't) │   │
 │   │   • Example: Assumes Redis persists by default (it doesn't)         │   │
-│   │   • Example: Assumes Cassandra handles cross-partition queries    │   │
-│   │                efficiently (it doesn't)                              │   │
+│   │   • Example: Assumes Cassandra handles cross-partition queries      │   │
+│   │                efficiently (it doesn't)                             │   │
 │   │                                                                     │   │
-│   │   Why it happens:                                                    │   │
-│   │   • New to the database (recently adopted)                           │   │
-│   │   • Assumptions based on other databases                             │   │
+│   │   Why it happens:                                                   │   │
+│   │   • New to the database (recently adopted)                          │   │
+│   │   • Assumptions based on other databases                            │   │
 │   │   • Documentation is unclear or incomplete                          │   │
-│   │   • No training or mentorship                                        │   │
+│   │   • No training or mentorship                                       │   │
 │   │                                                                     │   │
-│   │   Impact:                                                            │   │
-│   │   • System designed incorrectly (doesn't work at scale)              │   │
-│   │   • Requires redesign (expensive, time-consuming)                    │   │
-│   │   • Production incidents (unexpected behavior)                       │   │
+│   │   Impact:                                                           │   │
+│   │   • System designed incorrectly (doesn't work at scale)             │   │
+│   │   • Requires redesign (expensive, time-consuming)                   │   │
+│   │   • Production incidents (unexpected behavior)                      │   │
 │   │                                                                     │   │
-│   │   L6 Prevention:                                                     │   │
-│   │   • Database standards (limit choices, build expertise)              │   │
-│   │   • Training and documentation (internal wiki, runbooks)             │   │
+│   │   L6 Prevention:                                                    │   │
+│   │   • Database standards (limit choices, build expertise)             │   │
+│   │   • Training and documentation (internal wiki, runbooks)            │   │
 │   │   • Architecture review (Staff Engineer catches mistakes)           │   │
 │   │   • Mentorship (pair junior with senior on database work)           │   │
-│   │   • Start simple (PostgreSQL before Cassandra)                       │   │
+│   │   • Start simple (PostgreSQL before Cassandra)                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   Staff Engineer Insight: Human error is the #1 cause of incidents.         │
-│                          Design systems to be forgiving of mistakes.         │
-│                          Use automation, validation, and clear processes      │
-│                          to reduce human error surface area.                 │
+│                          Design systems to be forgiving of mistakes.        │
+│                          Use automation, validation, and clear processes    │
+│                          to reduce human error surface area.                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -5430,59 +5432,59 @@ Staff Engineers understand the gap between ideal design and operational reality:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    OPERATIONAL REALITY VS IDEAL DESIGN                       │
+│                    OPERATIONAL REALITY VS IDEAL DESIGN                      │
 │                                                                             │
-│   Ideal: "We'll use the right database for each use case"                  │
+│   Ideal: "We'll use the right database for each use case"                   │
 │   Reality: "We use PostgreSQL for everything because that's what the team   │
 │            knows. When it breaks, we can debug it."                         │
 │                                                                             │
 │   Why:                                                                      │
 │   • Team expertise matters more than perfect fit                            │
 │   • Operational familiarity reduces incident time                           │
-│   • Debugging unknown databases takes hours (not minutes)                  │
-│   • Hiring is easier (PostgreSQL skills are common)                        │
+│   • Debugging unknown databases takes hours (not minutes)                   │
+│   • Hiring is easier (PostgreSQL skills are common)                         │
 │                                                                             │
 │   L6 Approach: Standardize on 2-3 databases max. Accept suboptimal          │
 │                fit for operational simplicity.                              │
 │                                                                             │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
-│   Ideal: "We'll migrate to the better database when we need it"            │
+│   Ideal: "We'll migrate to the better database when we need it"             │
 │   Reality: "We're stuck with this database forever because migration is     │
-│            too risky and expensive."                                         │
+│            too risky and expensive."                                        │
 │                                                                             │
 │   Why:                                                                      │
-│   • Migrations take months (not weeks)                                     │   │
-│   • Risk of data loss or downtime                                         │   │
-│   • Application changes required (expensive)                                │   │
-│   • No business value (just technical debt)                                 │   │
+│   • Migrations take months (not weeks)                                      │
+│   • Risk of data loss or downtime                                           │
+│   • Application changes required (expensive)                                │
+│   • No business value (just technical debt)                                 │
 │                                                                             │
-│   L6 Approach: Choose database for 3-year horizon. Migration is last       │
-│                resort, not evolution strategy.                             │
+│   L6 Approach: Choose database for 3-year horizon. Migration is last        │
+│                resort, not evolution strategy.                              │
 │                                                                             │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   Ideal: "We'll optimize queries and indexes proactively"                   │
-│   Reality: "We optimize when pager goes off at 2 AM."                      │
+│   Reality: "We optimize when pager goes off at 2 AM."                       │
 │                                                                             │
 │   Why:                                                                      │
-│   • Proactive optimization has no immediate business value                 │   │
-│   • Incidents create urgency (and budget)                                  │   │
-│   • Hard to justify time for "prevention"                                  │   │
-│   • Monitoring catches problems eventually                                 │   │
+│   • Proactive optimization has no immediate business value                  │
+│   • Incidents create urgency (and budget)                                   │
+│   • Hard to justify time for "prevention"                                   │
+│   • Monitoring catches problems eventually                                  │
 │                                                                             │
-│   L6 Approach: Set up monitoring and alerting. Optimize reactively,        │
+│   L6 Approach: Set up monitoring and alerting. Optimize reactively,         │
 │                but with good tooling (fast to fix).                         │
 │                                                                             │
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
-│   Ideal: "We'll test all failure scenarios"                                │
+│   Ideal: "We'll test all failure scenarios"                                 │
 │   Reality: "We test happy path. Failures are discovered in production."     │
 │                                                                             │
 │   Why:                                                                      │
-│   • Chaos engineering is expensive (time, infrastructure)                     │   │
-│   • Hard to simulate all failure modes                                     │   │
-│   • Production failures are "real" tests (unfortunately)                    │   │
+│   • Chaos engineering is expensive (time, infrastructure)                   │
+│   • Hard to simulate all failure modes                                      │
+│   • Production failures are "real" tests (unfortunately)                    │
 │                                                                             │
 │   L6 Approach: Test critical failure modes (primary down, network           │
 │                partition). Accept that edge cases will be discovered        │
@@ -5491,18 +5493,18 @@ Staff Engineers understand the gap between ideal design and operational reality:
 │   ────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │   Ideal: "We'll document everything"                                        │
-│   Reality: "Documentation is outdated. We ask the person who built it."      │
+│   Reality: "Documentation is outdated. We ask the person who built it."     │
 │                                                                             │
 │   Why:                                                                      │
-│   • Documentation maintenance is thankless work                             │   │
-│   • Code changes faster than docs                                          │   │
-│   • People are faster to ask than to read                                  │   │
+│   • Documentation maintenance is thankless work                             │
+│   • Code changes faster than docs                                           │
+│   • People are faster to ask than to read                                   │
 │                                                                             │
 │   L6 Approach: Document critical decisions (ADRs). Keep runbooks updated.   │
 │                Accept that some knowledge is tribal (person-to-person).     │
 │                                                                             │
-│   Staff Engineer Principle: Design for operational reality, not ideal        │
-│                             conditions. Systems that work in practice        │
+│   Staff Engineer Principle: Design for operational reality, not ideal       │
+│                             conditions. Systems that work in practice       │
 │                             beat systems that work in theory.               │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -5668,87 +5670,6 @@ For each, practice:
 │   10. TOTAL COST INCLUDES OPERATIONS                                        │
 │       Licensing is the smallest part of database cost.                      │
 │       DBA time, on-call burden, incident recovery—count them all.           │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-# Final Verification: L6 Readiness Assessment
-
-## This Section Now Meets Google Staff Engineer (L6) Expectations
-
-### Staff-Level Signals Covered
-
-| Signal | Coverage | Evidence |
-|--------|----------|----------|
-| **Requirements-First Thinking** | ✅ Complete | Database decision framework, access pattern analysis |
-| **Explicit Trade-off Discussion** | ✅ Complete | L5 vs L6 tables, rejection reasoning in all examples |
-| **Failure Mode Analysis** | ✅ Complete | Node failures, cascading failures, split-brain, blast radius |
-| **Blast Radius Containment** | ✅ Complete | Dedicated section with notification system example |
-| **Evolution Planning** | ✅ Complete | Phase 1-4 evolution, migration strategies, feed system example |
-| **Capacity Planning** | ✅ Complete | Framework, thresholds, rate limiter projection example |
-| **Interview Calibration** | ✅ Complete | Phrases, signals, L5 vs L6 comparison |
-| **Real System Examples** | ✅ Complete | User profile, rate limiter, feed, notification, messaging, API gateway |
-| **Diagrams** | ✅ Complete | 20+ diagrams covering architecture, data flow, failure, evolution |
-| **Cost Analysis** | ✅ Complete | TCO framework, API gateway cost comparison |
-
-### Topics Explicitly Addressed
-
-- ✅ Database decision framework (access patterns first)
-- ✅ SQL vs NoSQL (why it's the wrong question)
-- ✅ Relational database strengths and limits
-- ✅ Key-value, document, and wide-column stores
-- ✅ NewSQL systems and when to avoid them
-- ✅ Applied examples with explicit rejections
-- ✅ Traffic spike handling
-- ✅ Node failure scenarios (PostgreSQL, Redis, Cassandra)
-- ✅ Schema change strategies
-- ✅ Database evolution over time
-- ✅ Migration strategies (Strangler Fig, Blue-Green, Shadow)
-- ✅ Blast radius containment
-- ✅ Cascading failure prevention
-- ✅ Hot partition detection and prevention
-- ✅ Multi-region database strategy
-- ✅ Data integrity verification
-- ✅ Split-brain prevention
-- ✅ Total cost of ownership
-- ✅ Interview calibration with example phrases
-- ✅ L5 vs L6 comparison throughout
-
-### Verification Checklist
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    L6 READINESS CHECKLIST                                   │
-│                                                                             │
-│   Content Quality                                                           │
-│   [✓] Major decisions explained with clear WHY                              │
-│   [✓] Trade-offs explicit and contextual                                    │
-│   [✓] Alternatives consciously rejected with reasoning                      │
-│   [✓] Real-world examples, not abstract theory                              │
-│                                                                             │
-│   Failure Thinking                                                          │
-│   [✓] Partial failures and degradation addressed                            │
-│   [✓] Runtime behavior during failure (not just recovery)                   │
-│   [✓] Blast radius explicitly discussed                                     │
-│   [✓] Cascading failure prevention covered                                  │
-│   [✓] Split-brain scenarios addressed                                       │
-│                                                                             │
-│   Scale & Evolution                                                         │
-│   [✓] Growth from v1 → 10× → multi-year considered                          │
-│   [✓] Bottlenecks identified before they fail                               │
-│   [✓] Evolution driven by constraints/incidents                             │
-│   [✓] Capacity planning framework provided                                  │
-│                                                                             │
-│   Staff-Level Signals                                                       │
-│   [✓] Clear L5 vs L6 differentiation                                        │
-│   [✓] System-wide ownership demonstrated                                    │
-│   [✓] Content is teachable to other engineers                               │
-│   [✓] Interview calibration with example phrases                            │
-│   [✓] Common L5 mistakes identified                                         │
-│                                                                             │
-│   VERDICT: This section meets Google Staff Engineer (L6) expectations.      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

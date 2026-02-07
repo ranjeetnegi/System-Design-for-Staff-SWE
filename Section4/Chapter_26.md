@@ -20,8 +20,8 @@ This chapter teaches cost and efficiency as Staff Engineers practice it: as part
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    COST THINKING: THE STAFF ENGINEER VIEW                   │
 │                                                                             │
-│   WRONG Framing: "Build it first, optimize cost later"                     │
-│   RIGHT Framing: "Cost is a constraint that shapes the design from day one"│
+│   WRONG Framing: "Build it first, optimize cost later"                      │
+│   RIGHT Framing: "Cost is a constraint that shapes the design from day one" │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Before designing, understand:                                      │   │
