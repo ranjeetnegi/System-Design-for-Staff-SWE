@@ -847,6 +847,59 @@ This is a detailed walkthrough of a realistic production incident, showing how p
 
 **The Fundamental Lesson**: A 12-second GC pause should not cause a 20-minute outage. The architecture allowed a minor fault to cascade into system-wide failure.
 
+### Human Failure Modes During the Incident
+
+Analysis of human errors that made the Thursday Afternoon Outage worse:
+
+| Error | Impact | What Happened |
+|-------|--------|---------------|
+| **Delayed detection** | 10 minutes lost | On-call engineer saw initial alert but dismissed it as a monitoring blip |
+| **Wrong diagnosis** | 15 minutes lost | Engineer focused on the symptom (API gateway overloaded) instead of the root cause (slow inventory service) |
+| **Escalation delay** | 15 minutes lost | Engineer tried to fix it alone instead of paging the inventory team |
+| **Risky mitigation** | 30-second full outage | Under pressure, engineer restarted the API gateway fleet simultaneously instead of rolling restart |
+| **Incomplete recovery** | Secondary spike 20 min later | Declared "resolved" when error rate dropped, but didn't check that retry backlog had drained |
+
+**Prevention Strategies**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              PREVENTING HUMAN FAILURE MODES                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   1. STRUCTURED INCIDENT RESPONSE                                        │
+│   ────────────────────────────────────────                              │
+│   Use ICS (Incident Command System) — first action is assess and        │
+│   delegate, not fix.                                                    │
+│                                                                         │
+│   2. RUNBOOK-FIRST CULTURE                                               │
+│   ────────────────────────────────────────                              │
+│   "If you don't have a runbook, your first step is to page someone      │
+│    who does"                                                             │
+│                                                                         │
+│   3. BLAMELESS ESCALATION                                                │
+│   ────────────────────────────────────────                              │
+│   Remove stigma from paging senior engineers — escalation should        │
+│   happen at 5 minutes, not 30.                                          │
+│                                                                         │
+│   4. AUTOMATED DIAGNOSTICS                                               │
+│   ────────────────────────────────────────                              │
+│   When alert fires, automatically collect and present top 5 metrics     │
+│   to on-call (don't make them hunt)                                     │
+│                                                                         │
+│   5. RECOVERY VERIFICATION                                               │
+│   ────────────────────────────────────────                              │
+│   "Resolved" requires all of:                                            │
+│   □ Error rate < threshold                                               │
+│   □ Retry backlog drained                                                │
+│   □ Dependent services healthy                                            │
+│   □ Customer-facing metrics normal                                       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Staff Insight**: 
+> The majority of outage duration comes from human factors, not technical ones. A 2-minute detection delay + 10-minute misdiagnosis + 15-minute escalation delay = 27 minutes of unnecessary outage. That's often longer than the actual fix.
+
 ---
 
 # Part 5: Apply Failure Reasoning to Real Systems
@@ -1475,8 +1528,51 @@ Systems don't become resilient by design—they evolve through failure. Here's h
 
 **Interview Signal**: "I've learned that the time to design for failure is before the first outage, not after. But realistically, most architectures evolve through incidents. The skill is recognizing patterns: if we had a retry storm once, we'll have it again unless we fix the systemic issue."
 
----
+### Scale Thresholds: When to Invest in Each Failure Handling Pattern
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              V1 → 10× GROWTH MODEL FOR FAILURE HANDLING                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Scale    │ Services │ Failure Pattern Investment │ Why               │
+│   ─────────┼──────────┼───────────────────────────┼───────────────────│
+│   V1       │ 5-10     │ Simple timeouts + retries │ Failures obvious, │
+│            │          │ + health checks            │ manual fix fast   │
+│   ─────────┼──────────┼───────────────────────────┼───────────────────│
+│   V2       │ 10-30    │ + Circuit breakers        │ Cascading        │
+│            │          │ + bulkheads                │ failures possible │
+│            │          │ + structured incident      │ manual RCA slows │
+│            │          │   response                 │                   │
+│   ─────────┼──────────┼───────────────────────────┼───────────────────│
+│   V3       │ 30-100   │ + Cell-based isolation    │ Failure paths    │
+│            │          │ + chaos engineering        │ too complex for   │
+│            │          │ + automated diagnostics   │ human reasoning   │
+│   ─────────┼──────────┼───────────────────────────┼───────────────────│
+│   V4       │ 100+     │ + Automated failover      │ Human response   │
+│            │          │ + ML-based anomaly         │ can't scale to   │
+│            │          │   detection                │ failure frequency │
+│            │          │ + self-healing             │                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**What Breaks at Each Transition**:
+- **V1→V2**: Manual debugging becomes too slow
+- **V2→V3**: Manual blast radius containment fails
+- **V3→V4**: Manual failure detection can't keep up
+
+**Most Dangerous Assumptions**:
+- "Our service mesh handles failures" → It handles known patterns, not novel ones
+- "More monitoring = better detection" → Alert fatigue kills detection
+- "Automated recovery is always better than manual" → Automated recovery without guards can make things worse
+
+**Early Warning That You Need the Next Level**:
+- More than 2 incidents/month requiring > 30 minutes to resolve
+- Cascading failures crossing > 3 service boundaries
+- On-call escalation rate > 20%
+
+---
 
 # Part 8: Observability During Partial Failures
 
@@ -2889,9 +2985,110 @@ class CapacityReservation:
 
 ---
 
+## Part 14B: Cost Reality — What Failure Tolerance Actually Costs
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              COST BREAKDOWN: FAILURE TOLERANCE INVESTMENTS              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Resilience Pattern              │ Cost Impact                        │
+│   ────────────────────────────────┼────────────────────────────────────│
+│   N+1 provisioning                │ 33-100% extra compute              │
+│   (always-on spare capacity)      │ (depends on redundancy level)     │
+│                                   │                                    │
+│   Multi-region failover           │ 2× infrastructure cost             │
+│   (active-passive)                │ (active-active adds conflict      │
+│                                   │  resolution engineering overhead)  │
+│                                   │                                    │
+│   Chaos engineering program        │ 0.5-1 FTE dedicated               │
+│                                   │ + testing infrastructure           │
+│                                   │ + blast radius from experiments   │
+│                                   │                                    │
+│   Cell-based architecture         │ 10-20% overhead                    │
+│                                   │ (cell routing + config mgmt       │
+│                                   │  + reduced bin-packing efficiency) │
+│                                   │                                    │
+│   Observability stack             │ $5K-50K/month                      │
+│   (metrics, traces, logs)         │ (often most underestimated cost)  │
+│                                   │                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Dominant Cost Drivers**: 
+- **#1: Spare capacity (N+1)** — Always-on redundancy is the largest cost
+- **#2: Multi-region replication** — Doubling infrastructure for failover
+
+**Dollar Example**:
+For a 100-server service:
+- N+1 provisioning adds 34 servers ($50K/month)
+- Cell-based architecture (4 cells) adds routing overhead + 15% reduced efficiency ($22K/month)
+- Total failure tolerance cost: **$72K/month** — roughly **40% of base infrastructure cost**
+
+**Cost of NOT Investing**:
+Average cost of a 1-hour outage for a mid-size e-commerce platform:
+- $100K-500K in lost revenue
+- $50K in engineering time
+- Customer trust erosion (unquantifiable)
+
+**One major outage per year justifies $600K/year in resilience investment.**
+
+**What Staff Engineers Do NOT Build**:
+- Chaos engineering before basic monitoring is solid
+- Cell-based architecture for < 10 services (start with bulkheads)
+- Automated multi-region failover before manual failover is tested and reliable
+- Perfect failure detection (accept false positives, design for safe defaults)
+
+**Cost-Scaling Rule**: 
+> Resilience cost should be **20-40% of base infrastructure cost**. Below 20%, you're under-invested. Above 40%, you're likely over-engineering.
+
+---
+
 # Part 15: Runbook Essentials for Partial Failures
 
 > **Staff Insight**: Runbooks are not documentation — they're operational muscle memory. The time to write them is before the incident, when you can think clearly.
+
+### Ownership Model During Failures
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              INCIDENT ROLES AND OWNERSHIP                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   Role                    │ Ownership                                  │
+│   ────────────────────────┼────────────────────────────────────────────│
+│   Incident Commander      │ Timeline, communication, decision          │
+│   (Senior on-call)        │ authority                                  │
+│                           │                                            │
+│   Service Owner           │ Diagnosis + fix                            │
+│   (Team owning root-cause │                                            │
+│    service)               │                                            │
+│                           │                                            │
+│   Blast Radius Assessor   │ Understanding who else is affected         │
+│   (SRE or Staff Engineer) │                                            │
+│                           │                                            │
+│   Communication Lead      │ Status page, stakeholder updates           │
+│   (Separate from IC)      │                                            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Ownership Ambiguity That Causes Outages**:
+> During a cascading failure, Service A team says "our service is healthy, the problem is Service B." Service B says the same about Service C. Meanwhile, nobody is working on the actual user-facing impact.
+
+**Staff-Level Fix**:
+> Incident Commander owns the **USER IMPACT**, not any specific service. Their job is to restore user experience, which may mean degrading Service A even though Service A is "healthy."
+
+**Cross-Team Handoff Protocol**:
+When root cause crosses team boundaries:
+1. Both teams join the incident call
+2. IC decides which team leads the fix
+3. Other team provides support and context
+
+**Post-Incident Ownership**:
+- Owning team writes the postmortem
+- **ALL affected teams review and add their perspective**
+- IC ensures cross-team learnings are captured
 
 ## Anatomy of an Effective Runbook
 

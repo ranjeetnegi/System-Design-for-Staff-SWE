@@ -1519,6 +1519,145 @@ PARTITIONS:
 
 ---
 
+# Part 6C: Scale Thresholds — When to Evolve Your Async Architecture
+
+## Growth Model: V1 → 10× Scale Evolution
+
+As your system grows, different architectural patterns become necessary. Here's how async systems evolve:
+
+| Scale | Msg/sec | Architecture | What Breaks at Next Scale |
+|-------|---------|--------------|---------------------------|
+| **V1** | 10-100 | Single SQS queue or RabbitMQ | Queue depth grows, single consumer can't keep up |
+| **V2** | 100-1K | Multiple queues + competing consumers | Message ordering lost, need partitioned log |
+| **V3** | 1K-10K | Kafka with 12-24 partitions | Consumer lag grows during peaks, need more partitions |
+| **V4** | 10K-100K | Kafka with 100+ partitions + consumer groups | Rebalancing takes minutes, partition count limit approaching |
+| **V5** | 100K+ | Multi-cluster Kafka + stream processing (Flink) | Cross-cluster replication, global ordering impossible |
+
+## What Breaks First at Each Transition
+
+### V1 → V2: Consumer Throughput Limit
+
+**V1 Architecture**: Single SQS queue, single consumer
+- **What works**: Simple, easy to reason about
+- **Breaking point**: Consumer can't keep up with producer rate
+- **Symptoms**: Queue depth grows, messages age, SLA violations
+- **Example**: 500 msg/sec → Single consumer processes 200 msg/sec → Queue depth grows by 300 msg/sec → After 1 hour: 1M messages queued → 5-hour processing delay
+
+**V2 Solution**: Multiple queues + competing consumers
+- Split by service/domain (e.g., `orders-queue`, `payments-queue`)
+- Multiple consumers per queue
+- **Trade-off**: Lose message ordering within queue
+
+### V2 → V3: Ordering Requirements
+
+**V2 Architecture**: Multiple queues, competing consumers
+- **What works**: Horizontal scaling, no single bottleneck
+- **Breaking point**: Need ordering guarantees (e.g., user events must be processed in order)
+- **Symptoms**: Race conditions, inconsistent state, bugs from out-of-order processing
+- **Example**: User registration → Profile update → Email sent. If processed out of order: Email sent before profile exists → Error
+
+**V3 Solution**: Kafka with partitions, partition keys
+- Partition by user ID → All events for same user go to same partition → Ordered processing
+- 12-24 partitions for parallelism
+- **Trade-off**: More operational complexity (partitions, consumer groups)
+
+### V3 → V4: Rebalancing Time
+
+**V3 Architecture**: Kafka with 12-24 partitions
+- **What works**: Good parallelism, ordering preserved
+- **Breaking point**: Consumer lag grows during traffic spikes, need more partitions
+- **Symptoms**: Lag spikes to hours during peak, can't add partitions fast enough
+- **Example**: 10K msg/sec baseline → Peak 50K msg/sec → Lag grows to 2 hours → Can't catch up
+
+**V4 Solution**: Kafka with 100+ partitions, multiple consumer groups
+- More partitions = more parallelism
+- Separate consumer groups for different use cases
+- **Trade-off**: Rebalancing takes 2-5 minutes (all consumers pause), approaching Kafka's practical partition limit (~200K per cluster)
+
+### V4 → V5: Cluster Management
+
+**V4 Architecture**: Single Kafka cluster, 100+ partitions
+- **What works**: High throughput, good parallelism
+- **Breaking point**: Need real-time stream processing, global ordering impossible at this scale
+- **Symptoms**: Can't do real-time aggregations, need separate clusters for isolation
+- **Example**: Need to compute real-time metrics (revenue per minute) → Kafka alone insufficient → Need Flink/Kafka Streams
+
+**V5 Solution**: Multi-cluster Kafka + stream processing
+- Separate clusters per region/service
+- Flink for real-time aggregations and windowed computations
+- **Trade-off**: Cross-cluster replication complexity, can't guarantee global ordering
+
+## Most Dangerous Assumptions
+
+### Assumption 1: "Adding Partitions is Free"
+
+**Reality**: Adding partitions triggers consumer group rebalancing
+- **Cost**: All consumers pause for 30s - 5min (depending on partition count)
+- **Example**: Adding 10 partitions to 100-partition topic → 4 consumer groups rebalance → 2 minutes of zero processing → 1.2M messages of lag accumulated
+- **Mitigation**: Add partitions during low-traffic windows, use blue-green deployment
+
+### Assumption 2: "Consumer Lag is Linear"
+
+**Reality**: Lag can grow exponentially during failures
+- **Linear growth**: Consumer crashes → Lag grows at producer rate
+- **Exponential growth**: Consumer crashes + producer rate spikes (e.g., retry storm) → Lag grows faster than linear
+- **Example**: Normal: 10K msg/sec → Consumer crash → Lag grows at 10K msg/sec. During incident: Retry storm → Producer rate spikes to 50K msg/sec → Lag grows at 50K msg/sec → 5× faster
+- **Mitigation**: Circuit breakers, backpressure, alert on lag growth rate (not just absolute lag)
+
+### Assumption 3: "Kafka Retention is Just Storage"
+
+**Reality**: Retention affects CPU, network, and operational complexity
+- **Storage cost**: Retention × Replication × Message size (obvious)
+- **Hidden costs**: 
+  - Compaction: CPU-intensive, more retention = more compaction work
+  - Replication: Network bandwidth scales with retention
+  - Indexing: More retention = larger index files = slower seeks
+- **Example**: 7-day retention → 14TB storage. 30-day retention → 60TB storage + 3× compaction CPU + 3× replication bandwidth
+- **Mitigation**: Use tiered storage (Pulsar) or S3 for long-term retention
+
+## Decision Triggers: When to Migrate
+
+### Migrate from Queue to Log When:
+
+1. **Replay needed > 1×/month**
+   - Debugging production issues requires replaying events
+   - **Example**: Payment discrepancy → Need to replay last week's events → SQS doesn't support replay → Migrate to Kafka
+
+2. **Consumers > 3**
+   - Multiple services need same events
+   - **Example**: Order service → Payment service, Analytics service, Email service all need order events → Use Kafka topic with 3 consumer groups
+
+3. **Message volume > 1K/sec**
+   - Queue-based systems become operational burden at this scale
+   - **Example**: 2K msg/sec → SQS costs $2K/month → Kafka cluster costs $3K/month but provides replay → Worth the extra cost
+
+### Migrate from Log to Stream Processing When:
+
+1. **Real-time aggregation needed**
+   - Need to compute metrics/aggregations as events arrive
+   - **Example**: Revenue per minute dashboard → Kafka alone can't aggregate → Need Flink/Kafka Streams
+
+2. **Windowed computation required**
+   - Need to compute over time windows (e.g., hourly averages)
+   - **Example**: Compute average order value per hour → Need windowing → Use Flink
+
+3. **Event-time processing needed**
+   - Events arrive out of order, need to process by event timestamp
+   - **Example**: IoT sensors send events with delays → Need to process by sensor timestamp, not arrival time → Use Flink with event-time windows
+
+## Scale Thresholds Summary
+
+**Key Insight**: Each architectural evolution solves the previous architecture's bottleneck, but introduces new complexity. Staff engineers anticipate these transitions and plan migrations proactively, not reactively.
+
+**Red Flags That Indicate You've Outgrown Your Architecture**:
+- Consumer lag consistently > 1 hour
+- Rebalancing takes > 2 minutes
+- Can't add partitions without causing outages
+- Need replay capability but using queues
+- Need real-time aggregations but only have Kafka
+
+---
+
 # Part 7: Decision Frameworks
 
 ## The Async Model Decision Tree
@@ -1853,6 +1992,132 @@ Understanding how each system fails helps you choose and operate them correctly.
 
 ---
 
+# Part 8B: Blast Radius Analysis — How Async Failures Cascade
+
+## Blast Radius by Failure Type
+
+Understanding how failures propagate in async systems is critical for designing resilient architectures. Here's how different failure modes affect system availability:
+
+| Failure Type | Blast Radius | Duration | Impact |
+|--------------|--------------|----------|--------|
+| **Single Kafka broker failure** | Partitions on that broker unavailable during reassignment | 30s - 2min | 1/N of partitions affected (N = broker count). Consumers for those partitions pause. |
+| **Consumer group rebalance** | ALL consumers in the group pause processing | Seconds to minutes | Zero messages processed during rebalance. Lag grows for ALL partitions in the group. |
+| **Schema incompatibility deployed** | Consumers crash on deserialize | Until rollback | Consumer lag grows unboundedly. Data loss if lag exceeds retention period. |
+| **DLQ overflow** | Poison messages accumulate | Until manual intervention | If DLQ is bounded, new poison messages are dropped silently. Processing stops for affected partitions. |
+| **Producer backpressure** | Producer buffers fill | Until downstream recovers | Producer blocks or drops messages. Upstream service latency spikes. Cascades to API layer. |
+| **Partition leader election** | Partitions unavailable during election | 5-30s | All producers/consumers for affected partitions pause. |
+| **Zookeeper/KRaft controller failure** | Cluster metadata unavailable | Until recovery | No new partitions can be created. Rebalancing blocked. Cluster may split-brain. |
+| **Network partition** | Brokers in minority partition | Until network heals | Producers/consumers connected to minority partition fail. Data divergence possible. |
+
+## Quantified Example: Single Broker Failure Cascade
+
+**Scenario**: 6-broker Kafka cluster with 48 partitions, 4 consumer groups
+
+**Failure**: Single broker (broker 3) crashes
+
+**Cascade Analysis**:
+1. **Immediate impact**: 8 partitions (48 ÷ 6) lose their leader
+2. **Leader election**: 8 partitions elect new leaders (5-30s)
+3. **Consumer group rebalancing**: 
+   - Consumer Group A: 12 partitions → 8 partitions reassigned → full rebalance
+   - Consumer Group B: 12 partitions → 8 partitions reassigned → full rebalance
+   - Consumer Group C: 12 partitions → 8 partitions reassigned → full rebalance
+   - Consumer Group D: 12 partitions → 8 partitions reassigned → full rebalance
+4. **Total impact**: 4 consumer groups × 8 partitions = 32 partition reassignments
+5. **Rebalancing duration**: ~60s (all 4 groups rebalance simultaneously)
+6. **Processing impact**: Zero messages processed across ALL 4 consumer groups for ~60s
+7. **Lag accumulation**: At 10K msg/sec per group → 40K messages/sec × 60s = 2.4M messages of lag
+
+**Key Insight**: A single broker failure doesn't just affect 1/6 of partitions—it triggers rebalancing across ALL consumer groups, causing a full pause in processing.
+
+## Containment Strategies
+
+**1. Separate Kafka Clusters by Criticality**
+- **Payments cluster**: Isolated, higher replication factor (3×), dedicated brokers
+- **Analytics cluster**: Shared, lower replication (2×), can tolerate longer outages
+- **Benefit**: Payment processing continues even if analytics cluster fails
+
+**2. Consumer Group Isolation**
+- **Don't mix critical and non-critical consumers on the same topic**
+- Example: Payment processing and analytics dashboards should be in separate consumer groups
+- **Better**: Use separate topics (`payments-events` vs `payments-analytics`) to prevent one slow consumer from affecting the other
+
+**3. Circuit Breaker on Consumers**
+- Stop processing if error rate > threshold (e.g., > 5% errors in 1 minute)
+- Fail fast instead of letting lag grow unboundedly
+- Alert immediately when circuit breaker trips
+- **Example**: Consumer processing payment events → Error rate spikes to 10% → Circuit breaker opens → Consumer stops processing → Alert fires → Team investigates → Prevents data corruption
+
+**4. Partition-Level Isolation**
+- Use separate Kafka clusters for different services
+- Prevents one service's consumer lag from affecting others
+- **Trade-off**: Higher operational overhead, but better isolation
+
+**5. Graceful Degradation**
+- Non-critical consumers can pause during incidents
+- Critical consumers continue processing
+- **Example**: During broker failure, pause analytics consumers but keep payment processing running
+
+## Staff-Level Insight: Consumer Group Rebalancing
+
+> "Consumer group rebalancing is the most underestimated blast radius in async systems. A single slow consumer joining the group can pause ALL consumers for 30+ seconds. I've seen this cause cascading failures: rebalance → processing pause → lag grows → retention expires → data loss. The fix: separate consumer groups for critical vs non-critical workloads, and use separate topics when possible."
+
+**Real-World Example**:
+- E-commerce platform: 20 consumer groups processing order events
+- New consumer deployed with slow startup (loading 10GB state)
+- Consumer joins group → triggers rebalance → all 20 groups pause for 45s
+- During pause: 500K orders queued → API latency spikes → customers see errors
+- **Fix**: Deployed new consumers during low-traffic window, used blue-green deployment to avoid rebalancing
+
+## Failure Propagation Patterns
+
+**Pattern 1: Consumer Lag → Retention Expiration → Data Loss**
+```
+Consumer crashes
+  ↓
+Lag grows (no processing)
+  ↓
+Lag exceeds retention (7 days)
+  ↓
+Messages deleted from Kafka
+  ↓
+Consumer recovers but can't replay
+  ↓
+Permanent data loss
+```
+
+**Pattern 2: Schema Breaking Change → Consumer Crashes → Lag Grows**
+```
+Producer deploys breaking schema change
+  ↓
+Consumers crash on deserialize
+  ↓
+All consumers in group fail
+  ↓
+Lag grows unboundedly
+  ↓
+Retention expires → data loss
+```
+
+**Pattern 3: DLQ Overflow → Processing Stops**
+```
+Poison message arrives
+  ↓
+Consumer retries → fails → moves to DLQ
+  ↓
+More poison messages arrive
+  ↓
+DLQ fills up (bounded at 10K messages)
+  ↓
+New poison messages dropped silently
+  ↓
+Processing appears healthy but data is lost
+```
+
+**Prevention**: Monitor DLQ depth, alert when > 50% full, investigate immediately.
+
+---
+
 # Part 9: Interview Phrasing
 
 ## Demonstrating Staff-Level Understanding
@@ -2005,6 +2270,113 @@ This gives us reliable delivery without the complexity of a log-based system tha
 
 ---
 
+# Part 9C: Cost Reality — What Async Infrastructure Actually Costs
+
+## Total Cost of Ownership (TCO) Comparison
+
+Understanding the true cost of async infrastructure requires looking beyond just compute and storage. Here's a realistic TCO breakdown at different message volumes:
+
+| Technology | 1K msg/sec | 10K msg/sec | 100K msg/sec |
+|------------|------------|-------------|--------------|
+| **Self-managed Kafka (3-broker)** | | | |
+| - Compute (3× m5.xlarge) | $500/month | $500/month | $1,500/month (6 brokers) |
+| - Storage (7-day retention, 3× replication) | $200/month | $2,000/month | $20,000/month |
+| - Operational overhead | 10% SRE | 20% SRE | 40% SRE |
+| - **Total** | **~$700/month + 0.1 FTE** | **~$3K-8K/month + 0.2 FTE** | **~$25K/month + 0.4 FTE** |
+| **Self-managed Kafka (6-broker)** | | | |
+| - Compute (6× m5.xlarge) | $1,000/month | $1,000/month | $1,000/month |
+| - Storage (7-day retention, 3× replication) | $200/month | $2,000/month | $20,000/month |
+| - Operational overhead | 15% SRE | 25% SRE | 50% SRE |
+| - **Total** | **~$1,200/month + 0.15 FTE** | **~$5K-10K/month + 0.25 FTE** | **~$25K/month + 0.5 FTE** |
+| **AWS MSK (Managed Kafka)** | | | |
+| - Compute + Storage | $800/month | $5,000/month | $50,000/month |
+| - Operational overhead | 5% SRE | 5% SRE | 10% SRE |
+| - **Total** | **~$800/month + 0.05 FTE** | **~$5K-12K/month + 0.05 FTE** | **~$50K/month + 0.1 FTE** |
+| **AWS SQS** | | | |
+| - Compute + Storage | $50/month | $1,000/month | $10,000/month |
+| - Operational overhead | 0% SRE | 0% SRE | 0% SRE |
+| - **Total** | **~$50/month + 0 FTE** | **~$1K-3K/month + 0 FTE** | **~$10K/month + 0 FTE** |
+| **RabbitMQ (Self-managed)** | | | |
+| - Compute (3× m5.large) | $300/month | $600/month | $3,000/month |
+| - Storage (minimal) | $50/month | $200/month | $1,000/month |
+| - Operational overhead | 5% SRE | 10% SRE | 20% SRE |
+| - **Total** | **~$350/month + 0.05 FTE** | **~$1K-2K/month + 0.1 FTE** | **~$5K/month + 0.2 FTE** |
+
+**Example Calculation (10K msg/sec, 7-day retention, 3× replication):**
+- Message size: 1KB average
+- Daily volume: 10,000 × 86,400 = 864M messages = 864GB/day
+- 7-day retention: 864GB × 7 = 6TB
+- With 3× replication: 18TB total storage
+- Storage cost (EBS gp3): 18TB × $0.08/GB/month = ~$1,500/month
+- Compute (3× m5.xlarge): ~$500/month
+- Operational overhead: ~20% of one SRE (upgrades, monitoring, troubleshooting)
+- **Self-managed Kafka total: ~$3K-8K/month + 0.2 FTE**
+- **AWS MSK total: ~$5K-12K/month + 0.05 FTE** (managed service premium)
+- **SQS total: ~$1K-3K/month + 0 FTE** (but no replay capability)
+
+## Dominant Cost Drivers
+
+**For Log-Based Systems (Kafka, Pulsar):**
+- **Storage dominates** at scale: Retention period × Replication factor × Message size × Message rate
+- Example: 100K msg/sec × 1KB × 7 days × 3× replication = 180TB storage = $14K/month just for storage
+- **Operational toil** is the hidden cost: Upgrades, rebalancing, monitoring, troubleshooting consumer lag
+- **Compute** is relatively cheap until you hit partition limits (then need more brokers)
+
+**For Stream Processing (Flink, Kafka Streams):**
+- **Compute dominates**: Stateful operators require more CPU/memory than stateless
+- State backend storage (RocksDB) adds I/O costs
+- Checkpointing overhead increases with state size
+- **Example**: Flink job with 100GB state: Checkpoint takes 30s, requires 2× memory for state backend
+
+**For Queue-Based Systems (SQS, RabbitMQ):**
+- **Compute dominates** at low volumes (simple message routing)
+- **Storage is minimal** (messages deleted after consumption)
+- **Operational overhead** varies: SQS = 0%, RabbitMQ = 5-10% SRE time
+
+## Cost of Wrong Technology Choice
+
+**Using Kafka when SQS suffices:**
+- **Overhead**: ~$5K/month in unnecessary infrastructure
+- **Operational burden**: 0.5 FTE in SRE time managing Kafka cluster
+- **Complexity**: Schema registry, consumer groups, partition management for simple task queues
+- **Real example**: Team using Kafka for 500 msg/sec task queue → $8K/month + 0.3 FTE → Migrated to SQS → $200/month + 0 FTE
+
+**Using SQS when you need replay:**
+- **First data loss incident**: Consumer crashes, lag exceeds retention → Lost 3 days of events
+- **Cost to rebuild state**: 2 engineers × 2 weeks = $50K+ in engineering time
+- **Ongoing risk**: Can't debug production issues without replay capability
+- **Real example**: Payment processing system using SQS → Consumer bug caused incorrect balances → Had to rebuild from database snapshots → $80K in engineering time
+
+**Using real-time stream processing when batch is sufficient:**
+- **Cost multiplier**: Real-time Flink cluster = 5× more expensive than daily Spark batch job
+- **Example**: Daily aggregation of 1B events
+  - Real-time Flink: 20× m5.2xlarge = $3K/month, runs 24/7
+  - Daily Spark batch: 50× m5.2xlarge = $600/month, runs 1 hour/day
+  - **5× cost difference** for same computation
+
+## What Staff Engineers Do NOT Build
+
+**Custom message brokers:**
+- Building Kafka/Pulsar from scratch: 10+ engineer-years, ongoing maintenance nightmare
+- **Exception**: Only if you're at Google/Amazon scale and need features that don't exist
+
+**Kafka clusters for < 1K msg/sec:**
+- Use SQS or RabbitMQ instead
+- Kafka overhead (partitions, consumer groups, Zookeeper/KRaft) not justified
+- **Threshold**: Consider Kafka when > 1K msg/sec OR need replay OR > 3 consumers
+
+**Exactly-once delivery when at-least-once + idempotency works:**
+- Exactly-once adds 2-3× latency and complexity
+- Idempotent consumers are simpler and often sufficient
+- **Exception**: Financial transactions where duplicates are unacceptable
+
+**Real-time stream processing when batch is sufficient:**
+- Real-time = 5-10× more expensive than batch
+- **Decision rule**: Do users need results in < 1 minute? If not, batch is fine
+- **Example**: Daily analytics dashboard doesn't need real-time processing
+
+---
+
 # Part 10: Common Mistakes and Anti-Patterns
 
 ## Mistake 1: Using Kafka for Everything
@@ -2125,6 +2497,145 @@ Re-count everything (slow, possibly wrong due to retention)
 
 ---
 
+# Part 10B: Organizational Reality — Who Owns What in Async Systems
+
+## Ownership Model: Clear Boundaries Prevent Outages
+
+Async systems span multiple teams, and unclear ownership leads to incidents. Here's who owns what:
+
+| Component | Owner | Responsibilities | Why This Matters |
+|-----------|-------|------------------|------------------|
+| **Message broker infrastructure** | Platform/SRE team | Manage clusters, upgrades, monitoring, capacity planning | They have operational expertise and 24/7 coverage |
+| **Topic/queue creation and configuration** | Service team | Define retention, partitions, schemas, replication factor | They understand their data requirements and access patterns |
+| **Producer code and schema** | Producer team | Write producer code, define message schema, ensure message format | They own the contract and data quality |
+| **Consumer code and lag** | Consumer team | Write consumer code, monitor lag, handle failures, manage DLQ | They own their processing logic and SLA |
+| **Schema evolution coordination** | Shared (Producer + All Consumer teams) | Producer proposes changes, all consumer teams approve | Breaking changes affect all consumers |
+| **DLQ investigation** | Consumer team | Investigate poison messages, fix bugs, reprocess messages | They understand the processing logic that caused failures |
+| **Cross-team SLA** | Shared | Define and monitor SLAs (e.g., "Consumer lag < 1 hour") | Ensures system-wide reliability |
+
+## The Ownership Gap That Causes Outages
+
+**Classic Failure Scenario**:
+
+1. **Producer team** deploys schema change (adds required field) without notifying consumer teams
+2. **Consumer teams** haven't updated their code → Consumers crash on deserialize
+3. **Consumer lag grows** → Nobody notices (consumer team thinks it's a temporary spike)
+4. **7 days later**: Retention expires → Messages deleted from Kafka
+5. **Consumer recovers** → Can't replay → **Permanent data loss**
+6. **Blame game**: Producer team says "We announced it in Slack", Consumer team says "We didn't see it"
+
+**Root Cause**: No enforced process for schema changes, no shared monitoring dashboard, unclear ownership of consumer lag.
+
+## Prevention: Enforced Processes and Shared Visibility
+
+### 1. Schema Registry with Compatibility Checks
+
+**Enforcement**: Schema changes blocked in CI/CD if breaking compatibility
+- **Backward compatible**: Adding optional fields, removing required fields → ✅ Allowed
+- **Breaking**: Adding required fields, changing field types → ❌ Blocked unless all consumer teams approve
+- **Tool**: Confluent Schema Registry or AWS Glue Schema Registry
+- **Process**: Producer team creates PR → Schema registry validates compatibility → If breaking, requires approval from all consumer teams → Merge blocked until approvals
+
+### 2. Mandatory Consumer Team Sign-Off
+
+**Process**: 
+- Producer team creates RFC (Request for Comments) for schema change
+- Lists all consumer teams that use the topic
+- Requires explicit approval from each consumer team
+- **Example**: "Adding `user_preferences` field to `user-events` topic. Consumer teams: Analytics (approval needed), Email Service (approval needed), Payment Service (approval needed)"
+
+**Enforcement**: Schema registry blocks deployment until all approvals received.
+
+### 3. Shared Dashboard: Consumer Lag Per Topic
+
+**Visibility**: Single dashboard showing all consumer lag across all topics
+- **Columns**: Topic name, Consumer group, Current lag, Lag growth rate, Owner (consumer team), SLA status
+- **Alerts**: 
+  - Lag > 1 hour → Page consumer team
+  - Lag growth rate > 10K msg/min → Alert consumer team + Platform team
+  - Lag > retention period → Critical alert to all teams
+
+**Ownership**: Consumer team owns their lag, but Platform team provides visibility and alerts.
+
+## Human Failure Modes: What Goes Wrong
+
+### Failure Mode 1: Wrong Partition Count
+
+**Too Few Partitions**:
+- **Symptom**: Hot partitions, some consumers idle while others overloaded
+- **Example**: 10K msg/sec, 4 partitions → Each partition handles 2.5K msg/sec → One partition gets 8K msg/sec (hot key) → Consumer for that partition can't keep up → Lag grows
+- **Fix**: Add partitions, but triggers rebalancing (see Part 6C)
+
+**Too Many Partitions**:
+- **Symptom**: Rebalancing takes minutes, approaching Kafka's practical limit
+- **Example**: 1K msg/sec, 200 partitions → Rebalancing takes 5 minutes → All consumers pause → Lag accumulates
+- **Fix**: Reduce partitions (requires recreating topic), or split into multiple topics
+
+**Prevention**: Capacity planning (Part 6B) with 2-year growth target.
+
+### Failure Mode 2: Retention Set Too Low
+
+**Symptom**: Data loss during consumer outages
+- **Example**: Retention = 1 day → Consumer crashes → Team investigates for 2 days → Messages deleted → Can't replay → Data loss
+- **Fix**: Set retention based on longest expected consumer outage + buffer (e.g., 7 days for 1-day max outage)
+
+**Prevention**: Document retention rationale, review during capacity planning.
+
+### Failure Mode 3: Schema Breaking Change Deployed Without Backward Compatibility
+
+**Symptom**: All consumers crash, lag grows unboundedly
+- **Example**: Producer adds required field `user_id` → Consumers expect optional → Crash on deserialize → Lag grows → Retention expires → Data loss
+- **Fix**: Rollback producer, or deploy consumer updates first (backward compatible deployment)
+
+**Prevention**: Schema registry compatibility checks, mandatory consumer team approvals.
+
+### Failure Mode 4: Consumer Deployed Without DLQ
+
+**Symptom**: Poison messages block queue, processing stops
+- **Example**: Consumer processes payment events → One malformed message → Consumer retries forever → Queue blocked → No new messages processed
+- **Fix**: Add DLQ, configure max retries, investigate poison messages
+
+**Prevention**: Require DLQ configuration in consumer deployment checklist.
+
+## Cross-Team SLA Examples
+
+**SLA 1: Consumer Lag**
+- **Metric**: Consumer lag < 1 hour for 99.9% of time
+- **Owner**: Consumer team
+- **Alert**: Page consumer team if lag > 1 hour for > 5 minutes
+- **Escalation**: If lag > retention period, escalate to Platform team + Consumer team lead
+
+**SLA 2: DLQ Investigation**
+- **Metric**: DLQ messages investigated within 4 hours
+- **Owner**: Consumer team
+- **Alert**: Alert if DLQ depth > 100 messages
+- **Process**: Consumer team investigates, fixes bug, reprocesses messages
+
+**SLA 3: Schema Change Notification**
+- **Metric**: All consumer teams notified 2 weeks before breaking schema change
+- **Owner**: Producer team
+- **Enforcement**: Schema registry blocks deployment without approvals
+- **Process**: RFC → Consumer team approvals → Deploy
+
+**SLA 4: Topic Availability**
+- **Metric**: Topic availability > 99.9% (excluding planned maintenance)
+- **Owner**: Platform/SRE team
+- **Alert**: Page Platform team if topic unavailable
+- **Process**: Platform team manages broker failures, upgrades, capacity
+
+## Staff-Level Insight: Ownership Clarity Prevents Incidents
+
+> "I've seen more outages caused by unclear ownership than by technical failures. The producer team thinks the consumer team owns lag. The consumer team thinks the platform team owns the topic. Meanwhile, lag grows and data is lost. The fix: Document ownership explicitly, provide shared visibility (dashboards), and enforce processes (schema registry, approvals)."
+
+**Real-World Example**:
+- E-commerce platform: Order events topic
+- **Producer team**: Order Service (creates orders, publishes events)
+- **Consumer teams**: Payment Service, Inventory Service, Analytics Service, Email Service
+- **Problem**: No schema registry, no shared lag dashboard, no approval process
+- **Incident**: Producer team adds required field → 2 consumer teams crash → Lag grows for 3 days → Nobody notices → Retention expires → 3 days of order events lost
+- **Fix**: Implemented schema registry, shared lag dashboard, mandatory approvals → No similar incidents in 2 years
+
+---
 
 # Part 11: Interview Calibration for Async Model Topics
 

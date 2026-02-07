@@ -1510,6 +1510,89 @@ def transfer(from_account, to_account, amount, idempotency_key):
 
 3. **Two-Phase Commit:** Prepare all parties before committing
 
+### 6.2B Cascading Failure Timeline: When Coordination Collapses
+
+Coordination failures cascade through dependent services in predictable patterns. Understanding this timeline helps Staff engineers design containment strategies and set realistic SLAs.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│         CASCADING FAILURE TIMELINE: ZOOKEEPER LEADER ELECTION           │
+│                                                                         │
+│   T+0:    ZooKeeper leader node experiences high GC pause (2 seconds)  │
+│   T+2s:   Followers detect missed heartbeat, initiate leader election   │
+│   T+3s:   All sessions with old leader enter "connection loss" state    │
+│   T+5s:   Leader election completes, new leader elected                 │
+│   T+5-15s: Session reconnection storm — all clients reconnect           │
+│            simultaneously                                               │
+│   T+8s:   New leader overwhelmed by session re-establishment            │
+│   T+10s:  Lock holders uncertain — fencing tokens may be invalid        │
+│   T+12s:  Applications with locks begin "safety timeout" — pause        │
+│            operations                                                    │
+│   T+15s:  Thundering herd: all paused operations retry simultaneously   │
+│   T+20s:  New leader CPU at 100% from reconnection + lock reacquisition │
+│   T+30s:  Some clients timeout and escalate to "coordination            │
+│            unavailable" mode                                             │
+│   T+60s:  Stability returns as reconnection storm subsides              │
+│                                                                         │
+│   User-Visible Impact:                                                  │
+│   - 30-60 seconds of degraded service for all lock-dependent features   │
+│   - Partial availability: some operations succeed, others timeout       │
+│   - Error rates spike to 20-40% during recovery window                  │
+│                                                                         │
+│   Blast Radius:                                                         │
+│   Every service using this ZK cluster is affected simultaneously.      │
+│   If 50 services depend on the cluster, all 50 experience degradation.  │
+│                                                                         │
+│   Containment Strategies:                                               │
+│   1. Separate ZK clusters per criticality tier (critical vs. non-       │
+│      critical workloads)                                                │
+│   2. Circuit breakers on ZK clients (fail fast when ZK is unhealthy)   │
+│   3. Cached last-known-good state (allow degraded mode during outages) │
+│                                                                         │
+│   Prevention:                                                           │
+│   - GC tuning (reduce pause times to < 100ms)                           │
+│   - Dedicated coordination nodes (no co-located workloads)              │
+│   - Connection pooling to limit reconnection storms                     │
+│   - Exponential backoff on reconnection attempts                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Timeline Breakdown:**
+
+- **T+0**: ZooKeeper leader node experiences high GC pause (2 seconds)
+- **T+2s**: Followers detect missed heartbeat, initiate leader election
+- **T+3s**: All sessions with old leader enter "connection loss" state
+- **T+5s**: Leader election completes, new leader elected
+- **T+5-15s**: Session reconnection storm—all clients reconnect simultaneously
+- **T+8s**: New leader overwhelmed by session re-establishment
+- **T+10s**: Lock holders uncertain—fencing tokens may be invalid
+- **T+12s**: Applications with locks begin "safety timeout"—pause operations
+- **T+15s**: Thundering herd: all paused operations retry simultaneously
+- **T+20s**: New leader CPU at 100% from reconnection + lock reacquisition
+- **T+30s**: Some clients timeout and escalate to "coordination unavailable" mode
+- **T+60s**: Stability returns as reconnection storm subsides
+
+**User-Visible Impact:**
+
+30-60 seconds of degraded service for all lock-dependent features. Partial availability: some operations succeed, others timeout. Error rates spike to 20-40% during recovery window.
+
+**Blast Radius:**
+
+Every service using this ZK cluster is affected simultaneously. If 50 services depend on the cluster, all 50 experience degradation.
+
+**Containment:**
+
+- Separate ZK clusters per criticality tier (critical vs. non-critical workloads)
+- Circuit breakers on ZK clients (fail fast when ZK is unhealthy)
+- Cached last-known-good state (allow degraded mode during outages)
+
+**Prevention:**
+
+- GC tuning (reduce pause times to < 100ms)
+- Dedicated coordination nodes (no co-located workloads)
+- Connection pooling to limit reconnection storms
+- Exponential backoff on reconnection attempts
+
 ### 6.3 Clock Skew
 
 Clocks lie. Plan accordingly.
@@ -2634,6 +2717,85 @@ GOOD: get_user():
 
 **Why it's bad:** Reads don't need mutual exclusion → massive perf penalty for nothing
 
+### Anti-Pattern 6: Human Failure Modes in Coordination
+
+Coordination systems amplify human errors. Staff engineers must anticipate and prevent common mistakes that lead to production incidents.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    HUMAN FAILURE MODES IN COORDINATION                  │
+│                                                                         │
+│   ┌──────────────────────────────┬──────────────────────────────────┐  │
+│   │ Error                        │ Impact                           │  │
+│   ├──────────────────────────────┼──────────────────────────────────┤  │
+│   │ Forgetting fencing tokens    │ Most common, causes silent data  │  │
+│   │ in new service               │ corruption                        │  │
+│   ├──────────────────────────────┼──────────────────────────────────┤  │
+│   │ Setting TTL too short       │ Locks expire during normal       │  │
+│   │                              │ operation, causing duplicate     │  │
+│   │                              │ processing                       │  │
+│   ├──────────────────────────────┼──────────────────────────────────┤  │
+│   │ Setting TTL too long        │ Dead lock holders block          │  │
+│   │                              │ resources for minutes            │  │
+│   ├──────────────────────────────┼──────────────────────────────────┤  │
+│   │ Manual lock release during  │ Can violate safety guarantees,   │  │
+│   │ incident                     │ cause split-brain                │  │
+│   ├──────────────────────────────┼──────────────────────────────────┤  │
+│   │ Not testing coordination    │ "It works when ZK is healthy"    │  │
+│   │ failure in staging           │ is not a test                    │  │
+│   └──────────────────────────────┴──────────────────────────────────┘  │
+│                                                                         │
+│   Prevention Strategies:                                               │
+│   - Lint rules that require fencing tokens in lock-acquiring code     │
+│   - TTL templates per use case (prevent arbitrary TTL values)          │
+│   - Lock release requires 2-person approval during incidents           │
+│   - Chaos engineering: regularly inject ZK failures in staging        │
+│                                                                         │
+│   On-Call Reality:                                                     │
+│   "Coordination system issues are the hardest to debug at 3 AM         │
+│   because symptoms manifest in dependent services, not in the          │
+│   coordination system itself."                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Common Human Errors:**
+
+1. **Forgetting fencing tokens in new service**
+   - Most common error
+   - Causes silent data corruption (two processes think they hold the lock)
+   - Detection: Only discovered when duplicate operations occur
+
+2. **Setting TTL too short**
+   - Locks expire during normal operation
+   - Causes duplicate processing
+   - Example: 30-second TTL for a 45-second operation
+
+3. **Setting TTL too long**
+   - Dead lock holders block resources for minutes
+   - Prevents recovery from process crashes
+   - Example: 1-hour TTL for a 10-second operation
+
+4. **Manual lock release during incident**
+   - Can violate safety guarantees
+   - Causes split-brain scenarios
+   - Example: Releasing a lock while the original holder is still active
+
+5. **Not testing coordination failure in staging**
+   - "It works when ZK is healthy" is not a test
+   - Production failures are the first time the system sees coordination outages
+   - Results in cascading failures that could have been prevented
+
+**Prevention Strategies:**
+
+- **Lint rules that require fencing tokens** in lock-acquiring code
+- **TTL templates per use case** (prevent arbitrary TTL values)
+- **Lock release requires 2-person approval** during incidents
+- **Chaos engineering**: Regularly inject ZK failures in staging
+
+**On-Call Reality:**
+
+"Coordination system issues are the hardest to debug at 3 AM because symptoms manifest in dependent services, not in the coordination system itself." Engineers spend hours tracing symptoms back to a coordination failure that occurred minutes earlier.
+
 ---
 
 <a name="when-not-to-use-locks"></a>
@@ -3332,6 +3494,139 @@ Design monitoring for your coordination:
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 16.1B Cost Reality: What Coordination Infrastructure Actually Costs
+
+Coordination services are expensive—not just in compute, but in operational toil. Staff engineers must understand the true cost before committing to a coordination architecture.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              COORDINATION INFRASTRUCTURE COST COMPARISON                │
+│                                                                         │
+│   ┌──────────────────┬──────────────┬──────────────┬─────────────────┐ │
+│   │ Solution         │ 3-node Setup │ 5-node Setup │ Managed Service │ │
+│   ├──────────────────┼──────────────┼──────────────┼─────────────────┤ │
+│   │ ZooKeeper        │ $1.5K/month  │ $3K/month    │ N/A             │ │
+│   │ (self-hosted)    │ + $8K/year   │ + $12K/year  │                 │ │
+│   │                  │ (ops toil)   │ (ops toil)   │                 │ │
+│   ├──────────────────┼──────────────┼──────────────┼─────────────────┤ │
+│   │ etcd             │ $1K/month    │ $2K/month    │ N/A             │ │
+│   │ (self-hosted)    │ + $5K/year   │ + $8K/year   │                 │ │
+│   │                  │ (ops toil)   │ (ops toil)   │                 │ │
+│   ├──────────────────┼──────────────┼──────────────┼─────────────────┤ │
+│   │ Managed          │ N/A          │ N/A          │ $5K-8K/month    │ │
+│   │ (Cloud-native)   │              │              │ + $2K/year      │ │
+│   │                  │              │              │ (ops toil)      │ │
+│   └──────────────────┴──────────────┴──────────────┴─────────────────┘ │
+│                                                                         │
+│   Cost breakdown (5-node ZooKeeper example):                           │
+│   - Compute: 5 × (8-core, 32GB RAM) = $2.5K/month                       │
+│   - Storage: 5 × 200GB NVMe = $500/month                               │
+│   - Network: Inter-zone traffic = $200/month                            │
+│   - Operational toil: $10K/year (debugging, upgrades, monitoring)      │
+│                                                                         │
+│   Total: ~$3.2K/month + $10K/year operational burden                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Top 2 Cost Drivers:**
+
+1. **Dedicated Coordination Nodes That Can't Be Shared**
+   - Coordination services require dedicated resources—you cannot co-locate other workloads
+   - CPU and memory must be reserved even during idle periods
+   - A 5-node ZooKeeper cluster costs ~$2K-5K/month in compute alone
+   - Adding $10K/year in operational toil (debugging sessions, upgrades, monitoring)
+   - Managed alternatives cost 2-3× more ($5K-8K/month) but reduce operational burden by 80%
+
+2. **Operational Expertise Required**
+   - ZooKeeper and etcd are notorious for subtle failure modes
+   - GC pauses, session storms, and split-brain scenarios require deep expertise
+   - On-call engineers spend 2-3 hours per incident debugging coordination issues
+   - Training and documentation overhead: ~$5K-8K/year per team
+
+**What Staff Engineers Do NOT Build:**
+
+- **Custom consensus implementations** → Use battle-tested Raft libraries (etcd, Consul)
+- **Coordination for operations that can be made idempotent** → Idempotency keys eliminate need for locks
+- **Distributed locks for operations that can use optimistic concurrency** → Version numbers and CAS operations are cheaper
+
+**Cost of Coordination Failure:**
+
+If ZooKeeper is down for 10 minutes, all lock-dependent services are blocked. For an e-commerce platform:
+- Estimated $50K in lost revenue (assuming $5K/minute transaction volume)
+- Customer trust degradation (estimated $20K in churn risk)
+- Engineering time to diagnose and resolve: 4-6 hours × $200/hour = $800-1.2K
+
+**Total blast radius: $70K-71K per 10-minute outage**
+
+### 16.1C Scale Thresholds: When Coordination Becomes the Bottleneck
+
+Coordination services have hard limits. Staff engineers must recognize early warning signs and plan architectural changes before hitting these limits.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              COORDINATION SCALING THRESHOLDS & ACTIONS                   │
+│                                                                         │
+│   ┌───────────────┬──────────────┬──────────────────────────────────┐  │
+│   │ Lock Acq/sec  │ ZK Latency   │ Action Required                 │  │
+│   ├───────────────┼──────────────┼──────────────────────────────────┤  │
+│   │ 100/sec       │ < 5ms        │ Single cluster fine              │  │
+│   │               │              │ Monitor leader CPU               │  │
+│   ├───────────────┼──────────────┼──────────────────────────────────┤  │
+│   │ 1K/sec        │ 5-20ms       │ Watch leader CPU                │  │
+│   │               │              │ Consider read-only follower      │  │
+│   │               │              │ offload                          │  │
+│   ├───────────────┼──────────────┼──────────────────────────────────┤  │
+│   │ 10K/sec       │ 20-50ms      │ ZK session count limit           │  │
+│   │               │              │ approaching                      │  │
+│   │               │              │ Need to partition coordination   │  │
+│   ├───────────────┼──────────────┼──────────────────────────────────┤  │
+│   │ 100K/sec      │ > 100ms      │ Cannot use centralized           │  │
+│   │               │              │ coordination                     │  │
+│   │               │              │ Must redesign for coordination   │  │
+│   │               │              │ avoidance (CRDTs, partitioned    │  │
+│   │               │              │ ownership)                       │  │
+│   └───────────────┴──────────────┴──────────────────────────────────┘  │
+│                                                                         │
+│   Most Dangerous Scaling Assumption:                                   │
+│   "ZooKeeper scales horizontally" → FALSE                              │
+│                                                                         │
+│   Reality: ZK writes go through leader only. Adding followers helps    │
+│   reads but NOT write throughput. Write capacity is fixed by leader   │
+│   node performance.                                                    │
+│                                                                         │
+│   Early Warning Signs:                                                │
+│   - ZK leader CPU > 60%                                                │
+│   - Session count > 10K                                                │
+│   - Write latency p99 > 100ms                                          │
+│                                                                         │
+│   What Breaks First:                                                   │
+│   Session establishment rate (ZK has hard limits on concurrent new      │
+│   sessions). When this limit is hit, new clients cannot connect,       │
+│   causing cascading failures in dependent services.                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Critical Thresholds:**
+
+- **100/sec**: ZooKeeper handles easily, single cluster is fine
+- **1K/sec**: Watch leader CPU, consider read-only follower offload
+- **10K/sec**: ZK session count limit approaching, need to partition coordination
+- **100K/sec**: Cannot use centralized coordination—must redesign for coordination avoidance (CRDTs, partitioned ownership)
+
+**Most Dangerous Scaling Assumption:**
+
+"ZooKeeper scales horizontally" — **FALSE**. ZK writes go through leader only; adding followers helps reads but not write throughput. Write capacity is fixed by leader node performance.
+
+**Early Warning Signs:**
+
+- ZK leader CPU > 60%
+- Session count > 10K
+- Write latency p99 > 100ms
+
+**What Breaks First:**
+
+Session establishment rate (ZK has hard limits on concurrent new sessions). When this limit is hit, new clients cannot connect, causing cascading failures in dependent services.
 
 ### 16.2 Production Runbooks
 

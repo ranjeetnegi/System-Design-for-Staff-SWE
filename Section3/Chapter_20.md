@@ -1711,6 +1711,41 @@ Region B historically gets 40% of traffic → Allow 40 req/min
 
 ---
 
+## Part 6B: Cost Reality — What CAP Trade-offs Actually Cost
+
+Understanding the real cost implications of CAP choices is critical for Staff Engineers. The infrastructure and engineering costs differ dramatically between CP and AP systems.
+
+### Infrastructure Cost Comparison
+
+| Choice | Infrastructure Cost Multiplier | Dominant Cost Driver | Engineering Complexity |
+|--------|-------------------------------|---------------------|----------------------|
+| CP (single-region) | 1.5× | Consensus protocol overhead (CPU + latency) | Moderate — Raft/Paxos libraries available |
+| CP (multi-region) | 3-5× | Synchronous cross-region replication bandwidth | High — cross-region consensus, failover orchestration |
+| AP (single-region) | 1× baseline | Async replication (cheap) | Low — standard replication |
+| AP (multi-region) | 1.5-2× | Conflict resolution logic (engineering time) | High — conflict resolution, reconciliation, eventual consistency guarantees |
+| Hybrid (per-feature) | 2-3× | Mixed infrastructure + routing complexity | Highest — must maintain both CP and AP paths |
+
+### Real Dollar Examples
+
+**Rate limiter**: AP saves $15K/month vs CP at 1M QPS (no consensus overhead, local counters only)
+
+**Payment system**: CP costs $40K/month extra for cross-region sync, but prevents $500K/year in inconsistency-related losses
+
+**News feed**: AP saves $100K/month vs CP at scale (no synchronous fan-out to millions of followers)
+
+### The Cost Paradox
+
+CP systems cost more in infrastructure but less in engineering (no conflict resolution). AP systems cost less in infrastructure but more in engineering (conflict resolution, reconciliation, UI for stale data). At small scale, CP is cheaper overall. At large scale, AP is cheaper overall.
+
+### What Staff Engineers Do NOT Build
+
+- **CP for data that tolerates staleness** (wastes money) — Use AP for engagement metrics, view counts, recommendations
+- **AP for financial data** (saves money short-term, catastrophic long-term) — Use CP for payments, account balances, critical transactions
+- **Global CP when regional CP suffices** (2-3× cheaper) — Use regional CP primaries with async cross-region replication
+- **Custom conflict resolution when LWW or merge suffices** — Use standard CRDTs or last-write-wins instead of building custom reconciliation logic
+
+---
+
 # Part 7: CAP and System Evolution
 
 CAP choices aren't permanent. As systems mature and incidents occur, teams re-evaluate their trade-offs.
@@ -1796,6 +1831,24 @@ Early-stage systems shouldn't worry about CAP because:
 4. You don't know your consistency requirements until you have users
 
 **The pivot point**: When you add your second region, CAP becomes your problem. That's when you need explicit decisions.
+
+### Quantitative Scale Thresholds: When CAP Trade-offs Become Material
+
+As systems grow, CAP trade-offs become material at specific scale thresholds:
+
+| Scale | Users | Regions | CAP Reality | Action |
+|-------|-------|---------|-------------|--------|
+| V1 | < 100K | 1 | No CAP trade-off (no partitions within single region in practice) | Use strong consistency everywhere, single primary |
+| V2 | 100K-1M | 1-2 | Partitions rare, latency is the real issue | CP for core data, AP for engagement metrics |
+| V3 | 1M-10M | 2-3 | Partitions happen 2-3×/year, cross-region latency = 100-200ms | Per-feature CP/AP split, regional primaries |
+| V4 | 10M-100M | 3-5 | Partitions happen monthly (some region always has issues) | Mostly AP with CP only for financial data |
+| V5 | 100M+ | 5+ | Partitions are constant (always some degraded link) | Assume partition is the default state, design for AP with consistency as the exception |
+
+**Key threshold**: At 3+ regions, you should assume some partition is always happening somewhere. This fundamentally changes your design — consistency becomes the exception, not the rule.
+
+**Most dangerous assumption**: "We'll add multi-region later" — FALSE. Retrofitting CP→AP is an architectural rewrite, not a migration. The data model, client behavior, and conflict resolution all change.
+
+**Cost inflection point**: At < 1M users, CP costs ~$2K/month extra (single-region sync). At 10M users multi-region, CP costs ~$50K/month extra (cross-region sync). At 100M users, CP for all data is simply not feasible.
 
 ---
 
@@ -1897,6 +1950,38 @@ The worst time for a partition is during high traffic:
 - Recovery more difficult
 
 **Staff learning**: Your CAP behavior must work under stress, not just in isolation.
+
+### Organizational Reality: Who Decides CP vs AP?
+
+CAP decisions are not purely technical — they require organizational alignment and clear ownership.
+
+#### The Decision Matrix
+
+- **Product Manager wants**: "Everything consistent, always available" (impossible)
+- **Engineering Manager wants**: "Whatever is cheapest and simplest"
+- **Staff Engineer's job**: Translate CAP into business terms and drive the decision
+
+#### How to Get Buy-in for AP
+
+Don't say "we're sacrificing consistency." Say "during a rare network issue (2-3×/year), users might briefly see slightly stale like counts, but the app stays fully functional. The alternative is the app showing error pages to 40% of users."
+
+#### Who Owns What
+
+- **CAP strategy per feature**: Staff Engineer (cross-cutting architectural decision)
+- **Implementation of CP path**: Database/platform team
+- **Implementation of AP path + conflict resolution**: Product engineering team
+- **Monitoring CP/AP behavior**: SRE team
+- **CAP decision documentation**: Staff Engineer (must be written down, not tribal knowledge)
+
+#### Human Failure Modes
+
+- **Team choosing CP by default without analysis** — Leads to unnecessary unavailability during partitions
+- **Not documenting CAP decisions** — Next team inherits unknown behavior, makes wrong assumptions during incidents
+- **Incident response that doesn't know whether the system is CP or AP** — Can't assess impact correctly, makes wrong decisions
+
+#### Staff-Level Fix
+
+Every service must have a one-page "Consistency Contract" that states: what happens during a partition, which features degrade, and who to page.
 
 ---
 
@@ -2147,6 +2232,27 @@ For this e-commerce scenario, **AP is clearly better**:
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Quantified Blast Radius: CP vs AP During Real Partition
+
+Concrete numbers demonstrate the business impact difference between CP and AP during actual partition events.
+
+#### E-Commerce Flash Sale Scenario: Quantified Impact
+
+| Metric | CP System | AP System |
+|--------|-----------|-----------|
+| Users unable to complete checkout | 100% in minority partition (~40%) | 0% (all checkouts proceed) |
+| Users seeing stale inventory | 0% | ~15% (some see sold-out items as available) |
+| Revenue lost during 30-min partition | $150K (40% of users blocked) | $5K (oversold items need refund) |
+| Support tickets generated | ~2,000 ("app is broken") | ~50 ("my order was cancelled") |
+| Recovery time after partition heals | Instant (queued writes process) | 5-30 minutes (reconciliation) |
+| Long-term trust impact | High ("unreliable app") | Low ("one order issue, resolved quickly") |
+
+**Staff insight**: In almost every consumer-facing scenario, AP has smaller total business impact during partitions. The exception is financial systems where a single inconsistency can have legal or regulatory consequences.
+
+#### Blast Radius Containment for Hybrid Systems
+
+Route financial operations to CP path, everything else to AP. During partition, only checkout is affected (not browsing, not search, not recommendations). Blast radius: 5% of features instead of 100%.
 
 ---
 

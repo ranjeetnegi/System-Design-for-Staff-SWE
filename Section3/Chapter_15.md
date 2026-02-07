@@ -2391,6 +2391,137 @@ login(email, password):
 
 ---
 
+### Quantitative Growth Thresholds: When to Scale
+
+Staff engineers don't guess when to scale—they model thresholds based on measurable metrics. Here's when each scaling decision becomes necessary.
+
+#### Scale Thresholds: What Breaks First
+
+| Scale | Users | Write QPS | Read QPS | What Breaks First | Action Required |
+|-------|-------|-----------|----------|-------------------|-----------------|
+| **Early** | 10K | 50 | 500 | Nothing—single node handles easily | Monitor, optimize queries |
+| **Growth** | 100K | 500 | 5K | Connection pool exhaustion | Add connection pooling, read replicas |
+| **Scale** | 1M | 5K | 50K | Write bottleneck (WAL saturation) | Read replicas mandatory, consider sharding |
+| **Large** | 10M | 50K | 500K | Read replicas saturate, replication lag | Sharding required, aggressive caching |
+| **Massive** | 100M | 500K | 5M | Shard rebalancing overhead | Multi-region, specialized sharding strategies |
+
+#### Specific Breaking Points
+
+**At 5K Write QPS: Single PostgreSQL Primary Hits WAL Bottleneck**
+
+```
+PostgreSQL Write-Ahead Log (WAL) limits:
+- Single disk: ~2,000-3,000 writes/sec sustained
+- NVMe SSD: ~5,000-8,000 writes/sec sustained
+- Beyond this: WAL becomes bottleneck, commit latency spikes
+
+Symptoms:
+- p99 write latency > 100ms (was < 10ms)
+- WAL write queue depth > 10
+- Disk I/O saturation at 90%+
+
+Action: Read replicas help reads, but writes still bottlenecked
+→ Need sharding OR write optimization (batch writes, denormalize)
+```
+
+**At 50K Read QPS: Read Replicas Saturate — Need Sharding or Caching**
+
+```
+Read replica saturation math:
+- Single replica capacity: ~10K-15K QPS (depends on query complexity)
+- 3 replicas: ~30K-45K QPS total
+- At 50K QPS: Replicas at 80-90% utilization
+
+Replication lag grows under write pressure:
+- Low write load: Replication lag < 100ms
+- High write load (5K+ writes/sec): Replication lag 500ms-2s
+- At 50K reads/sec + 5K writes/sec: Lag spikes to 5-10s
+
+Users see stale data. Read replicas no longer sufficient.
+→ Need sharding (distribute reads across shards) OR aggressive caching (Redis, CDN)
+```
+
+**At 100+ Shards: Operational Overhead Exceeds Engineering Capacity**
+
+```
+Operational overhead quantification:
+- Schema migration: 5 min × 100 shards = 500 min = 8.3 hours (sequential)
+- Parallel migration: Requires coordination, rollback complexity, 2-3 hours + risk
+- Incident response: 1 shard failure = 1% users affected, but requires investigation
+- At 100 shards: Expect 1-2 shard incidents per month = 4-8 hours/month
+
+Team capacity (5-person team):
+- 100 shards: ~30% of team time on shard operations
+- 200 shards: ~60% of team time on shard operations
+- 500 shards: Requires dedicated platform team (2-3 engineers)
+
+Staff insight: At 100+ shards, you've outgrown simple sharding. Need:
+- Automated shard management (Vitess, Citus, custom)
+- Specialized platform team
+- Or reconsider architecture (maybe sharding isn't the answer)
+```
+
+#### Early Warning Metrics
+
+Monitor these metrics to predict scaling needs **before** systems break:
+
+| Metric | Threshold | What It Predicts |
+|--------|-----------|------------------|
+| **Replication lag trend** | > 500ms and growing | Read replicas saturating, need sharding soon |
+| **Connection pool utilization** | > 80% sustained | Need more replicas or connection pooling optimization |
+| **Disk I/O saturation** | > 85% sustained | WAL bottleneck approaching, write scaling needed |
+| **p99 query latency** | > 100ms (was < 20ms) | Capacity limit approaching, investigate root cause |
+| **Shard key distribution** | > 20% variance in shard sizes | Hot shards forming, rebalancing needed |
+
+**Staff approach**: Set alerts at 60% of breaking point, not 90%. Gives you 3-6 months to plan and execute scaling.
+
+#### Most Dangerous Assumptions
+
+**1. "Read replicas scale linearly" (FALSE)**
+
+```
+Assumption: 3 replicas = 3x read capacity
+Reality: Replication lag grows non-linearly under write pressure
+
+Write load → Replication lag:
+- 1K writes/sec → 50ms lag
+- 5K writes/sec → 500ms lag
+- 10K writes/sec → 2-5s lag
+
+At high write load, replicas become unusable (stale data). You get 1.5-2x effective capacity, not 3x.
+```
+
+**2. "Sharding doubles capacity" (FALSE)**
+
+```
+Assumption: 16 shards = 16x write capacity
+Reality: Cross-shard overhead consumes 15-30% of capacity
+
+Overhead sources:
+- Shard routing: +1-2ms per request
+- Cross-shard queries: 10-50ms additional latency
+- Rebalancing: Ongoing 5-10% capacity reserved for migrations
+- Operational overhead: Team time on shard management
+
+Effective capacity: 16 shards ≈ 11-14x single-node capacity (not 16x)
+```
+
+**3. "We'll shard when we hit 80% capacity" (DANGEROUS)**
+
+```
+Reality: Sharding takes 3-6 months to implement properly
+- Design: 2-4 weeks
+- Implementation: 4-8 weeks
+- Testing: 2-4 weeks
+- Migration: 2-4 weeks
+- Stabilization: 2-4 weeks
+
+If you wait until 80% capacity, you'll hit 100% before sharding is ready.
+Staff approach: Start sharding design at 50-60% capacity, implement at 70-75%
+```
+
+---
+
 ### 3.2 Scenario: Rate Limiter Counters
 
 Rate limiting looks simple until you try to do it at scale. Let's design a distributed rate limiter.
@@ -3266,6 +3397,157 @@ Storage side:
 
 ---
 
+### Blast Radius Quantification per Failure Type
+
+Staff engineers quantify impact, not just identify failures. Here's the exact blast radius for each failure mode.
+
+#### Blast Radius Matrix
+
+| Failure Type | % Users Affected | Duration | Recovery Action | Business Impact |
+|--------------|------------------|----------|-----------------|-----------------|
+| **Single replica down** | 0% (if quorum intact) | 5-30 min | Failover to other replicas | 33% read capacity reduction, no data loss |
+| **Primary down (async replication)** | 0% (failover) | 1-5 min | Promote replica, redirect writes | Brief write unavailability, potential data loss window |
+| **Primary down (sync replication)** | 0% (failover) | 1-5 min | Promote replica, redirect writes | Brief write unavailability, zero data loss |
+| **Shard failure (16 shards)** | 6.25% (1/16) | 5-30 min | Failover to shard replica | Isolated to one shard's users, N-1/N unaffected |
+| **Shard failure (64 shards)** | 1.56% (1/64) | 5-30 min | Failover to shard replica | Even smaller blast radius, 98.44% unaffected |
+| **Replication lag > 30s** | 70-80% (all read-replica users) | Until lag resolves | Investigate root cause, possibly throttle writes | Stale data visible, user confusion, potential revenue impact |
+| **Replication lag > 5min** | 70-80% | Until lag resolves | Emergency: promote lagging replica or reduce write load | Critical: users see data from hours ago, major UX degradation |
+| **Cross-shard query failure** | 5-15% (features using cross-shard joins) | Until query fixed | Fallback to degraded mode or fix query | Isolated to specific features, core functionality works |
+| **Router failure** | 100% | Until router restarted | Restart router instance, failover to backup | Complete outage, but typically < 1 min recovery |
+| **Rebalancing failure mid-migration** | 5-15% (affected key range) | Until rollback completes | Rollback migration, restore from backup | Data in affected range unavailable, but bounded |
+| **Split-brain (2 primaries)** | 50% (half see one primary, half see other) | Until resolved | Fence one primary, reconcile data | Data divergence, potential corruption, requires manual reconciliation |
+| **Network partition (quorum lost)** | 0-100% (depends on partition) | Until network heals | Wait for heal or force one side down | CP system: rejects all writes, AP system: accepts writes (divergence risk) |
+
+#### Detailed Blast Radius Analysis
+
+**Single Replica Down: 0% Users Affected, But 33% Capacity Reduction**
+
+```
+Scenario: 3 read replicas, 1 fails
+
+User impact: 0% (other 2 replicas handle all reads)
+Capacity impact: 33% reduction (from 3 replicas to 2)
+
+Latency impact:
+- Before: p99 latency 50ms (load balanced across 3)
+- After: p99 latency 75ms (load balanced across 2)
+- If already at 80% capacity: May hit 100%, latency spikes to 200ms+
+
+Staff insight: "0% users affected" is misleading. Capacity reduction can cause cascading failures if system is near limits.
+```
+
+**Shard Failure: 1/N of Users Completely Down, N-1/N Unaffected**
+
+This is WHY we shard—natural blast radius isolation.
+
+```
+Scenario: 16 shards, shard 7 fails
+
+User impact:
+- Shard 7 users: 100% down (6.25% of total users)
+- Other 15 shards: 0% impact (93.75% of users unaffected)
+
+Recovery:
+- Failover to shard 7 replica: 5-15 min
+- During failover: Shard 7 users see errors
+- After failover: Shard 7 users back online
+
+Contrast with single-node failure:
+- Single node down: 100% of users affected
+- Shard down: 6.25% of users affected
+
+Staff insight: Sharding provides natural fault isolation. This is an underappreciated benefit beyond just scaling.
+```
+
+**Replication Lag > 30s: All Read-Replica Users See Stale Data**
+
+```
+Scenario: 70% of reads go to replicas, replication lag spikes to 30s
+
+User impact: 70-80% of users see stale data
+- Profile updates: Not visible for 30s
+- New posts: Missing for 30s
+- Likes/comments: Delayed by 30s
+
+Business impact:
+- User confusion: "Why didn't my update save?"
+- Support tickets: Spike in "data not updating" complaints
+- Revenue impact: If pricing/catalog data stale, potential revenue loss
+
+Duration: Until lag resolves (could be minutes to hours)
+
+Staff insight: Replication lag is a silent killer. Users don't see errors, they see wrong data. Hard to detect without monitoring.
+```
+
+**Cross-Shard Query Failure: Only Features Using Cross-Shard Joins Affected**
+
+```
+Scenario: Feed feature requires joining user data across shards, query fails
+
+User impact: 5-15% (only users using feed feature)
+- Feed: Broken
+- Profile: Works (single-shard query)
+- Messages: Work (single-shard query)
+- Search: Works (uses separate search index)
+
+Isolated blast radius: Core functionality unaffected, only specific feature down
+
+Recovery options:
+1. Fallback: Show cached feed (stale but functional)
+2. Degraded mode: Show feed without cross-shard data
+3. Fix query: Usually 10-30 min
+
+Staff insight: Cross-shard queries are architectural debt. They break isolation. Prefer denormalization.
+```
+
+**Rebalancing Failure Mid-Migration: Affected Key Range Unavailable**
+
+```
+Scenario: Migrating 20% of users from shard 3 to shard 7, migration fails halfway
+
+User impact: 5-15% (users in affected key range)
+- Users being migrated: Data unavailable (in limbo between shards)
+- Users not being migrated: Unaffected
+
+Data state:
+- Some data copied to shard 7, some still on shard 3
+- Router doesn't know which shard has which data
+- Queries may return 404 or wrong data
+
+Recovery:
+- Rollback: Restore from backup, revert router config (30-60 min)
+- Or: Complete migration manually (2-4 hours)
+
+Staff insight: Rebalancing is risky. Always have rollback plan. Test on staging with production-like data volumes.
+```
+
+#### Staff Insight: Sharding Provides Natural Blast Radius Isolation
+
+This is an underappreciated benefit of sharding beyond just scaling:
+
+```
+Single-node architecture:
+- Node failure → 100% users affected
+- No natural isolation
+
+Sharded architecture:
+- Shard failure → 1/N users affected
+- Natural fault boundaries
+- Can design features to be shard-local (zero cross-shard dependencies)
+
+Example: User profile service
+- Sharded by user_id
+- Profile reads/writes: Single shard (isolated)
+- Feed (requires cross-shard): Separate service, can fail independently
+- Messages (shard-local): Isolated from feed failures
+
+Result: Shard failure affects 6% of users, not 100%
+```
+
+**Quantification**: In a 16-shard system, a single shard failure affects 6.25% of users. In a 64-shard system, it's 1.56%. This natural isolation is why companies like Facebook, Twitter, and Instagram shard aggressively—not just for scale, but for fault tolerance.
+
+---
+
 ### 4.2 Sharding Failure Modes
 
 | Failure | Symptoms | Detection | Recovery |
@@ -3336,6 +3618,132 @@ Storage side:
    - Build: Control, customization, learning
    - Buy: Speed, reliability, focus on business logic
    - Answer: Buy unless you have genuine unique requirements AND capacity
+
+---
+
+### Cost Reality: What Replication and Sharding Actually Cost
+
+Staff engineers don't just architect systems—they quantify the cost of every decision. Here's what replication and sharding actually cost at scale.
+
+#### Cost Comparison: Single Node vs. Read Replicas vs. Sharding
+
+| Scale | Single Node | 3 Read Replicas | 16 Shards (P+R each) | Cost Multiplier |
+|-------|-------------|-----------------|---------------------|-----------------|
+| **1M users** | $500/month | $2,000/month | $8,000/month | 4x → 16x |
+| **10M users** | $2,000/month | $8,000/month | $32,000/month | 4x → 16x |
+| **100M users** | $10,000/month | $40,000/month | $160,000/month | 4x → 16x |
+
+*Assumptions: AWS RDS PostgreSQL, db.r5.xlarge (4 vCPU, 32GB RAM) for primary, db.r5.large for replicas, 1TB storage, multi-AZ enabled*
+
+#### Top 2 Cost Drivers
+
+**1. Network Bandwidth for Replication**
+
+Replication isn't free. Every write to the primary must be replicated to all replicas:
+
+```
+Write amplification:
+- Primary write: 1KB
+- Replication to 3 replicas: 3KB additional network traffic
+- At 10K writes/sec × 1KB = 10MB/sec × 3 replicas = 30MB/sec sustained
+- Monthly cost: ~$200-400/month for inter-AZ data transfer
+```
+
+At 100K writes/sec, replication bandwidth alone costs $2,000-4,000/month. This is often overlooked until the AWS bill arrives.
+
+**2. Operational Complexity Multiplier per Shard**
+
+Each shard multiplies operational overhead:
+
+| Operation | Single Shard | 16 Shards | Multiplier |
+|-----------|--------------|-----------|------------|
+| Schema migrations | 1 execution | 16 coordinated executions | 16x |
+| Backup verification | 1 check | 16 checks | 16x |
+| Monitoring alerts | 1 alert config | 16 alert configs | 16x |
+| Incident response | 1 on-call | 16 potential incidents | 16x |
+| Capacity planning | 1 forecast | 16 forecasts | 16x |
+
+**Hidden cost**: A schema migration that takes 5 minutes on a single node takes 80 minutes across 16 shards (sequential) or requires sophisticated coordination (parallel with rollback complexity). Staff engineers budget 2-3x calendar time for sharded migrations.
+
+#### Dollar-Value Example: 10M User System
+
+```
+Scenario: Social media app at 10M users
+
+Option A: 3 read replicas
+- Primary: $2,000/month
+- 3 replicas: $6,000/month
+- Network bandwidth: $300/month
+- Total: $8,300/month
+- Operational overhead: 0.2 FTE (1 engineer 1 day/month)
+
+Option B: 16 shards (each with primary + 2 replicas)
+- 16 primaries: $32,000/month
+- 32 replicas: $48,000/month
+- Network bandwidth: $2,400/month
+- Total: $82,400/month
+- Operational overhead: 1.5 FTE (3 engineers 50% time)
+
+Difference: $74,100/month = $889,200/year
+
+That difference funds:
+- 8-10 senior engineers (at $150K/year fully loaded)
+- OR 2-3 Staff engineers (at $300K/year fully loaded)
+- OR entire infrastructure for 3-4 other services
+```
+
+**Staff insight**: The $74K/month difference isn't just infrastructure—it's opportunity cost. That money could fund features that drive revenue, not just scale.
+
+#### What Staff Engineers Intentionally Do NOT Build
+
+**1. Over-sharding for growth that may never come**
+
+```
+Anti-pattern: "We'll need 64 shards in 2 years, so let's build for 64 now"
+Reality: You're paying 64x operational complexity for capacity you may never need
+Staff approach: Start with 4-8 shards, use consistent hashing, expand when metrics show need
+```
+
+**2. Custom rebalancing when database-native works**
+
+```
+Anti-pattern: Building custom shard rebalancing logic from scratch
+Reality: PostgreSQL logical replication, MongoDB chunk migration, Cassandra nodetool all exist
+Staff approach: Use database-native tools unless you have unique requirements (you probably don't)
+```
+
+**3. Cross-shard joins when denormalization is cheaper**
+
+```
+Anti-pattern: "We'll join user data across shards for the feed"
+Reality: Cross-shard joins cost 10-100ms latency + 16x network overhead
+Staff approach: Denormalize user data into feed shards, accept eventual consistency
+Cost savings: $20K/month in reduced query complexity + infrastructure
+```
+
+#### Cost Scaling: Non-Linear Growth
+
+Costs don't scale linearly. Each shard adds operational burden:
+
+```
+Linear assumption: 16 shards = 16x cost
+Reality: 16 shards = 16x infrastructure + 2-3x operational complexity
+
+Why non-linear?
+- Monitoring: 16 shards require shard-aware dashboards (custom work)
+- Incident response: Shard failures cascade (one shard down → load shifts → others fail)
+- Schema changes: Must coordinate across all shards (exponential complexity)
+- Capacity planning: Hot shards require rebalancing (ongoing work)
+- Team training: Engineers must understand shard routing (knowledge overhead)
+```
+
+**Quantification**: A 5-person team can comfortably manage:
+- Single node: 100% capacity
+- 4 shards: 80% capacity (20% overhead)
+- 16 shards: 50% capacity (50% overhead)
+- 64 shards: 20% capacity (80% overhead)
+
+At 64 shards, you need a dedicated platform team. That's 2-3 engineers × $300K/year = $600-900K/year in human cost, separate from infrastructure.
 
 ---
 
@@ -3999,6 +4407,223 @@ L6 Response: "Let me understand why we think we need sharding. 50GB fits comfort
 - If it's for 'future growth' → let's model when we'd actually need it
 
 Sharding adds significant operational complexity. I'd estimate 2-3 engineer-months to implement properly, plus ongoing maintenance cost. Unless we have a clear timeline where single-node limits are exceeded, I'd recommend investing in caching and query optimization first."
+
+---
+
+# Part 7B: Organizational Reality — Ownership and Human Failures
+
+Staff engineers don't just design systems—they design organizational structures that prevent human error. Here's who owns what, and how humans break sharded systems.
+
+## Ownership Model: Who Owns What
+
+| Component | Owner | Responsibilities | Escalation Path |
+|-----------|-------|-----------------|-----------------|
+| **Shard map / routing logic** | Platform team | Maintains consistent hashing, shard assignment, router configuration | Staff Engineer + Platform Lead |
+| **Rebalancing decisions** | Staff Engineer + Platform | When to rebalance, which shards, migration strategy | Engineering Director |
+| **Shard-specific incidents** | Product team (with platform support) | On-call for their shard, debugging shard-specific issues | Platform team for infrastructure issues |
+| **Schema changes** | Product team (coordinated) | Design schema, coordinate rollout across all shards | Platform team for migration tooling |
+| **Monitoring & alerting** | Platform team | Shard-aware dashboards, per-shard alerts, capacity planning | Staff Engineer for alert tuning |
+| **Backup & disaster recovery** | Platform team | Per-shard backups, restore procedures, DR drills | Staff Engineer for DR strategy |
+| **Shard capacity planning** | Staff Engineer + Platform | Forecast growth per shard, identify hot shards, plan splits | Engineering Director for resource allocation |
+
+### Cross-Team Coordination Requirements
+
+**Resharding Requires Coordinated Downtime/Migration Windows**
+
+```
+Scenario: Need to split 8 shards into 16 shards
+
+Coordination required:
+1. Product teams: Feature freeze during migration (2-4 weeks)
+2. Platform team: Execute migration, monitor, rollback if needed
+3. SRE team: On-call coverage during migration window
+4. Business: Communicate potential user impact (even if < 1%)
+
+Timeline:
+- Planning: 2 weeks (Staff Engineer + Platform)
+- Execution: 1-2 weeks (Platform, with Product on standby)
+- Stabilization: 1 week (all teams monitoring)
+
+Staff insight: Resharding is an organizational event, not just a technical one. Budget 4-6 weeks calendar time.
+```
+
+**Schema Changes Must Be Rolled Across ALL Shards**
+
+```
+Scenario: Add new column to users table
+
+Naive approach: "I'll just run ALTER TABLE on each shard"
+Reality: Requires coordination, testing, rollback plan
+
+Proper process:
+1. Design: Product team designs schema change
+2. Review: Staff Engineer reviews for sharding implications
+3. Testing: Test on staging shards (mirror production)
+4. Rollout: Platform team coordinates sequential rollout
+   - Shard 0: Apply, verify, wait 1 hour
+   - Shard 1: Apply, verify, wait 1 hour
+   - ... repeat for all 16 shards
+5. Rollback: If any shard fails, rollback all shards
+
+Time: 2-3 days for 16 shards (vs. 5 minutes for single node)
+
+Staff insight: Schema changes are 16x more expensive in a sharded system. Design schemas carefully upfront.
+```
+
+**Monitoring Must Be Shard-Aware**
+
+```
+Anti-pattern: Aggregate metrics across all shards
+Example: "Average latency across all shards: 50ms" (hides hot shard at 500ms)
+
+Staff approach: Per-shard monitoring
+- Alert per shard: "Shard 7 latency > 200ms"
+- Dashboard: Show all shards, highlight outliers
+- Capacity planning: Track per-shard growth, not aggregate
+
+Complexity: 16 shards = 16x alert configs, 16x dashboards (or shard-aware tooling)
+```
+
+## Human Failure Modes
+
+Humans break sharded systems in predictable ways. Here's how to prevent each failure mode.
+
+| Failure Mode | Frequency | Cost to Fix | Prevention |
+|--------------|-----------|-------------|------------|
+| **Wrong shard key selection** | Most common | Very expensive (resharding required) | Staff Engineer review, load testing |
+| **Accidental data deletion during rebalancing** | Rare but catastrophic | Data loss, restore from backup | Automated backups, dry-run migrations |
+| **Configuration drift across shards** | Common | Gradual degradation, hard to detect | Infrastructure as code, automated validation |
+| **Promoting lagging replica during failover** | Occasional | Data loss, inconsistency | Automated lag checks, quorum requirements |
+| **Cross-shard query in hot path** | Common | Latency spikes, cascading failures | Architecture review, performance testing |
+| **Shard key not in WHERE clause** | Common | Full table scan across all shards | Query analyzer, automated checks |
+| **Rebalancing during peak traffic** | Occasional | Service degradation | Change windows, capacity planning |
+
+### Wrong Shard Key Selection (Most Common, Most Expensive)
+
+```
+Example: Sharded by user_id, but 80% of queries filter by created_at
+
+Problem:
+- Queries like "users created in last 7 days" hit ALL shards
+- Each shard scans its entire user table
+- 16 shards × full scan = 16x worse than single node
+
+Cost to fix:
+- Resharding: 2-3 engineer-months
+- Migration: 1-2 weeks downtime
+- Risk: Data loss if migration fails
+
+Prevention:
+- Staff Engineer reviews shard key selection
+- Load test with realistic query patterns
+- Model query distribution before sharding
+```
+
+### Accidental Data Deletion During Rebalancing
+
+```
+Example: Migration script has bug, deletes users instead of copying
+
+Scenario:
+1. Script: DELETE FROM shard_3 WHERE user_id IN (migrated_users)
+2. Bug: Deletes ALL users from shard_3, not just migrated ones
+3. Result: 6.25% of users deleted
+
+Recovery:
+- Restore from backup: 1-2 hours
+- Replay transactions from WAL: 2-4 hours
+- Total downtime: 3-6 hours
+
+Prevention:
+- Automated backups before migration
+- Dry-run migrations on staging
+- Two-person review of migration scripts
+- Gradual rollout (migrate 1% first, verify, then 10%, then 100%)
+```
+
+### Configuration Drift Across Shards
+
+```
+Example: Shard 7 has different indexes than other shards
+
+How it happens:
+- Engineer adds index to shard 7 manually (urgent fix)
+- Forgets to add to other shards
+- Over time: Each shard drifts
+
+Symptoms:
+- Shard 7: Fast queries (has index)
+- Other shards: Slow queries (missing index)
+- Hard to detect: Aggregate metrics look fine
+
+Prevention:
+- Infrastructure as code (Terraform, Ansible)
+- Automated validation: Compare configs across shards
+- Schema migration tooling: Apply to all shards automatically
+```
+
+### Promoting Lagging Replica During Failover
+
+```
+Example: Primary fails, promote replica with 30s lag
+
+Scenario:
+1. Primary crashes
+2. Automated failover promotes replica
+3. Replica has 30s replication lag (wasn't checked)
+4. Result: Last 30s of writes lost
+
+Prevention:
+- Check replication lag before promotion
+- Require quorum (multiple replicas agree on promotion)
+- Use semi-sync replication (at least one replica confirms write)
+- Staff Engineer designs failover logic, not junior engineers
+```
+
+## Runbook: Shard X is Down
+
+When a shard fails, follow this runbook. Staff engineers write these, not SREs.
+
+```
+INCIDENT: Shard X is down
+
+STEP 1: Verify failure
+- Check shard health endpoint: curl https://shard-X.internal/health
+- Check metrics: Is shard X returning errors?
+- Check logs: What errors are shard X returning?
+
+STEP 2: Check if hash ring updated
+- Is router aware shard X is down?
+- Are requests still routing to shard X? (They shouldn't)
+- If not updated: Manually update hash ring, redirect traffic
+
+STEP 3: Verify failover to replica
+- Is shard X replica healthy?
+- Has replica been promoted to primary?
+- Check replication lag: Is replica caught up?
+- If lag > 5s: Wait for catch-up OR accept data loss window
+
+STEP 4: Check dependent services
+- Which services depend on shard X?
+- Are they handling errors gracefully?
+- Check error rates in dependent services
+
+STEP 5: Communicate affected user segment
+- Calculate: Shard X = 1/N of users (e.g., 6.25% for 16 shards)
+- Notify: Product team, Support team, Leadership
+- Message: "Shard 7 is down, affecting ~6.25% of users. Estimated recovery: 15 min"
+
+STEP 6: Root cause analysis
+- Why did shard X fail? (Disk full? OOM? Network partition?)
+- Document: Add to postmortem, update runbook if needed
+
+STEP 7: Prevent recurrence
+- Fix root cause (if infrastructure issue)
+- Update monitoring (if detection was slow)
+- Update runbook (if steps were missing)
+```
+
+**Staff insight**: Runbooks aren't just for SREs. Product engineers who own shards need these. Write them proactively, test them in fire drills.
 
 ---
 
