@@ -571,13 +571,13 @@ This is why we need to think carefully about push vs. pull.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           Clients (Mobile/Web)                       │
+│                           Clients (Mobile/Web)                      │
 └────────────────────────────────────┬────────────────────────────────┘
                                      │
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                            API Gateway                               │
-│                    (Auth, Rate Limiting, Routing)                    │
+│                            API Gateway                              │
+│                    (Auth, Rate Limiting, Routing)                   │
 └────────────────────────────────────┬────────────────────────────────┘
                                      │
               ┌──────────────────────┼──────────────────────┐
@@ -1184,7 +1184,7 @@ The architecture section mentioned multi-region as a future evolution. Here's th
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    MULTI-REGION ARCHITECTURE EVOLUTION                       │
+│                    MULTI-REGION ARCHITECTURE EVOLUTION                      │
 │                                                                             │
 │   SINGLE REGION (Current)              MULTI-REGION (Year 1)                │
 │   ─────────────────────────            ─────────────────────                │
