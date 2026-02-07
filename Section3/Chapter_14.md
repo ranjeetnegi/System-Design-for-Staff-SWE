@@ -1414,11 +1414,11 @@ Staff engineers understand not just what consistency models do, but how they're 
 │          ▼                                                               │
 │   ┌─────────────┐     3. Propose    ┌─────────────┐                      │
 │   │   LEADER    │ ───────────────── │ FOLLOWER 1  │                      │
-│   │   (Primary) │     (sync)       │  (Replica)  │                      │
-│   │             │ ──────┐          └──────┬──────┘                      │
+│   │   (Primary) │     (sync)        │  (Replica)  │                      │
+│   │             │ ──────┐           └──────┬──────┘                      │
 │   └──────┬──────┘       │   3. Propose    │                              │
 │          │              │   (sync)        │  4. ACK                      │
-│          │              ▼                 │                               │
+│          │              ▼                 │                              │
 │          │       ┌─────────────┐          │                              │
 │          │       │ FOLLOWER 2  │──────────┘                              │
 │          │       │  (Replica)  │                                         │
@@ -1429,8 +1429,8 @@ Staff engineers understand not just what consistency models do, but how they're 
 │          ▼                                                               │
 │   Client receives confirmation                                           │
 │                                                                          │
-│   LATENCY: Same region: 5-15ms │ Cross-region: 200-500ms                │
-│   FAILURE: If 1 follower down → still works (quorum intact)             │
+│   LATENCY: Same region: 5-15ms │ Cross-region: 200-500ms                 │
+│   FAILURE: If 1 follower down → still works (quorum intact)              │
 │            If leader down → election (1-10s unavailable)                 │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1464,9 +1464,9 @@ Staff engineers understand not just what consistency models do, but how they're 
 │   │  consistent              consistent                                  │
 │   └───────────────────────────────┘                                      │
 │                                                                          │
-│   LATENCY: 1-5ms (write to nearest node)                                │
-│   WINDOW: Readers on B/C see stale data for 50ms-5s                     │
-│   FAILURE: Any node down → others continue independently                │
+│   LATENCY: 1-5ms (write to nearest node)                                 │
+│   WINDOW: Readers on B/C see stale data for 50ms-5s                      │
+│   FAILURE: Any node down → others continue independently                 │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1476,39 +1476,39 @@ Staff engineers understand not just what consistency models do, but how they're 
 ┌──────────────────────────────────────────────────────────────────────────┐
 │           CONSISTENCY FAILURE CASCADE (STRONG CONSISTENCY)               │
 │                                                                          │
-│   TRIGGER: Network partition between US-East and US-West                │
+│   TRIGGER: Network partition between US-East and US-West                 │
 │                                                                          │
-│   T+0s    ┌──────────┐  ╳╳╳╳╳  ┌──────────┐                            │
+│   T+0s    ┌──────────┐  ╳╳╳╳╳    ┌──────────┐                            │
 │           │ US-East  │  partition│ US-West  │                            │
-│           │ (Leader) │          │(Follower)│                            │
-│           └────┬─────┘          └──────────┘                            │
+│           │ (Leader) │           │(Follower)│                            │
+│           └────┬─────┘           └──────────┘                            │
 │                │                                                         │
-│   T+1s    Leader cannot reach quorum                                    │
-│           → Writes begin failing with timeout errors                    │
+│   T+1s    Leader cannot reach quorum                                     │
+│           → Writes begin failing with timeout errors                     │
 │                │                                                         │
-│   T+2s    ┌────▼─────┐                                                  │
-│           │ App Layer│ receives write errors                            │
-│           │          │ → Begins retrying                                │
-│           └────┬─────┘                                                  │
+│   T+2s    ┌────▼─────┐                                                   │
+│           │ App Layer│ receives write errors                             │
+│           │          │ → Begins retrying                                 │
+│           └────┬─────┘                                                   │
 │                │                                                         │
-│   T+5s    Retry amplification: 3× normal write load on leader          │
-│           Leader CPU spikes to 90%                                      │
+│   T+5s    Retry amplification: 3× normal write load on leader            │
+│           Leader CPU spikes to 90%                                       │
 │                │                                                         │
-│   T+10s   ┌────▼─────┐                                                  │
-│           │ Client   │ sees "Service unavailable" errors                │
-│           │ Layer    │ → Users retry manually                           │
-│           └────┬─────┘                                                  │
+│   T+10s   ┌────▼─────┐                                                   │
+│           │ Client   │ sees "Service unavailable" errors                 │
+│           │ Layer    │ → Users retry manually                            │
+│           └────┬─────┘                                                   │
 │                │                                                         │
-│   T+15s   Cascading effect: 5× normal load                             │
-│           Some clients cache stale state from last successful read      │
-│           → Stale client state + retries = inconsistent user experience │
+│   T+15s   Cascading effect: 5× normal load                               │
+│           Some clients cache stale state from last successful read       │
+│           → Stale client state + retries = inconsistent user experience  │
 │                │                                                         │
-│   T+60s   Partition heals → quorum restored → writes drain             │
-│           Recovery: 30-120s for retry backlog to clear                  │
-│                                                                         │
-│   BLAST RADIUS: 100% of write operations, ~40% of reads                │
-│   DURATION: Partition length + 30-120s recovery                         │
-│   CONTAINMENT: Circuit breaker on writes, read from local cache        │
+│   T+60s   Partition heals → quorum restored → writes drain               │
+│           Recovery: 30-120s for retry backlog to clear                   │
+│                                                                          │
+│   BLAST RADIUS: 100% of write operations, ~40% of reads                  │
+│   DURATION: Partition length + 30-120s recovery                          │
+│   CONTAINMENT: Circuit breaker on writes, read from local cache          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1761,34 +1761,7 @@ The trade-off I'm making: complexity of causal tracking (vector clocks, dependen
 
 ---
 
-# Part 15: Final Verification — L6 Readiness Checklist
-
-## Does This Section Meet L6 Expectations?
-
-| L6 Criterion | Coverage | Notes |
-|-------------|----------|-------|
-| **Judgment & Decision-Making** | ✅ Strong | 6 heuristics, decision tree, real-world application |
-| **Failure & Degradation Thinking** | ✅ Strong | Consistency under failure, partition behavior |
-| **Implementation Depth** | ✅ Strong | Vector clocks, session stickiness, consensus protocols |
-| **Scale & Evolution** | ✅ Strong | Consistency evolution, migration paths, cost analysis |
-| **Observability** | ✅ Strong | Monitoring, verification, SLOs |
-| **Multi-Region** | ✅ Strong | Active-active/passive, conflict resolution |
-| **Interview Calibration** | ✅ Strong | Probing questions, L5 mistakes, L6 signals |
-
-## Staff-Level Signals Demonstrated
-
-✅ Consistency choice varies by data type within same system
-✅ Failure modes explicitly addressed for each model
-✅ Implementation mechanisms understood (not just concepts)
-✅ Multi-region patterns with conflict resolution
-✅ Observability and verification strategies
-✅ Evolution path as system scales
-✅ Quantified trade-offs (latency, cost, availability)
-✅ Interview-ready articulation structure
-
----
-
-# Part 16: Organizational Reality — Ownership, Human Failures, and Operational Readiness
+# Part 15: Organizational Reality — Ownership, Human Failures, and Operational Readiness
 
 Staff Engineers don't just design consistency — they operationalize it across teams.
 
