@@ -18,12 +18,12 @@ This chapter covers a **simplified** recommendation and ranking system at Staff 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │     RECOMMENDATION SYSTEM: THE STAFF ENGINEER VIEW                          │
 │                                                                             │
-│   WRONG Framing: "An ML model that predicts what users want"               │
-│   RIGHT Framing: "A multi-stage pipeline that retrieves thousands of       │
+│   WRONG Framing: "An ML model that predicts what users want"                │
+│   RIGHT Framing: "A multi-stage pipeline that retrieves thousands of        │
 │                   candidates from billions of items, scores them with       │
 │                   multiple models, applies business rules and diversity     │
-│                   constraints, and serves a personalized ranked list—      │
-│                   all in under 100ms, for every user, on every page load"  │
+│                   constraints, and serves a personalized ranked list—       │
+│                   all in under 100ms, for every user, on every page load"   │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Before designing, understand:                                      │   │
@@ -38,12 +38,12 @@ This chapter covers a **simplified** recommendation and ranking system at Staff 
 │                                                                             │
 │   THE UNCOMFORTABLE TRUTH:                                                  │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  The recommendation model gets all the attention, but it's only    │   │
-│   │  5% of the system. The other 95% is: candidate generation at       │   │
+│   │  The recommendation model gets all the attention, but it's only     │   │
+│   │  5% of the system. The other 95% is: candidate generation at        │   │
 │   │  scale, feature storage and serving, real-time signal ingestion,    │   │
-│   │  serving infrastructure, A/B testing, and the feedback loop that   │   │
-│   │  connects user behavior back to model training. A brilliant model  │   │
-│   │  in a bad infrastructure serves stale, slow, or no results.        │   │
+│   │  serving infrastructure, A/B testing, and the feedback loop that    │   │
+│   │  connects user behavior back to model training. A brilliant model   │   │
+│   │  in a bad infrastructure serves stale, slow, or no results.         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -86,8 +86,8 @@ A recommendation system selects and ranks items from a large corpus to show spec
 │   → "They skipped all fashion items quickly"                                │
 │                                                                             │
 │   RETRIEVE: Go to the warehouse and pull candidate items                    │
-│   → Items similar to what they've bought (collaborative filtering)         │
-│   → Items related to what they're browsing (content-based)                 │
+│   → Items similar to what they've bought (collaborative filtering)          │
+│   → Items related to what they're browsing (content-based)                  │
 │   → Items that are popular right now (trending)                             │
 │   → Items the store wants to promote (business rules)                       │
 │                                                                             │
@@ -99,11 +99,11 @@ A recommendation system selects and ranks items from a large corpus to show spec
 │                                                                             │
 │   SERVE: Present the shelf to the customer immediately                      │
 │   → The customer sees a personalized storefront                             │
-│   → Response must be instant (< 100ms) — they'll walk away otherwise       │
+│   → Response must be instant (< 100ms) — they'll walk away otherwise        │
 │                                                                             │
 │   LEARN: Watch what they pick up and put down                               │
 │   → "They clicked running shoes — increase sports affinity"                 │
-│   → "They ignored fitness apparel — maybe not interested after all"        │
+│   → "They ignored fitness apparel — maybe not interested after all"         │
 │   → Update the model for next time                                          │
 │                                                                             │
 │   SCALE: Do this for 100 million customers simultaneously                   │
@@ -305,31 +305,31 @@ SCENARIO 4: Recommendation system has a feedback loop failure
 │   ITEM CORPUS: 10 million items                                             │
 │         │                                                                   │
 │         ▼                                                                   │
-│   ┌─────────────────────────────────┐                                       │
+│   ┌────────────────────────────────-─┐                                      │
 │   │  RETRIEVAL (cheap, broad)        │  10M → 1,000 candidates              │
 │   │  "Which items COULD be relevant?"│  Cost: ~15ms                         │
 │   │  Multiple sources in parallel    │  Goal: High recall                   │
-│   └─────────────┬───────────────────┘                                       │
-│                 ▼                                                            │
-│   ┌─────────────────────────────────┐                                       │
+│   └─────────────┬───────────────────-┘                                      │
+│                 ▼                                                           │
+│   ┌──────────────────────────────────┐                                      │
 │   │  SCORING (expensive, precise)    │  1,000 → 50 ranked items             │
 │   │  "Which items ARE relevant?"     │  Cost: ~20ms                         │
-│   │  ML model with rich features     │  Goal: High precision               │
-│   └─────────────┬───────────────────┘                                       │
-│                 ▼                                                            │
-│   ┌─────────────────────────────────┐                                       │
+│   │  ML model with rich features     │  Goal: High precision                │
+│   └─────────────┬────────────────────┘                                      │
+│                 ▼                                                           │
+│   ┌──────────────────────────────────┐                                      │
 │   │  RE-RANKING (rules, diversity)   │  50 → 20 final items                 │
 │   │  "What should the user SEE?"     │  Cost: ~3ms                          │
 │   │  Business constraints applied    │  Goal: Balanced feed                 │
-│   └─────────────┬───────────────────┘                                       │
-│                 ▼                                                            │
+│   └─────────────┬────────────────────┘                                      │
+│                 ▼                                                           │
 │         20 personalized items served to user                                │
 │                                                                             │
 │   WHY A FUNNEL:                                                             │
-│   → You can't score 10M items with an expensive model (10M × 20µs = 200s) │
-│   → You can't retrieve only 20 items (too few → poor diversity, recall)    │
-│   → The funnel lets you apply cheap operations broadly and expensive       │
-│     operations narrowly — the fundamental cost-quality trade-off           │
+│   → You can't score 10M items with an expensive model (10M × 20µs = 200s)   │
+│   → You can't retrieve only 20 items (too few → poor diversity, recall)     │
+│   → The funnel lets you apply cheap operations broadly and expensive        │
+│     operations narrowly — the fundamental cost-quality trade-off            │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -955,63 +955,63 @@ MOST DANGEROUS ASSUMPTIONS:
 │                RECOMMENDATION SYSTEM ARCHITECTURE                           │
 │                                                                             │
 │   ┌──────────────┐                                                          │
-│   │   Clients     │  (Mobile apps, web frontend, internal services)         │
+│   │   Clients    │  (Mobile apps, web frontend, internal services)          │
 │   └──────┬───────┘                                                          │
 │          │                                                                  │
 │          ▼                                                                  │
 │   ┌──────────────────────────────────────────────────────────────────┐      │
-│   │                    API GATEWAY                                    │      │
+│   │                    API GATEWAY                                   │      │
 │   │  (Auth, rate limit, A/B traffic split, surface routing)          │      │
 │   └──────┬───────────────────────────────────┬───────────────────────┘      │
 │          │                                   │                              │
 │   ┌──────▼──────────────┐             ┌──────▼──────────────┐               │
-│   │ RECOMMENDATION       │             │ EVENT INGESTION     │               │
-│   │ SERVING PATH         │             │ PATH                │               │
+│   │ RECOMMENDATION      │             │ EVENT INGESTION     │               │
+│   │ SERVING PATH        │             │ PATH                │               │
 │   └──────┬──────────────┘             └──────┬──────────────┘               │
 │          │                                   │                              │
 │   ┌──────▼──────────────┐             ┌──────▼──────────────┐               │
-│   │ CANDIDATE RETRIEVAL  │             │ EVENT STREAM         │               │
-│   │ (Multi-source)       │             │ (Message Queue)      │               │
-│   │                      │             └──────┬──────────────┘               │
-│   │ ┌─────────────────┐  │                    │                              │
-│   │ │ Collab Filtering │  │    ┌──────────────┼──────────────┐               │
-│   │ │ Content-Based    │  │    │              │              │               │
-│   │ │ Trending         │  │    ▼              ▼              ▼               │
-│   │ │ Editorial/Rules  │  │  ┌──────┐  ┌───────────┐  ┌──────────┐         │
-│   │ └─────────────────┘  │  │Real-  │  │ Event     │  │ Training │         │
-│   └──────┬──────────────┘  │time   │  │ Archive   │  │ Pipeline │         │
-│          │                  │Feature│  │ (Storage) │  │ (Batch)  │         │
-│          ▼                  │Update │  └───────────┘  └──────────┘         │
-│   ┌──────────────────────┐  └───┬───┘                      │               │
-│   │ FEATURE ASSEMBLY      │     │                           │               │
-│   │ (Batch + Real-time)   │◄────┘                           │               │
-│   └──────┬──────────────┘                                  │               │
-│          │                                                  │               │
-│          ▼                                                  ▼               │
+│   │ CANDIDATE RETRIEVAL │             │ EVENT STREAM        │               │
+│   │ (Multi-source)      │             │ (Message Queue)     │               │
+│   │                     │             └──────┬──────────────┘               │
+│   │ ┌─────────────────┐ │                    │                              │
+│   │ │ Collab Filtering│ │     ┌──────────────┼──────────────┐               │
+│   │ │ Content-Based   │ │     │              │              │               │
+│   │ │ Trending        │ │     ▼              ▼              ▼               │
+│   │ │ Editorial/Rules │ │   ┌───────┐  ┌───────────┐  ┌──────────┐          │
+│   │ └─────────────────┘ │   │Real-  │  │ Event     │  │ Training │          │
+│   └──────┬──────────────┘   │time   │  │ Archive   │  │ Pipeline │          │
+│          │                  │Feature│  │ (Storage) │  │ (Batch)  │          │
+│          ▼                  │Update │  └───────────┘  └──────────┘          │
+│   ┌───────────────────────┐ └───┬───┘                      │                │
+│   │ FEATURE ASSEMBLY      │     │                          │                │
+│   │ (Batch + Real-time)   │◄────┘                          │                │
+│   └──────┬────────────────┘                                │                │
+│          │                                                 │                │
+│          ▼                                                 ▼                │
 │   ┌──────────────────────┐              ┌──────────────────────┐            │
-│   │ MODEL SCORING         │              │ MODEL REGISTRY       │            │
-│   │ (GPU/CPU inference)   │◄─────────────│ (Versioned models)   │            │
-│   └──────┬──────────────┘              └──────────────────────┘            │
+│   │ MODEL SCORING        │              │ MODEL REGISTRY       │            │
+│   │ (GPU/CPU inference)  │◄─────────────│ (Versioned models)   │            │
+│   └──────┬───────────────┘              └──────────────────────┘            │
 │          │                                                                  │
 │          ▼                                                                  │
 │   ┌──────────────────────┐                                                  │
-│   │ RE-RANKING            │                                                  │
-│   │ (Business rules,      │                                                  │
-│   │  diversity, filtering) │                                                  │
-│   └──────┬──────────────┘                                                  │
+│   │ RE-RANKING           │                                                  │
+│   │ (Business rules,     │                                                  │
+│   │ diversity, filtering)│                                                  │
+│   └──────┬───────────────┘                                                  │
 │          │                                                                  │
 │          ▼                                                                  │
 │   Response to Client                                                        │
 │                                                                             │
 │   ┌───────────────────────────────────────────────────────────────────────┐ │
-│   │                    FEATURE STORE                                       │ │
+│   │                    FEATURE STORE                                      │ │
 │   │  (User features + Item features + Cross features)                     │ │
 │   │  Batch pipeline (daily) + Streaming pipeline (real-time)              │ │
 │   └───────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │
 │   ┌──────────────────────┐  ┌──────────────────────┐                        │
-│   │ EXPERIMENT PLATFORM   │  │ FALLBACK STORE       │                        │
-│   │ (A/B test config)     │  │ (Pre-computed recs)   │                        │
+│   │ EXPERIMENT PLATFORM  │  │ FALLBACK STORE       │                        │
+│   │ (A/B test config)    │  │ (Pre-computed recs)  │                        │
 │   └──────────────────────┘  └──────────────────────┘                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -2079,7 +2079,7 @@ RECOMMENDED: LEADER-FOLLOWER WITH REGIONAL SERVING
   │          │     │          │     │          │
   │ Feature  │     │ Feature  │     │ Feature  │
   │ Store    │────→│ Store    │     │ Store    │
-  │ (Leader) │     │ (Follower)│     │ (Follower)│
+  │ (Leader) │     │(Follower)│     │(Follower)│
   │          │     │          │     │          │
   │ Scoring  │     │ Scoring  │     │ Scoring  │
   │ Nodes    │     │ Nodes    │     │ Nodes    │
@@ -2473,46 +2473,46 @@ an infrastructure reliability problem."
 │                RECOMMENDATION SYSTEM: FULL ARCHITECTURE                     │
 │                                                                             │
 │   ┌──────────┐                                                              │
-│   │  Client   │                                                              │
+│   │  Client  │                                                              │
 │   └────┬─────┘                                                              │
 │        │                                                                    │
 │        ▼                                                                    │
 │   ┌──────────────────────────────────────────────────────┐                  │
-│   │              API GATEWAY + A/B TEST ROUTING            │                  │
+│   │              API GATEWAY + A/B TEST ROUTING          │                  │
 │   └────┬────────────────────────────────────┬────────────┘                  │
 │        │  SERVING PATH (read)               │  EVENT PATH (write)           │
 │        ▼                                    ▼                               │
 │   ┌────────────────┐                   ┌────────────────┐                   │
-│   │  Candidate      │                   │  Event Stream   │                   │
-│   │  Retrieval      │                   │  (Message Queue) │                   │
+│   │  Candidate     │                   │  Event Stream  │                   │
+│   │  Retrieval     │                   │(Message Queue) │                   │
 │   │  ┌──────────┐  │                   └────┬───────────┘                   │
-│   │  │CF  │CB│T│E│  │                        │                              │
-│   │  └──────────┘  │         ┌───────────────┼────────────┐                 │
-│   └────┬───────────┘         │               │            │                 │
-│        ▼                     ▼               ▼            ▼                 │
-│   ┌────────────────┐   ┌──────────┐   ┌──────────┐ ┌──────────┐           │
-│   │  Feature        │   │ Streaming │   │  Event   │ │ Training │           │
-│   │  Assembly       │◄──│ Feature   │   │ Archive  │ │ Pipeline │           │
-│   │                 │   │ Pipeline  │   │(Storage) │ │ (Batch)  │           │
-│   └────┬───────────┘   └──────────┘   └──────────┘ └────┬─────┘           │
-│        ▼                                                  │                 │
-│   ┌────────────────┐                               ┌──────▼─────┐          │
-│   │  Model Scoring  │◄──────────────────────────────│   Model    │          │
-│   │  (GPU/CPU)      │                               │  Registry  │          │
-│   └────┬───────────┘                               └────────────┘          │
+│   │  │CF │CB│T│E│  │                        │                               │
+│   │  └──────────┘  │        ┌───────────────┼────────────┐                  │
+│   └────┬───────────┘        │               │            │                  │
+│        ▼                    ▼               ▼            ▼                  │
+│   ┌────────────────┐   ┌──────────┐   ┌──────────┐ ┌──────────┐             │
+│   │  Feature       │   │ Streaming│   │  Event   │ │ Training │             │
+│   │  Assembly      │◄──│ Feature  │   │ Archive  │ │ Pipeline │             │
+│   │                │   │ Pipeline │   │(Storage) │ │ (Batch)  │             │
+│   └────┬───────────┘   └──────────┘   └──────────┘ └────┬─────┘             │
+│        ▼                                                │                   │
+│   ┌────────────────┐                             ┌──────▼─────┐             │
+│   │  Model Scoring │◄────────────────────────────│   Model    │             │
+│   │  (GPU/CPU)     │                             │  Registry  │             │
+│   └────┬───────────┘                             └────────────┘             │
 │        ▼                                                                    │
 │   ┌────────────────┐                                                        │
-│   │  Re-Ranking     │                                                        │
-│   │  (Rules+Diverse) │                                                        │
+│   │  Re-Ranking    │                                                        │
+│   │ (Rules+Diverse)│                                                        │
 │   └────┬───────────┘                                                        │
 │        ▼                                                                    │
 │   ┌────────────┐   ┌────────────────────────────────────────────┐           │
-│   │  Response   │   │           FEATURE STORE                    │           │
+│   │  Response  │   │           FEATURE STORE                    │           │
 │   └────────────┘   │  ┌────────────┐    ┌────────────────┐      │           │
-│                     │  │ Batch Layer │    │ Streaming Layer │      │           │
-│                     │  │ (daily)     │    │ (real-time)     │      │           │
-│                     │  └────────────┘    └────────────────┘      │           │
-│                     └────────────────────────────────────────────┘           │
+│                    │  │ Batch Layer│    │ Streaming Layer│      │           │
+│                    │  │ (daily)    │    │ (real-time)    │      │           │
+│                    │  └────────────┘    └────────────────┘      │           │
+│                    └────────────────────────────────────────────┘           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2527,37 +2527,37 @@ an infrastructure reliability problem."
 │        │                                                                    │
 │        ▼                                                                    │
 │   ┌──────────────────────────────────────────────────────┐                  │
-│   │  RETRIEVAL (cheap, parallel, high recall)             │    ~15ms        │
-│   │                                                       │                 │
-│   │  Collaborative Filtering → 500 candidates             │                 │
-│   │  Content-Based          → 300 candidates              │                 │
-│   │  Trending               → 200 candidates              │                 │
-│   │  Editorial              → 100 candidates              │                 │
-│   │  Union + Dedup          → 1,000 candidates            │                 │
+│   │  RETRIEVAL (cheap, parallel, high recall)            │    ~15ms         │
+│   │                                                      │                  │
+│   │  Collaborative Filtering → 500 candidates            │                  │
+│   │  Content-Based          → 300 candidates             │                  │
+│   │  Trending               → 200 candidates             │                  │
+│   │  Editorial              → 100 candidates             │                  │
+│   │  Union + Dedup          → 1,000 candidates           │                  │
 │   └──────────────────────────────┬───────────────────────┘                  │
 │                                  │                                          │
 │                          1,000 candidates                                   │
 │                                  │                                          │
 │                                  ▼                                          │
 │   ┌──────────────────────────────────────────────────────┐                  │
-│   │  SCORING (expensive, precise, high precision)         │    ~20ms        │
-│   │                                                       │                 │
-│   │  Feature Assembly: User + Item + Cross features       │                 │
-│   │  ML Model Inference: P(engagement) per candidate      │                 │
-│   │  Sort by score → Top 50                               │                 │
+│   │  SCORING (expensive, precise, high precision)        │    ~20ms         │
+│   │                                                      │                  │
+│   │  Feature Assembly: User + Item + Cross features      │                  │
+│   │  ML Model Inference: P(engagement) per candidate     │                  │
+│   │  Sort by score → Top 50                              │                  │
 │   └──────────────────────────────┬───────────────────────┘                  │
 │                                  │                                          │
 │                            50 scored items                                  │
 │                                  │                                          │
 │                                  ▼                                          │
 │   ┌──────────────────────────────────────────────────────┐                  │
-│   │  RE-RANKING (rules, diversity, business)              │    ~3ms         │
-│   │                                                       │                 │
-│   │  Diversity enforcement (max 3 per category)           │                 │
-│   │  Freshness boost (new items moved up)                 │                 │
-│   │  Sponsored insertion (defined positions)              │                 │
-│   │  Already-seen filter (session dedup)                  │                 │
-│   │  → Final 20 items                                     │                 │
+│   │  RE-RANKING (rules, diversity, business)             │    ~3ms          │
+│   │                                                      │                  │
+│   │  Diversity enforcement (max 3 per category)          │                  │
+│   │  Freshness boost (new items moved up)                │                  │
+│   │  Sponsored insertion (defined positions)             │                  │
+│   │  Already-seen filter (session dedup)                 │                  │
+│   │  → Final 20 items                                    │                  │
 │   └──────────────────────────────┬───────────────────────┘                  │
 │                                  │                                          │
 │                       20 personalized items                                 │
@@ -2570,44 +2570,44 @@ an infrastructure reliability problem."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    GRACEFUL DEGRADATION STACK                                │
+│                    GRACEFUL DEGRADATION STACK                               │
 │                                                                             │
 │   Level 0: FULL PERSONALIZED RANKING (normal)                               │
 │   ┌─────────────────────────────────────────────────────────────────┐       │
-│   │ Multi-source retrieval → Real-time features → GPU scoring      │       │
-│   │ → Business rules re-ranking                                    │       │
-│   │ Quality: ★★★★★   Latency: 55ms   Personalization: Full        │       │
+│   │ Multi-source retrieval → Real-time features → GPU scoring       │       │
+│   │ → Business rules re-ranking                                     │       │
+│   │ Quality: ★★★★★   Latency: 55ms   Personalization: Full          │       │
 │   └─────────────────────────────────────────────────────────────────┘       │
 │        │ IF: Model slow or GPU overloaded                                   │
 │        ▼                                                                    │
 │   Level 1: CPU SCORING WITH REDUCED CANDIDATES                              │
 │   ┌─────────────────────────────────────────────────────────────────┐       │
-│   │ Reduced retrieval (300 candidates) → Cached features → CPU     │       │
-│   │ Quality: ★★★★☆   Latency: 80ms   Personalization: Good        │       │
+│   │ Reduced retrieval (300 candidates) → Cached features → CPU      │       │
+│   │ Quality: ★★★★☆   Latency: 80ms   Personalization: Good          │       │
 │   └─────────────────────────────────────────────────────────────────┘       │
 │        │ IF: Feature store unavailable                                      │
 │        ▼                                                                    │
 │   Level 2: CACHED RECENT RECOMMENDATIONS                                    │
 │   ┌─────────────────────────────────────────────────────────────────┐       │
-│   │ Return last successful recommendations for this user (< 1hr)   │       │
-│   │ Quality: ★★★☆☆   Latency: 5ms    Personalization: Stale       │       │
+│   │ Return last successful recommendations for this user (< 1hr)    │       │
+│   │ Quality: ★★★☆☆   Latency: 5ms    Personalization: Stale         │       │
 │   └─────────────────────────────────────────────────────────────────┘       │
 │        │ IF: No cached results (new user, cache expired)                    │
 │        ▼                                                                    │
 │   Level 3: PRE-COMPUTED SEGMENT RECOMMENDATIONS                             │
 │   ┌─────────────────────────────────────────────────────────────────┐       │
-│   │ Pre-computed lists by demographic segment (updated daily)      │       │
-│   │ Quality: ★★☆☆☆   Latency: 3ms    Personalization: Segment     │       │
+│   │ Pre-computed lists by demographic segment (updated daily)       │       │
+│   │ Quality: ★★☆☆☆   Latency: 3ms    Personalization: Segment       │       │
 │   └─────────────────────────────────────────────────────────────────┘       │
 │        │ IF: Segment lookup fails                                           │
 │        ▼                                                                    │
 │   Level 4: GLOBAL POPULAR ITEMS                                             │
 │   ┌─────────────────────────────────────────────────────────────────┐       │
-│   │ Static list of globally popular items (always in memory)       │       │
-│   │ Quality: ★☆☆☆☆   Latency: 1ms    Personalization: None        │       │
+│   │ Static list of globally popular items (always in memory)        │       │
+│   │ Quality: ★☆☆☆☆   Latency: 1ms    Personalization: None          │       │
 │   └─────────────────────────────────────────────────────────────────┘       │
 │                                                                             │
-│   INVARIANT: User ALWAYS sees recommendations. Never an empty slot.        │
+│   INVARIANT: User ALWAYS sees recommendations. Never an empty slot.         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2620,29 +2620,29 @@ an infrastructure reliability problem."
 │                                                                             │
 │   V1: POPULARITY-BASED              │  LIMITS:                              │
 │   ┌──────────────────────┐          │  No personalization                   │
-│   │ Batch: Compute popular│          │  < 1K QPS                            │
-│   │ items per category    │          │  Daily refresh only                   │
-│   │ Serve: Lookup by      │          │                                       │
-│   │ category              │          │  BREAKS: Users bore of same items,    │
-│   └──────────────────────┘          │  engagement plateaus                   │
+│   │Batch: Compute popular│          │  < 1K QPS                             │
+│   │items per category    │          │  Daily refresh only                   │
+│   │Serve: Lookup by      │          │                                       │
+│   │category              │          │  BREAKS: Users bore of same items,    │
+│   └──────────────────────┘          │  engagement plateaus                  │
 │         │                                                                   │
 │         ▼                                                                   │
 │   V2: PERSONALIZED, SINGLE-REGION   │  LIMITS:                              │
 │   ┌──────────────────────┐          │  Single region latency                │
-│   │ Retrieval: CF + CB    │          │  Daily features (stale)               │
-│   │ Scoring: ML model     │          │  No session adaptation                │
-│   │ Features: Batch daily │          │  < 35K QPS                            │
-│   │ A/B testing: Basic    │          │                                       │
+│   │ Retrieval: CF + CB   │          │  Daily features (stale)               │
+│   │ Scoring: ML model    │          │  No session adaptation                │
+│   │ Features: Batch daily│          │  < 35K QPS                            │
+│   │ A/B testing: Basic   │          │                                       │
 │   └──────────────────────┘          │  BREAKS: Global latency,              │
-│         │                           │  stale recommendations                 │
+│         │                           │  stale recommendations                │
 │         ▼                                                                   │
 │   V3: MULTI-REGION PLATFORM         │  HANDLES:                             │
 │   ┌──────────────────────┐          │  500M DAU, 150K QPS                   │
-│   │ Multi-source retrieval│          │  Real-time features                   │
-│   │ Dual-path features    │          │  Multi-surface models                 │
-│   │ GPU scoring + fallback│          │  Multi-region < 100ms                 │
-│   │ Full A/B platform     │          │  Automated deployment                 │
-│   │ Fallback stack        │          │  Per-surface re-ranking               │
+│   │Multi-source retrieval│          │  Real-time features                   │
+│   │Dual-path features    │          │  Multi-surface models                 │
+│   │GPU scoring + fallback│          │  Multi-region < 100ms                 │
+│   │Full A/B platform     │          │  Automated deployment                 │
+│   │Fallback stack        │          │  Per-surface re-ranking               │
 │   └──────────────────────┘          │                                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
