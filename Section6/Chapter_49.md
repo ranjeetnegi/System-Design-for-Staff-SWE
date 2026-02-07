@@ -16,24 +16,24 @@ This chapter covers the design of a search and indexing system at Staff Engineer
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│     SEARCH / INDEXING SYSTEM: THE STAFF ENGINEER VIEW                      │
+│     SEARCH / INDEXING SYSTEM: THE STAFF ENGINEER VIEW                       │
 │                                                                             │
-│   WRONG Framing: "An Elasticsearch cluster that indexes documents"         │
-│   RIGHT Framing: "A globally distributed information retrieval platform    │
-│                   that ingests billions of documents, serves sub-100ms     │
-│                   ranked results at 100K+ QPS, supports near-real-time    │
-│                   freshness, multi-tenancy, and cross-region failover—    │
-│                   owned by a platform team, consumed by dozens of          │
-│                   product teams"                                           │
+│   WRONG Framing: "An Elasticsearch cluster that indexes documents"          │
+│   RIGHT Framing: "A globally distributed information retrieval platform     │
+│                   that ingests billions of documents, serves sub-100ms      │
+│                   ranked results at 100K+ QPS, supports near-real-time      │
+│                   freshness, multi-tenancy, and cross-region failover—      │
+│                   owned by a platform team, consumed by dozens of           │
+│                   product teams"                                            │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  Before designing, understand:                                      │   │
 │   │                                                                     │   │
 │   │  1. What is the corpus? (Products? Documents? Messages? Mixed?)     │   │
-│   │  2. What is the read:write ratio? (1000:1? 100:1? 10:1?)          │   │
+│   │  2. What is the read:write ratio? (1000:1? 100:1? 10:1?)            │   │
 │   │  3. What freshness does the business need? (Seconds? Minutes?)      │   │
 │   │  4. How many distinct tenants / product teams use search?           │   │
-│   │  5. Is relevance a differentiator? (Search IS the product? Or      │   │
+│   │  5. Is relevance a differentiator? (Search IS the product? Or       │   │
 │   │     search assists navigation?)                                     │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -43,7 +43,7 @@ This chapter covers the design of a search and indexing system at Staff Engineer
 │   │  complexity is in the WRITE PATH: ingesting documents, analyzing    │   │
 │   │  text, building index segments, merging them, replicating them      │   │
 │   │  across regions—all while serving live queries without degrading    │   │
-│   │  latency. The write path is where Staff Engineers spend 70% of     │   │
+│   │  latency. The write path is where Staff Engineers spend 70% of      │   │
 │   │  their design time.                                                 │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -92,7 +92,7 @@ A search system is an information retrieval platform that ingests documents (str
 │   → Return top results                                                      │
 │                                                                             │
 │   WHY NOT JUST SCAN ALL BOOKS?                                              │
-│   1 million books × 1ms per book = 1000 seconds to scan                    │
+│   1 million books × 1ms per book = 1000 seconds to scan                     │
 │   Index lookup: 5ms regardless of collection size                           │
 │                                                                             │
 │   A SEARCH SYSTEM IS THIS LIBRARY CATALOG, AT:                              │
@@ -294,27 +294,27 @@ SCENARIO 3: Search system returns stale results
 │   (Databases, services)        (Read-optimized mirror)                      │
 │                                                                             │
 │   ┌─────────────────┐          ┌─────────────────┐                          │
-│   │ Products DB      │ ──────→ │ Product Index     │                         │
-│   │ Messages DB      │ ──────→ │ Messages Index    │                         │
-│   │ Users DB         │ ──────→ │ Users Index       │                         │
-│   │ Documents Store  │ ──────→ │ Documents Index   │                         │
+│   │ Products DB     │ ──────→  │ Product Index   │                          │
+│   │ Messages DB     │ ──────→  │ Messages Index  │                          │
+│   │ Users DB        │ ──────→  │ Users Index     │                          │
+│   │ Documents Store │ ──────→  │ Documents Index │                          │
 │   └─────────────────┘          └─────────────────┘                          │
 │                                                                             │
 │   The search index is NEVER the source of truth.                            │
-│   It is a derived, denormalized, read-optimized PROJECTION                 │
+│   It is a derived, denormalized, read-optimized PROJECTION                  │
 │   of the authoritative data.                                                │
 │                                                                             │
 │   This has consequences:                                                    │
 │   1. Index can be rebuilt from source — recovery path exists                │
 │   2. Index can be stale — freshness lag is inherent                         │
 │   3. Index can have different schema — optimized for queries, not writes    │
-│   4. Index can be replicated independently — scale reads without           │
+│   4. Index can be replicated independently — scale reads without            │
 │      touching the source                                                    │
-│   5. Index can be wrong — and that's fixable by reindexing                 │
+│   5. Index can be wrong — and that's fixable by reindexing                  │
 │                                                                             │
-│   The Staff Engineer's key insight: Because the index is derived,          │
+│   The Staff Engineer's key insight: Because the index is derived,           │
 │   you can make aggressive trade-offs (eventual consistency, approximate     │
-│   results, stale data) that you would NEVER make on the source of truth.  │
+│   results, stale data) that you would NEVER make on the source of truth.    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1075,48 +1075,48 @@ DANGEROUS ASSUMPTION 4: "The query parser handles all queries well"
 │                    SEARCH SYSTEM ARCHITECTURE                               │
 │                                                                             │
 │   ┌─────────────┐                                                           │
-│   │   Clients    │  (Product services, mobile apps, web frontend)           │
+│   │   Clients   │  (Product services, mobile apps, web frontend)            │
 │   └──────┬──────┘                                                           │
 │          │                                                                  │
 │          ▼                                                                  │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                    QUERY GATEWAY / LOAD BALANCER                    │   │
-│   │  (Authentication, tenant identification, rate limiting, routing)    │   │
-│   └─────────┬──────────────────────────────────┬───────────────────────┘   │
+│   ┌────────────────────────────────────────────────────────────────────┐    │
+│   │                    QUERY GATEWAY / LOAD BALANCER                   │    │
+│   │  (Authentication, tenant identification, rate limiting, routing)   │    │
+│   └─────────┬──────────────────────────────────┬───────────────────────┘    │
 │             │                                  │                            │
 │      ┌──────▼──────┐                    ┌──────▼──────┐                     │
-│      │  QUERY PATH  │                    │ WRITE PATH   │                    │
+│      │  QUERY PATH │                    │ WRITE PATH  │                     │
 │      └──────┬──────┘                    └──────┬──────┘                     │
 │             │                                  │                            │
-│      ┌──────▼──────────────┐            ┌──────▼──────────────┐             │
-│      │ QUERY COORDINATOR    │            │ INDEXING PIPELINE    │             │
-│      │ (Parse, plan, scatter│            │ (Validate, analyze,  │             │
-│      │  gather, merge, rank)│            │  route to shards)    │             │
-│      └──────┬──────────────┘            └──────┬──────────────┘             │
+│      ┌──────▼─────────────-─┐           ┌──────▼──────────────┐             │
+│      │ QUERY COORDINATOR    │           │ INDEXING PIPELINE   │             │
+│      │ (Parse, plan, scatter│           │ (Validate, analyze, │             │
+│      │  gather, merge, rank)│           │  route to shards)   │             │
+│      └──────┬──────────────-┘           └──────┬──────────────┘             │
 │             │                                  │                            │
-│             │    ┌─────────────────────────────┐│                            │
-│             │    │     SHARD LAYER              ││                            │
-│             │    │                              ││                            │
-│             ▼    ▼                              ▼│                            │
-│      ┌────────────────────────────────────────────┐                          │
-│      │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐   │                          │
-│      │  │Shard │  │Shard │  │Shard │  │Shard │   │                          │
-│      │  │  0   │  │  1   │  │  2   │  │ ...  │   │                          │
-│      │  │      │  │      │  │      │  │      │   │                          │
-│      │  │ P R R│  │ P R R│  │ P R R│  │ P R R│   │  P=Primary R=Replica    │
-│      │  └──────┘  └──────┘  └──────┘  └──────┘   │                          │
-│      └────────────────────────────────────────────┘                          │
+│             │    ┌────────────────────────────┐│                            │
+│             │    │     SHARD LAYER            ││                            │
+│             │    │                            ││                            │
+│             ▼    ▼                            ▼│                            │
+│      ┌────────────────────────────────────────────┐                         │
+│      │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐    │                         │
+│      │  │Shard │  │Shard │  │Shard │  │Shard │    │                         │
+│      │  │  0   │  │  1   │  │  2   │  │ ...  │    │                         │
+│      │  │      │  │      │  │      │  │      │    │                         │
+│      │  │ P R R│  │ P R R│  │ P R R│  │ P R R│    │  P=Primary R=Replica    │
+│      │  └──────┘  └──────┘  └──────┘  └──────┘    │                         │
+│      └────────────────────────────────────────────┘                         │
 │                                                                             │
-│      ┌────────────────────────────────────────────┐                          │
-│      │          CLUSTER MANAGEMENT                 │                          │
-│      │  (Shard allocation, rebalancing, health)    │                          │
-│      └────────────────────────────────────────────┘                          │
+│      ┌────────────────────────────────────────────┐                         │
+│      │          CLUSTER MANAGEMENT                │                         │
+│      │  (Shard allocation, rebalancing, health)   │                         │
+│      └────────────────────────────────────────────┘                         │
 │                                                                             │
-│      ┌──────────────────┐  ┌──────────────────┐                              │
-│      │  CONFIG STORE     │  │  METADATA STORE   │                             │
-│      │  (Schema, aliases,│  │  (Cluster state,  │                             │
-│      │   tenant config)  │  │   shard map)      │                             │
-│      └──────────────────┘  └──────────────────┘                              │
+│      ┌──────────────────┐  ┌──────────────────┐                             │
+│      │  CONFIG STORE    │  │  METADATA STORE  │                             │
+│      │ (Schema, aliases,│  │  (Cluster state, │                             │
+│      │   tenant config) │  │   shard map)     │                             │
+│      └──────────────────┘  └──────────────────┘                             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3133,18 +3133,18 @@ REASONS:
 ```
 STRATEGY 1: FULL REPLICATION (every region has everything)
   
-  ┌─────────────────────────────────────────────────────┐
+  ┌──────────────────────────────────────────────────-───-┐
   │                                                       │
-  │   US-EAST              US-WEST             EU-WEST   │
-  │   ┌──────────┐        ┌──────────┐        ┌──────────┐
-  │   │ Full     │        │ Full     │        │ Full     │
-  │   │ Index    │  ←───→ │ Index    │  ←───→ │ Index    │
-  │   │ (2B docs)│        │ (2B docs)│        │ (2B docs)│
-  │   └──────────┘        └──────────┘        └──────────┘
+  │   US-EAST              US-WEST            EU-WEST     │
+  │   ┌──────────┐        ┌──────────┐       ┌──────────┐ |
+  │   │ Full     │        │ Full     │       │ Full     │ |
+  │   │ Index    │  ←───→ │ Index    │ ←───→ │ Index    │ |
+  │   │ (2B docs)│        │ (2B docs)│       │ (2B docs)│ |
+  │   └──────────┘        └──────────┘       └──────────┘ |
   │                                                       │
-  │   WRITE: One region is primary writer, others replicate│
+  │   WRITE:One region is primary writer, others replicate│
   │   READ: Each region serves local queries              │
-  └─────────────────────────────────────────────────────┘
+  └─────────────────────────────────────────────────────--┘
 
   PROS: Any region can serve any query. Simple failover (any region takes all traffic).
   CONS: 3× storage cost. Cross-region replication bandwidth. Write amplification.
@@ -3152,18 +3152,18 @@ STRATEGY 1: FULL REPLICATION (every region has everything)
 
 STRATEGY 2: PARTITIONED REPLICATION (regional data stays regional)
   
-  ┌─────────────────────────────────────────────────────┐
+  ┌─────────────────────────────────────────────────────--┐
   │                                                       │
-  │   US-EAST              US-WEST             EU-WEST   │
-  │   ┌──────────┐        ┌──────────┐        ┌──────────┐
-  │   │ US Data   │        │ US Data   │        │ EU Data  │
-  │   │ (1B docs) │  ←───→ │ (1B docs) │        │ (1B docs)│
-  │   └──────────┘        └──────────┘        └──────────┘
+  │   US-EAST              US-WEST           EU-WEST      │
+  │   ┌──────────┐        ┌──────────┐       ┌──────────┐ |
+  │   │ US Data  │        │ US Data  │       │ EU Data  │ |
+  │   │ (1B docs)│  ←───→ │ (1B docs)│       │ (1B docs)│ |
+  │   └──────────┘        └──────────┘       └──────────┘ |
   │                                                       │
   │   US data replicated within US regions                │
   │   EU data stays in EU (GDPR compliance)               │
   │   Cross-region queries: Federated search              │
-  └─────────────────────────────────────────────────────┘
+  └────────────────────────────────────────────────--─────┘
 
   PROS: Data locality compliance. Less replication. Smaller per-region clusters.
   CONS: Cross-region queries require federation (higher latency).
@@ -3907,7 +3907,7 @@ because we're searching too many segments."
 │                    SEARCH SYSTEM ARCHITECTURE                               │
 │                                                                             │
 │                      ┌──────────────┐                                       │
-│                      │   Clients     │                                       │
+│                      │   Clients    │                                       │
 │                      └──────┬───────┘                                       │
 │                             │                                               │
 │                      ┌──────▼───────┐                                       │
@@ -3916,36 +3916,36 @@ because we're searching too many segments."
 │                             │                                               │
 │               ┌─────────────┼─────────────┐                                 │
 │               ▼                           ▼                                 │
-│     ┌─────────────────┐         ┌─────────────────┐                         │
-│     │ Query Coordinator│         │Indexing Pipeline │                         │
-│     │   (stateless)    │         │   (stateless)    │                         │
-│     │                  │         │                  │                         │
-│     │ Parse → Plan     │         │ Validate → Analyze│                        │
-│     │ Scatter → Gather │         │ Route → Write     │                        │
-│     │ Rank → Respond   │         │                  │                         │
-│     └────────┬─────────┘         └────────┬─────────┘                        │
+│     ┌────────────────-─┐         ┌─────────────────┐                        │
+│     │ Query Coordinator│         │Indexing Pipeline│                        │
+│     │   (stateless)    │         │   (stateless)   │                        │
+│     │                  │         │                 │                        │
+│     │ Parse → Plan     │         │ Validate→Analyze│                        │
+│     │ Scatter → Gather │         │ Route → Write   │                        │
+│     │ Rank → Respond   │         │                 │                        │
+│     └────────┬─────────┘         └────────┬────────┘                        │
 │              │                            │                                 │
-│              │         ┌──────────────────┤                                  │
-│              │         │  Message Queue   │                                  │
-│              │         └────────┬─────────┘                                  │
-│              │                  │                                            │
-│              ▼                  ▼                                            │
-│     ┌────────────────────────────────────────┐                               │
-│     │              SHARD LAYER                │                               │
-│     │                                        │                               │
-│     │  ┌─────┐ ┌─────┐ ┌─────┐     ┌─────┐  │                               │
-│     │  │ S0  │ │ S1  │ │ S2  │ ... │ S249│  │                               │
-│     │  │P R R│ │P R R│ │P R R│     │P R R│  │                               │
-│     │  └─────┘ └─────┘ └─────┘     └─────┘  │                               │
-│     │                                        │                               │
-│     │  Each shard: Inverted index + Stored   │                               │
-│     │  fields + Doc values + TX log          │                               │
-│     └────────────────────────────────────────┘                               │
+│              │         ┌──────────────────┤                                 │
+│              │         │  Message Queue   │                                 │
+│              │         └────────┬─────────┘                                 │
+│              │                  │                                           │
+│              ▼                  ▼                                           │
+│     ┌────────────────────────────────────────┐                              │
+│     │              SHARD LAYER               │                              │
+│     │                                        │                              │
+│     │  ┌─────┐ ┌─────┐ ┌─────┐     ┌─────┐   │                              │
+│     │  │ S0  │ │ S1  │ │ S2  │ ... │ S249│   │                              │
+│     │  │P R R│ │P R R│ │P R R│     │P R R│   │                              │
+│     │  └─────┘ └─────┘ └─────┘     └─────┘   │                              │
+│     │                                        │                              │
+│     │  Each shard: Inverted index + Stored   │                              │
+│     │  fields + Doc values + TX log          │                              │
+│     └────────────────────────────────────────┘                              │
 │                                                                             │
-│     ┌──────────────┐        ┌──────────────┐                                 │
-│     │Cluster Manager│        │ Config Store  │                                │
-│     │(leader-elected)│        │(ZK / etcd)   │                                │
-│     └──────────────┘        └──────────────┘                                 │
+│     ┌─────────--─────┐        ┌──────────────┐                              │
+│     │Cluster Manager │        │ Config Store │                              │
+│     │(leader-elected)│        │(ZK / etcd)   │                              │
+│     └──────────────--┘        └──────────────┘                              │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3954,37 +3954,37 @@ because we're searching too many segments."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    QUERY EXECUTION TIMELINE                                  │
+│                    QUERY EXECUTION TIMELINE                                 │
 │                                                                             │
 │   TIME   COMPONENT          ACTION                                          │
 │   ─────  ─────────────────  ───────────────────────────────────────────     │
 │   0ms    Client             Send query: "red running shoes"                 │
-│   1ms    Gateway            Auth + rate limit check                          │
-│   2ms    Coordinator        Parse query, expand synonyms, spell check        │
-│   5ms    Coordinator        Plan: select all 250 shards                      │
-│   6ms    Coordinator        SCATTER: fan out to 250 shard replicas           │
+│   1ms    Gateway            Auth + rate limit check                         │
+│   2ms    Coordinator        Parse query, expand synonyms, spell check       │
+│   5ms    Coordinator        Plan: select all 250 shards                     │
+│   6ms    Coordinator        SCATTER: fan out to 250 shard replicas          │
 │          │                                                                  │
 │          │  ┌─ Shard 0:   Lookup postings, intersect, score → 15ms          │
 │          │  ├─ Shard 1:   Lookup postings, intersect, score → 12ms          │
 │          │  ├─ Shard 2:   Lookup postings, intersect, score → 18ms          │
 │          │  ├─ ...                                                          │
 │          │  ├─ Shard 249: Lookup postings, intersect, score → 22ms          │
-│          │  └─ (all shards execute IN PARALLEL)                              │
+│          │  └─ (all shards execute IN PARALLEL)                             │
 │          │                                                                  │
-│   28ms   Coordinator        GATHER: All 250 responses received               │
-│   30ms   Coordinator        Merge top-20 from each shard (priority queue)    │
-│   32ms   Coordinator        ML re-rank top-100 candidates                    │
-│   34ms   Coordinator        Apply business rules on top-20                   │
-│   35ms   Coordinator        Compute facet aggregations                       │
-│   36ms   Coordinator        Format response                                  │
-│   37ms   Client             Receive response                                 │
+│   28ms   Coordinator        GATHER: All 250 responses received              │
+│   30ms   Coordinator        Merge top-20 from each shard (priority queue)   │
+│   32ms   Coordinator        ML re-rank top-100 candidates                   │
+│   34ms   Coordinator        Apply business rules on top-20                  │
+│   35ms   Coordinator        Compute facet aggregations                      │
+│   36ms   Coordinator        Format response                                 │
+│   37ms   Client             Receive response                                │
 │                                                                             │
 │   TOTAL: 37ms (P50)                                                         │
 │                                                                             │
 │   BUDGET ALLOCATION:                                                        │
 │   ├── Gateway overhead:     1ms   (2.7%)                                    │
 │   ├── Query parsing:        4ms   (10.8%)                                   │
-│   ├── Shard execution:      22ms  (59.5%) ← THIS IS THE BOTTLENECK         │
+│   ├── Shard execution:      22ms  (59.5%) ← THIS IS THE BOTTLENECK          │
 │   ├── Merge + re-rank:      8ms   (21.6%)                                   │
 │   └── Response formatting:  2ms   (5.4%)                                    │
 │                                                                             │
@@ -4024,10 +4024,10 @@ because we're searching too many segments."
 │                                                                             │
 │   KEY INSIGHT:                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │  The coordinator's job is to PROTECT users from infrastructure     │   │
-│   │  problems. A slow shard is the coordinator's problem, not the     │   │
-│   │  user's problem. Return the best results available within the      │   │
-│   │  latency budget, and signal incompleteness metadata for debugging. │   │
+│   │  The coordinator's job is to PROTECT users from infrastructure      │   │
+│   │  problems. A slow shard is the coordinator's problem, not the       │   │
+│   │  user's problem. Return the best results available within the       │   │
+│   │  latency budget, and signal incompleteness metadata for debugging.  │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -4037,43 +4037,43 @@ because we're searching too many segments."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    SEARCH SYSTEM EVOLUTION                                   │
+│                    SEARCH SYSTEM EVOLUTION                                  │
 │                                                                             │
 │   V1: SINGLE NODE                     │  LIMITS:                            │
-│   ┌─────────────┐                     │  < 10M docs, < 100 QPS             │
-│   │ App Server   │                     │  Single point of failure            │
+│   ┌─────────────┐                     │  < 10M docs, < 100 QPS              │
+│   │ App Server  │                     │  Single point of failure            │
 │   │ ┌─────────┐ │                     │                                     │
-│   │ │  Index   │ │                     │  BREAKS: Index exceeds memory,      │
-│   │ └─────────┘ │                     │  QPS exceeds single CPU            │
+│   │ │  Index  │ │                     │  BREAKS: Index exceeds memory,      │
+│   │ └─────────┘ │                     │  QPS exceeds single CPU             │
 │   └─────────────┘                     │                                     │
 │         │                                                                   │
 │         ▼                                                                   │
 │   V2: SINGLE CLUSTER                  │  LIMITS:                            │
-│   ┌────────────────────────────┐      │  < 500M docs, < 10K QPS            │
-│   │   Coordinator  Coordinator  │      │  Single region                      │
-│   │       │              │      │      │                                     │
-│   │   ┌───┴───┐    ┌───┴───┐  │      │  BREAKS: Cross-region latency,     │
-│   │   │ Shards │    │ Shards │  │      │  multi-team resource contention    │
-│   │   │ + Repl │    │ + Repl │  │      │                                     │
-│   │   └───────┘    └───────┘  │      │                                     │
+│   ┌────────────────────────────┐      │  < 500M docs, < 10K QPS             │
+│   │   Coordinator  Coordinator │      │  Single region                      │
+│   │       │            │       │      │                                     │
+│   │   ┌───┴───┐    ┌───┴───┐   │      │  BREAKS: Cross-region latency,      │
+│   │   │ Shards│    │ Shards│   │      │  multi-team resource contention     │
+│   │   │ + Repl│    │ + Repl│   │      │                                     │
+│   │   └───────┘    └───────┘   │      │                                     │
 │   │      Message Queue         │      │                                     │
 │   │      Pipeline Workers      │      │                                     │
 │   └────────────────────────────┘      │                                     │
 │         │                                                                   │
 │         ▼                                                                   │
 │   V3: MULTI-REGION PLATFORM           │  HANDLES:                           │
-│   ┌──────────┐ ┌──────────┐ ┌──────┐  │  2B+ docs, 100K+ QPS              │
-│   │ US-East  │ │ US-West  │ │  EU  │  │  Multi-region failover             │
-│   │ Cluster  │ │ Cluster  │ │Cluster│  │  20+ tenant teams                  │
-│   │          │ │          │ │      │  │  Tiered storage                     │
-│   │ 100 nodes│ │ 100 nodes│ │  80  │  │  Per-tenant SLOs                   │
+│   ┌──────────┐ ┌──────────┐ ┌──────┐  │  2B+ docs, 100K+ QPS                │
+│   │ US-East  │ │ US-West  │ │  EU  │  │  Multi-region failover              │
+│   │ Cluster  │ │ Cluster  │ │Clus- │  │  20+ tenant teams                   │
+│   │          │ │          │ │ -ter │  │  Tiered storage                     │
+│   │ 100 nodes│ │ 100 nodes│ │  80  │  │  Per-tenant SLOs                    │
 │   │          │ │          │ │nodes │  │                                     │
 │   └──────────┘ └──────────┘ └──────┘  │                                     │
 │        ↕            ↕           ↕     │                                     │
 │   ┌────────────────────────────────┐  │                                     │
-│   │  Global Indexing Pipeline       │  │                                     │
-│   │  Cross-Region Replication       │  │                                     │
-│   │  Federated Query Support        │  │                                     │
+│   │  Global Indexing Pipeline      │  │                                     │
+│   │  Cross-Region Replication      │  │                                     │
+│   │  Federated Query Support       │  │                                     │
 │   └────────────────────────────────┘  │                                     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
