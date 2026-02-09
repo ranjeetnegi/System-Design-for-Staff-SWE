@@ -176,7 +176,7 @@ Each Staff-level chapter elevates a Senior problem to global scale, introducing 
 | 49 | Search / Indexing System (Read-heavy, Latency-sensitive) | Done | [Chapter 49](Section6/Chapter_49.md) |
 | 50 | Recommendation / Ranking System (Simplified) | Done | [Chapter 50](Section6/Chapter_50.md) |
 | 51 | Notification Delivery System (Fan-out at Scale) | Done | [Chapter 51](Section6/Chapter_51.md) |
-| 52 | Authentication & Authorization System | Planned | — |
+| 52 | Authentication & Authorization System | Done | [Chapter 52](Section6/Chapter_52.md) |
 | 53 | Distributed Scheduler / Job Orchestration System | Planned | — |
 | 54 | Feature Experimentation / A/B Testing Platform | Planned | — |
 | 55 | Log Aggregation & Query System | Planned | — |
