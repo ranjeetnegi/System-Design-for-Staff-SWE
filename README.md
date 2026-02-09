@@ -181,7 +181,7 @@ Each Staff-level chapter elevates a Senior problem to global scale, introducing 
 | 54 | Feature Experimentation / A/B Testing Platform | Done | [Chapter 54](Section6/Chapter_54.md) |
 | 55 | Log Aggregation & Query System | Done | [Chapter 55](Section6/Chapter_55.md) |
 | 56 | Payment / Transaction Processing System | Done | [Chapter 56](Section6/Chapter_56.md) |
-| 57 | Media Upload & Processing Pipeline | Planned | — |
+| 57 | Media Upload & Processing Pipeline | Done | [Chapter 57](Section6/Chapter_57.md) |
 
 ---
 
