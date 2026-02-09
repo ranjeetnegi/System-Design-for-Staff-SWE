@@ -179,7 +179,7 @@ Each Staff-level chapter elevates a Senior problem to global scale, introducing 
 | 52 | Authentication & Authorization System | Done | [Chapter 52](Section6/Chapter_52.md) |
 | 53 | Distributed Scheduler / Job Orchestration System | Done | [Chapter 53](Section6/Chapter_53.md) |
 | 54 | Feature Experimentation / A/B Testing Platform | Done | [Chapter 54](Section6/Chapter_54.md) |
-| 55 | Log Aggregation & Query System | Planned | — |
+| 55 | Log Aggregation & Query System | Done | [Chapter 55](Section6/Chapter_55.md) |
 | 56 | Payment / Transaction Processing System | Planned | — |
 | 57 | Media Upload & Processing Pipeline | Planned | — |
 
