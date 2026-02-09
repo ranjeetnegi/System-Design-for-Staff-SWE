@@ -178,7 +178,7 @@ Each Staff-level chapter elevates a Senior problem to global scale, introducing 
 | 51 | Notification Delivery System (Fan-out at Scale) | Done | [Chapter 51](Section6/Chapter_51.md) |
 | 52 | Authentication & Authorization System | Done | [Chapter 52](Section6/Chapter_52.md) |
 | 53 | Distributed Scheduler / Job Orchestration System | Done | [Chapter 53](Section6/Chapter_53.md) |
-| 54 | Feature Experimentation / A/B Testing Platform | Planned | — |
+| 54 | Feature Experimentation / A/B Testing Platform | Done | [Chapter 54](Section6/Chapter_54.md) |
 | 55 | Log Aggregation & Query System | Planned | — |
 | 56 | Payment / Transaction Processing System | Planned | — |
 | 57 | Media Upload & Processing Pipeline | Planned | — |
