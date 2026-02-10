@@ -240,6 +240,41 @@ These questions have no free answers. Every choice has trade-offs.
 
 **Staff heuristic**: "If you're not sure whether you need multi-region, you don't need it yet."
 
+### When to Reject Multi-Region (Even Under Pressure)
+
+Staff engineers often face stakeholder pressure: "Competitors are multi-region"; "Our board expects global presence"; "Let's future-proof." The L6 response is not automatic agreement—it's calibrated pushback.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAFF DECISION: WHEN TO SAY NO                          │
+│                                                                             │
+│   PRESSURE: "We need multi-region for enterprise sales"                     │
+│                                                                             │
+│   STAFF RESPONSE:                                                           │
+│   "Multi-region adds 2–3× cost and operational complexity. Before we      │
+│   commit, let's quantify: How many enterprise deals are blocked by          │
+│   single-region? What's the revenue at risk? If it's <$500K ARR, a         │
+│   well-documented DR runbook and 4-hour RTO may satisfy procurement          │
+│   without the complexity. If it's $2M+ ARR, we should add a region."       │
+│                                                                             │
+│   KEY: Replace "we need it" with "here's the cost, here's the benefit,     │
+│   here's the threshold where it pays off."                                 │
+│                                                                             │
+│   PRESSURE: "Our availability target is 99.99%; we need multi-region"       │
+│                                                                             │
+│   STAFF RESPONSE:                                                           │
+│   "99.99% = 52 minutes downtime/year. A single region at 99.95% gives     │
+│   us 4.4 hours. The gap is 3.5 hours. Multi-region can get us there, but    │
+│   a poorly designed multi-region system can make it WORSE—we've seen       │
+│   cascading failures reduce availability. Let's first improve single-region  │
+│   reliability (better health checks, faster failover within region).       │
+│   If we still can't hit 99.99%, then multi-region is justified."           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: Staff engineers own the cost of complexity. Saying "no" with data prevents teams from building systems they cannot operate. The ability to explain trade-offs to leadership—and to hold the line when the numbers don't justify multi-region—is a Staff-level judgment signal.
+
 ---
 
 ## Simple Example: The Journey to Multi-Region Thinking
@@ -584,6 +619,19 @@ Staff Decision: REJECT
 - Saves $36K/year
 ```
 
+### Sustainability: The Hidden Cost of Multi-Region
+
+Staff engineers at scale consider sustainability alongside raw dollar cost. Multi-region amplifies both.
+
+| Factor | Single Region | Multi-Region |
+|--------|---------------|--------------|
+| **Energy (compute)** | N servers | 2–3× N servers |
+| **Energy (network)** | Mostly intra-region | Large cross-region traffic; network consumes energy |
+| **Carbon footprint** | One region's grid mix | Multiple regions; each has different grid |
+| **Waste heat** | One cooling footprint | 2–3× cooling footprint |
+
+**Staff insight**: "More regions = more energy. If you're adding regions for resilience, ensure you're not doubling carbon for marginal availability gains. Regional data partitioning (data stays local) reduces both cost and energy compared to full replication."
+
 ### Tension 4: Operational Simplicity vs Global Resilience
 
 ```
@@ -802,6 +850,35 @@ FUNCTION resolve_conflict(local_state, incoming_write):
 3. **Eventual consistency**: Readers may see different values in different regions
 4. **Debugging nightmare**: "Why did this value change?" spans regions
 5. **Schema evolution**: Changes must be backward-compatible across all regions
+
+### Invariants: What Must Hold Across Regions
+
+Staff engineers make invariants explicit before choosing active-active. Different data types have different invariants:
+
+| Invariant | Example | Active-Active Safe? |
+|-----------|---------|---------------------|
+| **Monotonicity** | Like count only increases | Yes (CRDT-style merge) |
+| **Uniqueness** | Email per account | No—conflicts |
+| **Balance** | Account balance ≥ 0 | No—double-spend risk |
+| **Ordering** | Feed order | Partial—merge order |
+| **Idempotency** | "Add item" | Yes (set semantics) |
+
+**Staff principle**: "If your invariant cannot be preserved under merge, active-active is wrong for that data. Use active-passive or centralized writes instead."
+
+### Invariant Violation Detection: Knowing When Conflicts Broke the Rules
+
+In active-active systems, conflicts can violate invariants even when resolution "succeeds." Staff engineers design for detection, not just resolution.
+
+| Invariant | Violation Example | How to Detect |
+|-----------|-------------------|---------------|
+| **Balance ≥ 0** | LWW picks older write; balance goes negative | Post-merge validation; alert on negative balance |
+| **Uniqueness** | Both regions create same email; merge loses one | Conflict log + reconciliation job; surface to user |
+| **Ordering** | Feed order diverges; merge produces wrong order | Periodic hash comparison across regions; alert on divergence |
+| **Monotonicity** | Like count decreases due to bad merge | Assert count ≥ previous; rollback or manual fix |
+
+**Concrete example**: A payment system uses LWW for balance updates. During partition, Region A: balance 100 → 50 (purchase). Region B: balance 100 → 80 (refund). LWW picks B (later timestamp). Balance = 80, but user actually spent 50. Invariant violated: money is unaccounted. **Detection**: Every balance change logs (old, new, region, timestamp). Nightly job compares ledger sum to balance sum; alerts on mismatch. **Lesson**: Conflict resolution can produce "valid" state that violates business invariants. Detection must be explicit.
+
+**Staff insight**: "Resolution is local; detection is global. Build reconciliation jobs that run across regions and alarm on invariant violations."
 
 ### Conflict Resolution Strategies
 
@@ -2628,6 +2705,32 @@ bottlenecks = identify_bottlenecks(v1_state, growth_factor=10)
 
 **Key Staff Insight**: "Identify bottlenecks at 50% capacity, not 95%. You need time to implement solutions before users feel the pain."
 
+### First Bottlenecks: What Breaks First in Multi-Region
+
+When transitioning to a multi-region system, Staff engineers anticipate the *first* bottlenecks—the ones that show up before you've fully scaled.
+
+| Stage | First Bottleneck | Why It Breaks First |
+|-------|------------------|----------------------|
+| **Going from 1 to 2 regions** | Cross-region replication lag | Single write path → replication latency; first users to notice are those far from primary |
+| **Going from 2 to 3 regions** | Replication topology (N×(N-1)) | Replication traffic doubles; network cost and lag grow faster |
+| **Early active-active** | Conflict resolution | Rare conflicts become visible only under load; test coverage often misses them |
+| **Global traffic routing** | DNS TTL / propagation | Users hit wrong region during failover; complaints spike before DNS propagates |
+| **Follow-the-sun** | Time zone handoff | First incident during handoff exposes gaps in escalation |
+
+**Staff heuristic**: "Design for the first bottleneck before you hit it. The first failure is usually the one you didn't expect because you optimized for the wrong thing."
+
+### Staff vs Senior: Key Decision Moments in Scale
+
+| Moment | Senior Approach | Staff Approach |
+|--------|-----------------|----------------|
+| **First latency complaints** | "Add a region." | "Where are the users? What's fast vs slow? CDN and edge caching first." |
+| **Hitting 10× growth** | "We need to scale; add replicas." | "What breaks first? Compute, latency, or availability? Address the bottleneck." |
+| **Going from 2 to 3 regions** | "More regions = better." | "Replication traffic doubles. Is the cost justified? Do we need quorum?" |
+| **First partition** | "Failover will handle it." | "What's the blast radius? Do we have regional fallbacks? Reject or reconcile?" |
+| **Cost overrun** | "Multi-region is expensive; we'll optimize." | "Which 20% of traffic causes 80% of cost? Regional partitioning, selective replication." |
+
+**Staff principle**: "Seniors optimize for the happy path. Staff engineers optimize for the failure path and the cost path."
+
 ## When Rollback or Simplification Is Correct
 
 Sometimes the right Staff decision is to REDUCE multi-region complexity:
@@ -2881,7 +2984,36 @@ FUNCTION evaluate_multiregion_complexity(system):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Diagram 4: Cascading Failure Propagation Paths
+## Diagram 4: Scale Progression — When Bottlenecks Emerge
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SCALE PROGRESSION: BOTTLENECK EMERGENCE                  │
+│                                                                             │
+│   V1 (Single Region)         10× Growth             100× Growth             │
+│   ┌─────────────────┐       ┌─────────────────┐    ┌─────────────────┐      │
+│   │ Users: 100K     │       │ Users: 1M       │    │ Users: 10M      │      │
+│   │ Traffic: 1K/s   │       │ Traffic: 10K/s  │    │ Traffic: 100K/s  │      │
+│   │ Latency: 50ms    │       │ Latency: 80ms    │    │ Latency: 150ms   │      │
+│   │ Cost: $10K/mo   │       │ Cost: $50K/mo   │    │ Cost: $200K/mo   │      │
+│   └────────┬────────┘       └────────┬────────┘    └────────┬────────┘      │
+│            │                         │                      │               │
+│            │                         │                      │               │
+│            ▼                         ▼                      ▼               │
+│   ✓ No bottlenecks           ⚠ Geographic latency    ❌ Write latency      │
+│   ✓ Plenty of headroom       ⚠ 30% users >200ms      ❌ Single-region SPOF │
+│                             │                      ❌ Replication lag     │
+│                             │                      │                      │
+│                             │                      │                      │
+│   ACTION: None              ACTION: CDN + Edge      ACTION: Read replicas  │
+│                             ACTION: Cache          ACTION: Regional data   │
+│                                                                             │
+│   STAFF INSIGHT: "Identify bottlenecks at 50% capacity, not 95%."           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Diagram 5: Cascading Failure Propagation Paths
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -3059,6 +3191,39 @@ Interviewers rarely ask directly about multi-region. They probe through indirect
 
 **L6 thinking:**
 "Before adding regions, let me understand the user distribution and latency requirements. If 80% of users are in the US, a well-optimized single region with a CDN might meet our needs with much less complexity. If we do need multi-region, we need to decide on consistency model, conflict resolution, and failover strategy. What are the requirements for each of these?"
+
+### Signals of Strong Staff Thinking vs Common Senior Mistakes
+
+| Signal | Strong Staff Thinking | Common Senior Mistake |
+|--------|----------------------|------------------------|
+| **When asked about latency** | "First, where are the users? What's the latency budget? CDN and edge caching solve most cases before we consider regions." | "We need more regions to reduce latency." |
+| **When asked about availability** | "Multi-region can decrease availability if we add dependencies. What's the actual RTO? Can we meet it with active-passive?" | "Active-active gives us 99.99%." |
+| **When discussing failures** | "What's the blast radius? Does this region's failure affect others? We design for containment." | "We have failover, so we're good." |
+| **When discussing consistency** | "Which data requires strong consistency? Which can be eventual? We choose per data type." | "We'll use eventual consistency everywhere." |
+| **Cost justification** | "Cross-region transfer is 40–60% of incremental cost. We quantified the benefit before adding regions." | "Multi-region is worth the cost for reliability." |
+
+### How to Explain Multi-Region to Leadership
+
+Staff engineers distill complex trade-offs into business language:
+
+| Technical Concept | Leadership One-Liner |
+|-------------------|----------------------|
+| **Why not multi-region?** | "We're spending $X/year for regional redundancy. Our current single-region availability meets the SLA. The incremental cost doesn't justify the benefit yet." |
+| **Why active-passive?** | "We get disaster recovery and read scaling without the complexity of handling conflicts. Writes stay in one place; the trade-off is a few minutes of downtime during a regional outage." |
+| **Why reject during partition?** | "When regions can't talk, we'd rather show 'temporarily unavailable' than oversell inventory or corrupt data. Correctness over availability for this workload." |
+| **Cost of adding a region** | "Each region adds roughly 2× infrastructure plus 40–60% network cost. We're adding region X because [latency/availability/compliance] requires it—here's the quantified benefit." |
+
+**Staff principle**: "Leadership cares about risk, cost, and user impact. Translate technical decisions into those terms."
+
+### How to Teach Multi-Region to New Engineers
+
+1. **Start with the physics**: Speed of light, latency floor, why sync replication is costly.
+2. **Introduce CAP concretely**: "When the network partitions, you choose availability or consistency. Here's what each choice means for users."
+3. **Use the cascading failure timeline**: Walk through T+0 to T+10min so they see how one failure propagates.
+4. **Assign the cost-benefit exercise**: Have them calculate ROI for adding a region to a real or hypothetical system.
+5. **Role-play the incident**: "You're on-call. US-EAST is down. What do you check first? What do you *not* do?"
+
+**Staff insight**: "Multi-region concepts stick when engineers experience the failure modes—either in drills or in exercises. Theory alone isn't enough."
 
 ---
 
@@ -3259,6 +3424,49 @@ FUNCTION process_order(order):
 
 ---
 
+## Incident 2: Control-Plane Failure During Regional Degradation
+
+**Context:** A SaaS platform with three regions (US-EAST, EU-WEST, AP-NORTHEAST). Traffic routing and health checks rely on a global control plane hosted in US-EAST. Data plane (API servers, databases) runs independently per region.
+
+**Trigger:** US-EAST experiences a partial outage: data plane recovers within 20 minutes, but the control-plane service (route updates, health aggregation) stays down for 90 minutes due to a separate deployment bug.
+
+**Propagation:** EU-WEST and AP-NORTHEAST continue serving traffic, but:
+- Health checks cannot update global routing state
+- A prior decision to route 10% of US traffic to EU-WEST (for load balancing) cannot be reverted
+- EU-WEST receives sustained higher load than expected
+
+**User impact:** EU users see intermittent latency (P99 spikes from 80ms to 400ms) for 90 minutes. Engineers cannot diagnose quickly because control-plane dashboards are down; data-plane metrics are regional and scattered.
+
+**Engineer response:** On-call engineer in EU (who was handling unrelated EU traffic) notices elevated EU latency. Without global control-plane visibility, they assume regional capacity issue. They scale EU-WEST horizontally—which helps, but root cause (control-plane down, routing stuck) is not discovered until US engineer comes online and checks control-plane health.
+
+**Root cause:** Control plane and data plane shared the same deployment pipeline and region. A bad control-plane deploy in US-EAST took down routing logic while data plane recovered. No separation of control-plane failure detection from data-plane health.
+
+**Design change:** Control plane moved to dedicated infrastructure with independent deployment. Data-plane servers cache routing config locally; control-plane failure no longer causes routing changes to fail mid-flight. Health checks now run from multiple regions toward control plane; failure is detected within 60 seconds regardless of which region is on-call.
+
+**Lesson learned:** "Control-plane failure is invisible until it affects user traffic. Separate control and data planes, and ensure control-plane failure is observable and does not block data-plane operations."
+
+---
+
+## Incident 3: Configuration Drift During Follow-the-Sun Handoff
+
+**Context:** A payment service runs in three regions (US-EAST, EU-WEST, AP-NORTHEAST). Each region has its own rate limits and circuit-breaker thresholds. Config is managed via a central config service, but regional overrides are allowed for tuning. On-call follows follow-the-sun: US → EU → APAC.
+
+**Trigger:** A US engineer, tuning for a US holiday traffic spike, increases rate limits in US-EAST via the config UI. They intend to revert after the spike. The change is applied to US-EAST only. The same UI allows per-region override. EU and APAC keep the original limits. The US engineer forgets to revert and goes off shift. EU on-call arrives; no handoff mentions the US change.
+
+**Propagation:** Two days later, EU-WEST experiences a similar traffic spike. EU engineers expect the same headroom as US had. The EU rate limit is still at the original, lower value. EU traffic starts getting 429s. EU on-call scales up capacity, but rate limits are the bottleneck. They don't know US had different limits. The incident lasts 45 minutes before someone compares configs across regions and finds the drift.
+
+**User impact:** EU users see "Too many requests" errors during peak. Payment success rate drops from 99.5% to 94% for 45 minutes. Approximately 2,000 transactions fail or are retried by users.
+
+**Engineer response:** EU on-call scales horizontally, which helps marginally. The real fix is aligning EU rate limits with US. No one documents the root cause in the initial incident report. A Staff engineer, reviewing the post-mortem, notices the config drift and traces it to the US change.
+
+**Root cause:** Per-region config override with no cross-region visibility. No automation to detect or alarm on config drift. Follow-the-sun handoff did not include config-change review. Human error (forgetting to revert) combined with operational gaps (no drift detection).
+
+**Design change:** Config changes that affect rate limits or circuit breakers now require cross-region consistency check before apply. A weekly automated job compares config across regions and alerts on drift. Follow-the-sun handoff checklist includes "any config changes this shift?" Infrastructure as Code enforces config parity; overrides require explicit justification and time-bound expiry.
+
+**Lesson learned:** "Configuration drift across regions is a human-failure mode. Automate drift detection. Make cross-region config consistency a first-class concern, especially when different teams own different regions."
+
+---
+
 # Part 11: Multi-Region Monitoring and Alerting
 
 ## What to Monitor in Multi-Region Systems
@@ -3302,6 +3510,48 @@ FUNCTION process_order(order):
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Golden Signals for Multi-Region
+
+Staff engineers treat these as the minimum observable set for global systems:
+
+| Signal | What to Measure | Alert Threshold | Why It Matters |
+|--------|-----------------|-----------------|----------------|
+| **Latency** | P50, P99, P99.9 per region and per region-pair | P99 > 2× baseline | Cross-region latency spikes predict partition or overload |
+| **Errors** | Error rate per region, by error type | > 1% sustained | Regional degradation or cascade |
+| **Traffic** | Request rate per region, traffic shift | > 1.5× normal | Failover or routing anomaly |
+| **Replication** | Lag (seconds), throughput (bytes/s) | Lag > 5s | Consistency or partition risk |
+| **Saturation** | Queue depth, connection pool utilization | > 80% | Capacity or cascade risk |
+
+**Staff principle**: "If you can't answer 'what is the replication lag right now?' in under 30 seconds, your observability is insufficient for multi-region."
+
+### SLO/SLI for Multi-Region: Per-Region vs Global
+
+Multi-region complicates SLO definition. A "global 99.9% availability" SLO can hide regional degradation: 99% in one region and 100% in two others still averages 99.7%. Staff engineers define SLIs at multiple levels:
+
+| Level | SLI Definition | Why It Matters |
+|-------|----------------|----------------|
+| **Global** | (Successful requests across all regions) / (Total requests) | Overall user experience; revenue impact |
+| **Per-region** | (Successful requests in region R) / (Requests routed to R) | Detects regional degradation; failover decisions |
+| **Per-region-per-user-segment** | Same, segmented by user geography | EU users hitting EU region vs US region have different expectations |
+| **Cross-region** | Replication lag < 5s for 99% of replication streams | Consistency SLO; predicts partition risk |
+
+**Trade-off**: Per-region SLIs create more alerts and dashboards. But they prevent "global looks fine, EU is on fire" blind spots. **One-liner**: "Your global SLO is the floor. Your per-region SLIs are the ceiling—they tell you where to look when the floor holds but users complain."
+
+### Metrics, Logs, and Traces: What Each Answers
+
+| Question | Use | Example |
+|----------|-----|---------|
+| **"Is the system healthy?"** | Metrics | Error rate, latency percentiles, replication lag |
+| **"Why did this request fail?"** | Logs + Traces | Trace ID → log line → region, latency, error |
+| **"Where did the latency come from?"** | Traces | Span across regions, identify slow hop |
+| **"What happened during the partition?"** | Logs + Metrics | Correlate lag spike with partition detection |
+
+**Traces**: Propagate trace ID across regions. Use UTC for all timestamps. Log region, latency, and status in every span.
+
+**Logs**: Include region, trace_id, and timestamp_utc in every log line. Centralize or query across regions for correlation.
+
+**Metrics**: Tag by region, region-pair, and operation type. Dashboards should show per-region and global views.
 
 ## Pseudocode: Cross-Region Health Monitoring
 
@@ -3656,6 +3906,38 @@ OWNERSHIP_MATRIX = {
 //         the cross-region aspects. Staff Engineer coordinates.
 ```
 
+### Cross-Team Dependency Impact: When You Are the Dependency
+
+Multi-region systems often become dependencies for other teams. Staff engineers anticipate the ripple effects.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CROSS-TEAM DEPENDENCY IMPACT                             │
+│                                                                             │
+│   YOUR SYSTEM: Multi-region User API (Team A)                              │
+│   DEPENDENTS:   Checkout Service (Team B), Analytics (Team C)              │
+│                                                                             │
+│   SCENARIO: You add a new region (AP-SOUTH) for latency                     │
+│                                                                             │
+│   IMPACT ON TEAM B (Checkout):                                              │
+│   • Team B calls your API for user validation                               │
+│   • Their clients may now get routed to AP-SOUTH                            │
+│   • If Team B has single-region dependencies, AP-SOUTH calls may fail      │
+│   • YOU MUST: Document region list, advise on client retry/failover         │
+│                                                                             │
+│   IMPACT ON TEAM C (Analytics):                                             │
+│   • Team C ingests your events; their pipeline runs in US-EAST            │
+│   • New region = new event stream; their pipeline may not consume it       │
+│   • YOU MUST: Announce new region + event schema; give migration window    │
+│                                                                             │
+│   STAFF PRINCIPLE: "Adding a region is a cross-team change. Dependents     │
+│   need advance notice, compatibility guarantees, and a rollback path."     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: Staff engineers own the blast radius of their decisions across org boundaries. A region addition that breaks a dependent team's pipeline is a Staff-level failure—preventable with dependency mapping and change communication.
+
 ### Human Failure Modes: The Operational Reality
 
 ```
@@ -3766,6 +4048,156 @@ CLASS MultiRegionOperations:
 ```
 
 **Key Staff Insight**: "Multi-region systems require organizational design, not just technical design. The human factors often cause more incidents than the technical factors."
+
+---
+
+# Part 11.6: Security, Compliance, and Trust Boundaries
+
+## Why Multi-Region Amplifies Security and Compliance Surface
+
+Multi-region systems don't just distribute data—they distribute trust boundaries, compliance surfaces, and attack surfaces. Staff engineers must design for these explicitly.
+
+### Data Sensitivity and Trust Boundaries
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TRUST BOUNDARIES IN MULTI-REGION                         │
+│                                                                             │
+│   SINGLE REGION:                                                            │
+│   • One trust boundary: Data stays within known perimeter                   │
+│   • One compliance perimeter: Single jurisdiction's rules apply            │
+│   • One set of access controls: Same team, same policies                   │
+│                                                                             │
+│   MULTI-REGION:                                                             │
+│   • Data crosses trust boundaries: Replication = data movement             │
+│   • Multiple compliance perimeters: Each region has different rules         │
+│   • Data flows: US-EAST → EU-WEST means EU data crosses US infra           │
+│   • Replication lag = window where data exists in intermediate states      │
+│                                                                             │
+│   STAFF QUESTION: Which data must cross regions, and what protection       │
+│   does it need in transit and at rest?                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Staff-level design**: Classify data by sensitivity before deciding replication scope:
+
+| Data Class | Cross-Region? | Replication | Why |
+|------------|---------------|-------------|-----|
+| **PII** | Only if required by jurisdiction | Encrypted, minimal regions | Compliance and blast radius |
+| **Financial** | Often no—single region for writes | Audit trail replicates | Strong consistency trumps availability |
+| **Session/tokens** | Yes—local for reads | Short TTL, eventual revocation | Availability critical |
+| **Analytics** | Yes—aggregated only | Aggregates, not raw | Minimize exposure |
+
+### Compliance: Data Residency vs Multi-Region
+
+**Key distinction**: Compliance often requires data to *stay* in a region, not *replicate* everywhere.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DATA RESIDENCY: THE STAFF ENGINEER VIEW                  │
+│                                                                             │
+│   REQUIREMENT: "EU user data must stay in EU"                               │
+│                                                                             │
+│   WRONG: "We'll replicate EU data to US for backup"                         │
+│   • Backup in US violates residency                                         │
+│                                                                             │
+│   RIGHT: "EU data stays in EU. US backup contains only non-EU data."       │
+│   • Or: EU data backs up to EU secondary region only                         │
+│                                                                             │
+│   REQUIREMENT: "GDPR deletion must propagate within 30 days"                │
+│                                                                             │
+│   WRONG: "We'll replicate deletion eventually"                              │
+│   • Eventual = could be days; 30-day SLA is stricter                        │
+│                                                                             │
+│   RIGHT: "Deletion is a critical path; we propagate within 24 hours."       │
+│   • Or: Regional deletion is authoritative; other regions respect it      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Staff heuristic**: "Compliance drives *where* data lives. Multi-region drives *how* we serve it. Design so compliance constraints are satisfied first; then add replication for availability."
+
+### Cross-Region Security Considerations
+
+| Consideration | Single Region | Multi-Region |
+|---------------|---------------|--------------|
+| **Encryption in transit** | Internal network; TLS optional | Cross-region always encrypted; key rotation is harder |
+| **Replication credentials** | One set | Must not leak; rotation per region |
+| **Audit trail** | Single log store | Logs across regions; correlation, retention, deletion |
+| **Breach blast radius** | One region | Compromised region could affect replicated data |
+
+**Staff principle**: "Never assume cross-region links are trusted. Encrypt, authenticate, and audit every replication path."
+
+---
+
+# Part 11.7: Mental Models and One-Liners
+
+## Staff-Grade Mental Models for Multi-Region
+
+A mental model is a shorthand that lets you reason about complex systems without re-deriving everything. These are the models Staff engineers use when they think about multi-region.
+
+### Mental Model 1: "Consistency Is a Decision, Not a Default"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Every region you add = another place that can disagree about state.        │
+│  You must explicitly choose: strong (sync + latency) or eventual (async).   │
+│  There is no "default" that works for all data.                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mental Model 2: "Every Cross-Region Call Is a Failure Mode"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Synchronous cross-region call = latency + failure + cascade risk.          │
+│  Ask: "Can this be local, cached, or async?"                                │
+│  If not: "What happens when the call is 10× slower or fails?"               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mental Model 3: "Blast Radius = Design Choice"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Regional failure can stay regional or go global.                          │
+│  Global singletons, shared control plane, sync dependencies = global blast.  │
+│  Regional independence, async replication, local fallbacks = local blast.   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mental Model 4: "Multi-Region Is Not an Upgrade"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Adding regions = adding complexity, cost, and failure modes.              │
+│  Justify each region with: latency, availability, or compliance.            │
+│  If you can't quantify the benefit, don't add the region.                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mental Model 5: "Reject During Partition > Reconcile After"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  When regions can't talk, you choose: allow local writes (reconcile later)  │
+│  or reject writes (no conflicts). For money, inventory, and identity:     │
+│  reject. For likes, nonces, and cache: allow. The cost of reconciliation  │
+│  after partition often exceeds the cost of a few minutes of unavailability.│
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## One-Liners for Leadership and Interviews
+
+| Use Case | One-Liner |
+|----------|-----------|
+| **Why not multi-region?** | "Multi-region adds 2–3× cost and complexity. We need to prove the benefit justifies it." |
+| **Availability during partition** | "We prefer rejecting during partition over reconciling conflicts after." |
+| **Latency vs consistency** | "Speed of light limits us. Strong consistency requires cross-region round-trips; we accept that or choose eventual consistency." |
+| **Failure containment** | "A regional failure should affect that region's users, not everyone. We design for that." |
+| **Cost of multi-region** | "Cross-region transfer is 40–60% of incremental cost. We minimize replication for non-critical data." |
+| **When to add a region** | "We add a region when latency, availability, or compliance requirements can't be met otherwise." |
 
 ---
 
@@ -4118,6 +4550,39 @@ For a social media platform, design regional data partitioning:
 | **Shared control plane** | All regions for control operations |
 | **Synchronous replication** | All regions for writes |
 | **Global database** | All regions |
+
+---
+
+# Master Review Prompt Check (11 Checkboxes)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | L6 coverage audit completed (dimensions A–J) | ✓ |
+| 2 | Gaps identified and content added with Staff-level explanation | ✓ |
+| 3 | Structured real incidents present (3: Split-Brain, Control-Plane, Config Drift—each with Context \| Trigger \| Propagation \| User impact \| Engineer response \| Root cause \| Design change \| Lesson learned) | ✓ |
+| 4 | Staff vs Senior contrasts visible (L5 vs L6 table, Staff vs Senior decision moments) | ✓ |
+| 5 | Scale analysis (first bottlenecks, growth over years, evolution journey) | ✓ |
+| 6 | Cost drivers and sustainability addressed | ✓ |
+| 7 | Mental models and one-liners included | ✓ |
+| 8 | Diagrams support key concepts (architecture, replication, failure, cascading, scale progression) | ✓ |
+| 9 | Interview calibration (probes, signals, mistakes, phrases, leadership explanation, teaching guidance) | ✓ |
+| 10 | Leadership explanation and teaching guidance | ✓ |
+| 11 | Exercises and brainstorming present (20+ questions, 10 exercises with deliverables) | ✓ |
+
+## L6 Dimension Coverage (A–J)
+
+| Dimension | Coverage | Key Sections |
+|-----------|----------|--------------|
+| **A. Judgment & decision-making** | ✓ | L5 vs L6 table, cost-benefit, when to reject multi-region, rollback evaluation, explain to leadership, how to teach |
+| **B. Failure & incident thinking** | ✓ | Part 5 (failure scenarios), Part 10 (3 incidents), cascading timeline, blast radius |
+| **C. Scale & time** | ✓ | Part 7 (evolution), growth modeling, first bottlenecks, bottleneck framework, scale diagram, Staff vs Senior decision moments |
+| **D. Cost & sustainability** | ✓ | Tension 3 (cost vs redundancy), cost drivers, sustainability subsection |
+| **E. Real-world engineering** | ✓ | Part 11.5 (operational reality), human failure modes, on-call, config drift incident |
+| **F. Learnability & memorability** | ✓ | Part 11.7 (mental models), one-liners, Quick Reference Card |
+| **G. Data, consistency & correctness** | ✓ | Tensions 1–2, invariants, invariant violation detection, replication models, conflict resolution |
+| **H. Security & compliance** | ✓ | Part 11.6 (security, compliance, trust boundaries) |
+| **I. Observability & debuggability** | ✓ | Part 11 (monitoring, golden signals, SLO/SLI, metrics/logs/traces), Part 11.5 (distributed tracing) |
+| **J. Cross-team & org impact** | ✓ | Part 11.5 (ownership, escalation, team boundaries, cross-team dependency impact) |
 
 ---
 

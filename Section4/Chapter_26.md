@@ -134,6 +134,46 @@ When engineers think about cost, they often think about compute hours and storag
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### The Cost of Security and Compliance
+
+Staff Engineers treat security and compliance as cost drivers, not afterthoughts. Data sensitivity and trust boundaries directly influence architecture and ongoing expense:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        SECURITY & COMPLIANCE: COST IMPLICATIONS AT STAFF LEVEL               │
+│                                                                             │
+│   TRUST BOUNDARIES:                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Each trust boundary adds validation, encryption, audit logging   │   │
+│   │  • Cross-boundary data flow often requires token exchange, quotas   │   │
+│   │  • Staff question: "Which boundaries are required vs nice-to-have?" │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   DATA SENSITIVITY:                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • PII/financial data: Encryption at rest and in transit (2-3x cost)│   │
+│   │  • Data residency: Regional deployment, no cross-region replication │   │
+│   │  • Retention for compliance: Cannot delete; storage grows forever   │   │
+│   │  • Audit trails: Log everything, retain years (observability cost)   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   TRADE-OFF STAFF ENGINEERS MAKE:                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  "We could encrypt all logs, but that doubles storage cost and      │   │
+│   │   complicates debugging. We'll encrypt PII fields only."            │   │
+│   │                                                                     │   │
+│   │  "Compliance requires 7-year retention. That's 2x our hot storage.  │   │
+│   │   We need a cold archive tier, not Standard storage."               │   │
+│   │                                                                     │   │
+│   │  "Data residency for EU means we can't use our global cache.       │   │
+│   │   Accept the 2x cache cost or accept cross-region latency."        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   L6 INSIGHT: Compliance cost is non-negotiable for regulated data.        │
+│   The question is: Are we paying for compliance we don't actually need?    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Why Systems Fail from Unsustainability
 
 A system can be technically correct—handling all requests properly, maintaining consistency, recovering from failures—and still fail because it cannot be sustained.
@@ -363,6 +403,42 @@ At Staff level, you're not just building features—you're making architectural 
 │   │  for when metrics hit specific thresholds                           │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Cost Decisions and On-Call Burden
+
+Cost optimizations that reduce redundancy or headroom directly increase operational burden. Staff Engineers factor this in:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        COST vs ON-CALL BURDEN: THE HIDDEN TRADE-OFF                         │
+│                                                                             │
+│   COST CUTS THAT INCREASE ON-CALL:                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Fewer replicas → More single points of failure; more pages       │   │
+│   │  • Right-sized capacity → Less headroom; traffic spikes = incidents   │   │
+│   │  • Reduced observability → Harder to debug; longer MTTR             │   │
+│   │  • Consolidated regions → Follow-the-sun impossible; 3am pages      │   │
+│   │                                                                     │   │
+│   │  Staff question: "How many additional pages per month does this     │   │
+│   │  optimization cause? Is the savings worth the burnout risk?"         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   HUMAN ERROR AMPLIFICATION:                                                │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Tight margins leave no room for misconfiguration                  │   │
+│   │  • Fatigue from frequent pages leads to shortcut errors             │   │
+│   │  • Complex cost-optimized systems are harder to operate correctly   │   │
+│   │                                                                     │   │
+│   │  Example: A team cut from 4 replicas to 2. One misconfigured deploy  │   │
+│   │  took down both; no redundancy. Recovery took 2 hours.              │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   L6 APPROACH:                                                              │
+│   Quantify on-call cost: pages/month × (MTTR + follow-up) × engineer rate.  │
+│   If cost optimization increases pages by 5/month and MTTR is 30 min,     │
+│   that's 2.5 engineer-hours/month—often comparable to infrastructure saved.│
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1581,6 +1657,83 @@ PREVENTION (Staff-Level):
 - Automated log volume anomaly detection
 ```
 
+## Structured Incident: Cache Reduction Cascade
+
+A fully structured incident illustrates how Staff Engineers analyze cost-driven failures:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        STRUCTURED INCIDENT: CACHE REDUCTION CASCADE                          │
+│        (Context | Trigger | Propagation | Impact | Response | Root Cause)   │
+│                                                                             │
+│   CONTEXT:                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  System: E-commerce API, 50K daily active users                    │   │
+│   │  Architecture: API → Redis cache → PostgreSQL                       │   │
+│   │  Cost pressure: CFO requested 25% infrastructure reduction          │   │
+│   │  Team: 4 engineers, no dedicated cost/SRE role                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   TRIGGER:                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Decision: Reduce Redis from 6 nodes to 3 (save $8K/month)          │   │
+│   │  Rationale: "Cache hit rate is 85%, we have headroom"               │   │
+│   │  Approval: Engineering lead signed off; no blast radius analysis     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   PROPAGATION:                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  T+0:     Cache capacity halved; eviction rate increases             │   │
+│   │  T+3d:    Hit rate drops 85% → 62% (no alert; metric not watched)   │   │
+│   │  T+7d:    DB query rate +40%; CPU 50% → 72%                         │   │
+│   │  T+10d:   Promotional email sent; traffic +60%                      │   │
+│   │  T+10d+2h: DB connection pool exhausted; API latency 100ms → 4s     │   │
+│   │  T+10d+3h: Health checks fail; load balancer marks backends down    │   │
+│   │  T+10d+4h: Full outage; checkout unavailable                        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   USER IMPACT:                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • 4-hour outage during peak promotion                             │   │
+│   │  • Estimated $120K lost revenue                                     │   │
+│   │  • Customer support tickets 10x normal                              │   │
+│   │  • Partial failures (timeouts) for 2 hours before full outage       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ENGINEER RESPONSE:                                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • On-call paged; initially scaled API (wrong root cause)            │   │
+│   │  • DB metrics reviewed; connection exhaustion identified            │   │
+│   │  • Emergency Redis scale-up (30 min to provision)                   │   │
+│   │  • Traffic recovered over 2 hours                                    │   │
+│   │  • Rollback: Restored 6-node cache; cost "savings" reversed          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ROOT CAUSE:                                                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Direct: Cache capacity cut without modeling downstream DB impact   │   │
+│   │  Contributing: No cost-change blast radius review                   │   │
+│   │  Contributing: No alert on cache hit rate degradation              │   │
+│   │  Contributing: Cost optimization treated as infra-only decision     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   DESIGN CHANGE:                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Blast radius checklist required for any capacity reduction       │   │
+│   │  • Cache hit rate SLO: alert if < 75%                                │   │
+│   │  • Cost anomaly detection: alert on >20% infra change in 7 days      │   │
+│   │  • Right-size instances instead of reducing replica count           │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   LESSON LEARNED:                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  "Cost optimization is a system design change. Map dependencies,      │   │
+│   │   model degradation paths, and protect the critical path before      │   │
+│   │   cutting optimization layers." — Staff Engineer, post-incident     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 7: Evolution Over Time (Sustainability Thinking)
@@ -1798,6 +1951,45 @@ Staff Engineers model cost scaling with concrete dollar amounts to identify dang
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### First Bottleneck: Where Cost Breaks First at Scale
+
+Staff Engineers identify the first bottleneck—the component that will hit cost limits before others—as growth occurs over years:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        FIRST BOTTLENECK ANALYSIS: STAFF-LEVEL SCALE THINKING                 │
+│                                                                             │
+│   QUESTION: "At 1×, 10×, 100× scale, which component hits its cost limit   │
+│   first?"                                                                   │
+│                                                                             │
+│   TYPICAL ORDER (varies by system):                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  1. OBSERVABILITY (often first)                                     │   │
+│   │     • Cardinality grows with users × endpoints × regions              │   │
+│   │     • Storage for logs/metrics/traces grows super-linearly           │   │
+│   │     • First cliff: Often at 5-10× scale                             │   │
+│   ├─────────────────────────────────────────────────────────────────────┤   │
+│   │  2. STORAGE (primary data)                                          │   │
+│   │     • Accumulates over time; unbounded without retention             │   │
+│   │     • First cliff: Depends on growth rate; 12-24 months typical      │   │
+│   ├─────────────────────────────────────────────────────────────────────┤   │
+│   │  3. NETWORK (cross-region, egress)                                  │   │
+│   │     • Kicks in when going multi-region or high egress                │   │
+│   │     • First cliff: When adding regions or hitting egress tiers       │   │
+│   ├─────────────────────────────────────────────────────────────────────┤   │
+│   │  4. COMPUTE (last, usually)                                         │   │
+│   │     • Scales roughly linearly; auto-scaling helps                    │   │
+│   │     • First cliff: When single-node limits hit (sharding needed)      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   STAFF FRAMEWORK:                                                          │
+│   For each component, ask: "At what scale does this become 2× current      │
+│   cost? Which component crosses that threshold first?" Design retention,     │
+│   sampling, and architecture to push the first bottleneck out.              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 ```
 
 ## Avoiding Destabilization During Optimization
@@ -2193,6 +2385,33 @@ Interviewers rarely ask "What's the cost?" directly. They probe through design d
 
 ---
 
+## How to Explain Cost Decisions to Leadership
+
+Staff Engineers translate technical trade-offs into business terms executives care about:
+
+| Technical Concept | Leadership Framing |
+|-------------------|-------------------|
+| "Right-sizing cache" | "We're reducing waste—paying for capacity we don't use. Savings: $X/month with no user impact." |
+| "Deferring multi-region" | "80% of users are in two regions. Going global now would cost 3× for 5% of users. We can add regions when we see demand." |
+| "99.9% vs 99.99% availability" | "The extra nine costs 5× more. Our SLA is 99.9%. The difference is ~7 hours/year downtime—acceptable for our use case." |
+| "Cost anomaly alert" | "We caught a $50K/month leak before it became $500K. Cost monitoring paid for itself." |
+
+**One-liner for leadership:** "We're spending X on infrastructure. At our growth rate, we'll hit a cost cliff in Y months unless we [specific action]. The fix costs Z and prevents that cliff."
+
+---
+
+## How to Teach Cost Thinking to the Team
+
+Staff Engineers build cost awareness without becoming a bottleneck:
+
+1. **Make costs visible**: Dashboards, weekly reports, cost-per-request in monitoring. Engineers optimize what they can see.
+2. **Include cost in design reviews**: Ask "What's the cost at 10× scale?" routinely. Normalize the question.
+3. **Retrospectives on cost incidents**: When cost optimization causes an outage, do a blameless post-mortem. Focus on "What invariant did we miss?"
+4. **Document trade-offs**: When you choose cost over perfection, write it down. "We chose eventual consistency here because strong would cost 3×."
+5. **Protect the critical path**: Teach the rule: "Cut optimization layers first (cache, CDN), never the critical path (database, auth)."
+
+---
+
 # Part 10: Brainstorming Questions
 
 ## Discovery Questions
@@ -2583,59 +2802,6 @@ Design a tagging strategy for a 50-person engineering org with 8 teams:
 - Enforcement mechanism
 - Reporting structure
 - Exception handling process
-| /api/feed | 40% | 60% | $0.01 | ? |
-| /api/profile | 30% | 10% | $0.001 | Already efficient |
-| /api/search | 5% | 25% | $0.05 | ? |
-
-**Deliverable:** Hot path analysis with optimization plan.
-
----
-
-## Exercise 7: Build vs Buy Analysis
-
-**Objective:** Practice total cost of ownership.
-
-For a component (cache, queue, database), compare build vs buy:
-
-**Build (Self-Hosted):**
-- Infrastructure cost: $X/month
-- Engineering setup: X weeks
-- Ongoing maintenance: X hours/week
-- Risk of outages: ?
-
-**Buy (Managed Service):**
-- Service cost: $X/month
-- Integration effort: X days
-- Vendor lock-in risk: ?
-- Scalability limits: ?
-
-**Deliverable:** TCO comparison with recommendation.
-
----
-
-## Exercise 8: Observability Cost Optimization
-
-**Objective:** Practice designing cost-efficient observability.
-
-Design an observability strategy that provides debugging capability while controlling cost:
-
-**Current state:**
-- All logs retained 90 days
-- All metrics at 1-second resolution
-- All traces stored
-- Cost: $100K/month
-
-**Target state:**
-- Same debugging capability
-- Cost: $30K/month
-
-**Document:**
-- What to keep at high fidelity
-- What to aggregate or sample
-- Retention policies
-- Alert on cost anomalies
-
-**Deliverable:** Observability strategy document.
 
 ---
 
@@ -3864,24 +4030,69 @@ Staff Engineers anticipate how cost management fails in practice:
 
 ✅ Cost as first-class design constraint
 ✅ Five dimensions of cost (compute, storage, network, ops, engineering)
+✅ Security & compliance cost (data sensitivity, trust boundaries)
 ✅ Right-sizing vs over-provisioning
 ✅ Cost-reliability-performance triangle
+✅ Invariants when cost-cutting (data, consistency, durability)
+✅ Cost decisions and on-call burden
 ✅ Sustainability across system lifecycle
 ✅ Cost-driven failure modes
 ✅ Hot path identification
+✅ First bottleneck analysis (scale over years)
 ✅ Incremental optimization approach
 ✅ Build vs buy reasoning
 ✅ Cost monitoring and alerting
-✅ AWS-specific optimization (EC2, S3, RDS, DynamoDB, Lambda, Network)
+✅ Cloud-native optimization (compute, storage, network, database, serverless)
 ✅ Reserved capacity and Spot instance strategies
 ✅ FinOps practices (tagging, attribution, budgets)
 ✅ Cost anomaly detection and investigation
+✅ Structured incident format (Context|Trigger|Propagation|Impact|Response|Root cause|Design change|Lesson)
+✅ How to explain to leadership; how to teach cost thinking
 
-## This chapter now meets Google Staff Engineer (L6) expectations with comprehensive AWS cloud-native cost optimization coverage.
+## This chapter now meets Google Staff Engineer (L6) expectations with comprehensive cost optimization coverage.
+
+---
+
+## Master Review Prompt Check
+
+- [ ] **A. Judgment & decision-making**: L5/L6 trade-offs, cost-reliability-performance triangle, alternatives considered
+- [ ] **B. Failure & incident thinking**: Cascading failure timeline, blast radius, structured incident (Context|Trigger|Propagation|Impact|Response|Root cause|Design change|Lesson)
+- [ ] **C. Scale & time**: 3-phase evolution, cost projection at 10×/100×, first bottleneck analysis, growth over years
+- [ ] **D. Cost & sustainability**: Primary topic; five dimensions, TCO, right-sizing, cost cliffs
+- [ ] **E. Real-world engineering**: On-call burden, operational overhead, human error, human failure modes
+- [ ] **F. Learnability & memorability**: Staff Engineer's First Law, mental models, one-liners, Quick Reference Card
+- [ ] **G. Data, consistency & correctness**: Invariants when cost-cutting, consistency boundaries, durability
+- [ ] **H. Security & compliance**: Cost of compliance, data sensitivity, trust boundaries
+- [ ] **I. Observability & debuggability**: Tiered observability, cardinality, cost of debugging when observability is cut
+- [ ] **J. Cross-team & org impact**: FinOps vs Engineering, cost attribution, leadership explanation, teaching
+- [ ] **Exercises & Brainstorming**: 15+ exercises, discovery/trade-off/evolution questions
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Evidence |
+|-----------|----------|---------|
+| **A. Judgment & decision-making** | ✅ Strong | L5 vs L6 table, cost-reliability-performance triangle, latency investment decision framework |
+| **B. Failure & incident thinking** | ✅ Strong | 4 failure patterns, cascading failure timeline, blast radius, structured incident (Cache Reduction Cascade), Logging Explosion, Runaway Batch Job |
+| **C. Scale & time** | ✅ Strong | 3-phase evolution, cost scaling model V1→10×→100×, first bottleneck analysis, growth projections |
+| **D. Cost & sustainability** | ✅ Primary | Five dimensions, TCO, right-sizing, cost cliffs, sustainability test |
+| **E. Real-world engineering** | ✅ Strong | On-call burden, operational overhead, human failure modes, cost police anti-pattern |
+| **F. Learnability & memorability** | ✅ Strong | Staff Engineer's First Law, one-liners, mental models, Quick Reference Card |
+| **G. Data, consistency & correctness** | ✅ Strong | Invariants when cost-cutting, consistency boundaries, durability |
+| **H. Security & compliance** | ✅ Strong | Cost of security & compliance, data sensitivity, trust boundaries |
+| **I. Observability & debuggability** | ✅ Strong | Tiered observability, cardinality, observability cost optimization |
+| **J. Cross-team & org impact** | ✅ Strong | FinOps vs Engineering, cost attribution, how to explain to leadership, how to teach |
 
 ---
 
 # Quick Reference Card
+
+## Staff Engineer Mental Models (One-Liners)
+
+- **Cost is correctness**: "A system that works but cannot be afforded is not a working system."
+- **Invariants first**: "Before cutting cost, list invariants. If a change breaks one, it's not a cost optimization—it's a design change."
+- **Optimize layers before critical path**: "Cut optimization layers first (cache, CDN), never the critical path (database, auth)."
+- **Cost as input**: "Cost is a design input, not an output. Right-size for current needs, design for evolution."
+- **Restraint is skill**: "The most expensive designs aren't wrong—they're excessive. Restraint is an engineering skill."
 
 ## Cost Decision Framework
 

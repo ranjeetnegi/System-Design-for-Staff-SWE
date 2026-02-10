@@ -2230,7 +2230,7 @@ Partial failures occur when a database component degrades rather than completely
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   L6 Mitigation:                                                            │
-|   ┌─────────────────────────────────────────────────────────────────────┐   |
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   • Set aggressive query timeouts (100ms, not 30s)                      │   │
 │   • Monitor p95/p99 latency, not just average                           │   │
 │   • Circuit breaker on slow queries (fail fast)                         │   │
@@ -2280,8 +2280,8 @@ Partial failures occur when a database component degrades rather than completely
 │   │   • Only detected via user complaints or replication lag metrics    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   L6 Mitigation:                                                            |
-|   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   L6 Mitigation:                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   • Monitor replication lag (alert if >1 second for critical data)      │   │
 │   • Route reads to primary for "read-after-write" patterns              │   │
 │   • Use session consistency (same user always reads from same replica)  │   │
@@ -2719,6 +2719,98 @@ When evolving databases, you need a migration strategy:
 
 ---
 
+# Part 6.5: Mental Models and One-Liners
+
+Staff Engineers internalize decision frameworks as memorable one-liners. These accelerate judgment under pressure and make reasoning teachable.
+
+## Database Selection One-Liners
+
+| One-Liner | When to Use |
+|-----------|-------------|
+| "Access patterns first, technology second." | Before naming any database. |
+| "PostgreSQL until you have a reason not to." | Default choice for transactional data. |
+| "Every database you add is another system to operate." | Justifying tool consolidation. |
+| "Schema-less usually means schema spread across application code." | Pushing back on document-store enthusiasm. |
+| "The partition key is the contract. Get it wrong once, pay forever." | Wide-column and key-value design. |
+| "What breaks first?" | Scale and failure-mode analysis. |
+| "Fail-open for guards, fail-safe for money." | Rate limiters vs. payment systems. |
+| "Cache is a performance optimization until it becomes your source of truth." | Avoiding cache-as-primary mistakes. |
+| "Sharding is the last resort, not the first step." | Resisting premature sharding. |
+| "Boring is a feature." | Choosing battle-tested over novel. |
+| "If you can't trace it, you're guessing." | Advocating for distributed tracing. |
+| "Uniform distribution is an assumption, not a guarantee." | Designing for hot-partition skew. |
+
+## First Bottleneck Analysis
+
+Staff Engineers ask: "At 10× scale, what breaks first?" Not "will it scale?"—but *what specifically* fails.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FIRST BOTTLENECK BY DATABASE TYPE                         │
+│                                                                             │
+│   PostgreSQL (single node)                                                   │
+│   • FIRST: Connection pool (hits at ~500–1000 connections)                   │
+│   • THEN: Write throughput (~10–50K writes/sec)                            │
+│   • THEN: Disk I/O (large tables, index maintenance)                         │
+│                                                                             │
+│   Redis                                                                     │
+│   • FIRST: Memory (eviction or OOM)                                         │
+│   • THEN: Single-threaded CPU (commands block)                             │
+│   • THEN: Network (replication, clients)                                   │
+│                                                                             │
+│   Cassandra / Wide-column                                                   │
+│   • FIRST: Hot partition (bad partition key)                                │
+│   • THEN: Compaction lag (read amplification)                               │
+│   • THEN: Tombstone accumulation (deletes/updates)                         │
+│                                                                             │
+│   L6 Question: "For our specific workload, which of these do we hit first?" │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Scale Analysis: Growth Over Years
+
+Staff Engineers model *when* bottlenecks appear, not just *what* they are. Growth is rarely linear; first bottlenecks often hit in a predictable sequence:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SCALE OVER YEARS: TYPICAL BOTTLENECK SEQUENCE             │
+│                                                                             │
+│   Year 1 (0–100K users)                                                     │
+│   • Architecture: Single PostgreSQL, maybe Redis for sessions                │
+│   • First bottleneck: Usually NONE (underprovisioned from day 1 is rare)     │
+│   • Risk: Over-engineering (sharding too early)                             │
+│   • Staff action: Right-size, don't over-build                              │
+│                                                                             │
+│   Year 2 (100K–1M users)                                                    │
+│   • First bottleneck: Connection pool (often first)                         │
+│   • Second: Missing indexes (slow queries at scale)                          │
+│   • Next: Read replica needed (separate read/write load)                    │
+│   • Staff action: Add connection pooling, read replicas, caching            │
+│                                                                             │
+│   Year 3 (1M–10M users)                                                     │
+│   • First bottleneck: Disk I/O (write rate, vacuum, compaction)              │
+│   • Second: Single-node write throughput limit                              │
+│   • Next: Hot partition (if using distributed DB)                            │
+│   • Staff action: Functional partitioning, move hot data to specialized     │
+│                   stores (e.g., events to Cassandra)                        │
+│                                                                             │
+│   Year 4+ (10M+ users)                                                      │
+│   • First bottleneck: Sharding or NewSQL needed                              │
+│   • Second: Multi-region (latency, compliance)                               │
+│   • Staff action: Architectural change—sharding, geo-partitioning,          │
+│                   event-driven sync. Requires 3–6 month project.             │
+│                                                                             │
+│   Key: "First bottleneck" = what breaks first at that scale.                │
+│        Plan capacity 6–12 months before you hit it.                         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Scale transition diagram**: Growth over years rarely hits all limits at once. Staff Engineers map: Year 1 → first bottleneck (often connections or cache size). Year 2 → second (often write throughput or disk). Year 3+ → architectural change (sharding, functional split). Plan evolution, not just current state.
+
+---
+
 # Part 7: Summary Diagrams
 
 ## Database Selection Flow
@@ -3148,6 +3240,38 @@ Understanding cascading failures requires seeing them as a sequence of phases. E
 
 **The Staff Engineer question**: "At which phase does my system detect and contain this failure?" If the answer is Phase 3 or 4, you're designing reactively. If it's Phase 2, you're designing proactively.
 
+### Structured Incident: Database Migration Lockout
+
+When no structured incident exists in a section, Staff Engineers create one. Here is a database-specific incident in the prescribed format:
+
+| Section | Content |
+|---------|---------|
+| **Context** | A B2B SaaS platform with 2M users. Single PostgreSQL instance for core data (users, subscriptions, billing). Team planned a schema migration to add an index on `subscriptions.company_id` for a new analytics feature. Staging had 10K rows; production had 45M rows. |
+| **Trigger** | Engineer ran `CREATE INDEX CONCURRENTLY idx_subscriptions_company ON subscriptions(company_id)` at 2 PM. Staging completed in 8 seconds. Production began at 2:01 PM. |
+| **Propagation** | Index build held AccessShareLock (non-blocking reads) but triggered heavy I/O. At 2:15 PM, disk I/O saturated. Query latency climbed from 15ms to 2.5s. Connection pool exhausted by 2:22 PM. Writes began failing. Health checks failed. Load balancer marked primary unhealthy. |
+| **User impact** | 47 minutes of degraded service. Login failures, checkout timeouts, API 5xx errors. ~15,000 affected sessions. Estimated revenue impact: $80K. Customer support inundated. |
+| **Engineer response** | On-call paged at 2:25 PM. Initially suspected primary failure. Checked disk I/O—saturated. Identified long-running index build. Decision: cancel index build (cannot roll back CONCURRENTLY mid-build without leaving invalid index). Let build complete (estimated 2 more hours) or kill it. Killed build. Disk I/O recovered in 8 minutes. Full recovery by 3:12 PM. |
+| **Root cause** | Migration tested only on staging scale. No estimation of index build time on production data size. No load shedding or migration window. Index build on 45M rows wrote 12GB of index data, overwhelming shared disk. |
+| **Design change** | 1) All migrations require production-size data test and time estimate. 2) Index builds run in maintenance window with load shedding. 3) Use `pg_stat_progress_create_index` for visibility. 4) Consider online index creation tools for large tables. 5) Add disk I/O to migration runbook checks. |
+| **Lesson learned** | "Works in staging" is not a migration validation. Production data volume and I/O characteristics differ by orders of magnitude. Staff Engineers mandate: estimate migration duration on production-scale data before running in production. |
+
+**Staff insight**: This incident format (Context | Trigger | Propagation | User impact | Engineer response | Root cause | Design change | Lesson learned) is reusable for post-mortems and interview calibration. Memorize it.
+
+### Structured Incident: Hot Partition Meltdown
+
+A second incident illustrates a different failure class—not migration, but partition key design:
+
+| Section | Content |
+|---------|---------|
+| **Context** | A social analytics platform stored event counts in a wide-column store, partitioned by `(date, event_type)`. Daily active users (DAU) were computed by scanning partitions. The system served 5M DAU with 50M events/day. |
+| **Trigger** | A viral campaign drove 10× normal traffic to a single event type ("campaign_click"). All writes for that type hit one partition: `(2024-01-15, campaign_click)`. |
+| **Propagation** | The partition's node reached 100% CPU. Writes to that partition timed out. The application retried, increasing load. Other partitions on the same node (shared machine) became slow. Within 15 minutes, the entire node was unresponsive. Replication could not keep up. |
+| **User impact** | 30 minutes of missing analytics for the campaign. Client dashboards showed stale data. No core product outage, but the marketing team could not measure campaign performance. |
+| **Engineer response** | On-call identified the hot partition via per-partition metrics. Temporarily rate-limited writes to the hot key. Added salting to the partition key: `(date, event_type, hash(user_id) % 16)`. Deployed partition key change over 2 days. |
+| **Root cause** | Partition key designed for uniform distribution assumed all event types would have similar volume. No consideration for power-law or viral skew. No hot-partition detection or rate limiting. |
+| **Design change** | 1) All partition keys must include a salt or high-cardinality dimension for high-volume entities. 2) Per-partition metrics and alerting (skew ratio > 2). 3) Rate limiting on hot keys as circuit breaker. 4) Capacity planning assumes 10× skew for viral events. |
+| **Lesson learned** | "Uniform distribution" is an assumption, not a guarantee. Staff Engineers design partition keys for worst-case skew, not average-case. |
+
 ### Pattern 1: Thundering Herd on Cache Miss
 
 The thundering herd problem occurs when a cache failure causes all requests to simultaneously hit the backend database. Let's walk through exactly how this happens and why it's so destructive.
@@ -3489,6 +3613,23 @@ def create_user(user_data):
 4. **Visibility**: You can query outbox for stuck entries
 
 **The trade-off**: Eventual consistency. The user exists in PostgreSQL immediately but may take seconds to appear in search. For most use cases, this is acceptable. For the rare cases where it's not, you need distributed transactions (which have their own costs).
+
+### Structured Incident: Dual-Write Search Index Drift
+
+When data exists in multiple stores without a transactional outbox, silent inconsistency can accumulate into a major incident:
+
+| Section | Content |
+|---------|---------|
+| **Context** | A B2C marketplace stored products in PostgreSQL (source of truth) and Elasticsearch (search). Product catalog updates were dual-written: application wrote to both PostgreSQL and Elasticsearch in sequence. On success, it cached the product in Redis. No outbox or CDC. 500K products, 10K catalog updates/day. |
+| **Trigger** | A network partition during a 2-hour maintenance window caused 15% of Elasticsearch writes to fail. The application logged the error but did not retry or queue. PostgreSQL and Redis were updated; Elasticsearch was not. |
+| **Propagation** | Over 2 weeks, the failure rate varied (5–20%). No alert on search index vs. DB mismatch. Customer support reported "can't find product X" but search returned nothing. Engineering assumed a search bug. |
+| **User impact** | ~8% of products were in the database but not in search. Customers could not find products by name or category. Affected high-margin items. Estimated 12% drop in search-to-purchase conversion over 2 weeks. Revenue impact: ~$180K. |
+| **Engineer response** | On-call received a consolidated support ticket. Ran reconciliation job: count products in PostgreSQL vs. documents in Elasticsearch. Found 42K missing. Root cause: dual-write failures with no retry. Rebuilt search index from PostgreSQL (12 hours). Deployed retry logic for failed ES writes. |
+| **Root cause** | Dual-write without transactional outbox. No reconciliation or alerting on index drift. Application treated ES write failure as log-only; no retry queue. |
+| **Design change** | 1) Implement transactional outbox: write product + outbox event in one PostgreSQL transaction. 2) Worker consumes outbox, writes to Elasticsearch, retries on failure. 3) Daily reconciliation job: compare counts, alert if drift > 0.1%. 4) Search index rebuilt from source of truth weekly. |
+| **Lesson learned** | "Dual-write without an outbox is a time bomb. Every failure is a permanent inconsistency. Staff Engineers use transactional outbox or CDC for any cross-system writes that must eventually match." |
+
+**Staff insight**: This incident format reinforces why the outbox pattern exists. It is not theoretical—it prevents real incidents from real dual-write failures.
 
 ---
 
@@ -4248,6 +4389,21 @@ Checksums detect corruption at the record level. Store a cryptographic hash of c
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Interviewer Probe Questions
+
+Interviewers use these questions to assess depth. Strong candidates answer with specifics; weak candidates give generic answers.
+
+| Probe Question | Tests For | Strong Answer | Weak Answer |
+|----------------|-----------|---------------|-------------|
+| "What happens when this database fails?" | Failure-mode thinking | Blast radius, degradation path, detection, containment | "We'll fix it" or "We have backups" |
+| "How would you migrate off this database?" | Evolution thinking | Strangler fig, dual-write, rollback plan | "We wouldn't need to" |
+| "What breaks first at 10× scale?" | Bottleneck analysis | Specific limit (connections, disk I/O, hot partition) | "It scales" |
+| "Why not [alternative database]?" | Trade-off articulation | Explicit rejection with reasoning | "I prefer this one" |
+| "How do you debug a slow query in production?" | Observability | Traces, metrics, query plan, correlation | "We'd look at logs" |
+| "Who owns this database when two teams use it?" | Cross-team impact | Ownership model, change process | "We'd figure it out" |
+
+**Staff insight**: Interviewers probe until you show a gap or demonstrate depth. "I don't know" is acceptable if followed by how you'd find out. Guessing and hand-waving is not.
+
 ## Example Phrases Staff Engineers Use
 
 ### When Choosing a Database
@@ -4273,6 +4429,48 @@ Checksums detect corruption at the record level. Store a cryptographic hash of c
 > "Sharding is the right answer at massive scale, but we're not there yet. For now, read replicas and caching give us 10x headroom before we need to pay that complexity tax."
 
 > "I want to design this so we can evolve the database layer without rewriting the application. That means [abstraction layer / interface design]."
+
+---
+
+## How to Explain to Leadership
+
+Staff Engineers translate technical decisions into business language:
+
+**Database choice**: "We're using PostgreSQL for core data because it reduces operational risk and cost. Our team has deep expertise, which speeds incident resolution. The alternative would add 3–6 months of ramp-up and higher ongoing cost."
+
+**Migration delays**: "We're delaying the Cassandra migration because our current PostgreSQL setup has 18 months of headroom. Migrating now would consume 3 engineer-months with no user-visible benefit. We'll revisit when we approach the bottleneck."
+
+**Cost justification**: "The managed database costs 40% more than self-hosted, but it eliminates 15 hours/month of DBA work. At our team's cost, that's a net savings of $4K/month."
+
+**Principle**: Lead with impact (reliability, cost, velocity). Technology is the means, not the message.
+
+## How to Teach These Concepts
+
+**For engineers new to databases**: Start with the access-pattern matrix. "What do you need to read? What do you need to write? How often?" Map answers to the decision tree before naming technologies.
+
+**For senior engineers**: Focus on failure modes. "What happens when this database fails? What's the blast radius? How do we detect and contain?"
+
+**For architects**: Emphasize evolution. "What breaks at 10× scale? What's the migration path? What are we explicitly not building?"
+
+**Teaching one-liner**: "I'll explain the framework first. Then we'll apply it to your system. You'll see why the answer falls out—it's not magic, it's constraint satisfaction."
+
+---
+
+## Staff vs Senior: Database Decision Contrast
+
+At L6, the difference shows in *how* you approach database decisions, not just *what* you choose:
+
+| Dimension | Senior (L5) Approach | Staff (L6) Approach |
+|-----------|----------------------|---------------------|
+| **Starting point** | "Which database fits?" | "What are the access patterns, consistency needs, and failure modes?" |
+| **Rejection of alternatives** | "I prefer X" | "I'm explicitly not using Y because of [trade-off A, B]. Here's why that matters for our context." |
+| **Scale thinking** | "It scales" or "We'll add replicas" | "At 10× scale, [connections / disk I/O / hot partition] breaks first. We'll hit that around [timeframe]. Plan: [concrete steps]." |
+| **Failure thinking** | "We have backups" or "We'll fix it" | "Blast radius is [scope]. Degradation path: [cached data / read-only / fail-open]. Detection: [metric]. Containment: [circuit breaker / rate limit]." |
+| **Evolution** | "Current design handles our needs" | "This choice constrains us in [ways]. Migration path if we outgrow: [strangler fig / dual-write]. Avoid lock-in by [abstraction]." |
+| **Cost** | "Managed is easier" or "Self-hosted is cheaper" | "TCO: ops burden [X hrs/month], incident risk [Y]. At our scale, [managed/self-hosted] wins because [reason]." |
+| **Cross-team** | "We'll figure out ownership" | "Ownership model: [owner]. Change process: [RFC, review]. Shared DB standards: [approved list]. Non-standard requires [approval path]." |
+
+**Staff one-liner**: "A Senior picks a database. A Staff Engineer derives it from constraints and documents why alternatives were rejected."
 
 ---
 
@@ -4789,6 +4987,24 @@ Staff Engineers model how costs scale because linear thinking leads to budget su
 
 The solution: Plan for cost per user to increase 2-3× as you scale 10×. Budget accordingly, and optimize operational overhead first (it's the biggest cost driver).
 
+### Sustainability: Environmental Cost of Data at Scale
+
+**Why this matters at L6**: At Google-scale, data centers consume significant energy. Database choices affect power consumption: more replicas, more storage, more compute. Staff Engineers in organizations with sustainability commitments consider environmental cost alongside financial cost.
+
+**What drives database energy consumption**:
+- **Replication factor**: RF=3 uses ~3× storage and compute vs RF=1
+- **Idle capacity**: Over-provisioned clusters run 24/7 even during low traffic
+- **Storage tier**: Hot storage (SSD) vs cold (object storage) has different energy profiles
+- **Query efficiency**: Inefficient queries waste CPU; indexed queries finish faster
+
+**Concrete example**: A 100TB Cassandra cluster with RF=3 stores 300TB across nodes. Moving cold data (80% of data, rarely accessed) to object storage with lifecycle policies reduces active cluster size. Result: 40% less compute, lower energy cost, same user experience for hot data.
+
+**Trade-offs**: Sustainability optimizations can conflict with latency (cold storage is slower) or availability (fewer replicas). Staff Engineers balance these—archive old data, right-size replicas, optimize queries—without compromising core requirements.
+
+**L6 one-liner**: "Every byte you store and every query you run has a carbon cost. Design for efficiency; it's good for cost and for the planet."
+
+**Staff vs Senior contrast**: An L5 engineer optimizes for cost and performance; sustainability is rarely considered. An L6 engineer asks: "What does our data footprint cost the organization in energy and carbon?" and incorporates that into capacity planning and architecture reviews. At scale, this thinking prevents runaway consumption and aligns technical decisions with organizational sustainability commitments.
+
 ### What Staff Engineers Intentionally DON'T Build
 
 Staff Engineers avoid over-engineering by explicitly choosing what NOT to build:
@@ -4934,6 +5150,24 @@ Don't monitor everything—monitor what matters for decision-making:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Distributed Tracing for Database Debugging
+
+**Why this matters at L6**: Latency issues often span multiple services and databases. A request might touch Redis, PostgreSQL, and a search index. Without tracing, you cannot distinguish "database slow" from "network slow" from "application slow." Staff Engineers instrument database calls in trace spans to answer: *where* did the 200ms go?
+
+**What to trace**:
+- Database connection acquisition time (pool wait)
+- Query execution time (per query in a request)
+- Transaction duration (begin to commit)
+- Cross-database request flow (which DB contributed what latency)
+
+**Concrete example**: A feed load takes 450ms p99. Metrics show PostgreSQL p99 at 80ms and Redis at 5ms. Without tracing, the remaining 365ms is a mystery. With traces: 200ms in connection pool wait (exhausted), 80ms in PostgreSQL, 50ms in cache lookups, 120ms in serialization. Root cause: connection pool too small, not database speed.
+
+**Trade-offs**: Tracing adds overhead (~1–5% latency). Sample rather than trace everything. Use trace IDs to correlate logs and metrics. Staff Engineers argue for tracing when debugging cross-service latency—the cost of one incident outweighs the overhead.
+
+**L6 one-liner**: "If you can't trace a request from API to database and back, you're guessing when latency spikes."
+
+**Staff vs Senior contrast**: An L5 engineer checks individual service logs and database metrics when latency spikes. A Staff Engineer instruments the full request path so that a single trace shows where time was spent across all hops—and advocates for tracing as a prerequisite for debugging distributed systems, not an afterthought.
+
 ### Sample Runbook: PostgreSQL Primary Unresponsive
 
 ```markdown
@@ -4960,6 +5194,20 @@ PostgreSQL primary not responding to health checks for >30 seconds
 1. Create incident report
 2. Update this runbook with learnings
 ```
+
+### When the Pager Goes Off: Operational Burden at L6
+
+**Why this matters at L6**: Staff Engineers own the operational burden of their decisions. A database choice that "scales" but requires 3 AM pages every month is a bad choice. The cost of on-call is not just engineer time—it's burnout, context switching, and slowed feature delivery.
+
+**What actually happens on-call**:
+- **Detection lag**: Metrics may show "elevated latency" for 5–10 minutes before someone notices. Is it a real problem or a blip?
+- **Blame game**: "Is it the database or the app?" Without tracing, engineers guess. With traces, they know.
+- **Recovery pressure**: "Fix it now" leads to hasty fixes. Rollback? Restart? Scale up? Each has different risk.
+- **Post-incident fatigue**: The 2 AM page bleeds into the next day. Documentation and runbook updates often slip.
+
+**Staff-level trade-off**: A managed database adds cost but reduces on-call burden. A self-hosted database saves money but requires DBA expertise and incident readiness. For small teams, managed often wins on total cost (including sanity). For large teams with dedicated ops, self-hosted can be justified.
+
+**L6 one-liner**: "Every database you add is another system to operate at 2 AM. Choose databases that your team can debug when it breaks."
 
 ---
 
@@ -5026,6 +5274,68 @@ WHERE id = ?;
 -- Don't actually DELETE - you lose audit trail
 -- Keep anonymized record for referential integrity
 ```
+
+### Trust Boundaries and Data Sensitivity
+
+**Why this matters at L6**: Staff Engineers define where trust boundaries lie and how data sensitivity affects database design. A single misclassification can cause compliance violations or unnecessary complexity.
+
+**Data sensitivity classification** (from least to most sensitive):
+- **Public**: No restrictions (product catalog, marketing content)
+- **Internal**: Company-only (analytics, logs, feature flags)
+- **Confidential**: Business-critical (pricing, strategy)
+- **Restricted**: Regulated (PII, financial, health)
+- **Prohibited**: Never store (passwords plaintext, full credit card numbers)
+
+**Trust boundary implications**:
+- Restricted data must never share a database instance with public data
+- Cross-boundary queries (e.g., search indexing PII) require explicit pipelines with audit logging
+- Backup and replication paths must respect jurisdictional requirements (GDPR, data residency)
+
+**Staff-level trade-off**: Over-classifying everything as Restricted adds cost (encryption, audit, isolation) without benefit. Under-classifying creates compliance risk. Classify based on actual regulatory and business requirements, not paranoia.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TRUST BOUNDARIES AND DATABASE PLACEMENT                   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Trust Boundary 1: PUBLIC (no PII)                                  │   │
+│   │  • Product catalog, marketing content, open APIs                     │   │
+│   │  • DB: Shared PostgreSQL, Elasticsearch, CDN                         │   │
+│   │  • Isolation: Optional (separate schema if shared)                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Trust Boundary 2: INTERNAL (company-only)                            │   │
+│   │  • Analytics, logs, feature flags                                   │   │
+│   │  • DB: Shared PostgreSQL, data warehouse                             │   │
+│   │  • Isolation: Row-level or schema-level, no cross-region for PII     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Trust Boundary 3: RESTRICTED (PII, financial, health)                │   │
+│   │  • User accounts, payments, health records                           │   │
+│   │  • DB: DEDICATED instance or schema                                  │   │
+│   │  • Isolation: NEVER share with public data. Encryption, audit.       │   │
+│   │  • Cross-boundary: Explicit pipelines only (e.g., search index       │   │
+│   │    of PII requires audit, access control, data residency)             │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   Staff Insight: Crossing a trust boundary (e.g., indexing PII in search)   │
+│                  must be intentional, documented, and audited.              │
+│                  Do not replicate Restricted data across boundaries without   │
+│                  explicit compliance approval.                              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cross-Region Compliance
+
+When data spans regions, database placement drives compliance:
+- **Data residency**: Some regulations require data stored in-country (EU, China)
+- **Replication**: Async replica in another region may violate residency rules
+- **Backup location**: Backup destination matters for compliance
+
+**L6 decision**: Document data classification and residency requirements before choosing multi-region database topology. A design that replicates EU user data to a US region may be illegal regardless of technical elegance.
 
 ---
 
@@ -5620,6 +5930,39 @@ For each, practice:
 - Explicitly rejecting alternatives
 - Discussing failure modes
 - Explaining evolution over time
+
+---
+
+# Master Review Prompt Check
+
+Before considering this chapter complete, verify:
+
+- [x] **A. Judgment & decision-making**: Requirements-first framework, explicit rejection of alternatives, trade-off articulation
+- [x] **B. Failure & incident thinking**: Partial failures, blast radius, cascading failures, structured incident format (3 incidents: Migration Lockout, Hot Partition Meltdown, Dual-Write Search Drift)
+- [x] **C. Scale & time**: Evolution timeline, first-bottleneck analysis, scale-over-years sequence, scaling boundaries by database type
+- [x] **D. Cost & sustainability**: TCO framework, cost drivers, scaling cost analysis, environmental sustainability
+- [x] **E. Real-world engineering**: Operational complexity, human failure modes, on-call burden ("When the Pager Goes Off"), runbooks
+- [x] **F. Learnability & memorability**: Mental models, one-liners, decision trees
+- [x] **G. Data, consistency & correctness**: ACID, consistency models, invariants, data integrity verification
+- [x] **H. Security & compliance**: Encryption, access control, PII, trust boundaries, data sensitivity
+- [x] **I. Observability & debuggability**: Monitoring philosophy, alerting, runbooks, distributed tracing
+- [x] **J. Cross-team & org impact**: Database standards, consensus-building, ownership model
+- [x] **Exercises & Brainstorming**: Brainstorming questions and homework assignment present
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Key Sections |
+|-----------|----------|--------------|
+| **A. Judgment & decision-making** | ✓ | L5 vs L6 examples, decision framework, requirements-first, probe questions |
+| **B. Failure & incident thinking** | ✓ | Partial failures, blast radius, cascading failures, 3 structured incidents |
+| **C. Scale & time** | ✓ | Evolution timeline, first bottleneck, scale-over-years sequence, scaling boundaries |
+| **D. Cost & sustainability** | ✓ | TCO analysis, cost drivers, scaling cost, environmental sustainability |
+| **E. Real-world engineering** | ✓ | Operational complexity, human failure modes, on-call burden, runbooks |
+| **F. Learnability & memorability** | ✓ | Mental models, one-liners, decision trees |
+| **G. Data, consistency & correctness** | ✓ | ACID, consistency models, invariants (L6 discussion), integrity verification |
+| **H. Security & compliance** | ✓ | Encryption, access control, PII, trust boundaries (diagram), data sensitivity |
+| **I. Observability & debuggability** | ✓ | Monitoring, alerting, runbooks, distributed tracing |
+| **J. Cross-team & org impact** | ✓ | Standards, consensus, ownership, human failure modes |
 
 ---
 

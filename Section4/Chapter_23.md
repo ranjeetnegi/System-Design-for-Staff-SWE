@@ -662,6 +662,40 @@ STRATEGY 4: IDEMPOTENT PROCESSING
 
 **Staff Insight**: Sequence numbers and idempotent processing are often both necessary. Sequence numbers let you detect out-of-order delivery. Idempotent processing lets you handle duplicates. You'll need both for robust systems.
 
+### Invariants: What Must Always Hold
+
+Staff Engineers explicitly document invariants—properties that must hold for the system to be correct. Event-driven systems make invariants harder to reason about because state is distributed and eventual.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EVENT SYSTEM INVARIANTS (EXAMPLES)                       │
+│                                                                             │
+│   INVENTORY DOMAIN:                                                         │
+│   - Invariant: available_count >= 0 (never oversell)                        │
+│   - Risk: Duplicate OrderPlaced or out-of-order Cancel before Create       │
+│   - Enforcement: Idempotent decrement; reject if would go negative         │
+│                                                                             │
+│   PAYMENT DOMAIN:                                                           │
+│   - Invariant: amount_debited = sum(transaction amounts) per order          │
+│   - Risk: Duplicate charge event; partial failure mid-saga                  │
+│   - Enforcement: Idempotency key per transaction; saga compensation          │
+│                                                                             │
+│   NOTIFICATION DOMAIN:                                                      │
+│   - Invariant: Each notification_id sent at most once per channel          │
+│   - Risk: At-least-once delivery; consumer crash after send, before commit   │
+│   - Enforcement: Redis/db check before send; idempotency key in event        │
+│                                                                             │
+│   STAFF PRACTICE:                                                           │
+│   Before deploying an event consumer, write down:                            │
+│   1. What invariants must hold in the downstream system?                     │
+│   2. Which failure modes could violate them?                                │
+│   3. How does the consumer enforce them (idempotency, ordering, etc.)?      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: Invariants are the contract between design and correctness. When debugging production issues, Staff Engineers ask: "Which invariant was violated?" That question narrows the search from "something is wrong" to "we violated the never-oversell rule."
+
 ---
 
 ## Backpressure and Consumer Lag
@@ -1648,6 +1682,62 @@ GOOD REASON 5: Failure isolation is critical
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Cross-Team Coordination: Breaking Schema Change Drill
+
+When a producer makes a breaking change, multiple consumer teams must coordinate. Staff Engineers plan for this scenario explicitly.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CROSS-TEAM BREAKING CHANGE SCENARIO                      │
+│                                                                             │
+│   SITUATION:                                                                │
+│   Order Team wants to rename `amount_cents` → `total_cents` in OrderPlaced. │
+│   Consumers: Payment Team, Inventory Team, Analytics Team (3 teams)        │
+│                                                                             │
+│   L5 APPROACH (Fragile):                                                    │
+│   Order Team: "We're deploying Wednesday. Change is in the ticket."         │
+│   Payment Team: "We'll get to it." (doesn't)                                 │
+│   Wednesday: Order Team deploys. Payment consumer breaks. Payouts fail.   │
+│                                                                             │
+│   L6 APPROACH (Coordinated):                                                 │
+│                                                                             │
+│   PHASE 1: Proposal (Order Team)                                           │
+│   - Create RFC: "OrderPlaced schema v2: amount_cents → total_cents"        │
+│   - Event catalog: Register proposed change, list all consumers             │
+│   - Announce: "Breaking change proposed. Affected: Payment, Inventory,     │
+│     Analytics. Please acknowledge by [date]."                             │
+│                                                                             │
+│   PHASE 2: Consumer Alignment (Each Consumer Team)                         │
+│   - Payment: "We'll support both fields for 30 days, then remove old."     │
+│   - Inventory: "We need 2 weeks. Can delay to [date]?"                       │
+│   - Analytics: "We're fine. Deploy when ready."                            │
+│   - Order Team: Agrees to wait for slowest consumer (Inventory)            │
+│                                                                             │
+│   PHASE 3: Additive Deploy (Order Team)                                    │
+│   - Deploy: Publish BOTH `amount_cents` and `total_cents`                  │
+│   - All consumers read new field, ignore old (or vice versa during migrate) │
+│   - Run for 2 weeks. No breaking change yet.                               │
+│                                                                             │
+│   PHASE 4: Consumer Migration (Each Team)                                  │
+│   - Payment, Inventory, Analytics: Switch to `total_cents`                  │
+│   - Order Team: Verify all consumers on new field (via catalog/dashboard)    │
+│                                                                             │
+│   PHASE 5: Remove Old Field (Order Team)                                    │
+│   - After all consumers migrated: Remove `amount_cents` from producer       │
+│   - True breaking change, but no consumers depend on it anymore             │
+│                                                                             │
+│   KEY INSIGHT:                                                              │
+│   Breaking changes require calendar coordination, not just technical change. │
+│   Staff Engineers treat schema changes as cross-team projects with owners,  │
+│   timelines, and checkpoints. The producer does not unilaterally deploy.   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: At scale, event schemas become cross-team contracts. A single team cannot "move fast" without breaking others. Staff Engineers build processes that make coordination explicit—and design schema evolution strategies that minimize coordination (additive changes, long deprecation windows).
+
+---
+
 ### Staff Engineer's Ownership Checklist
 
 Before deploying an event-driven system, answer:
@@ -1696,6 +1786,36 @@ If you can't answer all 8, you're not ready for production.
 - **"Nobody owns it"**: DLQ fills up, lag spikes, schema changes break production
 
 **Staff Engineer Rule**: Every event, every consumer, every alert must have a clear owner. If ownership is unclear, the system will fail in production.
+
+### Organization Structure: Platform Team vs Event Volume
+
+Staff Engineers consider whether org structure matches event-driven complexity. Scaling events without scaling platform support leads to operational debt.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ORG STRUCTURE vs EVENT VOLUME                            │
+│                                                                             │
+│   RULE OF THUMB:                                                            │
+│   - < 10M events/day: 1 platform engineer (part-time) sufficient             │
+│   - 10M–100M events/day: Dedicated platform engineer or small team          │
+│   - 100M–1B events/day: Platform team (3–5) with Kafka specialization       │
+│   - > 1B events/day: Platform team + per-domain event stewards              │
+│                                                                             │
+│   INDICATORS YOU NEED MORE PLATFORM CAPACITY:                               │
+│   - Consumer team escalates "Kafka issues" to platform weekly                │
+│   - Schema changes cause production incidents (no compatibility process)     │
+│   - No event catalog or lineage; teams don't know who consumes what         │
+│   - DLQ backlogs grow; no one triages                                       │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   Event volume alone doesn't determine team size—complexity does.           │
+│   Ten simple consumers need less support than three complex stream           │
+│   processors. But at 100M+ events/day, you need dedicated platform focus.    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**: Over-investing in platform too early is wasteful. Under-investing causes burnout and incidents. Staff Engineers advocate for platform capacity when event-driven systems become a material part of the product—and before they become a crisis.
 
 ---
 
@@ -2545,6 +2665,86 @@ Staff Engineers design systems where failures don't cascade. Here's how:
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### The 3am On-Call Scenario: Lag Spike Drill
+
+Staff Engineers design for the human who gets paged at 3am. Here's a concrete drill for the most common event-driven page: consumer lag spike.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ON-CALL DRILL: CONSUMER LAG SPIKE AT 3AM                 │
+│                                                                             │
+│   PAGE: "payment-consumer lag > 50,000 for 5 minutes"                       │
+│                                                                             │
+│   MINUTE 0–2: Triage                                                         │
+│   - Which consumer group? payment-consumer (owned by Payment Team)           │
+│   - Which partitions? All 10 partitions affected, or just one?              │
+│   - Single-partition lag → poison message hypothesis (skip to DLQ drill)    │
+│   - All partitions lagging → capacity or downstream issue                   │
+│                                                                             │
+│   MINUTE 2–5: Root Cause Hypotheses                                         │
+│   1. Downstream slow? Check payment processor API latency, DB latency       │
+│   2. Consumer crash loop? Check pod restarts, error rate                    │
+│   3. Traffic spike? Compare producer rate now vs baseline                   │
+│   4. Deployment? Recent deploy might have introduced slow processing        │
+│                                                                             │
+│   MINUTE 5–10: Mitigation (While Investigating)                             │
+│   - Scale consumers if partition count allows (add pods)                    │
+│   - Circuit breaker: If downstream is the cause, fail fast to DLQ            │
+│   - Do NOT reset offset (causes duplicate processing)                       │
+│   - Do NOT kill consumers (rebalance pauses processing)                     │
+│                                                                             │
+│   MINUTE 10+: Communication                                                 │
+│   - Update status page if user-facing impact                                │
+│   - Notify producer team if lag will cause producer blocking                │
+│   - Document for post-mortem: trigger, timeline, fix                          │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   The runbook exists so the tired engineer doesn't guess. "Is it poison?     │
+│   Single partition. Is it downstream? Check DB. Is it us? Scale out."      │
+│   Pre-defined decision tree beats ad-hoc debugging at 3am.                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: Event-driven systems fail in ways that require systematic investigation. Staff Engineers write runbooks that reduce time-to-mitigation—and design alerting so the right person gets paged with enough context to act.
+
+---
+
+### Observability at Scale: When Logs and Traces Explode
+
+At 100K+ events/sec, naive observability fails. Staff Engineers design for sampling and aggregation from the start.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    OBSERVABILITY AT SCALE                                   │
+│                                                                             │
+│   PROBLEM: Log volume                                                       │
+│   - 100K events/sec × 500 bytes/event = 50 MB/sec log output               │
+│   - Full logging is unsustainable; storage and query costs explode          │
+│                                                                             │
+│   SOLUTION: Tiered observability                                            │
+│   - Always: Sample 0.1% of events for tracing (adjustable by topic)         │
+│   - Always: Aggregate metrics (lag, throughput, error rate)                │
+│   - On demand: Enable full trace for specific correlation_id               │
+│   - On demand: Replay tool for debugging specific events                    │
+│                                                                             │
+│   TRACE SAMPLING AT SCALE:                                                  │
+│   - Head-based: Sample at trace start (may miss rare paths)                 │
+│   - Tail-based: Sample after seeing interesting pattern (retroactive)      │
+│   - Adaptive: Increase sampling when error rate spikes                      │
+│   - Correlation_id as override: "Trace this one request" for support         │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   The goal is not "see everything" but "see enough to debug." At scale,     │
+│   you debug by hypothesis: "Is lag high? Is error rate up? Is partition 7   │
+│   hot?" Metrics and sampling get you there; full logs are for specific      │
+│   incidents when you already know the correlation_id.                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**: Sampling means you might miss the trace for the exact failure. Staff Engineers accept this: 0.1% sampling catches most patterns; for rare bugs, increase sampling temporarily or use correlation_id override.
 
 ---
 
@@ -3639,6 +3839,69 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Cost vs Scale: Visual Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    COST vs SCALE: WHEN TO ACT                               │
+│                                                                             │
+│   Monthly Cost │                                                             │
+│        $500K   │                                                        ╭───│
+│                │                                                    ╭───╯   │
+│        $50K    │                                              ╭────╯       │
+│                │                                        ╭────╯             │
+│         $5K    │                                  ╭─────╯                   │
+│                │                            ╭────╯                          │
+│           $500 │                      ╭────╯                                 │
+│                │                ╭─────╯                                       │
+│              $0 ├──────────────╯                                             │
+│                └────────────────────────────────────────────────────▶       │
+│                    1M      10M      100M      1B      10B    events/day       │
+│                                                                             │
+│   ACTION ZONES:                                                             │
+│   < $2K/month   → Monitor only; don't over-optimize                          │
+│   $2K–$50K     → Active optimization (compression, retention, batching)       │
+│   > $50K       → Cost is first-class; dedicated reviews, architecture eval │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Cost and Sustainability: Environmental Considerations
+
+Staff Engineers increasingly consider environmental sustainability alongside financial cost. Event-driven systems at scale consume significant compute and storage; understanding and optimizing resource efficiency extends beyond budgets.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SUSTAINABILITY DIMENSIONS IN EVENT SYSTEMS               │
+│                                                                             │
+│   DRIVER 1: IDLE CONSUMER WASTE                                             │
+│   - Consumers provisioned for peak (e.g., 50 instances)                       │
+│   - Off-peak: 45 instances idle, still consuming power                       │
+│   - Mitigation: Auto-scale consumers with traffic (not just lag)             │
+│                                                                             │
+│   DRIVER 2: UNDERUTILIZED RETENTION                                        │
+│   - 7-day retention "just in case" replay needed                            │
+│   - Actual replay frequency: once per quarter                               │
+│   - Mitigation: Right-size retention; tiered storage for old data           │
+│                                                                             │
+│   DRIVER 3: REDUNDANT REPLICATION                                           │
+│   - RF=3 for all topics (some tolerate RF=2)                                │
+│   - Mitigation: Per-topic replication policy by criticality                 │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   The same optimizations that reduce cost (compression, retention,          │
+│   sampling) reduce environmental footprint. Cost and sustainability        │
+│   are aligned—but sustainability adds a lens of long-term stewardship.     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: Leadership increasingly asks about environmental impact. Staff Engineers can articulate: "Event volume drives compute and storage; our optimizations reduce both cost and carbon footprint." Sustainability is not a separate initiative—it's a dimension of good capacity planning.
+
+---
+
 **Why Cost Matters at Staff Level**:
 
 1. **Hidden costs**: Consumer infrastructure often costs more than Kafka brokers
@@ -3651,6 +3914,53 @@ Staff Engineers treat cost as a first-class constraint, not an afterthought. Kaf
 - **Before adding events**: Estimate cost at 10x current scale
 - **After adding events**: Monitor cost per million events
 - **Cost review**: When Kafka cost > 10% of infrastructure budget, optimize
+
+---
+
+## Security and Compliance in Event-Driven Systems
+
+Event-driven systems introduce security and compliance concerns that Staff Engineers must address proactively. Events often carry sensitive data across trust boundaries; understanding data sensitivity and trust boundaries is essential at L6.
+
+### Data Sensitivity and Trust Boundaries
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TRUST BOUNDARIES IN EVENT-DRIVEN SYSTEMS                 │
+│                                                                             │
+│   INTERNAL ONLY (Same Trust Domain):                                        │
+│   - Order IDs, product SKUs, user IDs (internal)                            │
+│   - Events stay within corporate network                                    │
+│   - Minimal encryption beyond TLS in transit                               │
+│                                                                             │
+│   SENSITIVE (PII, Financial):                                                │
+│   - Email addresses, names, payment tokens                                  │
+│   - Requires encryption at rest AND in transit                             │
+│   - Field-level encryption for highly sensitive fields                      │
+│   - Access control: which consumer groups can read which topics             │
+│                                                                             │
+│   REGULATED (GDPR, HIPAA, PCI-DSS):                                         │
+│   - Health data, financial transactions, personal identifiers               │
+│   - Retention limits (delete after N days)                                  │
+│   - Audit trail: who read what, when                                        │
+│   - Right to erasure: can you delete a user's events?                       │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   Events replicate data. One event can exist in: topic, DLQ, consumer DB,  │
+│   backup snapshots. Deletion is non-trivial. Design for minimal retention.  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why it matters at L6**: A data breach or compliance violation in an event pipeline often has broader blast radius than a single-service breach. Events are consumed by multiple services; a misconfigured consumer can expose data to unauthorized teams. Staff Engineers define trust boundaries and enforce them across the pipeline.
+
+**Concrete example**: A notification service consumes `UserCreated` events containing email addresses. The analytics team adds a new consumer group for "user growth metrics" and stores raw events in a data warehouse accessible to 50 analysts. Result: PII in a low-trust environment. The fix: publish two event types—`UserCreated` (internal, full PII) and `UserGrowthMetric` (anonymized, analytics-safe). Producers own the decision of what to publish where.
+
+**Trade-offs**: Field-level encryption adds latency and prevents search/filtering in consumers. Anonymization loses useful analytics. The Staff decision: separate topics by sensitivity tier, not by consumer convenience.
+
+### Compliance Considerations
+
+- **Retention vs compliance**: GDPR "right to erasure" conflicts with Kafka's append-only log. Options: short retention for PII topics, tombstone events for deletion, or event design that excludes PII (reference by ID only; PII fetched from protected service).
+- **Audit requirements**: Financial systems need "who consumed this event, when." Consumer offset commits don't capture this. Solution: correlation IDs, audit logging in consumers, or dedicated audit consumer that records all reads.
+- **Cross-border data**: Events replicated across regions may move regulated data. Know which regions store which data; design topics to avoid prohibited flows.
 
 ---
 
@@ -3671,6 +3981,17 @@ Event-driven architecture is a powerful tool—but like all powerful tools, it c
 5. **Start synchronous, add events later**. It's easier to add async to a working sync system than to debug a broken async system. YAGNI for event-driven architecture is sound advice.
 
 The best event-driven systems I've seen were designed by engineers who were deeply skeptical of events. They added events reluctantly, for specific reasons, with comprehensive operational support. The worst systems were designed by enthusiasts who saw events as inherently superior and adopted them wholesale.
+
+### Mental Models for Event-Driven Architecture
+
+| Mental Model | Description | When to Apply |
+|--------------|-------------|---------------|
+| **Events as trade-offs** | Every event trades consistency/debuggability for scalability/independence | Before adding any event |
+| **Coupling transformation** | Events don't decouple—they make coupling invisible (schema, semantic, ordering) | When someone says "events decouple" |
+| **Lag as design parameter** | Lag is acceptable or problematic based on SLA; define SLA first | Capacity planning, SLA discussions |
+| **Idempotency as default** | Assume at-least-once; design every consumer for duplicate delivery | Consumer implementation |
+| **Ownership precedes operation** | Every event, consumer, alert needs a clear owner before production | Pre-deployment checklist |
+| **Production pain over theory** | Re-architect when production pain exceeds theoretical benefits | When to refactor |
 
 Be skeptical. Be specific. Be operational. That's how Staff Engineers build event-driven systems that work.
 
@@ -3779,6 +4100,59 @@ Most event-driven documentation discusses success and failure as binary states. 
 L5 engineers often think: "I'll make it idempotent" — but only make the *first* operation idempotent.
 
 L6 engineers know: Every step, every external call, every database write must independently handle being called twice. And you need observability into which step failed.
+
+---
+
+## Human Error: The Often-Overlooked Failure Mode
+
+Beyond technical failures, Staff Engineers design for operator mistakes. Event-driven systems amplify human error because coupling is invisible and changes propagate across teams.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HUMAN ERROR SCENARIOS IN EVENT SYSTEMS                   │
+│                                                                             │
+│   SCENARIO 1: WRONG PARTITION KEY DEPLOYED                                  │
+│                                                                             │
+│   Developer changes partition key from user_id to request_id for            │
+│   "better distribution." Deploys without notifying consumer teams.             │
+│   Result: Ordering broken for 3 days before consumers notice stale data.    │
+│                                                                             │
+│   Mitigation: Schema registry with partition key as contract; change        │
+│   requires approval from all consumers. Automated tests for ordering.       │
+│                                                                             │
+│   SCENARIO 2: SCHEMA CHANGE FORGOTTEN                                       │
+│                                                                             │
+│   Producer adds optional field `discount_code`. One consumer assumes        │
+│   required, throws NPE. Consumer restarts, reprocesses, NPE again.         │
+│   Partition stuck for 6 hours.                                              │
+│                                                                             │
+│   Mitigation: Schema compatibility checks in CI; consumer defensive null    │
+│   handling; canary deployment for new consumers.                             │
+│                                                                             │
+│   SCENARIO 3: OFFSET RESET BY MISTAKE                                      │
+│                                                                             │
+│   On-call engineer runs "reset offset to earliest" for wrong consumer       │
+│   group. Replays 6 months of events. Duplicate charges, duplicate emails.   │
+│                                                                             │
+│   Mitigation: Idempotent consumers (always); offset reset requires           │
+│   multi-step approval; audit log for offset changes.                         │
+│                                                                             │
+│   SCENARIO 4: DLQ IGNORED BY ROTATION                                      │
+│                                                                             │
+│   DLQ alert fires. New team member doesn't know playbook. "I'll look        │
+│   tomorrow." DLQ grows. One week later: 100K messages, data stale.         │
+│                                                                             │
+│   Mitigation: DLQ playbook in runbook; escalation if not resolved in N hrs; │
+│   ownership clearly assigned; onboarding includes DLQ drills.               │
+│                                                                             │
+│   STAFF INSIGHT:                                                            │
+│   The system should be forgiving of human error. Idempotency, defensive      │
+│   schema handling, and clear ownership reduce blast radius of mistakes.     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Trade-offs**: Strict processes (approval gates, schema locks) slow down iteration. Staff Engineers balance: enough guardrails to prevent catastrophic mistakes, not so many that teams bypass them or velocity suffers.
 
 ---
 
@@ -3942,6 +4316,9 @@ Systems don't fail at one scale—they fail at *transition points*. Staff Engine
 │   "Events are great!"                                                       │
 │                                                                             │
 │   STAGE 2: 10× (10K events/sec)                                             │
+│   FIRST BOTTLENECK: Single partition throughput (~10K msg/sec limit)        │
+│   - Add partitions before you hit it; can't remove later                   │
+│                                                                             │
 │   WHAT BREAKS:                                                              │
 │   - Single partition can't handle throughput                                │
 │   - Single consumer falls behind                                            │
@@ -3956,6 +4333,10 @@ Systems don't fail at one scale—they fail at *transition points*. Staff Engine
 │   - Consumer lag monitoring                                                 │
 │                                                                             │
 │   STAGE 3: 100× (100K events/sec)                                           │
+│   FIRST BOTTLENECK: Consumer processing rate (DB/API calls per event)      │
+│   - Even with 100 partitions, slow per-event work limits throughput         │
+│   - Batch and async I/O become mandatory                                    │
+│                                                                             │
 │   WHAT BREAKS:                                                              │
 │   - Kafka cluster resource limits                                           │
 │   - Consumer processing can't keep up even with parallelism                 │
@@ -3972,6 +4353,10 @@ Systems don't fail at one scale—they fail at *transition points*. Staff Engine
 │   - Dedicated platform team                                                 │
 │                                                                             │
 │   STAGE 4: 1000× (1M events/sec)                                            │
+│   FIRST BOTTLENECK: Cross-datacenter / region capacity                      │
+│   - Single cluster and consumer fleet hit limits                            │
+│   - Multi-region or dedicated clusters per domain required                  │
+│                                                                             │
 │   WHAT BREAKS:                                                              │
 │   - Single datacenter can't handle load                                     │
 │   - Cross-region consistency becomes a problem                              │
@@ -3987,6 +4372,32 @@ Systems don't fail at one scale—they fail at *transition points*. Staff Engine
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### First Bottleneck Quick Reference
+
+Staff Engineers anticipate *where* the system will fail first as it grows. Use this as a pre-flight check.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FIRST BOTTLENECK AT A GLANCE                              │
+│                                                                             │
+│   Scale         │ First Bottleneck              │ Mitigation                │
+│   ──────────────┼───────────────────────────────┼───────────────────────────  │
+│   1K ev/s       │ None yet                      │ Single partition OK        │
+│   10K ev/s      │ Single partition throughput  │ Add partitions (can't      │
+│                 │ (~10K msg/sec limit)         │ remove later)              │
+│   100K ev/s     │ Consumer processing rate     │ Batch writes, async I/O,   │
+│                 │ (DB/API calls per event)     │ optimize per-event cost     │
+│   1M ev/s       │ Kafka cluster / region       │ Multi-region, dedicated    │
+│                 │ capacity, retention cost     │ clusters, tiered storage   │
+│                                                                             │
+│   RULE OF THUMB: The bottleneck shifts: partition → consumer → cluster.     │
+│   Design for the next order of magnitude before you hit it.                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ### Incident-Driven Evolution: When to Re-Architect
 
@@ -4101,6 +4512,25 @@ At Staff level, you need to reason about events across regions. This is where ev
 
 ## Interview Calibration: What Interviewers Look For
 
+### Mental Models and One-Liners (Memorable Staff Thinking)
+
+| One-Liner | Use When |
+|-----------|----------|
+| *"Every event you publish is a promise you're making to the future. Make sure you can keep it."* | Explaining why event contracts matter |
+| *"The cheapest event is the one you don't publish. The second cheapest is the one you compress."* | Cost discussions, over-eventing |
+| *"Events don't eliminate coupling—they transform it. Sometimes beneficial, sometimes harmful."* | Pushing back on "decoupling" claims |
+| *"Invisible coupling is worse than visible coupling."* | Sync vs event trade-offs |
+| *"Same key + different producer = different partitions."* | Ordering violation lessons |
+| *"Ordering requires same key AND same producer AND same topic."* | Partition key design |
+| *"Re-architect when production pain exceeds theoretical benefits. Not before."* | When to refactor event systems |
+| *"Who's on-call when this breaks at 3am?"* | Before adding any event |
+| *"What invariant did we violate?"* | Debugging production issues |
+| *"One partition blocked? Poison message first."* | Investigating lag |
+| *"Design for the mistake your teammate will make."* | Human error prevention |
+| *"Events replicate data. One event can reach many consumers. Define trust boundaries per topic."* | Security, PII handling |
+
+---
+
 ### Staff-Level Signals in Event-Driven Design
 
 ```
@@ -4203,11 +4633,46 @@ At Staff level, you need to reason about events across regions. This is where ev
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### How to Explain Event-Driven Trade-offs to Leadership
+
+Staff Engineers translate technical decisions into business language:
+
+| Technical Concept | Leadership Framing |
+|-------------------|-------------------|
+| Events add latency | "Notifications will arrive within seconds, not milliseconds. For signup emails, that's acceptable." |
+| At-least-once, duplicates | "We accept that some emails might be sent twice on rare failures. We've designed for that. The alternative—losing notifications—is worse." |
+| Kafka cost at scale | "At 100M events/day, expect ~$4K/month for Kafka plus consumer infrastructure. At 1B, we'll need a dedicated platform team." |
+| Operational complexity | "Event-driven means debugging takes longer. We need correlation IDs and tracing. Trade-off: we can add new consumers without changing producers." |
+| When to avoid events | "For single consumer, sync is simpler. We're using events here because we have five consumers and need replay for auditing." |
+
+**One-liner for leadership**: "Events trade consistency and debuggability for scalability and producer independence. We're choosing this trade because [specific business reason]."
+
+### How to Teach Event-Driven Thinking to Junior Engineers
+
+1. **Start with the five questions** (from Quick Visual): What happens when consumer is down? Out-of-order? Duplicate? How do you debug? Who's on-call?
+2. **Use the L5 mistake as a teaching moment**: Show the "notification system" example—ask them to design it, then reveal the L6 answer. Discuss why sync was better.
+3. **Pair on an incident post-mortem**: Walk through the Ordering Violation incident. Have them identify Context, Trigger, Propagation. Ask: "What would you have done differently?"
+4. **Ownership exercise**: For each event in the system, have them fill in: Who owns the schema? Who gets paged for lag? Who owns the DLQ?
+5. **Cost estimation exercise**: Give them event volume and retention; have them estimate Kafka cost. Compare to actual. Discuss consumer cost vs broker cost.
+
 ---
 
 ## Real-World Incident: The Ordering Violation That Cost Millions
 
-A grounding example from production with a detailed step-by-step timeline:
+A grounding example from production with a detailed step-by-step timeline.
+
+### Structured Incident Summary
+
+| Phase | Description |
+|-------|--------------|
+| **Context** | E-commerce platform, 500K orders/day. Order service publishes to Kafka; inventory service consumes and decrements stock. Partition key: order_id. Assumption: same key = same partition = ordering. |
+| **Trigger** | Development added "fast cancel" feature. Cancel bypasses normal flow, publishes directly to Kafka from a different producer instance. Same order_id, different producer → different partition assignment. |
+| **Propagation** | OrderCancelled (Partition 7) processed before OrderPlaced (Partition 3). Inventory received cancel first, ignored it (order doesn't exist). Then received create, decremented. Pattern repeated silently for weeks. |
+| **User impact** | Inventory counts drifted. Popular items showed "in stock" when depleted. Customers ordered, received "sorry, out of stock" emails. Customer satisfaction dropped; revenue impact in millions. |
+| **Engineer response** | Initial investigation focused on inventory service ("why wrong counts?"). Days to trace to event ordering. Correlation IDs would have shortened this. |
+| **Root cause** | Partition key correct (order_id), but producers differed. Same key + different producer = different partitions. Ordering guarantee violated. |
+| **Design change** | (1) Single producer for all order events. (2) Inventory handles out-of-order: pre-cancelled flag, ignore subsequent create. (3) Sequence numbers for detection. (4) Reconciliation job. |
+| **Lesson learned** | Ordering requires same key AND same producer AND same topic. Defensive design: consumers must handle out-of-order delivery even when "guaranteed." |
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -4264,7 +4729,120 @@ A grounding example from production with a detailed step-by-step timeline:
 
 ---
 
+## Real-World Incident 2: Poison Message and the Unmonitored DLQ
+
+A second incident illustrates a different failure mode: consumer-side blocking and the cascading impact of an unmonitored DLQ.
+
+### Structured Incident Summary
+
+| Phase | Description |
+|-------|-------------|
+| **Context** | SaaS platform, user activity events flow to analytics and billing. Billing consumer processes events to compute usage. Topic: `user-activity`, 20 partitions. DLQ configured but no alerting. |
+| **Trigger** | Migration script published malformed event: `user_id` as `null` (JSON null) instead of string. One event in partition 12. Consumer expected string, threw NPE. |
+| **Propagation** | Consumer retried indefinitely (default retry). Offset not committed. Partition 12 blocked. Other partitions fine. Lag for partition 12 grew: 0 → 1K → 10K → 50K over 4 hours. Billing consumer had DLQ after 3 retries, but retry logic had bug: infinite loop before DLQ. Consumer never sent to DLQ. |
+| **User impact** | Billing for users whose events hashed to partition 12 was delayed. 5% of customers. Invoices generated with stale data. 200 customers disputed charges. Support flooded. |
+| **Engineer response** | Lag alert fired at 50K. Team investigated. "Why partition 12 only?" Led to poison message hypothesis. Manually inspected partition 12 head. Found malformed event. Bypassed by resetting offset past the message (data loss for that event). Full fix: DLQ logic, alert on any DLQ message. |
+| **Root cause** | Malformed event from migration script; consumer not defensive; DLQ never triggered due to retry bug; no DLQ monitoring. |
+| **Design change** | (1) Schema validation at producer. (2) Consumer defensive null handling. (3) DLQ after N retries with alert on any message. (4) Runbook: "Partition lag isolated to one partition → likely poison message." |
+| **Lesson learned** | One poison message blocks one partition. Without DLQ and monitoring, blockage is invisible until lag grows. Every consumer needs: poison detection, DLQ, and DLQ alerting. |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PRODUCTION INCIDENT: POISON MESSAGE + UNMONITORED DLQ   │
+│                                                                             │
+│   THE SYSTEM:                                                               │
+│   - user-activity topic, 20 partitions                                     │
+│   - Billing consumer: processes events, updates usage aggregates            │
+│   - DLQ configured (3 retries) but no alerting                              │
+│                                                                             │
+│   THE INCIDENT:                                                             │
+│   Migration script published event with user_id: null                        │
+│   Consumer: user_id.toString() → NPE                                        │
+│   Retry loop: process → NPE → no commit → redeliver → NPE ...               │
+│   Bug: Retry logic never reached DLQ (infinite retry for same message)      │
+│                                                                             │
+│   Partition 12: [ ... OK events ... ] [POISON] [ ... queued ... ]           │
+│   Consumer stuck on POISON. Offset not advancing.                            │
+│   Lag for P12: 0 → 1K → 10K → 50K (4 hours)                                │
+│   Other partitions: lag 0.                                                   │
+│                                                                             │
+│   THE IMPACT:                                                               │
+│   - 5% of users (partition 12) had stale billing                            │
+│   - 200 charge disputes                                                     │
+│   - Support overload                                                        │
+│                                                                             │
+│   THE FIX:                                                                  │
+│   1. Manual: Reset offset past poison (lost 1 event)                        │
+│   2. Producer: Schema validation, reject null user_id                       │
+│   3. Consumer: Defensive null check; fix retry→DLQ logic                    │
+│   4. Ops: Alert on DLQ size > 0; runbook for "single-partition lag"         │
+│                                                                             │
+│   THE LESSON:                                                               │
+│   Poison messages are inevitable. Design for them: DLQ, monitoring,        │
+│   defensive parsing. One partition blocked = investigate poison first.      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Real-World Incident 3: PII Exposure via Event Consumer
+
+A third incident illustrates security and compliance failure modes in event-driven systems—often overlooked until a breach occurs.
+
+### Structured Incident Summary
+
+| Phase | Description |
+|-------|--------------|
+| **Context** | Healthcare platform: Patient service publishes PatientCreated events containing name, DOB, SSN last-four, and diagnosis codes. Five consumer groups: Billing, Notifications, Analytics, Audit, and a new Research team consumer. Events flow via single topic `patient-events`. |
+| **Trigger** | Research team added consumer for "de-identified" analytics. Engineer assumed "de-identified" meant they should hash PII. Implemented SHA256 hash of (name + DOB). Re-identification risk: SHA256 of known inputs is reversible by lookup. Published consumer to production. |
+| **Propagation** | Research team stored hashed PII in data warehouse accessible to 200 analysts. External researcher gained access to warehouse (legitimate contract). Combined hashed values with public records (birth registries, name lists). Re-identified 15% of patients within 2 weeks. |
+| **User impact** | Patient data breach. Regulatory investigation. Fines. Reputational damage. Patients lost trust. |
+| **Engineer response** | Breach discovered via audit. Took 3 weeks to trace: event schema → Research consumer → warehouse. No field-level classification; no consumer-level access control. |
+| **Root cause** | Single topic carried PII to all consumers. No trust-boundary enforcement. "De-identification" implemented incorrectly. No compliance review for new consumer. |
+| **Design change** | (1) Separate topics by sensitivity: `patient-events-internal` (PII, 3 consumers), `patient-events-anonymized` (no PII, analytics-safe). (2) Producer publishes to both; anonymization at producer, not consumer. (3) Consumer approval process for PII topics. (4) Field-level encryption for SSN, diagnosis codes. |
+| **Lesson learned** | Events replicate data. One event in one topic can reach many consumers. Define trust boundaries per topic; never assume consumers will "handle" PII correctly. Producer owns what goes where. Compliance review for every new consumer of PII topics. |
+
+**Why it matters at L6**: Security incidents in event pipelines have broader blast radius than single-service breaches. One misconfigured consumer can expose data to unintended audiences. Staff Engineers design trust boundaries into the architecture, not as an afterthought.
+
+---
+
 # Final Verification Checklist
+
+## Master Review Prompt Check (11 Checkboxes)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | L6 coverage audit completed (dimensions A–J) | ✓ |
+| 2 | Gaps identified and content added with Staff-level explanation | ✓ |
+| 3 | Structured real incidents present (3: Ordering Violation, Poison Message/DLQ, PII Exposure—each with Context \| Trigger \| Propagation \| User impact \| Engineer response \| Root cause \| Design change \| Lesson learned) | ✓ |
+| 4 | Staff vs Senior contrasts visible | ✓ |
+| 5 | Scale analysis (first bottlenecks, growth over years) | ✓ |
+| 6 | Cost drivers and sustainability addressed | ✓ |
+| 7 | Mental models and one-liners included | ✓ |
+| 8 | Diagrams support key concepts | ✓ |
+| 9 | Interview calibration (probes, signals, mistakes, phrases) | ✓ |
+| 10 | Leadership explanation and teaching guidance | ✓ |
+| 11 | Exercises and brainstorming present | ✓ |
+
+---
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Evidence |
+|-----------|----------|----------|
+| **A. Judgment & decision-making** | ✓ Complete | WHY for all decisions, L5/L6 comparisons, explicit trade-offs throughout |
+| **B. Failure & incident thinking** | ✓ Complete | Partial failures, blast radius, cascading failure timeline, poison messages, DLQ |
+| **C. Scale & time** | ✓ Complete | V1→10×→100×→1000× breakpoints, first-bottleneck quick reference, evolution triggers |
+| **D. Cost & sustainability** | ✓ Complete | Cost drivers, cost analysis, cost vs scale visual, optimization tree, sustainability |
+| **E. Real-world engineering** | ✓ Complete | Operational burdens, ownership boundaries, on-call, DLQ playbook, 3am lag spike drill |
+| **F. Learnability & memorability** | ✓ Complete | Mental models, one-liners (Staff Engineer's First Law, "cheapest event is the one you don't publish") |
+| **G. Data, consistency & correctness** | ✓ Complete | Invariants, ordering guarantees, idempotency, eventual consistency |
+| **H. Security & compliance** | ✓ Complete | Data sensitivity, trust boundaries, PII, GDPR, retention, PII exposure incident |
+| **I. Observability & debuggability** | ✓ Complete | Correlation IDs, tracing, lag monitoring, DLQ alerting |
+| **J. Cross-team & org impact** | ✓ Complete | Ownership boundaries, producer/consumer ownership, event catalog, cross-team breaking change drill |
+
+---
 
 ## This Section Now Meets Google Staff Engineer (L6) Expectations
 
@@ -4286,6 +4864,8 @@ A grounding example from production with a detailed step-by-step timeline:
 2. **Feed Fan-Out**: Hybrid push/pull, celebrity problem, lag handling
 3. **Metrics Ingestion**: Cardinality explosion, late data, backpressure
 4. **Ordering Violation Incident**: Same key ≠ same partition when producers differ
+5. **Poison Message Incident**: One bad event blocks partition; DLQ without alerting
+6. **PII Exposure Incident**: Trust boundaries, topic separation by sensitivity
 
 ### Diagrams Provided:
 
@@ -4293,6 +4873,8 @@ A grounding example from production with a detailed step-by-step timeline:
 2. Consumer lag visualization (healthy vs unhealthy)
 3. Failure propagation (cascade and containment)
 4. Multi-region challenges
+5. First bottleneck quick reference (scale vs mitigation)
+6. Cost vs scale visual (action zones)
 
 ### Remaining Gaps (Acceptable at L6 Level):
 
@@ -4502,24 +5084,33 @@ Use these questions to evaluate event-driven designs in interviews, design revie
 
 ---
 
-## Category 8: Advanced Patterns
+## Category 8: Security and Compliance
 
-34. **How do you handle cross-topic ordering?**
+34. **What trust boundaries exist for your events?**
+    - Which topics carry PII or regulated data?
+    - Which consumer groups are authorized for each sensitivity tier?
+    - What happens when a new team wants to consume a PII topic?
+
+---
+
+## Category 9: Advanced Patterns
+
+35. **How do you handle cross-topic ordering?**
     - UserCreated in topic A, OrderCreated in topic B
     - Consumer might see order before user
     - How do you handle missing dependencies?
 
-35. **How do you handle hot keys?**
+36. **How do you handle hot keys?**
     - One entity generating disproportionate events
     - Causes hot partition, affects other entities on same partition
     - Sub-partitioning? Different topic?
 
-36. **How do you replay events to new consumers?**
+37. **How do you replay events to new consumers?**
     - New consumer needs historical data
     - Reset offset to beginning?
     - Separate bootstrap mechanism?
 
-37. **How do you handle schema migration for existing events?**
+38. **How do you handle schema migration for existing events?**
     - Events in topic don't match new schema
     - Consumer needs to handle both versions
     - What about compacted topics with mixed schemas?

@@ -57,8 +57,22 @@ This section teaches caching as Staff Engineers practice it: as a system-wide ar
 | **API responses** | "Cache in Redis, invalidate on write" | "Who writes? How many writers? Distributed invalidation is hard. Consider CDN for public content, Redis for personalized." |
 | **Session data** | "Redis with 24-hour TTL" | "What happens if Redis goes down? Sticky sessions as backup? Can we tolerate session loss? What's our persistence strategy?" |
 | **Feed content** | "Cache the entire feed" | "Cache post content, not the feed. Feeds change per-user, post content is shared. Different TTLs for different tiers." |
+| **EU user data** | "Cache in Redis like everything else" | "Where does this cache live? EU data must stay in EU. Regional cache pools only; no global CDN for PII." |
+| **Cost reduction request** | "Cache more to reduce DB load" | "What's our hit rate today? Below 70%, caching adds cost without proportional benefit. Fix the query first." |
 
-**Key Difference**: L6 engineers think about failure modes, consistency requirements, and operational complexity before adding caching.
+**Key Difference**: L6 engineers think about failure modes, consistency requirements, operational complexity, and compliance constraints before adding caching.
+
+### Staff vs Senior: The Caching Judgment Gap
+
+| Dimension | Senior (L5) | Staff (L6) |
+|-----------|-------------|------------|
+| **Decision trigger** | "It's slow, add cache" | "What's the first bottleneck? Fix that first. Cache when protection or cost justify it." |
+| **Blast radius** | Thinks in terms of "cache down = slower" | Models: cache down → N× backend load → cascading failure. Designs containment. |
+| **Partial failure** | Treats cache as up or down | Reasons about: one shard down, elevated latency, eviction storms, hot keys. |
+| **Time horizon** | "Works at current scale" | "What breaks at 10×? What's the first bottleneck by year 2?" |
+| **Org impact** | Optimizes own service | Considers shared cache clusters, cross-team standards, platform ownership. |
+
+**L6 signal**: Staff Engineers articulate *why* they are not caching something as often as *why* they are.
 
 ---
 
@@ -102,6 +116,19 @@ Yes, caching makes things faster. But this is often the least important benefit.
 The difference between 1ms and 10ms is rarely user-perceptible. The difference between your system staying up under load and crashing—that's perceptible.
 
 **Staff Insight**: If you're adding caching primarily for latency, question whether you need it. If you're adding caching for protection or cost, you probably do need it.
+
+### Cache Invariants: What Must Never Happen
+
+Staff Engineers define invariants—conditions that must hold regardless of cache state. Violations indicate design bugs.
+
+| Invariant | Violation Example | Mitigation |
+|-----------|-------------------|------------|
+| **No user A sees user B's data** | CDN caches response keyed only by path; user param changes content | Include all request dimensions that affect response in cache key, or do not cache |
+| **Stale permissions never grant access** | Cached permission with 1-hour TTL; user revoked 5 minutes ago | Fail closed: short TTL, sync invalidation, or do not cache |
+| **Cache failure does not cause data loss** | Write-through cache; cache down during write | Origin is source of truth; cache is performance layer only |
+| **Eviction does not corrupt semantics** | LRU evicts "user logged out" marker; next request treats user as logged in | Negative cache with distinct marker; short TTL; or avoid caching auth state |
+
+**One-liner**: "Cache is a performance optimization, never a correctness requirement."
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1197,6 +1224,105 @@ FUNCTION get_with_backend_limit(key):
     CATCH TimeoutError:
         THROW ServiceUnavailableError("System overloaded")
 ```
+
+---
+
+## Hot Key: Single Key Overload
+
+**Staff Engineer Insight**: Total cache failure and thundering herd are obvious. The **hot key** problem is subtler: one key (or a small set) receives disproportionate traffic, overloading a single shard while the rest of the cluster sits idle. This is a partial failure mode—most of the cache works, but one slice fails.
+
+**What it is**: In a sharded cache cluster, keys are distributed by hash. A "hot key" is one that receives 10–100× more traffic than the average. That key lives on one shard. That shard becomes the bottleneck.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HOT KEY: TRAFFIC vs KEY DISTRIBUTION                      │
+│                                                                             │
+│   Sharded cache (10 shards):                                                │
+│   [Shard 0] [Shard 1] [Shard 2] ... [Shard 9]                               │
+│       │         │         │              │                                  │
+│   5K/s      40K/s      5K/s    ...    5K/s     ← Traffic per shard         │
+│   ✓          ✗         ✓              ✓                                     │
+│                                                                             │
+│   product:12345 (Black Friday deal) hashes to Shard 1                        │
+│   40% of all requests hit this one key → Shard 1 overloaded                 │
+│   Other shards idle. Adding more shards doesn't fix it (same key, same shard)│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Example scenario**:
+- Redis Cluster with 10 shards, 100K ops/sec total
+- Popular product "Black Friday Deal" cached at key `product:12345`
+- 40% of all requests hit this one product → 40K ops/sec to one shard
+- Shard capacity: 15K ops/sec
+- Result: That shard's CPU at 100%, latency spiking from 1ms to 200ms
+
+**Why it matters at L6**: Staff Engineers anticipate hot keys before they cause incidents. Viral content, celebrity profiles, and flash-sale products create natural hot keys. The fix is not "add more shards"—hashing distributes keys, not traffic. You need to reason about access patterns.
+
+**Concrete prevention**:
+
+```
+// Hot key mitigation: Local read-through cache for ultra-hot keys
+CLASS HotKeyAwareCache:
+    CONSTANT HOT_THRESHOLD = 1000  // accesses per second
+    
+    CONSTRUCTOR(remote_cache, local_cache):
+        this.remote = remote_cache
+        this.local = local_cache
+        this.access_counts = NEW CounterMap()
+    
+    FUNCTION get(key, fetch_function):
+        // Track access frequency
+        count = this.access_counts.increment(key)
+        
+        // If hot, serve from local cache first
+        IF count > HOT_THRESHOLD:
+            local_value = this.local.GET(key)
+            IF local_value EXISTS:
+                RETURN deserialize(local_value)
+        
+        // Remote cache
+        remote_value = this.remote.GET(key)
+        IF remote_value EXISTS:
+            IF count > HOT_THRESHOLD:
+                this.local.SET(key, remote_value, TTL = 30 seconds)
+            RETURN deserialize(remote_value)
+        
+        // Miss - fetch and populate both
+        data = fetch_function()
+        this.remote.SET(key, serialize(data), TTL = 1 hour)
+        IF count > HOT_THRESHOLD:
+            this.local.SET(key, serialize(data), TTL = 30 seconds)
+        RETURN data
+```
+
+**Trade-offs**:
+- **Local cache**: Reduces load on hot key's shard, but adds inconsistency (local can be stale). Use only for data where brief staleness is acceptable.
+- **Key splitting**: Store hot data under multiple keys (e.g., `product:12345:replica_0` through `product:12345:replica_9`), read from random replica. Spreads load across shards. Trade-off: 10× memory for that item, more complex invalidation.
+
+**One-liner**: "Hashing distributes keys, not traffic. Hot keys overload one shard—design for them."
+
+---
+
+## Eviction Storms
+
+**What it is**: When cache memory is full, Redis evicts keys (LRU, LFU, etc.). Under memory pressure, eviction happens continuously. If eviction rate exceeds the rate at which new data is written, you get an **eviction storm**: most requests become cache misses, database load spikes, and the system degrades.
+
+**Why it matters at L6**: Eviction storms are a *partial* failure—the cache is "up" but ineffective. Senior engineers might see "cache hit rate dropped" and add memory. Staff Engineers ask: "Why did we hit memory limit? Is our working set larger than we thought? Are we caching the wrong things?"
+
+**Propagation timeline**:
+```
+T+0:    Memory reaches maxmemory-policy threshold
+T+1s:   Eviction begins; new writes trigger evictions
+T+5s:   Eviction rate = 500/sec; hit rate drops from 90% to 70%
+T+30s:  Working set churn; evictions evict hot data
+T+60s:  Hit rate 50%; database load 2× normal
+T+5m:   Cascading slowness; app threads block on DB
+```
+
+**Prevention**: Right-size memory, monitor eviction rate, tune eviction policy. Add alert when `eviction_rate > 100/sec` sustained. For critical data, use separate cache pool with `noeviction` (fail instead of evict) so critical keys are never evicted.
+
+**One-liner**: "Eviction storms mean cache is up but useless. Monitor eviction rate; it's a leading indicator of capacity problems."
 
 ---
 
@@ -2409,6 +2535,28 @@ FUNCTION analyze_cache_bottlenecks(current_traffic, cache_config):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Mental Models and One-Liners for Caching
+
+Memorable phrases help Staff Engineers make fast decisions and teach others.
+
+| Mental Model | One-Liner |
+|--------------|-----------|
+| **Cache as shield** | "Cache protects the backend from traffic it can't handle." |
+| **Cache as economic layer** | "Cheap reads (Redis, CDN) displace expensive reads (database, origin)." |
+| **Correctness vs performance** | "Cache is a performance optimization, never a correctness requirement." |
+| **Failure design** | "Cache will go down. Plan for it. Graceful degradation > hoping for the best." |
+| **Invariant** | "Stale permissions never grant access; stale data never leaks another user's data." |
+| **Trust boundary** | "If a single header or param can change the response, it must be in the cache key or the response must not be cached." |
+| **First bottleneck** | "Cache the first bottleneck. Fix the query before you hide it with cache." |
+| **Complexity budget** | "Every cache layer is operational burden. Simple > clever." |
+| **Sustainability** | "Right-sized cache reduces total system energy. Over-provisioned cache is waste." |
+| **Compliance** | "Cache must not extend the blast radius of a compliance violation. If you can't purge it on demand, don't cache it." |
+| **Hot key** | "Hashing distributes keys, not traffic. Hot keys overload one shard—design for them." |
+| **Eviction storm** | "Eviction storms mean cache is up but useless. Monitor eviction rate; it's a leading indicator of capacity problems." |
+| **Platform ownership** | "When three teams share a cache, it's platform. When one team has a cache, it's application." |
+
+**Teaching tip**: When mentoring, lead with the one-liner, then unpack the trade-offs. "Cache is a performance optimization, never a correctness requirement" → means: source of truth is always the backend; cache miss or failure must never cause wrong data to be returned.
+
 ---
 
 # Part 8: Staff-Level Deep Dives
@@ -2522,6 +2670,57 @@ CLASS LoadSheddingCache:
 ```
 
 **The key insight**: It's better to return errors to 80% of users than to have 100% of users see degraded performance or complete failure.
+
+---
+
+## Observability and Debuggability for Cache
+
+Staff Engineers design cache visibility so that when things go wrong, the path from symptom to root cause is short. Cache sits in the middle of the request path—without proper instrumentation, one request can touch CDN, Redis, and database, and correlating behavior across layers is hard.
+
+### Trace Correlation Across Cache Layers
+
+When a user reports "slow page load," the request may have hit:
+1. CDN miss → origin fetch
+2. Redis timeout → database fallback
+3. Database slow query
+
+**Staff approach**: Propagate a request ID (or trace ID) through every layer. Each cache operation logs: `{trace_id, key, result: hit|miss|timeout, latency_ms}`. In your observability system, one trace shows the full path.
+
+| Layer | What to log | What to metric |
+|-------|-------------|----------------|
+| CDN | Cache key (sanitized), hit/miss, origin fetch time | Hit rate by path, miss latency histogram |
+| Redis | Key pattern (not full key if PII), operation, latency | Hit rate, p99 latency, connection errors |
+| Database fallback | Trigger reason (miss, timeout, error) | Fallback rate, database latency when used as fallback |
+
+**One-liner**: "If you can't trace one request through CDN → Redis → DB, you can't debug cache issues."
+
+### When Traces Don't Reveal the Answer
+
+**Staff Engineer Insight**: Sometimes the trace shows the path but not the cause. Cache bugs can be subtle: wrong key, wrong TTL, invalidation race, or schema mismatch. When traces show "cache hit" but the user sees wrong data, you need a different approach.
+
+**Debugging playbook when traces aren't enough**:
+1. **Reproduce with controlled params**: Same user, same key, same path. Does the bug reproduce? If yes, it's deterministic; if no, it's timing-dependent.
+2. **Check cache key construction**: Log the exact key used. Could a missing dimension (user_id, version, locale) cause wrong-data hit?
+3. **Verify invalidation path**: On write, do we invalidate? Is the invalidation synchronous or eventual? Could a race window explain stale reads?
+4. **Inspect cached value**: For the specific key, what's actually stored? Serialization bug? Old schema?
+5. **Eliminate layers**: Bypass CDN (direct to origin), bypass Redis (direct to DB). Which layer serves wrong data?
+
+**Concrete example**: Users reported seeing another user's cart. Traces showed cache hit. The cache key was `cart:{user_id}`—correct. Root cause: a bug in session resolution returned the wrong `user_id` for 0.1% of requests. The cache was correct; the input was wrong. Fix: trace back to session handling, not cache.
+
+**Trade-off**: Deeper debugging takes time. Staff Engineers invest in deterministic reproduction and layer elimination before changing code. "Fix the symptom" (e.g., shorter TTL) can mask the real bug.
+
+### First-Bottleneck Analysis
+
+Before adding caching, Staff Engineers identify the *first* bottleneck—the resource that will limit growth soonest. Caching that resource has the highest leverage.
+
+| Scale Stage | Typical First Bottleneck | When to Add Cache |
+|--------------|--------------------------|-------------------|
+| 0–10K req/s | Database connections or query latency | Add Redis when DB CPU > 50% or connection pool > 70% |
+| 10K–100K req/s | Database throughput | Cache must be in place; focus on hit rate and key design |
+| 100K+ req/s | Redis memory or network | Add CDN for public content; consider Redis Cluster |
+| Global users | Origin latency for distant regions | CDN at edge before adding regions |
+
+**Example**: A feed service at 5K req/s might see DB at 30% CPU. The first bottleneck is not DB yet—it's likely application logic or lack of indexes. Adding cache here *hides* the real bottleneck. Staff move: fix the query first; add cache when approaching 50% DB capacity.
 
 ---
 
@@ -2877,6 +3076,18 @@ CLASS CacheChaosTest:
 
 Beyond CDN poisoning (covered earlier), cache systems have unique security concerns.
 
+### Trust Boundaries and Cache
+
+Staff Engineers explicitly model trust boundaries. A trust boundary is where data or control crosses from a trusted to a less-trusted (or untrusted) domain. Caching amplifies risk at boundaries.
+
+| Boundary | Trusted Side | Untrusted Side | Cache Risk |
+|----------|--------------|----------------|------------|
+| **CDN edge ↔ User** | CDN serves cached content | User (or attacker) can influence request | Cache poisoning via crafted headers/params |
+| **App ↔ Redis** | App servers | Redis (shared infra; other apps may use same cluster) | Key collision, data leakage if keys not namespaced |
+| **Region A ↔ Region B** | Local cache | Replicated data from another region | Stale data from replication lag; compliance (e.g., GDPR) |
+
+**Staff principle**: Never cache at a boundary without ensuring the cache key captures all untrusted dimensions. One malicious request must not affect other users.
+
 ### Redis Security Checklist
 
 ```
@@ -2980,6 +3191,22 @@ CLASS SecureCacheService:
                 THROW ValueError("Sensitive data in cache key: " + key)
         RETURN key
 ```
+
+### Compliance and Cached Data
+
+**Staff Engineer Insight**: Caching crosses regulatory boundaries. Regulators care where data lives, how long it persists, and whether it can be audited. Staff Engineers reason about compliance *before* caching, not after an audit finding.
+
+| Compliance Consideration | Cache Impact | L6 Approach |
+|-------------------------|--------------|-------------|
+| **Data residency** | CDN and Redis may replicate data across regions. EU user data cached in US edge violates GDPR. | Cache only in regions where origin data is permitted. Use regional cache pools; never cache PII at global CDN edge. |
+| **Retention** | TTL determines how long data persists. Long TTLs may exceed retention limits. | Align TTL with retention policy. Financial data: short TTL or no cache. Audit logs: never cache. |
+| **Right to erasure** | Cached data survives deletion requests. User requests account deletion; cache still serves profile for TTL duration. | Implement purge-on-delete: deletion must invalidate all cache keys for that entity. Synchronous invalidation for compliance-critical data. |
+| **Audit trail** | Caches are ephemeral; no built-in audit log. Regulators may require evidence of who accessed what. | Don't cache audit-sensitive data. For cached data, document: what is cached, TTL, invalidation path. Log cache purges for compliance. |
+| **Encryption** | Data at rest in Redis, in transit to CDN. | Encryption at rest (managed Redis). TLS for all cache connections. CDN over HTTPS. |
+
+**Concrete example**: A healthcare application caches patient lookup results. Regulatory frameworks require: data stays in authorized regions, access is auditable, deletion is immediate. Staff approach: (1) Regional Redis only, no cross-region replication for patient data. (2) Short TTL (5 minutes) with invalidation on record update or deletion. (3) No caching of audit logs or access records. (4) Runbook for emergency purge documented for compliance reviews.
+
+**One-liner**: "Cache must not extend the blast radius of a compliance violation. If you can't purge it on demand, don't cache it."
 
 ---
 
@@ -4333,6 +4560,38 @@ FUNCTION model_cache_costs(traffic_req_per_sec, hit_rate, avg_value_size_kb):
 
 **When caching becomes expensive**: When hit rate is low (<70%). At 50% hit rate, you're paying for cache AND database.
 
+### Cost Sustainability Over Years
+
+**Staff Engineer Insight**: Cache costs grow with traffic. At L6, you plan for 2–3 year horizons. A cache that costs $5K/month today can become $50K/month at 10× scale. Budget planning must be explicit.
+
+**Multi-year projection framework**:
+- **Year 1**: Current traffic × 1.5 (growth buffer). Model cost at this level.
+- **Year 2**: Traffic × 2–3 (typical product growth). Model cost; identify when Redis Cluster or CDN tier changes are needed.
+- **Year 3**: Traffic × 5 (aggressive growth). Model cost; identify when multi-region or architectural changes are required.
+
+**Concrete example**: A product catalog cache costs $2K/month at 10K req/s. At 2× (20K req/s), cost is ~$4K (linear). At 10× (100K req/s), single Redis node hits limits—Redis Cluster adds ~$8K. Total: $12K/month. At 50× (500K req/s), CDN becomes necessary; CDN adds $5K. Without planning, the team is surprised by a $15K/month bill when they "just" 5×'d.
+
+**Why it matters at L6**: Leadership asks "what will this cost in 2 years?" Staff Engineers have the model. They also know when to push back: "If we're not growing, we don't need to over-provision. Right-size for current + 6 months."
+
+**Trade-off**: Over-provisioning for 3 years wastes budget. Under-provisioning causes incidents during growth. The sweet spot: plan for 12–18 months, re-evaluate quarterly.
+
+---
+
+### Cache and Sustainability
+
+**Staff Engineer Insight**: At L6, cost thinking extends beyond dollars. Sustainability—energy use, carbon footprint, resource efficiency—increasingly influences design decisions. Caching has both positive and negative sustainability implications.
+
+**Positive impact**: Caching reduces database load, which often means fewer database servers, lower energy consumption, and less redundant computation. A 95% cache hit rate means 20× fewer database queries—significant energy savings at scale. CDN edge caching reduces origin traffic and distributes load closer to users, often reducing total network energy.
+
+**Negative impact**: In-memory caches (Redis) consume power 24/7 regardless of hit rate. Over-provisioned cache clusters—"we'll add headroom for Black Friday"—run at 30% utilization the rest of the year. Duplicate cache layers across regions multiply this waste.
+
+**Trade-offs**:
+- **Right-size aggressively**: Run cache at 60–70% memory utilization. Add capacity only when forecasts justify it. Avoid "just in case" over-provisioning.
+- **Prefer TTL over infinite retention**: Stale data that never expires consumes memory and energy indefinitely. Short TTLs plus eviction keep the working set lean.
+- **Measure before optimizing**: Don't add sustainability complexity (tiered caches, cold storage) without data. A simple well-tuned cache often beats a complex "green" design.
+
+**One-liner**: "Right-sized cache reduces total system energy. Over-provisioned cache is waste."
+
 ### What Staff Engineers Do NOT Build
 
 **Staff Engineer Insight**: The best optimization is not building unnecessary complexity. Here's what Staff Engineers intentionally avoid:
@@ -5216,6 +5475,36 @@ FUNCTION post_maintenance_traffic_ramp():
     log.info("Traffic ramp complete")
 ```
 
+### Incident 4: CDN Cache Poisoning (Structured Postmortem Format)
+
+This incident illustrates the full postmortem structure Staff Engineers use: Context → Trigger → Propagation → User impact → Engineer response → Root cause → Design change → Lesson learned.
+
+| Field | Content |
+|-------|---------|
+| **Context** | E-commerce platform serving product pages globally. CDN caches product HTML at edge. Product pages include user-specific elements (wishlist status, cart count) via JavaScript; base HTML was considered "public." Vary header was `Accept-Language` only. |
+| **Trigger** | Attacker sent request with crafted `Accept-Language: en; id=1` (or similar) to fetch product page. Application incorrectly used the `id` parameter to include pricing for product ID 1. Response was cached at CDN. |
+| **Propagation** | Next legitimate user with `Accept-Language: en` received cached response—with attacker's product data. Affected users saw wrong product, wrong price, or in worst case, another user's cart preview. Trust boundary violation: CDN treated response as cacheable when it should have been user-scoped. |
+| **User impact** | 2,400 users over 90 minutes saw incorrect product data. 12 users reported "seeing someone else's cart." No financial loss (checkout was server-side), but significant trust damage. |
+| **Engineer response** | User report at T+45min. On-call checked CDN cache keys → found language-based keys only. Traced request to product endpoint. Emergency purge of affected product paths. Added `Vary: Cookie` for product routes (breaking CDN hit rate short-term). Root cause analysis within 4 hours. |
+| **Root cause** | Application returned user-influenced data (from query param) while declaring cacheability via weak Vary. CDN key did not include the attacker-controlled dimension. Multiple teams assumed "product page = cacheable" without auditing which headers influenced response. |
+| **Design change** | (1) Audit all CDN-cached endpoints for cache key completeness. (2) Never cache responses influenced by query params unless param is in cache key. (3) Add automated tests: "same path, different params → different cache key." (4) Default to `Cache-Control: private` for product pages until proven safe. |
+| **Lesson learned** | CDN caching crosses a trust boundary: once cached, one malicious request can poison many users. Staff-level rule: "If a single header or param can change the response, it must be in the cache key or the response must not be cached." |
+
+**Why this format matters at L6**: Structured postmortems enable organizational learning, consistent incident response, and clear accountability. Interviewers and leadership expect Staff Engineers to produce and teach this format.
+
+### Incident 5: Data Residency Violation (Structured Postmortem Format)
+
+| Field | Content |
+|-------|---------|
+| **Context** | SaaS platform serving EU customers. User profiles cached in a shared Redis cluster in US region for latency. EU launch was 6 months ago; caching was not revisited for compliance. Legal assumed all EU data stayed in EU per contract. |
+| **Trigger** | Customer audit requested data flow documentation. Engineering produced architecture diagram showing Redis (US) in the read path for EU user profiles. |
+| **Propagation** | Legal reviewed and identified breach: EU user PII (names, emails) was cached in US region. Cache TTL was 1 hour; replication to Redis replicas meant copies existed in US for up to 1 hour per user. No purge-on-delete for EU users; GDPR deletion requests did not invalidate cache. |
+| **User impact** | No direct user-visible impact. Regulatory risk: potential fines, contract breach with EU customers. 12 enterprise customers affected. |
+| **Engineer response** | Immediate: partitioned EU user data to EU-only Redis cluster. Added purge-on-delete for EU users in deletion workflows. Short-term: audit of all cached data for residency; documented cache topology per region. |
+| **Root cause** | Caching was added for performance without compliance review. No data residency classification in cache design. EU expansion did not trigger architecture review for cached data. |
+| **Design change** | (1) Cache design requires compliance sign-off for regulated data. (2) Regional cache pools: EU data in EU Redis only; US data in US. (3) Purge-on-delete for all compliance-sensitive entities. (4) Architecture review checklist includes "Where does cached data live?" |
+| **Lesson learned** | Cache extends the blast radius of data. Staff-level rule: "If you can't document where cached data lives and how it's purged, don't cache it." |
+
 ---
 
 ## Cross-Team Cache Standards
@@ -5291,6 +5580,31 @@ Without cache standards, every team:
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### When Caching Becomes a Platform Service
+
+**Staff Engineer Insight**: At scale, shared cache infrastructure becomes a platform concern. Staff Engineers recognize the trigger points.
+
+**Decision framework—when to make caching a platform service**:
+
+| Signal | Implication |
+|--------|-------------|
+| 5+ teams use the same Redis cluster | Platform should own provisioning, scaling, monitoring |
+| Cache incidents affect multiple products | Single point of failure; platform owns reliability |
+| Teams debate TTL strategies and key formats | Standards needed; platform or central library team owns |
+| Cache costs are a significant line item | Platform owns cost attribution and optimization |
+| Compliance (GDPR, residency) applies to cached data | Platform owns regional topology and purge-on-delete |
+
+**When to keep caching application-owned**:
+- Single team, single product
+- Cache is a performance optimization, not critical path
+- No shared infrastructure
+
+**Trade-off**: Platform ownership increases consistency and reduces per-team operational burden, but adds process (RFCs, capacity requests). Application ownership is faster to iterate but leads to fragmentation at scale.
+
+**One-liner**: "When three teams share a cache, it's platform. When one team has a cache, it's application."
+
+---
 
 ### Ownership Boundaries: Who Owns What
 
@@ -5387,6 +5701,23 @@ Without cache standards, every team:
    - Platform team: "Apps are caching too much"
    - Application team: "Platform charges too much"
    - **Resolution**: Shared cost model. Platform shows per-team costs. Apps optimize usage.
+
+### Operational Burden: What Running Cache at Scale Actually Costs
+
+**Staff Engineer Insight**: Every cache layer is operational burden. Staff Engineers quantify this before adding it. The 3 AM page is real—cache incidents often surface during traffic spikes (evenings, launches) when the system is under stress.
+
+**What on-call for cache actually involves**:
+- **Interpretation load**: Cache metrics (hit rate, latency, evictions) can be misleading. "Hit rate dropped" could mean: cold start, hot key, eviction storm, wrong TTL, or a bug. The on-call engineer must triage quickly.
+- **Blast radius decisions**: When cache fails, do we serve stale data, fail closed, or shed load? The runbook must be explicit. Ambiguous runbooks lead to 5-minute debates at 3 AM.
+- **Escalation paths**: Cache is often shared. Is it platform infra (their page) or application logic (our page)? Unclear ownership delays resolution.
+
+**Concrete example**: A team added a Redis cache for a high-traffic endpoint. Hit rate was 95%. Six months later, a new feature caused cache key cardinality to explode—10M unique keys. Memory filled, evictions began, hit rate dropped to 50%. The on-call engineer saw "high latency" and "database CPU spike" but didn't immediately connect it to cache. The runbook said "check cache hit rate" but didn't say "if hit rate dropped and key count grew recently, suspect cardinality explosion." The incident lasted 30 minutes longer than it should have.
+
+**Why it matters at L6**: Staff Engineers design runbooks that reduce cognitive load. They include: "If you see X and Y, the likely cause is Z." They define ownership so no one hesitates at 3 AM. They add cache-specific alerts (eviction rate, key count growth) so the signal is clear.
+
+**Trade-off**: More operational preparation (runbooks, alerts, ownership docs) increases upfront cost but reduces incident duration and on-call fatigue. The complexity budget must include operational burden, not just code complexity.
+
+---
 
 ### Human Failure Modes: How Teams Fail with Caching
 
@@ -5612,6 +5943,22 @@ CLASS StandardCacheClient:
 
 # Part 9: Interview Calibration
 
+## What Interviewers Probe in Caching Discussions
+
+Interviewers at Staff level probe for *judgment*, not just knowledge. Typical probes:
+
+| Probe | What They're Testing |
+|-------|----------------------|
+| "What happens when the cache goes down?" | Failure mode reasoning, blast radius |
+| "How stale can this data be?" | Consistency model selection |
+| "Would you cache this? Why or why not?" | Judgment, not defaulting to "yes" |
+| "What's the first bottleneck as you scale?" | Scale and time thinking |
+| "How would you debug a user seeing wrong data?" | Observability, trace correlation |
+| "Who owns the cache—platform or app team?" | Cross-team impact |
+| "How do you explain this design to a non-engineer?" | Leadership communication |
+| "We're expanding to EU. How does caching change?" | Compliance, data residency |
+| "What's the sustainability impact of this cache design?" | Cost and sustainability thinking |
+
 ## What Interviewers Look For in Caching Discussions
 
 | Signal | What Demonstrates It | What's Missing If Absent |
@@ -5669,6 +6016,57 @@ CLASS StandardCacheClient:
 
 **Key difference**: L6 thinks about failure modes, security implications, and operational requirements—not just the happy path.
 
+## Common L5 Mistake: Debugging Without a Model
+
+**Scenario**: User reports "I updated my profile but still see old data."
+
+**L5 Response**:
+> "Let me check the cache. Maybe we need to invalidate. I'll add a shorter TTL for profiles."
+
+**What's missing**:
+- No systematic hypothesis formation (Is it cache? Which layer? Which key?)
+- No trace correlation (Can we follow this user's request through CDN → Redis → DB?)
+- No consistency model clarity (Is read-your-writes expected? Is it a bug or by design?)
+- Jumping to a fix (TTL change) without understanding root cause
+
+**L6 Response**:
+> "First, I need to understand the expected behavior. Do we promise read-your-writes for profile updates? If yes, we have a bug. If no, we need to set user expectations.
+>
+> To debug: (1) Get the user's request ID and trace it through CDN, Redis, and application. Check if the response came from cache or DB. (2) If from cache, check the cache key—did we invalidate on update? (3) Is the writer and reader the same service? (4) Could there be replication lag? (5) Only after we know the path do we change TTL or invalidation logic. Otherwise we're guessing."
+
+**Key difference**: L6 forms a hypothesis, traces the request path, and verifies the consistency model before changing anything. They don't guess; they instrument and observe.
+
+## Signals of Strong Staff Thinking
+
+| Signal | What It Sounds Like |
+|--------|---------------------|
+| **Leads with constraints** | "The first thing I need to understand is how stale this data can be." |
+| **Names trade-offs** | "We're trading instant invalidation for 15-minute staleness—that's acceptable for this use case." |
+| **Models blast radius** | "If Redis goes down, 100% of reads hit the DB. Our DB handles 5K QPS; we'd see 100K. We need a circuit breaker." |
+| **Rejects complexity** | "I wouldn't cache this. The invalidation story is too complex for the latency gain." |
+| **Considers org impact** | "This would affect the shared Redis cluster—we need platform alignment before we add this workload." |
+
+## How to Explain Caching to Leadership
+
+Staff Engineers translate technical decisions into business language:
+
+| Technical Concept | Leadership Framing |
+|-------------------|-------------------|
+| Cache hit rate | "We're serving 95% of reads from cache—that's 20× cheaper than the database." |
+| Cache failure | "If cache goes down, we degrade to slower responses instead of an outage. We've designed for that." |
+| CDN cost | "Edge caching cuts our bandwidth costs by 80% for static content." |
+| Cache stampede | "We prevent thundering herd: one request repopulates the cache, others wait—no database overload." |
+
+**Principle**: Lead with business impact (cost, reliability, latency), then briefly mention the mechanism. Avoid jargon unless asked.
+
+## How to Teach Caching to Junior Engineers
+
+1. **Start with the "why"**: Protection, cost, latency—in that order. Most juniors think only of speed.
+2. **Ask "what happens when it fails?"** early. Build failure-first thinking.
+3. **Use the one-liners**: "Cache is a performance optimization, never a correctness requirement."
+4. **Pair on a real incident**: Walk through a postmortem together. Structure: Context → Trigger → Propagation → Impact → Fix.
+5. **Assign ownership**: "You own the cache hit rate for this service. What would you monitor?"
+
 ---
 
 # Quick Reference Card
@@ -5703,6 +6101,8 @@ CLASS StandardCacheClient:
 │   • Cold start: Cache warming + gradual traffic                             │
 │   • Stale propagation: Versioned keys + emergency purge                     │
 │   • Write failures: Invalidation queue + monitoring                         │
+│   • Hot key: Local cache or key splitting for ultra-hot keys               │
+│   • Eviction storm: Monitor eviction rate; right-size memory                 │
 │                                                                             │
 │   LAYER SELECTION:                                                          │
 │   • CDN: Public, static, globally accessed                                  │
@@ -6296,6 +6696,43 @@ After completing exercises, evaluate yourself:
 - Cache-as-a-service architectures
 - Machine learning for cache eviction (LeCaR, etc.)
 - Database-integrated caching (MySQL query cache, PostgreSQL pg_prewarm)
+
+---
+
+# Master Review Prompt Check
+
+Use this checklist to verify chapter completeness before release.
+
+## 11-Point Verification
+
+| # | Check | Status |
+|---|-------|--------|
+| 1 | Judgment & decision-making: Staff-level frameworks and trade-offs articulated | ✓ |
+| 2 | Failure & incident thinking: Partial failures, blast radius, cascading failures | ✓ |
+| 3 | Scale & time: Growth over years, first bottlenecks, when to add cache | ✓ |
+| 4 | Cost & sustainability: Cost drivers, optimization strategies | ✓ |
+| 5 | Real-world engineering: Operational burdens, human errors, on-call scenarios | ✓ |
+| 6 | Learnability & memorability: Mental models, one-liners, frameworks | ✓ |
+| 7 | Data, consistency & correctness: Invariants, consistency models | ✓ |
+| 8 | Security & compliance: Trust boundaries, cache poisoning, Redis security | ✓ |
+| 9 | Observability & debuggability: Metrics, logs, trace correlation | ✓ |
+| 10 | Cross-team & org impact: Standards, ownership boundaries | ✓ |
+| 11 | Structured incident: Full format (Context \| Trigger \| Propagation \| User impact \| Engineer response \| Root cause \| Design change \| Lesson learned) | ✓ |
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Where to Find |
+|-----------|----------|---------------|
+| **A. Judgment & decision-making** | Staff vs Senior table, TTL framework, cache suitability matrix, debugging contrast | Part 1, Part 2, Part 7, Part 9 |
+| **B. Failure & incident thinking** | Stampede, thundering herd, cold start, hot key, eviction storms, cascading timeline, blast radius | Part 4, Part 6, Part 8 |
+| **C. Scale & time** | First-bottleneck analysis, growth stages, when to add Redis/CDN, cost sustainability over years | Part 6, Part 8 (Observability, Cache Cost Optimization) |
+| **D. Cost & sustainability** | Cost breakdown, optimization, tiered caching, cost sustainability over years, cache sustainability (energy, right-sizing) | Part 8 (Cache Cost Optimization, Cache and Sustainability) |
+| **E. Real-world engineering** | Human failure modes, operational burden/on-call reality, ownership conflicts | Part 8 (Cross-Team, Human Failure Modes, Operational Burden) |
+| **F. Learnability & memorability** | Mental models, one-liners (incl. hot key, eviction storm, platform ownership), teaching tips | Part 7, Part 9 |
+| **G. Data, consistency & correctness** | Invariants, consistency models, read-your-writes | Part 1, Part 2 |
+| **H. Security & compliance** | Trust boundaries, Redis security, CDN poisoning, compliance and cached data (residency, retention, audit) | Part 3, Part 8 (Cache Security, Compliance and Cached Data) |
+| **I. Observability & debuggability** | Trace correlation, metrics, first-bottleneck analysis, when traces don't reveal the answer | Part 8 (Observability) |
+| **J. Cross-team & org impact** | Cache standards, ownership boundaries, platform vs app, when caching becomes platform service | Part 8 (Cross-Team Cache Standards) |
 
 ---
 

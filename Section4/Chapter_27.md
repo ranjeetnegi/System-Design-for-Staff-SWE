@@ -403,6 +403,48 @@ STAFF-LEVEL APPROACH:
 └── Accept that some costs are load-bearing
 ```
 
+### 4a. Migration Cost Drivers: What Staff Engineers Track
+
+Migrations create costs beyond the obvious. Staff Engineers treat cost as a first-class migration constraint.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MIGRATION COST DRIVERS (STAFF VIEW)                     │
+│                                                                             │
+│   INFRASTRUCTURE COSTS                                                       │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Dual-system running: 2x compute, storage, licensing during phase │   │
+│   │  • Shadow traffic: 2x read load for comparison validation            │   │
+│   │  • Reconcilation jobs: Additional compute for drift detection         │   │
+│   │  • Extended retention: Old system kept for rollback                   │   │
+│   │  • Network: Cross-region data sync, egress costs                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   ENGINEERING COSTS                                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Migration work: 60-80% of engineer capacity during migration       │   │
+│   │  • Feature velocity drop: New features delayed or blocked             │   │
+│   │  • Context switching: Team maintaining two code paths                 │   │
+│   │  • Testing overhead: Validation for both systems                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   RISK COSTS (Expected value of failure)                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • P(failure) × cost of failure = expected risk cost                 │   │
+│   │  • Example: 10% fail rate × 40 engineer-hours recovery = 4 hrs      │   │
+│   │  • Add: User impact, revenue loss, reputation damage                │   │
+│   │  • Staff practice: Quantify before starting; revisit at each phase    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   SUSTAINABILITY AT L6:                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  "Can we afford to run both systems for 2x the planned duration?"   │   │
+│   │  Migrations always take longer than planned. Budget for 1.5-2x.       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 5. Compliance and Locality Changes
 
 ```
@@ -428,6 +470,42 @@ STAFF-LEVEL APPROACH:
 ├── Create audit capability from the start
 ├── Test compliance with adversarial scenarios
 └── Plan for regulations to become stricter over time
+```
+
+### 6a. When to Migrate vs. Extend: The Staff Judgment Call
+
+```
+DRIVER: System needs change, but migration is expensive
+
+THE STAFF QUESTION:
+├── "Do we migrate to a new architecture, or extend the current one?"
+├── This is a judgment call, not a technical one
+└── Wrong answer costs months or years
+
+MIGRATE WHEN:
+├── Current architecture fundamentally cannot support requirements
+├── Technical debt blocks all meaningful progress
+├── Cost of extending exceeds cost of migrating (over 2-3 year horizon)
+├── Team is demoralized by structural limitations
+└── Regulatory or compliance mandates cannot be met
+
+EXTEND WHEN:
+├── Current architecture can support requirements with modification
+├── Migration would require 6+ months with high risk
+├── Extending buys 1-2 years of runway at acceptable cost
+├── Team capacity is limited (migration would stall other work)
+└── Migration would destabilize a critical system
+
+STAFF TRADE-OFF:
+├── Extending: Lower risk now, potentially higher cost later
+├── Migrating: Higher risk now, potentially lower cost later
+└── The judgment: Which failure mode can the organization absorb?
+
+L6 EXAMPLE:
+"Database is slow at 10M users. Option A: Add read replicas, cache layer (3 weeks).
+Option B: Shard the database (4 months). Staff judgment: Extend first. We'll hit
+limits again at 50M users, but we'll have more data on access patterns to design
+sharding correctly. Migrating now would be premature—we don't know our hot keys."
 ```
 
 ### 6. Organizational Restructuring
@@ -1103,6 +1181,42 @@ STAFF INSIGHT:
     
     The goal is not "finish fast."
     The goal is "finish safely, and be able to recover if wrong."
+```
+
+## Operational Burdens and Human Error During Migration
+
+Staff Engineers design for the reality that migrations run longer than planned, and humans under fatigue make mistakes.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              OPERATIONAL BURDENS: STAFF ENGINEER AWARENESS                  │
+│                                                                             │
+│   ON-CALL DURING MIGRATION                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Two systems = more failure modes = more pages                      │   │
+│   │  • On-call burden doubles during dual-write phase                    │   │
+│   │  • Runbooks must cover both old and new paths                         │   │
+│   │  • Staff practice: Stagger migration phases; avoid Friday deploys    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   HUMAN ERROR RISK                                                          │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Fatigue: 3am rollback decisions are harder than 3pm ones          │   │
+│   │  • Complexity: Two systems increase cognitive load                    │   │
+│   │  • Automation: Manual steps during migration = error surface         │   │
+│   │  • Staff practice: Automate rollback; require two-person approval   │   │
+│   │                    for irreversible steps                            │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   MITIGATION:                                                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Pre-defined rollback triggers (automated, not judgment-based)     │   │
+│   │  • Single-command rollback where possible                            │   │
+│   │  • Extended bake times reduce need for hasty decisions                │   │
+│   │  • Document "do not roll back" criteria to avoid wrong rollback     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Risks Staff Engineers Accept vs. Refuse
@@ -2733,6 +2847,108 @@ DESIGN CHANGES:
        RETURN get_user(user_id)
 ```
 
+### Trust Boundaries During Migration
+
+When migrating auth, data stores, or cross-region flows, trust boundaries shift. Staff Engineers track this explicitly.
+
+```
+TRUST BOUNDARY SHIFT EXAMPLE: Auth migration
+
+Before: Client → [Old Auth] → Service (trust boundary at old auth)
+During:  Client → [Old Auth] ∨ [New Auth] → Service (two boundaries)
+After:   Client → [New Auth] → Service (trust boundary at new auth)
+
+STAFF CONSIDERATION:
+├── During migration: Which path is authoritative for access decisions?
+├── Token validation: Old vs new tokens—where does each get validated?
+├── Data sensitivity: During dual-write, data may cross new boundaries
+└── Audit: Log which trust boundary was used for each request
+```
+
+---
+
+## Scenario: Wrong Rollback—Human Error Under Fatigue
+
+### Context
+
+A search service was migrating from an in-house index to a managed search offering. The migration was in Phase 4: 60% of traffic on the new system, dual-write active. The service had three migration feature flags: `search_v2_traffic_pct`, `search_v2_writes`, and `search_v2_read_fallback`.
+
+### Trigger
+
+At 2:47 AM, P99 latency spiked from 80ms to 1200ms. The on-call engineer (solo, Week 6 of migration) received alerts. Dashboard showed elevated latency on the new search path.
+
+### Propagation
+
+```
+TIMELINE:
+
+T+0 (2:47 AM): Latency alert fires
+├── Engineer wakes, checks dashboard
+├── Sees: new_search_latency_p99 = 1200ms (threshold: 200ms)
+├── Old path: 80ms (normal)
+└── Decision: "Roll back migration"
+
+T+8 min (2:55 AM): Engineer executes rollback
+├── meant to run: set search_v2_traffic_pct = 0
+├── actually ran: set search_v2_read_fallback = false
+├── traffic_pct stayed at 60%
+├── read_fallback disabled = no fallback to old index on miss
+└── Result: 60% of users now get 404s on cache miss (no fallback)
+
+T+12 min (2:59 AM): User reports spike
+├── "Search is broken" — many results missing
+├── Engineer notices: Error rate up, not latency down
+├── Realizes: Wrong flag was changed
+└── Fix: Re-enable read_fallback (2:01 AM)
+
+T+20 min (3:07 AM): Correct rollback
+├── set search_v2_traffic_pct = 0
+├── All traffic back to old system
+└── Latency normalizes
+```
+
+### User Impact
+
+- 60% of users experienced incomplete search results for 12 minutes
+- Root cause of original latency spike: unrelated (CDN cache stampede), not migration
+- Incorrect rollback multiplied impact: went from latency to correctness failure
+
+### Engineer Response
+
+- Re-enabled read_fallback within 12 minutes
+- Executed correct rollback within 20 minutes
+- Post-incident: Migration team reviewed runbook, added automation
+
+### Root Cause
+
+1. **Primary**: Engineer rolled back the wrong flag under fatigue. Two similar-sounding flags (traffic_pct vs read_fallback) in a high-stress context.
+2. **Contributing**: Solo on-call during migration. No second pair of eyes for irreversible-seeming actions.
+3. **Contributing**: Manual rollback steps. Copy-paste from runbook; minor typo in flag name.
+
+### Design Change
+
+```
+CHANGES IMPLEMENTED:
+
+1. Single-command rollback
+   // Before: Three separate flag updates, easy to get wrong
+   // After:  rollback_search_migration() — one script, updates all flags correctly
+
+2. Automated rollback triggers
+   // Before: Engineer decides when to roll back
+   // After:  If latency_p99 > 500ms for 5 min, auto-set traffic_pct = 0
+
+3. Two-person approval for "disable fallback"
+   // read_fallback = false is dangerous; requires second engineer approval
+
+4. Staggered on-call
+   // During migration: Two engineers on rotation, not one
+```
+
+### Lesson Learned
+
+**Staff insight**: "The migration didn't fail. Our rollback procedure failed. We designed for technical correctness but not for a tired human at 3 AM. Reversibility isn't just about having a rollback—it's about making rollback impossible to get wrong."
+
 ---
 
 # Part 6B: Testing Strategies During Migration
@@ -4323,6 +4539,60 @@ the failure mode is [description]."
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## How to Explain Migration Trade-offs to Leadership
+
+Staff Engineers translate technical risk into business terms. Leadership cares about: timeline, cost, risk, and reversibility.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              EXPLAINING MIGRATION TO LEADERSHIP (STAFF APPROACH)            │
+│                                                                             │
+│   DON'T SAY:                                                                │
+│   "We need 6 months for dual-write and gradual cutover."                    │
+│                                                                             │
+│   DO SAY:                                                                   │
+│   "We have two options: Fast (3 months, 15% risk of 2-week outage) or     │
+│   Safe (6 months, 2% risk). The safe path costs 3 more months but avoids   │
+│   a potential $X revenue impact. I recommend Safe."                         │
+│                                                                             │
+│   FRAMING TEMPLATE:                                                         │
+│   ├── Options: [Fast] vs [Safe] (or [Medium])                               │
+│   ├── Timeline: X months vs Y months                                        │
+│   ├── Risk: P(failure) and impact if failure                                │
+│   ├── Recommendation: With rationale                                        │
+│   └── Ask: "What's your risk tolerance?" if unclear                          │
+│                                                                             │
+│   WHEN PUSHED FOR SPEED:                                                    │
+│   "I can compress the timeline by [skipping phase X]. The trade-off is     │
+│   [specific consequence]. If we hit that case, recovery takes [time].     │
+│   Are you comfortable with that?"                                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## How to Teach Migration Thinking to Senior Engineers
+
+Staff Engineers develop others. Key teaching moments:
+
+```
+TEACHING MOMENT 1: Design review
+"When you propose this change, walk me through the rollback. What happens
+if we need to undo it at 50% traffic?"
+
+TEACHING MOMENT 2: Incident retro
+"We had a rollback. What made it hard? What would make the next one easier?"
+
+TEACHING MOMENT 3: Migration planning
+"Before we start, list every consumer of this system. Include batch jobs,
+cron, and external partners. How do we find the ones we don't know?"
+
+TEACHING MOMENT 4: One-way door decision
+"This looks like a one-way door. What would we need to make it two-way?
+If we can't, what's our rollback plan before we commit?"
+
+PRINCIPLE: Don't give the answer. Ask the question that surfaces Staff-level thinking.
+```
+
 ---
 
 # Part 11: Reflection, Brainstorming, and Homework
@@ -4697,6 +4967,40 @@ The migration requires all teams to update their client code to use a new API.
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+# Part 12: Master Review Prompt Check
+
+Before considering this chapter complete, verify:
+
+| # | Check | Status |
+|---|-------|--------|
+| 1 | **Judgment & decision-making** | Migrate vs extend framework; one-way door decisions; risk acceptance |
+| 2 | **Failure & incident thinking** | Partial failures; blast radius; cascading failures; control-plane risk |
+| 3 | **Scale & time** | V1 → 10× → 100× → multi-year model; first bottlenecks; growth over years |
+| 4 | **Cost & sustainability** | Migration cost drivers; dual-system costs; risk cost; sustainability |
+| 5 | **Real-world engineering** | Operational burdens; on-call during migration; human error; fatigue incident |
+| 6 | **Learnability & memorability** | Mental models; one-liners; teaching frameworks |
+| 7 | **Data, consistency & correctness** | Dual-write invariants; reconciliation; consistency during migration |
+| 8 | **Security & compliance** | Data locality; GDPR, CCPA; deletion manifest; audit |
+| 9 | **Observability & debuggability** | Migration metrics; shadow comparison; rollback triggers |
+| 10 | **Cross-team & org impact** | Coordination; long-tail consumers; org restructuring |
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Key Sections |
+|-----------|----------|--------------|
+| **A. Judgment & decision-making** | ✓ | Migrate vs extend (6a); One-way doors; Risk acceptance; Reversibility |
+| **B. Failure & incident thinking** | ✓ | Blast radius; Partial rollout incident; Control-plane risk; Fatigue incident |
+| **C. Scale & time** | ✓ | V1→10×→100× growth; Migration complexity O(n²); Bottleneck identification |
+| **D. Cost & sustainability** | ✓ | Cost pressure; Migration cost drivers; Dual-system costs |
+| **E. Real-world engineering** | ✓ | Operational burdens; On-call; Human error; Wrong rollback incident |
+| **F. Learnability & memorability** | ✓ | Mental models; One-liners; Part 8B; Teaching moments |
+| **G. Data, consistency & correctness** | ✓ | Dual-write; Reconciliation; Invariants; Consistency models |
+| **H. Security & compliance** | ✓ | Data locality; Compliance; Deletion; GDPR/CCPA |
+| **I. Observability & debuggability** | ✓ | Migration observability; Metrics; Shadow comparison |
+| **J. Cross-team & org impact** | ✓ | Coordination; Long-tail; Org restructuring; Hidden dependencies |
 
 ---
 

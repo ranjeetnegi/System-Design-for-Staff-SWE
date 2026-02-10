@@ -70,13 +70,13 @@ Copy this into your notes and mark `[x]` when done.
 - [x] `Section3/Chapter_20.md`
 
 ### Section 4
-- [ ] `Section4/Chapter_21.md`
-- [ ] `Section4/Chapter_22.md`
-- [ ] `Section4/Chapter_23.md`
-- [ ] `Section4/Chapter_24.md`
-- [ ] `Section4/Chapter_25.md`
-- [ ] `Section4/Chapter_26.md`
-- [ ] `Section4/Chapter_27.md`
+- [x] `Section4/Chapter_21.md`
+- [x] `Section4/Chapter_22.md`
+- [x] `Section4/Chapter_23.md`
+- [x] `Section4/Chapter_24.md`
+- [x] `Section4/Chapter_25.md`
+- [x] `Section4/Chapter_26.md`
+- [x] `Section4/Chapter_27.md`
 
 ### Section 5
 - [ ] `Section5/Chapter_28.md`
