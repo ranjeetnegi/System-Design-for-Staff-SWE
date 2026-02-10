@@ -362,6 +362,20 @@ This is why we need to think carefully about push vs. pull.
 
 **Staff lesson:** "Design for today's scale with clear signals for when to revisit. At 5x, we'll need ranking optimization. At 10x, multi-region. Document the triggers."
 
+### How Staff Engineers Identify First Bottlenecks
+
+*Systematic process, not intuition.*
+
+| Step | Action | News Feed Example |
+|------|--------|-------------------|
+| 1. **Map the critical path** | Trace highest-volume request end-to-end | Feed load → Cache → Storage → Content → Rank → Merge |
+| 2. **Compute per-request cost** | Multiply throughput by cost per op | 50K/sec × 1 storage read + N content fetches |
+| 3. **Find amplification points** | Where 1 input becomes N outputs | Fan-out: 1 post → 500 writes (avg); celebrity: 1 post → 50M potential |
+| 4. **Compare to component limits** | Known limits of storage, cache, queues | Cassandra: ~10K writes/sec per node; Redis: ~100K ops/sec |
+| 5. **Document the trigger** | "At X scale, Y breaks" | "At 5x traffic, Ranking Service becomes bottleneck" |
+
+**Why it matters at L6**: Senior engineers often guess. Staff engineers derive. The "Scale Over Time" table above is the output of this process—each row answers "what breaks first and when?"
+
 ---
 
 ## Identifying Bottlenecks
@@ -482,6 +496,17 @@ This is why we need to think carefully about push vs. pull.
 | Consistency vs. Availability | Availability | Eventual consistency for most data | Feed doesn't need strong consistency |
 | Personalization vs. Simplicity | Moderate personalization | Full ML optimization | Can iterate; start simpler |
 | Push vs. Pull | Hybrid | Complexity | Neither alone works at scale |
+
+### Judgment at L6: Decision Reversibility
+
+*Staff engineers distinguish reversible from irreversible decisions.*
+
+| Decision Type | Example | Approach |
+|---------------|---------|----------|
+| **Reversible** | Cache TTL, fan-out threshold, ranking weights | Ship, measure, adjust. No need for exhaustive analysis. |
+| **Irreversible** | Sharding key, data model, push vs pull hybrid | Deep analysis first. Changing later is costly. |
+
+**Real-world example**: Choosing `user_id` as the Feed Storage shard key is effectively irreversible—resurfacing data later would require a full migration. Choosing a 5-minute cache TTL is reversible—we can change it in config and redeploy. **Staff lesson:** "Spend time on irreversible decisions. Make reversible ones quickly and iterate."
 
 ---
 
@@ -885,6 +910,18 @@ This is why we need to think carefully about push vs. pull.
 
 **Trade-off explicit:** "We could achieve 5-second freshness with synchronous fan-out, but at 50B writes/day that would triple our database cost. Sixty-second freshness with async fan-out is the right trade-off for this product."
 
+### Cost Sustainability Over Time
+
+*At L6, cost is not just today's number—it's a trajectory.*
+
+| Factor | Year 1 | Year 3 | Mitigation |
+|--------|--------|-------|------------|
+| **Storage growth** | 7-day retention | Same | Retention cap prevents unbounded growth |
+| **Fan-out amplification** | 50B writes/day | 3x if DAU triples | Hybrid model scales sub-linearly for celebrities |
+| **Cache memory** | 8TB effective | 24TB if 3x users | Evict inactive; only ~20% of users drive traffic |
+
+**Why it matters at L6**: Approval committees ask "what does this cost in 3 years?" Staff engineers design with bounded growth: retention limits, sharding strategy, and fallback ordering that avoids ML cost at scale. **Trade-off**: 7-day retention means we cannot support "show me my feed from 2 years ago"—acceptable for feed; document the constraint.
+
 ---
 
 ## Cross-Team and Org Impact
@@ -1052,6 +1089,23 @@ Throughout this design, I've highlighted where a Staff engineer goes beyond Seni
 
 ---
 
+## Mental Models and One-Liners
+
+*Staff engineers use memorable analogies to guide reasoning and onboard others.*
+
+| Mental Model | One-Liner | When to Use |
+|--------------|-----------|-------------|
+| **Push vs Pull** | "Push when mailboxes are small; pull when one sender has millions of recipients." | Explaining celebrity threshold |
+| **Freshness vs Latency** | "Users wait for the app to open; they don't wait for the latest post." | Justifying 60-second staleness |
+| **Cache stampede** | "Hot keys at read time = DDoS from your own users." | Request coalescing, cache warming |
+| **Blast radius** | "One shard down = 5% of users; one dependency down = 100%." | Prioritizing failure mitigations |
+| **Irreversible decisions** | "Sharding key is a one-way door; cache TTL is a knob." | Deciding how much analysis to do |
+| **Hybrid model** | "Neither push nor pull alone works at scale—the tails break you." | Justifying complexity |
+
+**Why it matters at L6**: These models speed decisions in design reviews and incidents. When someone asks "why not pure push?", "celebrity with 50M followers" is the answer. When deciding scope, "reversible vs irreversible" guides time allocation.
+
+---
+
 # Part 7: Blast Radius and Dependency Analysis — Staff-Level Depth
 
 Staff engineers don't just list failure scenarios—they quantify blast radius and trace dependency cascades. Let me extend the failure analysis.
@@ -1125,6 +1179,19 @@ Social Graph Service DOWN
 | Social Graph | Slow response | Timeout at 100ms, use cached data |
 | Social Graph | Partial data | Accept incomplete followee list, note in metrics |
 
+### Partial Failures and Degraded States
+
+*Staff engineers design for partial failure, not just binary up/down.*
+
+| Scenario | What Happens | User Impact | Staff Response |
+|----------|--------------|-------------|----------------|
+| **30% of cache nodes slow** | Some requests hit slow shards | P99 latency spikes; P50 unchanged | Circuit breaker per shard; divert traffic to healthy nodes |
+| **Content Service 2x latency** | Every feed load delayed | P99 rises, still functional | Timeout + fallback to metadata-only; alert on SLO breach |
+| **One Feed Storage shard overloaded** | ~5% of users see slow feeds | Isolated; others unaffected | Isolate shard; investigate hot key; consider splitting |
+| **Fan-out lag 15 min** | New posts delayed for some users | Freshness degrades; feeds still load | Prioritize active users; scale workers; alert on lag |
+
+**Why it matters at L6**: Systems rarely fail in binary fashion. Partial degradation (e.g., 20% of requests failing) is harder to diagnose than total outage. Design for observability that distinguishes "partial" from "total" and enables targeted mitigation. **Real-world example**: A storage cluster with one hot partition can cause P99 to spike while P50 stays normal—blast radius is small but user-perceivable; design for partition-level isolation and per-partition metrics.
+
 **Staff-Level Statement:**
 
 "The Social Graph Service is a critical dependency. If it's down, we can't compute new feeds or fan out posts. My mitigation: cache the social graph locally with 1-hour TTL. Stale follow relationships are acceptable—users don't frequently add/remove follows. For fan-out, we queue posts and replay when the service recovers."
@@ -1165,6 +1232,19 @@ At Staff level, you design to prevent cascades:
 # Part 8: Operational Readiness — Built-In from Day One
 
 Staff engineers design for operability, not just functionality. Here's what's built into this design:
+
+## Human Error Patterns — Design to Reduce Operator Mistakes
+
+*Real-world engineering includes human error. On-call engineers under stress make predictable mistakes.*
+
+| Pattern | What Happens | Design Mitigation |
+|---------|--------------|-------------------|
+| **Wrong service restarted** | Engineer restarts Feed Storage when Content Service is slow | Service names in runbooks; dashboards show dependency chain; "What is slow?" before "What to restart" |
+| **Kill switch hesitation** | Degraded mode available but engineer delays activating | Degradation toggles are one-click; runbooks say "activate if X" not "consider activating" |
+| **Cascade misattribution** | Blame Content Service when Social Graph is root cause | Trace shows full path; runbook lists "check Social Graph first" for feed generation failures |
+| **Rollback paralysis** | Unsure if rollback will help; delay decision | Canary metrics are explicit; "rollback if P99 > 500ms for 5 min" in deployment runbook |
+
+**Why it matters at L6**: Systems fail in production; humans respond. Design choices—clear naming, explicit runbook steps, one-click fallbacks—reduce cognitive load when seconds matter. **Trade-off**: Extra automation (e.g., auto-rollback on SLO breach) can cause false rollbacks; Staff engineers prefer documented decision rules over full automation for critical paths.
 
 ## Observability Design
 
@@ -1362,6 +1442,8 @@ The architecture section mentioned multi-region as a future evolution. Here's th
 | "Why hybrid and not pure push or pull?" | Trade-off articulation; quantitative reasoning |
 | "How do you ensure users don't see duplicates?" | Data invariants; pagination correctness |
 | "Who owns the social graph?" | Cross-team awareness; dependency boundaries |
+| "What if 30% of cache nodes are slow?" | Partial failure thinking; degraded-state handling |
+| "Which decisions would you spend more time on?" | Decision reversibility; judgment calibration |
 
 ## Signals of Strong Staff Thinking
 
@@ -1369,8 +1451,21 @@ The architecture section mentioned multi-region as a future evolution. Here's th
 - **Derives** numbers (200M DAU × 5 = 1B loads) rather than guessing
 - **Names trade-offs** explicitly: "Choosing latency over freshness because..."
 - **Considers alternatives** and rejects with reasoning
-- **Discusses failure** before being prompted
+- **Discusses failure** before being prompted (including partial failure)
 - **Asks** "Does this scope work?" and "Is this assumption valid?"
+- **Distinguishes** reversible vs irreversible decisions; spends time accordingly
+
+## Staff vs Senior: Consolidated Contrast
+
+| Dimension | Senior (L5) | Staff (L6) |
+|-----------|-------------|------------|
+| **Approach** | Jumps to architecture | Establishes users, scale, NFRs first; architecture emerges |
+| **Scale** | "Large scale," "millions of users" | Derives: "200M DAU × 5 = 1B loads = 12K/sec"; shows math |
+| **Trade-offs** | Implicit or unstated | Explicit: "Choosing X over Y because..." |
+| **Edge cases** | Overlooked or addressed when asked | Proactively raised: celebrity, cold start, partial failure |
+| **Failure** | Addressed only when prompted | Discusses blast radius, degradation, partial failure upfront |
+| **Decisions** | Treats all decisions equally | Distinguishes reversible (ship fast) vs irreversible (deep analysis) |
+| **Cost** | Added as afterthought | Cost as first-class constraint; sustainability trajectory |
 
 ## Common Senior Mistake
 
@@ -1384,8 +1479,9 @@ The architecture section mentioned multi-region as a future evolution. Here's th
 
 1. **Start with the celebrity trap.** Have learners design pure push first; then ask "What if one user has 50M followers?" They discover the write explosion. Then have them design pure pull; "What if 50K users open the app per second?" They discover the read explosion. Hybrid emerges naturally.
 2. **Trace one request.** Walk through cache hit, cache miss, celebrity merge. Make every component's role explicit.
-3. **Inject failure.** "Redis is down. What happens?" Have them articulate degradation and blast radius.
+3. **Inject failure.** "Redis is down. What happens?" Have them articulate degradation and blast radius. Then: "What if only 30% of cache nodes are slow?" Forces partial failure reasoning.
 4. **Use the incident.** Walk through the cache stampede case; have learners identify request coalescing as the fix.
+5. **Calibrate decisions.** Ask: "Which decisions would you spend more time on? Sharding key or cache TTL?" Teaches reversibility framework.
 
 ---
 
@@ -1401,8 +1497,9 @@ Before wrapping up, Staff engineers mentally check:
 ☐ Did I state assumptions and invite correction?
 ☐ Did I explain why for each architecture decision?
 ☐ Did I consider alternatives and explain why rejected?
-☐ Did I discuss failure scenarios and degradation?
+☐ Did I discuss failure scenarios and degradation (including partial failure)?
 ☐ Did I mention how the system evolves?
+☐ Did I distinguish reversible vs irreversible decisions where relevant?
 
 ---
 
@@ -1414,7 +1511,7 @@ Use this checklist to verify chapter completeness:
 
 | # | Check | Status |
 |---|-------|--------|
-| 1 | **Judgment & decision-making** — Trade-off frameworks, explicit decision points, alternatives considered | ✅ |
+| 1 | **Judgment & decision-making** — Trade-off frameworks, explicit decision points, alternatives considered, reversibility framework | ✅ |
 | 2 | **Failure & incident thinking** — Partial failures, blast radius, containment, structured real incident | ✅ |
 | 3 | **Scale & time** — Growth over years, first bottlenecks, migration paths, derived numbers | ✅ |
 | 4 | **Cost & sustainability** — Cost as first-class constraint, cost drivers, trade-offs | ✅ |
@@ -1430,12 +1527,12 @@ Use this checklist to verify chapter completeness:
 
 | Dim | Dimension | Coverage | Location |
 |-----|-----------|----------|----------|
-| **A** | Judgment & decision-making | Strong | Trade-offs explicit; alternatives considered; decisions justified |
-| **B** | Failure & incident thinking | Strong | Blast radius (Part 7); Real incident (Celebrity Cache Stampede); degradation strategies |
-| **C** | Scale & time | Strong | Phase 3 derived numbers; evolution roadmap; multi-region migration |
-| **D** | Cost & sustainability | Strong | Cost drivers table; hybrid push-pull trade-off; retention, caching cost decisions |
-| **E** | Real-world engineering | Strong | Observability design; runbooks; deployment safety; on-call reference |
-| **F** | Learnability & memorability | Strong | Quick Reference Card; L5 vs L6 phrases; key numbers; mental models |
+| **A** | Judgment & decision-making | Strong | Trade-offs explicit; alternatives considered; decisions justified; reversibility framework |
+| **B** | Failure & incident thinking | Strong | Blast radius (Part 7); partial failure/degraded states; Real incident (Celebrity Cache Stampede); degradation strategies |
+| **C** | Scale & time | Strong | Phase 3 derived numbers; first-bottleneck identification process; evolution roadmap; multi-region migration |
+| **D** | Cost & sustainability | Strong | Cost drivers table; cost sustainability over time; hybrid push-pull trade-off; retention, caching cost decisions |
+| **E** | Real-world engineering | Strong | Human error patterns; observability design; runbooks; deployment safety; on-call reference |
+| **F** | Learnability & memorability | Strong | Quick Reference Card; L5 vs L6 phrases; key numbers; Mental Models & One-Liners subsection |
 | **G** | Data, consistency & correctness | Strong | Invariants (monotonicity, visibility, deletion propagation); durability; consistency models |
 | **H** | Security & compliance | Strong | Trust boundaries; defense in depth; PII handling; GDPR alignment |
 | **I** | Observability & debuggability | Strong | Part 8: metrics, tracing, structured logging, runbooks |

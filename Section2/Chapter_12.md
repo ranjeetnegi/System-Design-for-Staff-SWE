@@ -297,6 +297,8 @@ In a distributed system experiencing a network partition, you must choose betwee
 
 **Invariants as NFR:** Staff engineers define *data invariants*—properties that must always hold—as explicit NFRs. Examples: "Balance never negative," "Every notification has exactly one delivery attempt or is in retry," "User preferences are eventually consistent but never lost." Invariants drive consistency model choice: strong consistency for invariants that cannot be violated; eventual consistency where temporary violation is acceptable.
 
+**Concrete invariant example:** A double-entry accounting system has the invariant "sum of debits equals sum of credits." If this is violated, financial reports are wrong. That invariant forces: (1) writes must be atomic (strong consistency for the ledger), (2) no partial writes on failure (durability), (3) audit trail for every change. The Staff engineer states: "I'm designing for the invariant 'debits = credits'; everything else follows from that."
+
 **Example articulation**:
 "For the notification system, eventual consistency is acceptable for read status—if it takes a few seconds for 'read' to propagate, users won't notice. But for user preferences (muting notifications), I want read-your-writes consistency at minimum—if a user mutes something, they should immediately stop seeing notifications from it."
 
@@ -325,6 +327,8 @@ In a distributed system experiencing a network partition, you must choose betwee
 - Principle of least privilege
 
 **Trust boundaries:** Staff engineers map trust boundaries—where data or control crosses from trusted to untrusted (or less trusted) domains. Examples: user input → API; external client → internal service; internal service → third-party. Each boundary has NFR implications: validation, rate limiting, auth. Defining trust boundaries explicitly prevents security NFRs from being vague ("we'll secure it") and drives concrete design (validate at boundary, never trust internal data from untrusted source).
+
+**Compliance as NFR:** Staff engineers treat compliance requirements (GDPR, HIPAA, PCI-DSS, SOC2) as explicit NFRs, not afterthoughts. Each regulation imposes constraints: retention limits, deletion rights, audit trails, data residency. Before designing, ask: "What compliance regime applies? What invariants does it impose?" A payment system under PCI-DSS cannot treat "encryption at rest" as optional—it's a hard constraint. Compliance NFRs often conflict with cost or latency; Staff engineers surface these trade-offs early and document why certain choices are non-negotiable.
 
 **Example articulation**:
 "This system handles user notification preferences, which is PII. All data will be encrypted at rest. All API endpoints require authentication. User data is only accessible to the owning user—no cross-user data access. We'll log all data access for audit purposes, and data must be deletable for GDPR compliance."
@@ -561,9 +565,9 @@ What is the operating environment?
 
 **Grouped assumptions**:
 "Let me state my key assumptions:
-1. We're on standard cloud infrastructure (I'll use AWS examples)
+1. We're on standard cloud infrastructure
 2. Authentication and authorization are handled by existing systems
-3. We have push notification infrastructure (APNs/FCM integration)
+3. We have push notification infrastructure (mobile push provider integration)
 4. Traffic follows typical consumer patterns with 3x peak
 
 Do any of these need adjustment?"
@@ -623,7 +627,7 @@ These three concepts are related but distinct:
 - These are conditions under which your design is valid
 
 **Constraints**: Limits you must work within; these are given, not chosen.
-- "We must use the existing Oracle database"
+- "We must use the existing legacy database"
 - "Budget limits us to $10K/month infrastructure"
 - These constrain your solution space
 
@@ -731,7 +735,7 @@ Phase 5 draws explicit boundaries:
 
 "I'm designing the notification delivery system. I'm explicitly NOT designing:
 - Notification content creation (handled by calling services)
-- Push infrastructure (using existing APNs/FCM)
+- Push infrastructure (using existing mobile push providers)
 - Long-term analytics (separate system)
 
 These are in my 'assumptions' bucket—I assume they exist and work."
@@ -1002,8 +1006,8 @@ Now, if the interviewer says "Actually, we need this for Super Bowl ads," you ha
 
 ### Assumptions
 
-1. **Push infrastructure**: We have APNs/FCM integration via existing services
-2. **Email/SMS**: We have existing providers (SendGrid, Twilio)
+1. **Push infrastructure**: We have mobile push provider integration via existing services
+2. **Email/SMS**: We have existing email/SMS provider integrations
 3. **User data**: Device tokens, email addresses available from user service
 4. **Authentication**: Calling services are authenticated; we trust them
 
@@ -1109,6 +1113,23 @@ Now, if the interviewer says "Actually, we need this for Super Bowl ads," you ha
 | **Scalability** | "How much growth expected?" | "Handle 10x in 2 years" |
 | **Consistency** | "Can users see stale data?" | "Eventual (5s stale OK)", "Strong" |
 | **Security** | "What's sensitive? Compliance?" | "GDPR", "PCI-DSS", "Encryption at rest" |
+
+---
+
+## Cost as a First-Class Constraint
+
+**Why it matters at L6:** Staff engineers treat cost as a Phase 4/5 requirement, not an afterthought. Cost is often the *binding* constraint—you can achieve 99.99% availability, but the budget caps you at 99.9%. Establishing cost bounds early prevents over-engineering and enables right-sizing.
+
+**Design implications:**
+- Ask: "What's the infrastructure budget? What's the cost-per-transaction target?"
+- Quantify: "99.99% adds ~5–10x infra vs 99.9%; is that acceptable?"
+- Right-size: Match NFRs to value (internal tool vs customer-facing critical path)
+
+**Staff one-liner:** "Cost is a constraint. Establish it in Phase 4 so you don't design a system the org can't afford."
+
+**L5 vs L6 cost framing:**
+- **L5:** "We'll optimize cost later." Designs for NFRs without cost bounds; discovers budget overrun late.
+- **L6:** "Cost is a Phase 4 constraint. I'm targeting $X/month infra; that caps availability at 99.9%. If we need 99.99%, we'd need budget approval for ~5x. I'm right-sizing NFRs to the budget."
 
 ---
 
@@ -1507,6 +1528,19 @@ NFRs aren't static—they evolve as systems scale. Staff engineers anticipate th
 - Metrics emission from day one (for SLO tracking)
 
 V2 NFR upgrade is operational changes, not architecture changes."
+
+## First Bottleneck Analysis — Staff-Level Scale Thinking
+
+**Why it matters at L6:** Staff engineers ask "At 10x scale, what breaks first?" before designing. Anticipating the first bottleneck prevents redesign later.
+
+**First bottleneck questions:**
+- At 10x load, which component saturates first? (Database? Cache? Network?)
+- What's the first resource to exhaust? (Connections? Memory? Disk I/O?)
+- Which NFR degrades first? (Latency? Availability? Consistency?)
+
+**Example:** A feed system at 1M DAU: database handles load. At 10M DAU: the database becomes the first bottleneck—read replicas and caching kick in. At 100M DAU: the ranking service or cache layer may saturate before the database. Staff engineers design partition boundaries and fallback paths so that when the first bottleneck is hit, the system degrades gracefully (e.g., serve cached feed, disable personalization) rather than failing completely.
+
+**Trade-off:** Designing for first bottleneck adds some upfront complexity (metrics, circuit breakers, fallbacks). The alternative—discovering the bottleneck in production—is far more costly.
 
 ---
 

@@ -52,13 +52,13 @@ Copy this into your notes and mark `[x]` when done.
 - [x] `Section1/Chapter_6.md`
 
 ### Section 2
-- [ ] `Section2/Chapter_7.md`
-- [ ] `Section2/Chapter_8.md`
-- [ ] `Section2/Chapter_9.md`
-- [ ] `Section2/Chapter_10.md`
-- [ ] `Section2/Chapter_11.md`
-- [ ] `Section2/Chapter_12.md`
-- [ ] `Section2/Chapter_13.md`
+- [x] `Section2/Chapter_7.md`
+- [x] `Section2/Chapter_8.md`
+- [x] `Section2/Chapter_9.md`
+- [x] `Section2/Chapter_10.md`
+- [x] `Section2/Chapter_11.md`
+- [x] `Section2/Chapter_12.md`
+- [x] `Section2/Chapter_13.md`
 
 ### Section 3
 - [ ] `Section3/Chapter_14.md`
