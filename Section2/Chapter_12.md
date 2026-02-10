@@ -295,6 +295,8 @@ In a distributed system experiencing a network partition, you must choose betwee
 - Eventual consistency: Async replication, conflict resolution
 - Mixed: Strong for some operations, eventual for others
 
+**Invariants as NFR:** Staff engineers define *data invariants*—properties that must always hold—as explicit NFRs. Examples: "Balance never negative," "Every notification has exactly one delivery attempt or is in retry," "User preferences are eventually consistent but never lost." Invariants drive consistency model choice: strong consistency for invariants that cannot be violated; eventual consistency where temporary violation is acceptable.
+
 **Example articulation**:
 "For the notification system, eventual consistency is acceptable for read status—if it takes a few seconds for 'read' to propagate, users won't notice. But for user preferences (muting notifications), I want read-your-writes consistency at minimum—if a user mutes something, they should immediately stop seeing notifications from it."
 
@@ -321,6 +323,8 @@ In a distributed system experiencing a network partition, you must choose betwee
 - Input validation and sanitization
 - Audit logging
 - Principle of least privilege
+
+**Trust boundaries:** Staff engineers map trust boundaries—where data or control crosses from trusted to untrusted (or less trusted) domains. Examples: user input → API; external client → internal service; internal service → third-party. Each boundary has NFR implications: validation, rate limiting, auth. Defining trust boundaries explicitly prevents security NFRs from being vague ("we'll secure it") and drives concrete design (validate at boundary, never trust internal data from untrusted source).
 
 **Example articulation**:
 "This system handles user notification preferences, which is PII. All data will be encrypted at rest. All API endpoints require authentication. User data is only accessible to the owning user—no cross-user data access. We'll log all data access for audit purposes, and data must be deletable for GDPR compliance."
@@ -1164,6 +1168,20 @@ SIMPLIFICATIONS (things I'm choosing to defer):
 
 ---
 
+## Staff One-Liners and Mental Models
+
+| Mental Model | One-Liner |
+|--------------|-----------|
+| **NFRs drive architecture** | "Same function, different NFRs = different system." |
+| **Trade-off reality** | "You can't maximize all NFRs; state what you're sacrificing." |
+| **Failure is specified** | "Every NFR implies acceptable failure; define it explicitly." |
+| **Assumptions are validity conditions** | "Your design is valid only when your assumptions hold." |
+| **Blast radius** | "Define how far failure propagates before you design." |
+| **First bottleneck** | "At 10x scale, what breaks first? Design for that." |
+| **Cost of nines** | "Each nine costs more; right-size for the use case." |
+
+---
+
 ## Common Mistakes Quick Reference
 
 | Mistake | What It Looks Like | Fix |
@@ -1278,6 +1296,68 @@ Staff engineers treat degradation behavior as an explicit requirement:
 - Users see 'some features temporarily unavailable' not an error page
 - On-call is alerted at 99.5% (early warning before SLO breach)"
 
+## Blast Radius and Partial Failure — Staff-Level Depth
+
+**Why it matters at L6:** Staff engineers don't just define *what* fails—they define *how far* failure propagates. Partial failures are the norm; total outages are rare. Understanding blast radius shapes NFR boundaries and degradation design.
+
+**Blast radius** is the set of users, services, or data affected when a component fails. NFRs implicitly specify acceptable blast radius:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         BLAST RADIUS VISUALIZATION                          │
+│                                                                             │
+│   Component fails → Who/what is affected?                                   │
+│                                                                             │
+│   ┌─────────┐     ┌─────────┐     ┌─────────┐                             │
+│   │ Service │────▶│ Downstream│────▶│  Users  │   Blast radius expands      │
+│   │   A     │     │ Service B │     │ (100%)  │   with each dependency      │
+│   └─────────┘     └─────────┘     └─────────┘                             │
+│        │                 │                 │                                │
+│   Failure here      Cascade?          Full outage?                          │
+│   affects:         1 shard?          Or degraded?                           │
+│   • A only         • B only          • Partial failure OK                   │
+│   • A + B          • All shards      • Per NFR spec                         │
+│                                                                             │
+│   STAFF QUESTION: "When X fails, what's the acceptable blast radius?"       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| NFR Choice | Acceptable Blast Radius | Design Implication |
+|------------|-------------------------|---------------------|
+| Single-region | Entire region if region fails | Regional failover sufficient |
+| Multi-region active-active | Single region if region fails | Traffic shifts; other regions unaffected |
+| Sharded by user | Users in one shard if shard fails | Isolation; 1/N of users affected |
+| Shared rate limiter | All users if limiter fails | Fail open; degraded but not blocked |
+
+**Partial failure as NFR:** Staff engineers specify *degraded* behavior when only part of the system fails:
+
+- "If the personalization service is down, we serve cached feeds for 90% of users; core feed still loads."
+- "If one region fails, we serve 80% of traffic from the other region; latency may increase for 20% of users."
+
+**Real-world example:** A feed system that depends on a ranking service. If the ranking service fails, the L5 approach might assume "we're down." The Staff approach: "We degrade to chronological feed. Users see content; quality drops. Blast radius: 100% of users see degraded quality, 0% see total failure."
+
+**Trade-off:** Designing for partial failure adds complexity (fallback paths, circuit breakers). The alternative—all-or-nothing failure—often violates availability NFRs. Staff engineers accept the complexity for critical paths.
+
+---
+
+# Part 10b: Real Incident — NFR Violation in Production
+
+**Context:** A notification delivery system served 50M daily active users. NFRs: 99.9% availability, delivery within 5 seconds P95, zero notification loss.
+
+**Trigger:** A scheduled config change to increase queue consumer count was applied with a typo: consumer count set to 100 instead of 1000. The config validation passed (numeric range) but the value was wrong.
+
+**Propagation:** Within 30 minutes, queue depth grew from 10K to 2M messages. Delivery latency breached 5-second P95. Users reported delayed or missing notifications. The incident was detected via latency metrics, not queue depth.
+
+**User impact:** ~15% of users experienced delayed notifications (5–30 minutes). ~2% saw no delivery for several hours. Support tickets spiked.
+
+**Engineer response:** On-call identified the config error within 45 minutes. Rollback took 10 minutes (config service update). Queue drain took 2 hours. Full recovery: 3 hours.
+
+**Root cause:** The NFR was "delivery within 5 seconds" but the design did not include: (1) queue depth as an SLI, (2) config change validation for operational-critical values, (3) automatic rollback on delivery latency breach.
+
+**Design change:** Added queue depth SLO and alerting. Introduced config change dry-run and canary for consumer scaling. Added automatic latency-based circuit breaker: if delivery P95 > 30 seconds for 5 minutes, trigger rollback and alert.
+
+**Lesson learned:** NFRs must be matched with operational safeguards. "Delivery within 5 seconds" alone is insufficient; the system needed detection, degradation, and recovery for the *failure mode* (queue backlog), not just the SLA metric. Staff engineers now design: "When latency NFR is violated, we [detect], [degrade], [recover]—and we prevent human error from propagating via config safeguards."
+
 ---
 
 # Part 11: Operational NFRs as First-Class Requirements
@@ -1292,6 +1372,19 @@ Operational NFRs define how the system is run, not just how it performs. Staff e
 | **Debuggability** | Ability to diagnose issues | Can we find root cause quickly? |
 | **Deployability** | Ability to ship changes safely | Can we deploy with confidence? |
 | **Operability** | Ability to control and adjust | Can we tune behavior without code changes? |
+| **Human-error resilience** | Misconfig, fat-finger, bad deploy | Can we survive and recover from operator mistakes? |
+
+## Human Error as an Operational NFR
+
+**Why it matters at L6:** Most production incidents are triggered by human action—config mistakes, bad deploys, incorrect runbook execution. Staff engineers treat "survive operator error" as a first-class NFR.
+
+**Design implications:**
+- **Safeguards:** Require confirmation for destructive ops; dry-run mode for config changes
+- **Blast radius control:** Feature flags, canary deploys, and gradual rollout limit bad-change impact
+- **Recoverability:** Fast rollback, immutable config history, documented rollback procedures
+- **On-call burden:** Simple runbooks reduce fatigue-induced errors; automation reduces manual steps
+
+**Example articulation:** "We assume operators will occasionally misconfigure rate limits or deploy bad code. Our NFR: any config change can be rolled back in under 5 minutes. All deploys use canary with automatic rollback on error spike. This keeps operational NFRs sustainable even when humans make mistakes."
 
 ## Observability Requirements
 
@@ -1489,6 +1582,21 @@ When multiple NFRs conflict and can't all be met, Staff engineers have a framewo
 | Low cost | High availability | Redundancy costs money | Tier availability by feature criticality |
 | Fast deployment | Zero downtime | Blue-green needs double resources | Accept increased cost or slower deploys |
 
+## Cost Drivers in NFR Decisions
+
+**Why it matters at L6:** Changing NFRs changes cost. Staff engineers know which levers drive cost so they can reason about trade-offs.
+
+| NFR Change | Cost Driver | Rough Magnitude |
+|------------|------------|-----------------|
+| 99% → 99.9% availability | Redundancy (2x), failover | ~2-3x infra |
+| 99.9% → 99.99% availability | Multi-AZ, better monitoring | ~5-10x infra |
+| 99.99% → 99.999% availability | Multi-region, active-active | ~20-50x infra |
+| Eventual → strong consistency | Consensus, sync replication | Latency + 2-5x write cost |
+| 500ms → 100ms latency | Caching, edge, optimization | Varies; often 2-5x |
+| Basic → full audit trail | Logging, retention, compliance | Storage + operational overhead |
+
+**Staff one-liner:** "Each nine costs more. Right-size for the use case."
+
 ## NFR Prioritization Framework
 
 ```
@@ -1546,6 +1654,33 @@ When multiple NFRs conflict and can't all be met, Staff engineers have a framewo
 **The trade-off:** I'm accepting 2-5 second delivery latency to ensure durability (write to persistent queue before acknowledging). If latency were the top priority, I'd acknowledge faster but risk notification loss.
 
 **Business rationale:** Users tolerate slight delay; they don't tolerate missed notifications."
+
+---
+
+# Part 14b: Cross-Team and Organizational Impact — Staff-Level Scope
+
+**Why it matters at L6:** NFR decisions don't exist in isolation. They affect dependent teams, escalate support burden, and create org-wide cost. Staff engineers consider impact beyond their service boundary.
+
+## NFR Decisions That Cross Boundaries
+
+| NFR Decision | Cross-Team Impact | Staff Consideration |
+|--------------|-------------------|---------------------|
+| 99.99% availability | Increases dependency SLO expectations | "Downstream teams will depend on our uptime; we need to communicate clearly" |
+| Eventual consistency | Callers must handle staleness | "API consumers need retry and caching guidance" |
+| Degradation behavior | Support and docs teams need to explain | "When we degrade, users see X; support needs runbook" |
+| On-call escalation | Other teams paged for our deps | "Our failure cascades to Y; we need joint runbooks" |
+
+## Cost of Over-Provisioning at Org Level
+
+**Real-world example:** A team provisions 99.99% availability for an internal tool used by 50 engineers. The cost: multi-region deployment, 24/7 on-call, complex runbooks. The alternative: 99.9% with planned maintenance windows. The org pays 5x infra and 2 engineers full-time for an NFR that doesn't match the tool's value.
+
+**Staff thinking:** "Who pays for this NFR? Is the cost proportional to the value? Should we negotiate 99.9% with stakeholders so we can use those engineers for higher-impact work?"
+
+## Articulating Cross-Team Impact
+
+**L5 Approach:** Designs NFRs for the system in isolation.
+
+**L6 Approach:** "Our 99.99% availability SLO means downstream teams will build features that depend on us. I'll document our degradation behavior and SLAs so they can design accordingly. We'll also need to coordinate with the auth team—our availability depends on theirs—for joint incident response."
 
 ---
 
@@ -1633,6 +1768,32 @@ As you work through Phase 4 & 5, imagine the interviewer asking:
 
 Hit all of these, and you've demonstrated Staff-level Phase 4 & 5 thinking.
 
+## What Interviewers Probe Deeper
+
+| Probe | What They're Testing |
+|-------|---------------------|
+| "What if we need 99.99% instead of 99.9%?" | Can you reason about cost of NFR changes? |
+| "What happens when the database goes down?" | Do you define failure behavior, not just happy path? |
+| "Who are your dependencies? What if they fail?" | Blast radius and cascading failure awareness |
+| "How would you validate this design meets the NFRs?" | SLI/SLO and measurement thinking |
+| "Which of these constraints could we relax?" | Negotiation and prioritization judgment |
+
+## How to Explain NFR Trade-Offs to Leadership
+
+**Avoid:** "We need strong consistency and high availability." (Implies no trade-off.)
+
+**Use:** "We're prioritizing availability over strong consistency because [business reason]. The trade-off: users may see data up to 5 seconds stale. For [use case], that's acceptable. If we needed strong consistency, we'd pay 10x in latency and infrastructure. Here's the cost impact of each option."
+
+**Key:** Lead with business impact, not technical terms. Quantify the trade-off. Offer alternatives with costs.
+
+## How to Teach This Topic to Others
+
+1. **Start with the trade-off reality:** "You can't have everything. Pick what matters."
+2. **Use the 4-step process:** Non-negotiable → Flexible → Costs → Explicit choice.
+3. **Practice with constraints:** Give a conflicting set (e.g., fast + consistent + cheap) and have them prioritize.
+4. **Require quantification:** "Fast" is not acceptable; "P99 < 200ms" is.
+5. **Stress assumptions:** "State what you assume. Invite correction. Your design is only valid when assumptions hold."
+
 ---
 
 # Part 16: Final Verification — L6 Readiness Checklist
@@ -1706,6 +1867,14 @@ Hit all of these, and you've demonstrated Staff-level Phase 4 & 5 thinking.
 14. What trade-offs have you made that you later regretted?
 
 15. How do you know when you're over-engineering for NFRs that don't matter?
+
+## Blast Radius and Cross-Team Impact
+
+16. For a system you've worked on, what's the blast radius when the primary dependency fails?
+
+17. When have NFR decisions you made affected other teams? How did you communicate?
+
+18. What's an example of over-provisioning (e.g., 99.99% where 99.9% would suffice)? What was the org cost?
 
 ---
 

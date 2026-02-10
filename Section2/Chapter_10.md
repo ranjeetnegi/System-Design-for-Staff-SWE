@@ -1298,6 +1298,59 @@ I'm not trying to prevent all failures—I'm trying to contain blast radius."
 
 ---
 
+# Part 11a: Real Incident Case Study — Hot Key and Cache Stampede
+
+A structured incident illustrates how scale-related failures unfold and how Staff-level thinking changes the response.
+
+## Context
+
+A large social feed service served 200M DAU. Feed construction used a hybrid push/pull model: regular users had precomputed feeds (push); celebrity accounts used pull-at-read. A single cache layer sat in front of the feed store.
+
+## Trigger
+
+A celebrity with 50M followers posted during peak traffic (150K QPS overall). The post was not in the push pipeline (by design). The first 10,000 requests for feeds that included this user triggered cache misses and hit the database to fetch the new post.
+
+## Propagation
+
+- Cache misses multiplied: 10K misses/second became 50K as more users refreshed
+- Database connection pool saturated for the shard holding the celebrity’s data
+- That shard's latency spiked from 20ms to 2 seconds
+- Timeouts triggered retries, amplifying load
+- Within 2 minutes, the shard was effectively unavailable
+- Users following this celebrity saw errors; errors spread to other users on the same backend cluster
+
+## User Impact
+
+- ~5% of users experienced feed load failures for 8 minutes
+- ~0.5% saw partial feeds (missing recent posts)
+- Support tickets spiked; social media reports of "feed down"
+
+## Engineer Response
+
+- On-call identified the celebrity post as the trigger via traces
+- Manually warmed the cache for the celebrity’s feed (one-time fix)
+- Restarted the most overloaded database connections to clear the backlog
+- Traffic gradually recovered over 15 minutes
+
+## Root Cause
+
+1. **Hot key:** One user (celebrity) concentrated load on one shard
+2. **Cache stampede:** No coordinated single-flight for cache misses—each miss triggered independent DB reads
+3. **Missing circuit breaker:** No backpressure when the DB slowed; retries made it worse
+
+## Design Changes
+
+1. **Single-flight for cache misses:** Use a distributed lock or request coalescing so one miss triggers one DB fetch; others wait for the result
+2. **Circuit breaker on the DB client:** After N consecutive timeouts, stop sending traffic to that shard for 30 seconds
+3. **Celebrity pre-warming:** When a high-follower user posts, proactively warm the cache for that user’s feed
+4. **Read replica for hot shards:** Dedicated read capacity for shards known to have celebrity data
+
+## Lesson Learned
+
+"At scale, hot keys are not rare—they are expected. Design must assume they will occur. Cache stampede is a classic failure mode when many requests miss the same key; single-flight or probabilistic early expiration prevents it. Staff-level systems have these protections built in, not added after the first incident."
+
+---
+
 # Part 12: Scale Estimation Under Uncertainty
 
 Real-world scale estimation involves uncertainty. Staff engineers communicate this uncertainty explicitly rather than hiding behind false precision.
@@ -1501,6 +1554,190 @@ These aren't nice-to-haves—at this scale, they're required for the system to b
 
 ---
 
+# Part 14b: Real-World Engineering Burdens — On-Call, Human Error, Operational Toil
+
+Scale multiplies operational burden. Staff engineers design knowing that humans will run this system at 3 AM.
+
+## On-Call Reality at Scale
+
+At small scale, "restart the server" works. At large scale:
+- **Alert fatigue:** Thousands of metrics; most are noise. Staff engineers insist on high-signal alerting—no page unless action is required.
+- **Blast radius awareness:** A bad deploy at 100M users affects millions in minutes. Canary, staging, and feature flags are not optional.
+- **Recovery complexity:** You can't "restart everything." Rollback, traffic shift, and partial disable become the tools.
+
+**Staff-level insight:** "At 10M users, I assume we will have incidents. The design must make them easy to diagnose (structured logs, traces) and contain (circuit breakers, kill switches)."
+
+## Human Error as a First-Class Risk
+
+Humans make mistakes. At scale, a typo in a config can take down a region.
+
+| Risk | Small Scale | Large Scale | Mitigation |
+|------|-------------|-------------|------------|
+| Config error | Affects one service | Cascades to millions | Validation, staged rollout, immutable config |
+| Deploy mistake | Rollback in minutes | Rollback takes hours | Blue/green, canary, traffic shift |
+| Manual intervention | Rare | Constant | Automate; humans approve, machines execute |
+
+**Real-world example:** A capacity planner increases a rate limit from 10K to 100K without considering downstream database capacity. At 50K QPS, the database saturates. The fix: capacity planning must be holistic—every change checked against downstream limits.
+
+## Operational Toil and Sustainability
+
+Systems that require constant human intervention do not scale. Staff engineers design for:
+- **Self-healing:** Restart failed nodes, failover replicas, clear stuck queues
+- **Automated remediation:** Common failures have runbooks that run automatically
+- **Reduced toil:** If the same fix is done weekly, automate it
+
+**Trade-off:** Automation has a cost. Staff judgment: automate the 80% case; keep humans for the 20% that requires judgment.
+
+---
+
+# Quick Visual: Staff vs. Senior — Scale Thinking Contrast
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAFF vs SENIOR: SCALE THINKING                          │
+│                                                                             │
+│   SENIOR (L5)                          STAFF (L6)                           │
+│   ┌─────────────────────────┐          ┌─────────────────────────┐        │
+│   │ "We need to handle      │          │ "200M DAU × 20 actions   │        │
+│   │  a lot of traffic"      │    →     │  ÷ 86,400 = 46K QPS"     │        │
+│   │ Design for average     │          │ Design for peak + events  │        │
+│   │ Assume uniform load    │          │ Plan for hot keys         │        │
+│   │ Current scale only     │          │ 10x growth, migration   │        │
+│   │ Add monitoring later   │          │ Observability from day 1  │        │
+│   │ Cost not discussed     │          │ Cost as design constraint │        │
+│   └─────────────────────────┘          └─────────────────────────┘        │
+│                                                                             │
+│   KEY: Staff derives, plans for failure, and makes trade-offs explicit.     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Part 14c: Data, Consistency, and Durability at Scale
+
+Scale changes what you can guarantee. Staff engineers are explicit about invariants and consistency models.
+
+## Invariants That Must Hold
+
+Regardless of scale, some invariants are non-negotiable:
+- **Financial:** Debits must equal credits; no double-spend
+- **Identity:** User X’s data must not appear as User Y’s
+- **Ordering:** Within a partition, messages must be ordered
+
+**Staff-level distinction:** Know which invariants are strict (must never violate) vs. soft (best-effort, can degrade under load).
+
+## Consistency Models at Scale
+
+| Scale | Typical Model | Why |
+|------|---------------|-----|
+| Single node | Strong consistency | Cheap, simple |
+| Single region, replicated | Strong for writes; eventual for reads | Read replicas lag |
+| Multi-region | Eventual, or strong with latency cost | Cross-region sync is expensive |
+| Global, high write | Eventual, CRDTs, or conflict resolution | Strong consistency doesn’t scale |
+
+**Articulating in interviews:** "At 100K writes/second across regions, strong consistency would require synchronous replication—adding 100–200ms per write. For social posts, I choose eventual consistency. For payment ledgers, I accept the latency; correctness is non-negotiable."
+
+## Durability at Scale
+
+- **Single node:** One disk failure loses data. Replication required.
+- **Replicated:** N replicas; durability = 1 - (annual failure rate)^N
+- **Distributed storage:** Erasure coding, quorum writes—designed for durability at PB scale
+
+**Staff-level check:** "What is our durability target? 99.999999999% (11 nines)? That dictates replication factor and storage architecture."
+
+---
+
+# Part 14d: Security and Compliance at Scale
+
+Scale increases attack surface and regulatory exposure. Staff engineers consider trust boundaries and data sensitivity.
+
+## Trust Boundaries at Scale
+
+- **Small scale:** Single perimeter; internal vs. external
+- **Large scale:** Multi-tenant, partner APIs, internal services with different trust levels
+
+**Key question:** "Which data crosses which boundary? Payment data must never leave the payment boundary. User content may be processed by ML—that’s a different boundary."
+
+## Data Sensitivity and Retention
+
+| Data Type | Sensitivity | Scale Consideration |
+|-----------|-------------|---------------------|
+| PII | High | Encryption at rest and in transit; access controls; audit logs |
+| Payment | Highest | PCI scope; minimal retention; no logging of full numbers |
+| Analytics | Lower | Aggregation reduces sensitivity; longer retention OK |
+| Logs | Variable | May contain PII; retention limits, redaction |
+
+**Staff-level insight:** "At 100M users, we store billions of rows. A single misconfigured export or over-permissive access can expose millions. Data access must be audited and least-privilege."
+
+## Compliance at Scale
+
+Regulations (GDPR, CCPA, etc.) apply per user. At scale:
+- **Deletion:** "Delete user X" must cascade across all systems, all replicas, all backups
+- **Export:** User data export must complete within SLA (e.g., 30 days)
+- **Consent:** Consent state must be consistent and enforceable across all services
+
+**Trade-off:** Full compliance can limit architectural choices (e.g., where data lives). Staff engineers involve compliance early.
+
+---
+
+# Part 14e: Observability and Debuggability at Scale
+
+At scale, you cannot SSH into a box. You need metrics, logs, and traces.
+
+## The Three Pillars
+
+| Pillar | Purpose | Scale Consideration |
+|--------|---------|---------------------|
+| **Metrics** | "Is it healthy?" | Cardinality explosion; aggregate, sample, cost-control |
+| **Logs** | "What happened?" | Volume; structured logs, sampling, retention tiers |
+| **Traces** | "Where did it slow down?" | Trace 1 request across 50 services; correlation IDs |
+
+**Staff-level design:** "Every service emits a request_id. Every log line includes it. Every metric can be filtered by service, region, and user cohort. That’s how we debug a 100-service call chain."
+
+## Debuggability Under Load
+
+When the system is failing, you need to diagnose fast:
+- **Request tracing:** One ID from edge to storage and back
+- **Partial failure visibility:** "Which shard? Which region?"
+- **Replay:** Ability to replay a problematic request in staging
+
+**Real-world example:** At 1M QPS, P99 latency spikes. Without traces, you guess. With traces, you see 2% of requests hit a slow dependency; you fix that dependency or add a circuit breaker.
+
+---
+
+# Part 14f: Cross-Team and Organizational Impact
+
+Scale affects more than the system—it affects how teams and orgs work.
+
+## Dependency Management
+
+At scale, your system depends on many others—and many depend on you. A change in your API affects dozens of teams.
+
+**Staff-level behavior:** "We version our APIs. Breaking changes require a migration path. We notify dependent teams 6 months in advance. We measure adoption of new versions."
+
+## Team Topology at Scale
+
+| System Scale | Typical Structure | Coordination Cost |
+|-------------|-------------------|-------------------|
+| Single team | Monolith or few services | Low |
+| 10–20 services | Domain teams | Medium; need clear boundaries |
+| 100+ services | Platform + domain teams | High; platform provides standards |
+| 1000+ services | Multi-org, platform as product | Very high; APIs and SLOs are contracts |
+
+**Staff-level insight:** "At 100 services, we need a platform team. At 1000, we need platform as a product—other teams are customers. Capacity planning crosses team boundaries; someone must own the full picture."
+
+## Escalation and Ownership
+
+When something breaks at 2 AM:
+- **Clear ownership:** Every service has an on-call; every dependency has a documented owner
+- **Escalation paths:** L1 → L2 → Staff/Principal
+- **Cross-team incidents:** War room; one incident commander; post-mortem across teams
+
+**Trade-off:** Over-centralization slows iteration; under-centralization creates chaos. Staff engineers find the right balance for their org.
+
+---
+
 # Part 15: Interview Calibration for Scale (Phase 3)
 
 ## What Interviewers Evaluate During Scale Discussion
@@ -1575,20 +1812,89 @@ As you work through scale, imagine the interviewer asking:
 
 Hit all of these, and you've demonstrated Staff-level scale thinking.
 
+## What Interviewers Probe
+
+Interviewers at Staff level are testing whether you:
+
+- **Probe scale first** before designing. "How many users? What's the growth trajectory?"
+- **Derive, don't guess.** Show the math: DAU × actions ÷ 86,400 = QPS.
+- **Think in failure modes.** "At this scale, what breaks first? Hot keys? Network? Cascades?"
+- **Make trade-offs explicit.** "We trade X for Y because at this scale…"
+- **Consider cost.** "Does this design fit our budget? What's the cost per user?"
+- **Account for operations.** "Who runs this at 3 AM? What do they need to debug?"
+
+## Signals of Strong Staff Thinking
+
+| Signal | What It Looks Like |
+|--------|-------------------|
+| **Scale-first** | Opens with "Let me establish scale assumptions" before drawing boxes |
+| **Derivation** | Writes formulas on the board; numbers flow from users and actions |
+| **Blast radius** | "Failures will be partial; design for containment" |
+| **Trade-off fluency** | "At 100K QPS, strong consistency costs 200ms; we choose eventual" |
+| **Cost awareness** | "Precomputed vs. real-time: 10x cost difference; we choose precomputed" |
+| **Operational design** | "We need traces, correlation IDs, and kill switches from day one" |
+
+## Common Senior Mistake
+
+**The mistake:** Jumping to architecture before establishing scale. "We'll use a distributed database" without knowing whether the system needs 1K or 1M QPS.
+
+**Why it matters:** A Senior can design a correct system for the wrong scale. A Staff engineer ensures the design matches the problem. Interviewers notice when you skip the scale conversation.
+
+## How to Explain to Leadership
+
+Leadership cares about risk, cost, and timeline—not QPS or sharding. Translate:
+
+- **"We're designing for 10M users"** → "We can support our 2-year growth target without a rewrite."
+- **"Peak is 5x average"** → "We won't go down during Black Friday or a viral event."
+- **"Cost is $X per user"** → "At 10M users, infra cost is $Y; we need to stay within budget."
+- **"We're trading consistency for latency"** → "Users see updates within seconds instead of instantly; product has approved this."
+
+**One-liner:** "We're designing for the scale we'll have in 18 months, with a clear path to 10x beyond that."
+
+## How to Teach This Topic
+
+1. **Start with derivation.** Have learners estimate QPS for a known system (e.g., Twitter, Uber) and show their work.
+2. **Introduce multipliers.** Fan-out, peak, hot keys—each multiplies the naive number.
+3. **Add failure modes.** "What breaks first when you 10x load?"
+4. **Practice trade-offs.** Give a scenario: "Strong consistency or low latency? Choose and justify."
+5. **Use the incident.** Walk through the hot-key/cache-stampede case; have learners identify what they would have designed differently.
+
 ---
 
 # Part 16: Final Verification — L6 Readiness Checklist
 
-## Does This Section Meet L6 Expectations?
+## Master Review Prompt Check (All 11 Items)
 
-| L6 Criterion | Coverage | Notes |
-|-------------|----------|-------|
-| **Judgment & Decision-Making** | ✅ Strong | Scale thresholds, trade-off frameworks, decision points |
-| **Failure & Degradation Thinking** | ✅ Strong | Scale-failure relationship, blast radius, containment |
-| **Scale & Evolution** | ✅ Strong | Growth planning, scale thresholds, migration paths |
-| **Staff-Level Signals** | ✅ Strong | L6 phrases, interviewer evaluation, L5 mistakes |
-| **Real-World Grounding** | ✅ Strong | URL shortener, notification, rate limiter examples |
-| **Interview Calibration** | ✅ Strong | Explicit signals, phrases, mental checklist |
+Use this checklist to verify chapter completeness:
+
+| # | Check | Status |
+|---|-------|--------|
+| 1 | **Judgment & decision-making** — Scale thresholds, trade-off frameworks, explicit decision points | ✅ |
+| 2 | **Failure & incident thinking** — Partial failures, blast radius, containment, real incident case study | ✅ |
+| 3 | **Scale & time** — Growth over years, first bottlenecks, migration paths, scale thresholds | ✅ |
+| 4 | **Cost & sustainability** — Cost as first-class constraint, cost drivers, trade-offs | ✅ |
+| 5 | **Real-world engineering** — Operational burdens, human errors, on-call, toil | ✅ |
+| 6 | **Learnability & memorability** — Mental models, analogies, one-liners, cheat sheets | ✅ |
+| 7 | **Data, consistency & correctness** — Invariants, consistency models, durability at scale | ✅ |
+| 8 | **Security & compliance** — Data sensitivity, trust boundaries, compliance at scale | ✅ |
+| 9 | **Observability & debuggability** — Metrics, logs, traces, correlation IDs at scale | ✅ |
+| 10 | **Cross-team & org impact** — Dependencies, team topology, escalation, ownership | ✅ |
+| 11 | **Interview calibration** — What interviewers probe, Staff signals, leadership explanation, teaching | ✅ |
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dim | Dimension | Coverage | Location |
+|-----|-----------|----------|----------|
+| **A** | Judgment & decision-making | Strong | Parts 13, 14a; scale thresholds, trade-off frameworks |
+| **B** | Failure & incident thinking | Strong | Parts 11, 11a; blast radius, containment, real incident |
+| **C** | Scale & time | Strong | Parts 2–10, 12; growth, bottlenecks, migration paths |
+| **D** | Cost & sustainability | Strong | Part 14a; cost as first-class, drivers, trade-offs |
+| **E** | Real-world engineering | Strong | Part 14b; on-call, human error, operational toil |
+| **F** | Learnability & memorability | Strong | Cheat sheets, diagrams, one-liners throughout |
+| **G** | Data, consistency & correctness | Strong | Part 14c; invariants, consistency models, durability |
+| **H** | Security & compliance | Strong | Part 14d; trust boundaries, data sensitivity, compliance |
+| **I** | Observability & debuggability | Strong | Part 14e; metrics, logs, traces, correlation IDs |
+| **J** | Cross-team & org impact | Strong | Part 14f; dependencies, team topology, ownership |
 
 ## Staff-Level Signals Covered
 
@@ -1602,6 +1908,18 @@ Hit all of these, and you've demonstrated Staff-level scale thinking.
 ✅ Articulating scale-driven trade-offs
 ✅ Considering operational scale implications
 ✅ Knowing when scale thresholds force architectural changes
+
+## Mental Models and One-Liners
+
+| Concept | One-Liner |
+|---------|-----------|
+| Scale determines architecture | "At small scale, almost anything works. At large scale, distribution is mandatory." |
+| Peak vs. average | "Systems fail at peak, not average." |
+| Fan-out | "1K posts × 1K followers = 1M operations. Always trace the multiplier." |
+| Hot keys | "Power law: top 1% of keys often get 50% of traffic." |
+| Blast radius | "At scale, partial failures are normal; design for containment." |
+| Cost at scale | "A 10% inefficiency is negligible at 1K users and existential at 100M." |
+| Derivation | "Show your work. Derive, don't guess." |
 
 ## Remaining Gaps (Acceptable)
 

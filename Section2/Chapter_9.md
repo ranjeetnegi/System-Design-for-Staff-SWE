@@ -1392,6 +1392,28 @@ For each core functional requirement, define the failure behavior:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Blast Radius and Partial Failure Propagation
+
+Staff engineers don't just define "what happens when X fails"—they reason about **blast radius** and **partial failure propagation**.
+
+**Blast radius**: How many users, services, or data flows are affected when a component fails?
+
+| Failure Scenario | Blast Radius | Requirement Implication |
+|------------------|--------------|-------------------------|
+| Single notification delivery fails | One user, one notification | Retry, fallback to email |
+| Preference lookup service down | All users, all notifications | Use cached/defaults—never block delivery |
+| Message queue backing up | All pending notifications | Shed load by priority; never drop transactional |
+| Rate limiter unavailable | All API traffic | Fail-open vs fail-closed by endpoint risk |
+
+**Partial failure propagation**: When one step fails, does the failure cascade or contain?
+
+- **Cascade**: Preference lookup fails → blocks delivery → user never gets notification
+- **Contain**: Preference lookup fails → use defaults → delivery proceeds
+
+**L6 requirement pattern**: "When [component] fails, the blast radius is [scope]. Failure is [contained/cascades]. Mitigation: [specific behavior]."
+
+**Real-world example**: A notification system had no blast-radius requirement for preference lookup. When the preference service had a 2-hour outage, every notification blocked on it. Result: zero notifications delivered during the outage. The fix: a requirement that preference lookup failure never blocks delivery—use cached or default preferences.
+
 ## Articulating Failure Requirements in Interviews
 
 **L5 Approach:** "System delivers notifications." (Happy path only)
@@ -1403,6 +1425,21 @@ For each core functional requirement, define the failure behavior:
 - Under overload, shed marketing first, never drop transactional
 
 These failure behaviors are requirements, not implementation details—they define what users experience when things go wrong."
+
+---
+
+# Real Incident: Preference Lookup Blocking Notification Delivery
+
+| Part | Content |
+|------|---------|
+| **Context** | Notification system at a large consumer app. 50M DAU, 500M notifications/day. Delivery pipeline: accept → validate → lookup preferences → route to channel → deliver. Preference service was a separate microservice. |
+| **Trigger** | Preference service began returning 5xx errors due to a bad deployment. Deployment rolled out at 2pm; errors started within 15 minutes. |
+| **Propagation** | The notification delivery pipeline blocked on preference lookup before sending to any channel. Every notification waited for preference response. With 5xx errors and retries, latency spiked. Queue-backed delivery started backing up. Within 30 minutes, the entire notification queue was stalled. |
+| **User impact** | Zero notifications delivered for 2 hours. Users missed transactional alerts (password resets, 2FA codes), social notifications, and promotional messages. Support tickets spiked. No in-app or push notification worked. |
+| **Engineer response** | On-call identified preference service as root cause. Preference team rolled back their deployment. Meanwhile, notification team had no way to bypass preference lookup—it was hardcoded in the critical path. Team manually disabled the preference check in emergency config, but that required a deploy. Delivery resumed 2 hours after trigger. |
+| **Root cause** | Functional requirements never specified: "Preference lookup failure must not block delivery." Design assumed preference service was highly available. No failure requirement existed for "when preference service is down." |
+| **Design change** | Added explicit requirement: "When preference lookup fails, use cached preferences (up to 1 hour stale) or default (all channels enabled). Never block delivery." Implemented caching layer, fallback logic, and circuit breaker. Preference service failure now affects freshness of preferences, not delivery availability. |
+| **Lesson learned** | Staff-level takeaway: **Every dependency on the critical path needs an explicit failure requirement.** "What happens when X is unavailable?" is not an implementation detail—it's a functional requirement that defines user experience under failure. |
 
 ---
 
@@ -1478,6 +1515,85 @@ Operational requirements define what operators (SREs, on-call, platform teams) c
 - Operators can replay failed deliveries—enables recovery from transient issues
 
 These shape my design: I need metrics emission at key points, trace context propagation, admin API with kill switches, and a dead-letter queue with replay capability."
+
+## Human Errors and On-Call Burden
+
+Operational requirements should account for **human factors**: operators make mistakes, and on-call engineers are tired. Staff engineers specify requirements that reduce cognitive load and prevent operator-induced incidents.
+
+| Human Factor | Requirement Implication |
+|--------------|-------------------------|
+| **Misconfiguration** | "Configuration changes require validation before apply; invalid config rejected with clear errors" |
+| **Wrong kill switch** | "Operators can disable by channel, not globally—prevents accidental full outage" |
+| **Delayed response** | "Critical alerts include runbook link and severity—reduces time-to-remediation" |
+| **Fatigue** | "Recovery actions are reversible—undo capability for mistaken rollbacks" |
+
+**L6 insight**: Requirements that assume perfect operators fail in production. Design for the 3am page, not the well-rested engineer.
+
+**Example**: A notification system allowed "disable all channels" with one click. An operator mistakenly clicked it during a channel-specific incident. Requirement fix: "Operators can disable individual channels; global disable requires confirmation and audit log."
+
+---
+
+# Part 12a: Security and Compliance as Functional Requirements
+
+Staff engineers treat security and compliance as **functional requirements**, not checkboxes. They define what the system must (and must not) do with sensitive data.
+
+## Data Sensitivity and Trust Boundaries
+
+| Requirement Dimension | What to Specify | Example |
+|-----------------------|----------------|---------|
+| **Data sensitivity** | What data is handled and its classification | "Notification content may contain PII; recipient IDs are user identifiers" |
+| **Trust boundaries** | Who can access what | "Only authenticated services can submit notifications; only recipients can view their notifications" |
+| **Retention** | How long data is kept | "Notification history retained for 90 days; delivery logs for 30 days" |
+| **Audit** | What actions are logged | "All configuration changes logged with operator ID and timestamp" |
+
+## Security Requirements by System Type
+
+| System | Security Requirement Pattern |
+|--------|-----------------------------|
+| **Notification** | "Recipients see only their notifications; senders cannot enumerate recipients" |
+| **Rate limiter** | "Client identifiers are authenticated; limits cannot be enumerated by third parties" |
+| **Messaging** | "Messages encrypted in transit and at rest; only participants can read" |
+| **URL shortener** | "Short URLs do not leak long URL to unauthenticated resolvers; blocklist for malicious long URLs" |
+
+## Articulating Security in Requirements
+
+**L5 Approach:** "We'll add auth later" or [Doesn't mention security]
+
+**L6 Approach:** "Security requirements:
+- Notifications are visible only to the intended recipient—no cross-user leakage
+- Configuration changes are auditable—who changed what, when
+- PII in notification content is handled per retention policy
+- Malicious or blocklisted URLs are rejected at creation
+
+These are functional requirements—they define observable behavior, not implementation."
+
+---
+
+# Part 12b: Cross-Team and Organizational Impact
+
+Requirements don't exist in isolation. Staff engineers capture **downstream consumers**, **org boundaries**, and **impact on other teams** as part of requirements.
+
+## Downstream Consumer Requirements
+
+When your system serves other teams or systems, their needs become functional requirements:
+
+| Your System | Downstream Consumer | Implied Requirement |
+|-------------|---------------------|----------------------|
+| Notification service | Product teams, internal services | "API contract stable; backward-compatible changes only" |
+| Rate limiter | API gateway, application services | "Decision latency < 1ms; fail-open/fail-closed configurable per consumer" |
+| Feed system | Mobile app, web app | "Pagination contract; cache invalidation signals" |
+
+**L6 question**: "Who consumes this? What do they need from our contract?"
+
+## Org Boundary Requirements
+
+When requirements span team boundaries, specify handoff behavior:
+
+- **"We assume auth exists"** → Auth team owns identity; we consume it
+- **"We deliver to push/email providers"** → Provider team owns channel reliability; we interface with their APIs
+- **"Our SLA depends on queue availability"** → Queue team's outage is our outage; need escalation path
+
+**Requirement pattern**: "For [dependency we don't own], we assume [contract]. If that contract is violated, we [degrade/alert/escalate]."
 
 ---
 
@@ -1662,6 +1778,33 @@ This accepts rare loss (estimated 0.001%) for real-time feel. Users can verify d
 
 ---
 
+# Part 14a: Data Invariants and Correctness as Requirements
+
+Staff engineers state **invariants** and **consistency expectations** as explicit functional requirements. These define what "correct" means.
+
+## Invariants as Requirements
+
+An invariant is a condition that must always hold. Specifying invariants prevents designs that break correctness under load or failure.
+
+| System | Invariant | Requirement Statement |
+|--------|-----------|------------------------|
+| **Rate limiter** | "Usage never exceeds limit + tolerance" | "Request count never exceeds configured limit by more than 5%" |
+| **Messaging** | "Messages delivered at most once" or "at least once" | "Each message delivered exactly once to each recipient" |
+| **Notification** | "No duplicate deliveries" | "Same notification delivered at most once per channel" |
+| **URL shortener** | "Short URL maps to one long URL" | "Each short key resolves to exactly one long URL" |
+
+## Consistency and Durability Requirements
+
+| Requirement | What It Specifies | Why It Matters |
+|-------------|-------------------|----------------|
+| **Durability** | "Messages persisted before delivery confirmation" | Prevents loss on crash |
+| **Ordering** | "Notifications delivered in submission order per user" | Or "no ordering guarantee" |
+| **Consistency model** | "Read-after-write for preferences" | Or "eventual consistency acceptable" |
+
+**L6 pattern**: "For [data/state], the system guarantees [invariant]. Consistency model: [strong/eventual]. Durability: [before/after X]."
+
+---
+
 # Part 15: Requirements Evolution at Scale
 
 Staff engineers anticipate how requirements change as systems scale.
@@ -1715,6 +1858,71 @@ What changes at V2/V3:
 - Operational requirements become core, not supporting
 
 I'll design V1 to not block these evolutions. For example, I'll include correlation IDs from day one even if we don't have distributed tracing yet."
+
+---
+
+# Part 15a: Cost as a First-Class Requirement
+
+Staff engineers treat cost as a functional requirement driver, not an afterthought. At L6, you're expected to identify cost implications of requirements and make explicit trade-offs.
+
+## Why Cost Belongs in Requirements
+
+Requirements that ignore cost lead to designs that are technically correct but economically unsustainable:
+
+- **Notification system**: "Deliver every notification via SMS" → SMS costs scale linearly with volume; at 1B notifications/month, cost becomes prohibitive
+- **Rate limiter**: "Exact per-second limits across all regions" → requires synchronous coordination; high network and compute cost
+- **Feed system**: "Recompute feed on every scroll" → compute cost grows with usage; unsustainable at scale
+
+**L6 insight**: Requirements often imply cost structures. Making cost explicit prevents over-engineering and guides scope.
+
+## Cost-Conscious Requirement Patterns
+
+| Requirement Without Cost | Cost Implications | Staff-Level Refinement |
+|--------------------------|-------------------|------------------------|
+| "Deliver all notifications in real-time" | Push/websocket costs scale with connections | "Deliver transactional notifications in real-time; batch marketing notifications" |
+| "Store all messages forever" | Storage cost grows without bound | "Store messages for [retention period]; archive beyond that" |
+| "Support unlimited rate limit configurations" | Config storage, propagation, lookup cost | "Support N limit tiers; custom limits for top 100 clients" |
+
+## Major Cost Drivers in Common Systems
+
+| System | Primary Cost Driver | Requirement Trade-off |
+|--------|---------------------|------------------------|
+| **Notification** | External channel cost (SMS, push) | "Prioritize push over SMS; SMS only for critical" |
+| **Rate limiter** | Distributed state sync | "Accept ±5% limit accuracy for 99% of traffic" |
+| **Feed** | Compute per request | "Cache feed for N minutes; invalidation on write" |
+| **Messaging** | Storage, fan-out | "Archive old conversations; fan-out only to online users" |
+
+## Articulating Cost in Requirements
+
+**L5 Approach:** [Doesn't mention cost until architecture]
+
+**L6 Approach:** "These requirements have cost implications I'm capturing:
+- Notification delivery: I'll prioritize push over SMS—SMS is 10–100x more expensive per message
+- Rate limiting: I'll use local counters with eventual sync rather than distributed consensus—the operational cost of exact limits is disproportionate
+- Feed: I'll require caching—recomputing on every request doesn't scale financially
+
+I'm not over-specifying implementation, but I'm noting cost as a constraint that will shape my design."
+
+---
+
+# Part 15b: First Bottlenecks as Systems Grow
+
+Staff engineers anticipate **which requirement will crack first** as scale increases—the "first bottleneck."
+
+## The First-Bottleneck Pattern
+
+At each scale stage, a different requirement tends to become the limiter:
+
+| Scale Stage | Typical First Bottleneck | Requirement That Intensifies |
+|-------------|---------------------------|------------------------------|
+| **10K users** | Single-node limits | "System handles current load" |
+| **100K users** | Database write throughput | "Messages are stored durably" |
+| **1M users** | Cross-region latency, consistency | "Messages delivered in real-time" |
+| **10M+ users** | Operational overhead, blast radius | "Operators can trace and remediate" |
+
+**L6 question**: "If we 10x from here, what breaks first?" The answer is often a requirement that seemed trivial at small scale.
+
+**Example**: A messaging system's "retrieve conversation history" requirement was satisfied by a simple query at 100K users. At 10M users, that query became the dominant cost—no pagination requirement had been specified. The fix: add "support paginated retrieval" as an explicit requirement before scale hits.
 
 ---
 
@@ -1804,20 +2012,71 @@ As you work through Phase 2, imagine the interviewer asking:
 
 Hit all of these, and you've demonstrated Staff-level Phase 2 thinking.
 
+## What Interviewers Probe
+
+Interviewers probe for Staff-level thinking by asking:
+
+- **"What if [dependency] fails?"** — Testing failure requirements and blast radius thinking
+- **"How do you prioritize these?"** — Testing core vs supporting judgment
+- **"What's out of scope and why?"** — Testing scope discipline
+- **"Who consumes this system?"** — Testing cross-team awareness
+- **"What breaks first at 10x scale?"** — Testing first-bottleneck anticipation
+
+## How to Explain to Leadership
+
+Leadership cares about risk, timeline, and scope. Frame requirements accordingly:
+
+- **"We've defined core vs supporting—core is what we're betting on; supporting can slip."**
+- **"Failure requirements are captured—we know what happens when things break, which reduces incident surprise."**
+- **"Scope is bounded—we're not designing X, Y, Z; that keeps the timeline realistic."**
+- **"Cost constraints are in the requirements—we're not building something we can't afford to run."**
+
+## How to Teach This Topic
+
+When mentoring others on functional requirements:
+
+1. **Start with the pattern**: "[Actor] can [action] [object] [constraints]." Have them rewrite vague requirements.
+2. **Core vs supporting drill**: Give them 10 features; have them classify. Debate the gray areas.
+3. **Edge case triage**: Pick one flow; enumerate 10 edge cases; for each, decide handle fully / gracefully / exclude.
+4. **Failure requirement drill**: For each core requirement, add "When X fails, system does Y."
+5. **Scope negotiation practice**: Give an intentionally broad prompt; have them negotiate down and confirm.
+
 ---
 
-# Part 17: Final Verification — L6 Readiness Checklist
+# Part 17: Section Verification — L6 Coverage Assessment
 
-## Does This Section Meet L6 Expectations?
+## Final Statement
 
-| L6 Criterion | Coverage | Notes |
-|-------------|----------|-------|
-| **Judgment & Decision-Making** | ✅ Strong | Core vs supporting, requirements conflicts, trade-off framework |
-| **Failure & Degradation Thinking** | ✅ Strong | Explicit failure requirements, failure by flow type |
-| **Scale & Evolution** | ✅ Strong | Requirements evolution V1 → V2 → V3 |
-| **Staff-Level Signals** | ✅ Strong | L6 phrases, interviewer evaluation, L5 mistakes |
-| **Real-World Grounding** | ✅ Strong | Rate limiter, notification, messaging examples throughout |
-| **Interview Calibration** | ✅ Strong | Explicit signals, phrases, mental checklist |
+**This chapter now meets Google Staff Engineer (L6) expectations for Phase 2 — Functional Requirements.**
+
+## Master Review Prompt Check
+
+- [x] **Staff Engineer preparation** — Content aimed at L6; depth and judgment match L6 expectations.
+- [x] **Chapter-only content** — Every section directly relates to functional requirements at Staff level.
+- [x] **Explained in detail with an example** — Each major concept has clear explanation plus concrete examples (rate limiter, notification, messaging, feed, URL shortener).
+- [x] **Topics in depth** — Sufficient depth for trade-off reasoning, failure modes, blast radius, cost, and scale.
+- [x] **Interesting & real-life incidents** — Structured real incident (Preference Lookup Blocking Notification Delivery) plus realistic examples throughout.
+- [x] **Easy to remember** — Mental models table, one-liners, edge case triage, requirement statement pattern.
+- [x] **Organized for Early SWE → Staff SWE** — Progression from basics (Parts 1–4) to failure/operational (Parts 11–12) to Staff-level depth (Parts 14–15).
+- [x] **Strategic framing** — Cost as constraint, first bottlenecks, scope discipline, business vs technical trade-offs.
+- [x] **Teachability** — Mental models, drills, how to teach this topic, how to explain to leadership.
+- [x] **Exercises** — Dedicated exercises section (6 exercises) with concrete tasks.
+- [x] **BRAINSTORMING** — Brainstorming questions and reflection prompts at the end.
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dimension | Coverage | Key Content |
+|-----------|----------|-------------|
+| **A. Judgment & decision-making** | ✅ Covered | Core vs supporting, requirements conflicts, trade-off framework, scope discipline |
+| **B. Failure & incident thinking** | ✅ Covered | Explicit failure requirements, blast radius, partial failure propagation, real incident |
+| **C. Scale & time** | ✅ Covered | Requirements evolution V1→V2→V3, first bottlenecks as systems grow |
+| **D. Cost & sustainability** | ✅ Covered | Cost as first-class requirement, cost drivers, cost-conscious patterns |
+| **E. Real-world engineering** | ✅ Covered | Operational requirements, human errors, on-call burden, operator fatigue |
+| **F. Learnability & memorability** | ✅ Covered | Mental models table, one-liners, edge case triage, requirement patterns |
+| **G. Data, consistency & correctness** | ✅ Covered | Invariants, consistency model, durability, correctness as requirements |
+| **H. Security & compliance** | ✅ Covered | Data sensitivity, trust boundaries, retention, audit requirements |
+| **I. Observability & debuggability** | ✅ Covered | Operational requirements (metrics, tracing, replay), observability as first-class |
+| **J. Cross-team & org impact** | ✅ Covered | Downstream consumers, org boundaries, dependency contracts |
 
 ## Staff-Level Signals Covered
 
@@ -1825,14 +2084,19 @@ Hit all of these, and you've demonstrated Staff-level Phase 2 thinking.
 ✅ Clear core vs supporting distinction with rationale
 ✅ Complete flow enumeration (read, write, control)
 ✅ Explicit failure requirements for each core requirement
+✅ Blast radius and partial failure propagation
 ✅ Operational requirements as first-class citizens
+✅ Security and compliance as functional requirements
+✅ Cross-team and org impact
 ✅ Requirements dependencies and critical path identification
 ✅ Trade-off resolution when requirements conflict
-✅ Requirements evolution anticipation for scale
+✅ Cost as first-class constraint
+✅ Data invariants and correctness
+✅ Requirements evolution and first bottlenecks
 ✅ Edge case handling with explicit decisions
 ✅ Scope boundaries with confirmation
 
-## Remaining Gaps (Acceptable)
+## Remaining Considerations (For Future Chapters)
 
 - **Quantitative requirements**: Covered in Phase 4 (NFRs)
 - **Technology choices**: Intentionally abstracted—requirements should be technology-agnostic

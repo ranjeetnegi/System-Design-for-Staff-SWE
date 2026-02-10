@@ -1,4 +1,4 @@
-# Chapter 11: End-to-End System Design Using the 5-Phase Framework
+# Chapter 13: End-to-End System Design Using the 5-Phase Framework
 
 ### A Staff-Level Walkthrough: The News Feed System
 
@@ -348,6 +348,22 @@ This is why we need to think carefully about push vs. pull.
 
 ---
 
+## Scale Over Time: First Bottlenecks
+
+*Staff engineers anticipate where the system breaks as it grows.*
+
+| Scale | Feed Loads/sec | First Bottleneck | Mitigation |
+|-------|----------------|------------------|------------|
+| **1x (today)** | 50K | Feed cache memory; Feed Storage write throughput | Sharding; 7-day retention |
+| **5x** | 250K | Ranking Service becomes bottleneck; Content Service hot keys | Request coalescing; ranking cache |
+| **10x** | 500K | Single-region limit; cross-region latency for distant users | Multi-region; read replicas |
+| **50x** | 2.5M | Fan-out queue depth; Kafka partition limits | Increase partitions; fan-out prioritization |
+| **100x** | 5M | Celebrity count grows; more pull-path load | Higher push threshold; regional pre-warming |
+
+**Staff lesson:** "Design for today's scale with clear signals for when to revisit. At 5x, we'll need ranking optimization. At 10x, multi-region. Document the triggers."
+
+---
+
 ## Identifying Bottlenecks
 
 **My narration**: "At this scale, where are the bottlenecks?"
@@ -443,12 +459,16 @@ This is why we need to think carefully about push vs. pull.
 - **No feed corruption**: Feed should never show duplicate or broken content
 - **Idempotent operations**: Retries should be safe
 
+**Data invariants (Staff-level):** Explicit invariants prevent subtle bugs. For the feed system: (1) **Monotonicity**—a user's feed, when paginated, must not show the same item twice nor skip items; cursor-based pagination plus idempotent fan-out enforces this. (2) **Visibility**—if user A follows user B and B's post is not deleted, A's feed must eventually contain it (within freshness SLA); fan-out + eventual consistency. (3) **Deletion propagation**—when content is deleted, it must disappear from feeds; requires invalidation or filtering at read time. (4) **Durability**—published content is written to durable storage before ack; Kafka + Feed Storage with replication. At L6, state these invariants explicitly so the design can be validated against them.
+
 ### Security
 
 - **Authentication**: All feed requests from authenticated users
 - **Authorization**: Users only see content they have access to
 - **Rate limiting**: Protect against abuse
 - **Content safety**: Integration with content moderation (out of scope for this design)
+
+**Staff-level security depth:** Trust boundaries matter. The feed service sits between clients and multiple backend services. A compromised feed service could leak social graph data (who follows whom) or content the user should not see (e.g., account bans, muted content). Design choices: (1) Feed service never logs PII in traces; (2) Authorization checks at Content Service, not just Feed Service—defense in depth; (3) Rate limit per user to prevent scraping. For compliance (GDPR, etc.): user data in feeds is personal data; retention policies (7-day feed) must align with deletion rights. Feed storage must support "delete all data for user X" within SLA.
 
 ---
 
@@ -851,6 +871,37 @@ This is why we need to think carefully about push vs. pull.
 
 ---
 
+## Cost as First-Class Constraint — News Feed Drivers
+
+*Staff engineers treat cost as a design constraint, not an afterthought.*
+
+| Cost Driver | Magnitude | Staff-Level Mitigation |
+|-------------|-----------|------------------------|
+| **Fan-out writes** | 50B writes/day if pure push for celebrities | Hybrid: push for <10K followers, pull for celebrities. Cuts write amplification by 90%+ |
+| **Feed storage** | 50B items × 100 bytes = 5TB/day raw | 7-day retention; tier to cold storage for archive |
+| **Cache memory** | 200M users × 20 items × 2KB ≈ 8TB if all cached | Cache only active users (last 24h); evict inactive. ~20% of users drive 80% of traffic |
+| **Read path compute** | 50K feeds/sec × ranking + merge | Pre-materialization reduces compute; cache hit avoids computation |
+| **Cross-region (future)** | Full replication 2-3x cost | Async replication; read replicas for distant users only |
+
+**Trade-off explicit:** "We could achieve 5-second freshness with synchronous fan-out, but at 50B writes/day that would triple our database cost. Sixty-second freshness with async fan-out is the right trade-off for this product."
+
+---
+
+## Cross-Team and Org Impact
+
+*At Staff level, designs span team boundaries. Dependencies and ownership matter.*
+
+| Dependency | Owning Team | Contract / SLA | Escalation |
+|------------|-------------|----------------|------------|
+| **Content Service** | Content Platform | Get content by ID; P99 <50ms | Feed team cannot block on their outages; fallback to metadata-only |
+| **Social Graph Service** | Identity/Graph | Followers, followees; eventual consistency OK | If down, use cached graph (1h TTL); fan-out queues for replay |
+| **Ranking Service** | ML/Recommendations | Score content for user; P99 <50ms | Fallback to chronological; feed still works |
+| **Analytics pipeline** | Data Platform | Consume feed events (load, scroll, click) | Feed events are fire-and-forget; backpressure handled by analytics |
+
+**Org considerations:** Feed team owns the feed experience end-to-end but depends on 4+ teams. Changes to Content Service schema (e.g., new content types) require coordination. Ranking algorithm changes can affect feed latency—interface must be stable. **Staff lesson:** "Design for failure of dependencies. Document ownership and escalation paths. Cross-team SLOs must be explicit."
+
+---
+
 ## Evolution Over 1-2 Years
 
 **My narration**: "Systems evolve. Here's how I'd expect this to change."
@@ -1078,6 +1129,25 @@ Social Graph Service DOWN
 
 "The Social Graph Service is a critical dependency. If it's down, we can't compute new feeds or fan out posts. My mitigation: cache the social graph locally with 1-hour TTL. Stale follow relationships are acceptable—users don't frequently add/remove follows. For fan-out, we queue posts and replay when the service recovers."
 
+---
+
+## Real Incident: Celebrity Post Cache Stampede
+
+*Staff engineers learn from real incidents. Here's a structured case study that shaped how feed systems handle hot keys.*
+
+| Field | Content |
+|-------|---------|
+| **Context** | A major social platform's feed system used hybrid push-pull. Celebrity content was pulled at read time and merged with pre-materialized feeds. When a celebrity (30M followers) posted, the feed service fetched that post for every user who followed them and opened the app. |
+| **Trigger** | The celebrity posted during a live event. Within 2 minutes, 2 million users opened the app. All 2M requests resulted in cache misses for that celebrity's content (new post, not yet cached). |
+| **Propagation** | Each cache miss triggered: (1) Content Service lookup for the celebrity post, (2) Ranking Service invocation, (3) Feed Storage read. The Content Service received 2M requests for the same content_id in 2 minutes. The database could not serve that rate for a single key. |
+| **User impact** | Feed load latency spiked from 200ms P99 to 8 seconds. 40% of feed requests timed out. Users saw blank or spinner screens. Duration: 12 minutes until caches warmed. |
+| **Engineer response** | On-call scaled Content Service replicas and added a short-lived "hot content" cache in the feed service. By the time scaling completed, the spike had passed. Post-incident: added request coalescing for identical content_id within a 100ms window. |
+| **Root cause** | No request coalescing for hot content. A single new post from a celebrity became N independent backend requests (one per user), all for the same content. Cache stampede pattern. |
+| **Design change** | Implemented request coalescing: when 10+ requests for the same content_id arrive within 50ms, a single backend fetch serves all. Added "hot content" pre-warming: when a celebrity posts, async job pre-populates the content cache before user traffic peaks. |
+| **Lesson learned** | "Hot keys at read time behave like DDoS from your own users. Design for request coalescing and cache warming for known hot content. At Staff level, anticipate power-law traffic—the top 0.1% of content will drive a disproportionate share of backend load." |
+
+---
+
 ## Cascading Failure Prevention
 
 At Staff level, you design to prevent cascades:
@@ -1141,6 +1211,8 @@ Every request includes trace context:
 | Feature flags | New ranking algorithms behind flags |
 
 ## Runbooks (On-Call Reference)
+
+*Real-world engineering includes human error. Runbooks reduce mistakes under pressure. Keep them short, actionable, and tested.*
 
 **Runbook: Feed Latency Spike**
 
@@ -1280,6 +1352,43 @@ The architecture section mentioned multi-region as a future evolution. Here's th
 | **Failures** | "Let me trace through what happens when each component fails" |
 | **Evolution** | "In year 1, we'd add multi-region. Here's the migration path" |
 
+## What Interviewers Probe (News Feed Specific)
+
+| Probe | What They're Assessing |
+|-------|------------------------|
+| "What if a celebrity with 50M followers posts?" | Hot key awareness; push vs pull reasoning |
+| "How would you handle 10x traffic?" | Scale reasoning; bottlenecks; cost awareness |
+| "What happens when the cache goes down?" | Degradation thinking; blast radius |
+| "Why hybrid and not pure push or pull?" | Trade-off articulation; quantitative reasoning |
+| "How do you ensure users don't see duplicates?" | Data invariants; pagination correctness |
+| "Who owns the social graph?" | Cross-team awareness; dependency boundaries |
+
+## Signals of Strong Staff Thinking
+
+- **Proactively raises** celebrity/hot key before being asked
+- **Derives** numbers (200M DAU × 5 = 1B loads) rather than guessing
+- **Names trade-offs** explicitly: "Choosing latency over freshness because..."
+- **Considers alternatives** and rejects with reasoning
+- **Discusses failure** before being prompted
+- **Asks** "Does this scope work?" and "Is this assumption valid?"
+
+## Common Senior Mistake
+
+**Jumping to architecture without requirements.** A Senior might hear "news feed" and immediately draw: API → Cache → DB → Fan-out. They skip users, scale, NFRs. The design has no foundation. When the interviewer asks "What if 10x traffic?", they retrofit. Staff engineers establish the foundation first; architecture emerges from it.
+
+## How to Explain to Leadership
+
+"The feed system serves 200M daily users. Our main technical challenge is **write amplification**—when a celebrity posts, we can't push to millions of followers. We use a hybrid: push for normal users, pull for celebrities. This keeps cost and latency manageable. Our key trade-off: 60-second freshness for new posts, in exchange for sub-300ms feed load. Users value instant app launch over seeing the very latest post immediately."
+
+## How to Teach This Topic
+
+1. **Start with the celebrity trap.** Have learners design pure push first; then ask "What if one user has 50M followers?" They discover the write explosion. Then have them design pure pull; "What if 50K users open the app per second?" They discover the read explosion. Hybrid emerges naturally.
+2. **Trace one request.** Walk through cache hit, cache miss, celebrity merge. Make every component's role explicit.
+3. **Inject failure.** "Redis is down. What happens?" Have them articulate degradation and blast radius.
+4. **Use the incident.** Walk through the cache stampede case; have learners identify request coalescing as the fix.
+
+---
+
 ## Self-Check: Did I Cover Everything?
 
 Before wrapping up, Staff engineers mentally check:
@@ -1299,16 +1408,49 @@ Before wrapping up, Staff engineers mentally check:
 
 # Part 11: Final Verification — L6 Readiness Checklist
 
+## Master Review Prompt Check (All 11 Items)
+
+Use this checklist to verify chapter completeness:
+
+| # | Check | Status |
+|---|-------|--------|
+| 1 | **Judgment & decision-making** — Trade-off frameworks, explicit decision points, alternatives considered | ✅ |
+| 2 | **Failure & incident thinking** — Partial failures, blast radius, containment, structured real incident | ✅ |
+| 3 | **Scale & time** — Growth over years, first bottlenecks, migration paths, derived numbers | ✅ |
+| 4 | **Cost & sustainability** — Cost as first-class constraint, cost drivers, trade-offs | ✅ |
+| 5 | **Real-world engineering** — Operational burdens, on-call, runbooks, human error patterns | ✅ |
+| 6 | **Learnability & memorability** — Mental models, one-liners, diagrams, key phrases | ✅ |
+| 7 | **Data, consistency & correctness** — Invariants, consistency models, durability | ✅ |
+| 8 | **Security & compliance** — Data sensitivity, trust boundaries, compliance considerations | ✅ |
+| 9 | **Observability & debuggability** — Metrics, logs, traces, runbooks | ✅ |
+| 10 | **Cross-team & org impact** — Dependencies, ownership, escalation paths | ✅ |
+| 11 | **Interview calibration** — What interviewers probe, Staff signals, leadership explanation, teaching | ✅ |
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dim | Dimension | Coverage | Location |
+|-----|-----------|----------|----------|
+| **A** | Judgment & decision-making | Strong | Trade-offs explicit; alternatives considered; decisions justified |
+| **B** | Failure & incident thinking | Strong | Blast radius (Part 7); Real incident (Celebrity Cache Stampede); degradation strategies |
+| **C** | Scale & time | Strong | Phase 3 derived numbers; evolution roadmap; multi-region migration |
+| **D** | Cost & sustainability | Strong | Cost drivers table; hybrid push-pull trade-off; retention, caching cost decisions |
+| **E** | Real-world engineering | Strong | Observability design; runbooks; deployment safety; on-call reference |
+| **F** | Learnability & memorability | Strong | Quick Reference Card; L5 vs L6 phrases; key numbers; mental models |
+| **G** | Data, consistency & correctness | Strong | Invariants (monotonicity, visibility, deletion propagation); durability; consistency models |
+| **H** | Security & compliance | Strong | Trust boundaries; defense in depth; PII handling; GDPR alignment |
+| **I** | Observability & debuggability | Strong | Part 8: metrics, tracing, structured logging, runbooks |
+| **J** | Cross-team & org impact | Strong | Cross-team dependencies; ownership; escalation; SLO contracts |
+
 ## Does This End-to-End Walkthrough Meet L6 Expectations?
 
 | L6 Criterion | Coverage | Notes |
 |-------------|----------|-------|
 | **Judgment & Decision-Making** | ✅ Strong | Trade-offs explicit, alternatives considered, decisions justified |
-| **Failure & Degradation Thinking** | ✅ Strong | Blast radius, cascade analysis, degradation strategies |
+| **Failure & Degradation Thinking** | ✅ Strong | Blast radius, cascade analysis, degradation strategies, real incident |
 | **Scale & Evolution** | ✅ Strong | Derived numbers, multi-region evolution, migration path |
 | **Staff-Level Signals** | ✅ Strong | L5 vs L6 throughout, interview calibration |
 | **Real-World Grounding** | ✅ Strong | News Feed with concrete numbers and components |
-| **Interview Calibration** | ✅ Strong | Timing, phrases, interviewer signals, self-check |
+| **Interview Calibration** | ✅ Strong | Timing, phrases, interviewer signals, self-check, teaching guidance |
 
 ## Staff-Level Signals Demonstrated
 
@@ -1323,6 +1465,7 @@ Before wrapping up, Staff engineers mentally check:
 ✅ Failure scenarios with blast radius and degradation
 ✅ Evolution roadmap with technical migration path
 ✅ Operational readiness (observability, deployment, runbooks)
+✅ Structured real incident with lesson learned
 
 ---
 

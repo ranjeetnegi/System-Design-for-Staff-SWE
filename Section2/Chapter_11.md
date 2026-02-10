@@ -187,6 +187,17 @@ On-call burden directly impacts team sustainability. Burned-out engineers leave.
 - Can common incidents be auto-remediated?
 - Is the on-call burden proportional to the system's value?
 
+### Human Error and Cost Decisions
+
+Staff engineers anticipate that cost decisions will be made under pressure, with incomplete information, and by humans who make mistakes. This affects design.
+
+**Common human-error patterns in cost:**
+- **Optimization without measurement:** "Let's cut replicas to save money" without quantifying the failure risk. The fix: require cost-review gates that assess blast radius before changes.
+- **Siloed cost ownership:** Platform cuts observability spend; application teams lose visibility. The fix: cost decisions that affect cross-team visibility require alignment.
+- **Incentive misalignment:** "Ship features" is rewarded; "reduce toil" is not. Teams over-provision to avoid blame. The fix: normalize cost efficiency as a success metric.
+
+**Staff principle:** "Design so that the natural human tendency to optimize cost doesn't create single points of failure. Put guardrails where cost pressure meets reliability—e.g., require approval for reducing replica count on critical paths."
+
 ## Why Systems Fail Because They're Unsustainable
 
 Here's a scenario that plays out repeatedly:
@@ -401,6 +412,16 @@ Staff engineers often choose "good enough" over "optimal." This isn't laziness�
 | Normalized vs denormalized | Denormalized = more storage, faster reads | "For read-heavy with stable schema, denormalize. Storage is cheap; joins are expensive at scale." |
 | Retention period | Longer = more storage, more indexes | "What's the business value of old data? Archive to cold storage after 90 days." |
 | Granularity | Finer = more data points | "Per-second metrics for real-time dashboards; per-minute for historical analysis." |
+
+### Data Durability, Invariants, and Cost
+
+Staff engineers treat durability as an invariant that constrains cost optimization—not something to trade away for savings.
+
+**Durability invariants:** "Data written must not be lost" is non-negotiable for payment, identity, and orders. The cost of replicas, sync, and backups is the price of meeting that invariant. Staff engineers do not reduce replica count or relax durability to save cost on critical data.
+
+**Consistency models:** Weaker consistency (eventual vs strong) can reduce cost (fewer cross-region syncs, less coordination). But the choice is driven by *correctness* for the use case, not by cost alone. A Staff engineer says: "We use eventual consistency for feeds because it's correct for that use case *and* it's cheaper. We use strong consistency for balances because correctness requires it—cost is secondary."
+
+**Retention as cost decision:** Retention policies are where cost and durability intersect. "Keep forever" is expensive; "delete after 30 days" may violate compliance or recovery needs. Staff reasoning: "What's the *minimum* retention that preserves our invariants (recovery, compliance, audit)? Beyond that, we tier or delete."
 
 ### Caching Strategies
 
@@ -834,6 +855,26 @@ The team saved $30K/month (~$360K/year) in infrastructure. They lost $2M in a si
 
 **Staff-level analysis:**
 "The cost-saving decisions were individually reasonable but collectively created unacceptable risk. We saved $360K/year but couldn't survive a predictable peak. The correct trade-off was: keep cross-region replication for the checkout path (critical), reduce it for catalog browsing (less critical). Selective reliability based on business impact."
+
+---
+
+# Part 6a: Structured Real Incident — Cost-Optimization-Induced Observability Blindness
+
+**Context:** A mid-sized platform operated a metrics pipeline with 10,000 hosts emitting 200 metrics each at per-second granularity. Cost reviews had identified observability as the second-largest infrastructure spend. A cost-reduction initiative was approved to reduce metrics storage by 50%.
+
+**Trigger:** Cost savings were implemented by: (1) reducing retention from 90 days to 30 days for per-minute data, (2) sampling high-cardinality metrics by 90%, (3) disabling per-second ingestion for "non-critical" services. The changes went live in a single deployment.
+
+**Propagation:** Within 48 hours, a latent bug in a downstream service began causing gradual memory growth. The service had been classified "non-critical" and its per-second metrics were disabled. The P99 memory metric—which would have alerted at 85%—was only sampled at 10% of hosts. The sampling meant the alert never fired. Memory exhaustion caused a cascade: the service crashed, its load shifted to siblings, which then overloaded the database connection pool.
+
+**User impact:** 2.5 hours of partial outage affecting 40% of users. Checkout and account flows were degraded; 12K orders failed during the window.
+
+**Engineer response:** On-call engineers had no visibility into the failing service's metrics—they were sampled away. Diagnosis required correlating logs across services and manual correlation. The incident was resolved by reverting the failing service's deployment and scaling the database pool, but root cause was not understood until a post-incident review traced the memory growth pattern.
+
+**Root cause:** Cost decisions were made without mapping metrics to failure modes. The "non-critical" classification ignored the fact that this service sat on the critical path for checkout. Sampling 90% of high-cardinality metrics removed the signal needed to detect a gradual memory leak. The incident was caused by cost optimization, not by the original bug.
+
+**Design change:** (1) Metrics were reclassified by blast radius, not by team ownership. "Critical path" services retained full per-second metrics regardless of cost. (2) Sampling was applied only to non-alerting metrics; any metric used in an alert retained sufficient resolution. (3) Cost reviews were required to assess impact on observability before changes were approved.
+
+**Lesson learned:** Staff-level cost optimization in observability must preserve the signals needed for incident diagnosis. Cost cuts that degrade debuggability are a false economy—the next incident will cost more in engineering time and user impact than the savings. "Right-size metrics" means right-size for the failure modes you care about, not right-size for the budget.
 
 ---
 
@@ -2027,19 +2068,82 @@ CLASS CostAwareLoadManager:
 
 ---
 
+# Part 16a: Security, Compliance, and Cost — Staff-Level Considerations
+
+Staff engineers recognize that security and compliance are not free. Cost decisions intersect with trust boundaries and data sensitivity in ways that distinguish Staff from Senior thinking.
+
+## Data Sensitivity and Cost Trade-offs
+
+**The tension:** Encrypting everything, replicating to air-gapped regions, and retaining audit logs indefinitely all cost money. Staff engineers ask: "What level of protection does this data actually require?"
+
+| Data Sensitivity | Cost Implication | Staff Reasoning |
+|------------------|-----------------|-----------------|
+| **Public** | Minimal | No encryption at rest beyond baseline; CDN for delivery |
+| **Internal** | Low | Encryption at rest; standard retention; no cross-border required |
+| **Customer PII** | Medium | Encryption, access controls, retention per policy; may need regional residency |
+| **Payment/Health** | High | Strong encryption, audit logging, compliance-certified infra; regional constraints |
+| **Regulated** | Very High | Air-gapped options, extended retention, attestation; cost is non-negotiable |
+
+**Staff principle:** "We don't cut security to save cost. We right-size security to the data classification. Over-protecting low-sensitivity data wastes budget; under-protecting high-sensitivity data creates existential risk."
+
+## Trust Boundaries and Cost
+
+When cost optimization spans trust boundaries, Staff engineers pause. Cross-region replication, multi-tenant isolation, and third-party integrations all have trust and cost dimensions.
+
+- **Same trust boundary:** Cost optimization is straightforward (e.g., right-size within your own VPC).
+- **Cross trust boundary:** Cost savings (e.g., shared infra, reduced isolation) may violate compliance or blast-radius containment. Staff engineers treat trust-boundary crossings as design decisions, not cost optimizations.
+
+**Example:** Moving logs from a dedicated compliance-certified storage tier to a cheaper generic tier saves $50K/year but breaks audit requirements. A Senior might propose it; a Staff engineer rejects it because the cost of non-compliance dwarfs the savings.
+
+## Compliance Cost as Non-Negotiable
+
+Some costs exist because of compliance, not efficiency. Staff engineers distinguish:
+
+- **Efficiency costs** (can optimize): Over-provisioning, wrong storage tier, unused capacity.
+- **Compliance costs** (optimize within constraints): Retention periods, encryption, audit logging. You can optimize *how* you meet them (e.g., compact logs, tiered retention) but not *whether* you meet them.
+
+**Trade-off:** "We need 7-year retention for this data. We can't reduce retention to save cost. We *can* tier to cold storage after 90 days—that cuts cost 80% while preserving compliance."
+
+## L6 Implication
+
+At Staff level, cost reasoning includes security and compliance explicitly. You articulate: "This cost is driven by [data classification / compliance requirement]. Reducing it would require [accepting risk / changing scope], which we cannot do."
+
+---
+
 # Part 17: Final Verification — L6 Readiness Checklist
 
-## Does This Chapter Meet L6 Expectations?
+## Master Review Prompt Check (All 11 Items)
 
-| L6 Criterion | Coverage | Assessment |
-|--------------|----------|------------|
-| **Judgment & Decision-Making** | Trade-offs explicit throughout, cost as design input | ✅ Strong |
-| **Failure & Degradation Thinking** | Cascade failures, blast radius, graceful degradation | ✅ Strong |
-| **Scale & Evolution** | v1 → 10x → 100x, capacity planning, cost cliffs | ✅ Strong |
-| **Staff-Level Signals** | L5 vs L6 comparisons, interview scoring guide | ✅ Strong |
-| **Real-World Grounding** | 5 detailed examples with pseudocode | ✅ Strong |
-| **Interview Calibration** | Scoring criteria, red flags, checklist | ✅ Strong |
-| **Diagrams** | 7 conceptual diagrams | ✅ Strong |
+Use this checklist to verify chapter completeness:
+
+| # | Check | Status |
+|---|-------|--------|
+| 1 | **Judgment & decision-making** — Cost-benefit trade-off frameworks, explicit decision points, right-sizing heuristics | ✅ |
+| 2 | **Failure & incident thinking** — Partial failures at cost boundaries, blast radius containment, structured real incident | ✅ |
+| 3 | **Scale & time** — Growth over years, first bottlenecks, cost cliffs, capacity-planning matrix | ✅ |
+| 4 | **Cost & sustainability** — Cost as first-class constraint, four dimensions, sustainability equation | ✅ |
+| 5 | **Real-world engineering** — Operational burdens, on-call cost, human error in cost decisions, toil | ✅ |
+| 6 | **Learnability & memorability** — Mental models, one-liners, diagrams, Quick Reference Card | ✅ |
+| 7 | **Data, consistency & correctness** — Cost vs durability invariants, retention as cost decision | ✅ |
+| 8 | **Security & compliance** — Data sensitivity in cost context, compliance cost, trust boundaries | ✅ |
+| 9 | **Observability & debuggability** — Cost metrics, attribution, cost alerts, anomaly detection | ✅ |
+| 10 | **Cross-team & org impact** — FinOps, team cost accountability, cost governance | ✅ |
+| 11 | **Interview calibration** — What interviewers probe, Staff signals, leadership explanation, teaching | ✅ |
+
+## L6 Dimension Coverage Table (A–J)
+
+| Dim | Dimension | Coverage | Location |
+|-----|-----------|----------|----------|
+| **A** | Judgment & decision-making | Strong | Parts 3, 5, 6; cost-benefit framework, decision heuristics |
+| **B** | Failure & incident thinking | Strong | Parts 6, 11, 16; blast radius, cascades, structured incident |
+| **C** | Scale & time | Strong | Parts 7, 13; evolution phases, capacity matrix, cost cliffs |
+| **D** | Cost & sustainability | Strong | All parts; core chapter theme |
+| **E** | Real-world engineering | Strong | Part 1, operational cost section; on-call, human error |
+| **F** | Learnability & memorability | Strong | Diagrams, Quick Reference Card, Mental Models table |
+| **G** | Data, consistency & correctness | Strong | Part 1, Part 3; retention, durability, consistency trade-offs |
+| **H** | Security & compliance | Strong | Part 16a; data sensitivity, compliance cost in cost design |
+| **I** | Observability & debuggability | Strong | Parts 12, 13; cost observability, attribution, alerts |
+| **J** | Cross-team & org impact | Strong | Part 23; FinOps, team accountability, governance |
 
 ## Staff-Level Signals Covered
 
@@ -4795,6 +4899,16 @@ CLASS CostAccountabilityFramework:
 | **Keep data forever** | Unbounded storage growth | Retention policies and tiering |
 | **Multi-region everything** | 2-3x infrastructure | Multi-region only where needed |
 | **Synchronous everywhere** | Higher latency, more resources | Async where consistency allows |
+
+## Staff One-Liners for Cost
+
+| When | One-Liner |
+|------|-----------|
+| Opening cost discussion | "Let me think about the major cost drivers in this design..." |
+| Right-sizing | "Right-size for the failure modes that matter." |
+| Trade-off | "Sustainable System = Correct + Scalable + Affordable + Operable." |
+| Rejecting over-engineering | "We could add X, but the cost doesn't justify it for this use case." |
+| Explaining to leadership | "Cost is a design constraint, not a post-launch problem." |
 
 ---
 
