@@ -1940,12 +1940,12 @@ When learning from incidents, Staff Engineers use a consistent structure. Here i
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    INCIDENT: NOTIFICATION QUEUE CASCADE                      │
+│                    INCIDENT: NOTIFICATION QUEUE CASCADE                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │   CONTEXT                                                                   │
-│   Shared notification platform used by 5 product teams. Designed for       │
-│   ~1M notifications/day. Assumption: "large scale" but never quantified.     │
+│   Shared notification platform used by 5 product teams. Designed for        │
+│   ~1M notifications/day. Assumption: "large scale" but never quantified.    │
 │                                                                             │
 │   TRIGGER                                                                   │
 │   New team onboarded with 8M notifications/day. Per-tenant rate limits      │
@@ -1958,7 +1958,7 @@ When learning from incidents, Staff Engineers use a consistent structure. Here i
 │                                                                             │
 │   USER IMPACT                                                               │
 │   Password reset emails delayed 24–48 hours. Users locked out of accounts.  │
-│   Support ticket volume 20x normal. NPS drop in affected cohort.           │
+│   Support ticket volume 20x normal. NPS drop in affected cohort.            │
 │                                                                             │
 │   ENGINEER RESPONSE                                                         │
 │   Emergency scaling of workers. Triage: pause bulk sends, prioritize        │
