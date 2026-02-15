@@ -26,42 +26,42 @@ The chapters in this section answer the fundamental question: **What does it mea
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SECTION 1: LEARNING PATH                                 │
 │                                                                             │
-│   Chapter 1                                                                 │
+│   Chapter 7                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  HOW GOOGLE EVALUATES STAFF ENGINEERS                               │   │
 │   │  Understand what L6 means and how interviewers assess it            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 2                                                                 │
+│   Chapter 8                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  SCOPE, IMPACT, AND OWNERSHIP                                       │   │
 │   │  Learn the three dimensions that define Staff-level work            │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 3                                                                 │
+│   Chapter 9                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  DESIGNING SYSTEMS THAT SCALE ACROSS TEAMS                          │   │
 │   │  Technical scaling + organizational scaling                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 4                                                                 │
+│   Chapter 10                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  DESIGNING UNDER AMBIGUITY                                          │   │
 │   │  Navigate unclear requirements like a Staff Engineer                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 5                                                                 │
+│   Chapter 11                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  TRADE-OFFS, CONSTRAINTS, AND DECISION-MAKING                       │   │
 │   │  Make and communicate trade-offs explicitly                         │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 6                                                                 │
+│   Chapter 12                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  COMMUNICATION AND INTERVIEW LEADERSHIP                             │   │
 │   │  Lead the interview conversation like a Staff Engineer              │   │
@@ -74,7 +74,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ## Chapter Summaries
 
-### Chapter 1: How Google Evaluates Staff Engineers in System Design Interviews
+### Chapter 7: How Google Evaluates Staff Engineers in System Design Interviews
 
 **Core Question**: What is Google actually looking for in an L6 system design interview?
 
@@ -93,7 +93,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
-### Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
+### Chapter 8: Scope, Impact, and Ownership at Google Staff Engineer Level
 
 **Core Question**: What do scope, impact, and ownership actually mean at Staff level?
 
@@ -108,7 +108,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
-### Chapter 3: Designing Systems That Scale Across Teams
+### Chapter 9: Designing Systems That Scale Across Teams
 
 **Core Question**: Why do systems fail more often for human reasons than technical ones?
 
@@ -123,7 +123,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
-### Chapter 4: Staff Engineer Mindset — Designing Under Ambiguity
+### Chapter 10: Staff Engineer Mindset — Designing Under Ambiguity
 
 **Core Question**: How do you design when requirements are unclear?
 
@@ -143,7 +143,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
-### Chapter 5: Trade-offs, Constraints, and Decision-Making at Staff Level
+### Chapter 11: Trade-offs, Constraints, and Decision-Making at Staff Level
 
 **Core Question**: How do you make and communicate trade-offs effectively?
 
@@ -158,7 +158,7 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
-### Chapter 6: Communication and Interview Leadership for Google Staff Engineers
+### Chapter 12: Communication and Interview Leadership for Google Staff Engineers
 
 **Core Question**: How do you lead the interview conversation like a Staff Engineer?
 
@@ -235,12 +235,12 @@ After completing Section 1, you'll be ready for:
 
 | Chapter | Estimated Reading Time | Estimated Practice Time |
 |---------|----------------------|------------------------|
-| Chapter 1 | 45-60 minutes | 30 minutes reflection |
-| Chapter 2 | 45-60 minutes | 30 minutes reflection |
-| Chapter 3 | 60-90 minutes | 1 hour practice |
-| Chapter 4 | 60-90 minutes | 1 hour practice |
-| Chapter 5 | 60-90 minutes | 1 hour practice |
-| Chapter 6 | 45-60 minutes | 2 hours mock interviews |
+| Chapter 7 | 45-60 minutes | 30 minutes reflection |
+| Chapter 8 | 45-60 minutes | 30 minutes reflection |
+| Chapter 9 | 60-90 minutes | 1 hour practice |
+| Chapter 10 | 60-90 minutes | 1 hour practice |
+| Chapter 11 | 60-90 minutes | 1 hour practice |
+| Chapter 12 | 45-60 minutes | 2 hours mock interviews |
 
 **Total Section**: ~6-8 hours reading + practice
 

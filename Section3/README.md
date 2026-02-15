@@ -30,21 +30,21 @@ The chapters in this section answer the fundamental question: **What are the law
 │                                                                             │
 │   ┌── Foundational Guarantees ──────────────────────────────────────────┐   │
 │   │                                                                     │   │
-│   │  Chapter 14                                                         │   │
+│   │  Chapter 20                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  CONSISTENCY MODELS                                          │   │   │
 │   │  │  Strong → Causal → Eventual — what does each cost?           │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 15                                                         │   │
+│   │  Chapter 21                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  REPLICATION AND SHARDING                                    │   │   │
 │   │  │  Scale reads, scale writes, don't lose data                  │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 16                                                         │   │
+│   │  Chapter 22                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  LEADER ELECTION, COORDINATION, AND DISTRIBUTED LOCKS        │   │   │
 │   │  │  When your system needs a boss — and when it doesn't         │   │   │
@@ -55,14 +55,14 @@ The chapters in this section answer the fundamental question: **What are the law
 │                            ▼                                                │
 │   ┌── Resilience & Communication ───────────────────────────────────────┐   │
 │   │                                                                     │   │
-│   │  Chapter 17                                                         │   │
+│   │  Chapter 23                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  BACKPRESSURE, RETRIES, AND IDEMPOTENCY                      │   │   │
 │   │  │  The stability triangle — preventing cascading failures      │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 18                                                         │   │
+│   │  Chapter 24                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  QUEUES, LOGS, AND STREAMS                                   │   │   │
 │   │  │  Choosing the right asynchronous communication model         │   │   │
@@ -73,14 +73,14 @@ The chapters in this section answer the fundamental question: **What are the law
 │                            ▼                                                │
 │   ┌── Failure & Trade-offs ─────────────────────────────────────────────┐   │
 │   │                                                                     │   │
-│   │  Chapter 19                                                         │   │
+│   │  Chapter 25                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  FAILURE MODELS AND PARTIAL FAILURES                         │   │   │
 │   │  │  Design for the middle, not the edges                        │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 20                                                         │   │
+│   │  Chapter 26                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  CAP THEOREM — BEHAVIOR UNDER PARTITION                      │   │   │
 │   │  │  Applied case studies and Staff-level trade-offs             │   │   │
@@ -95,7 +95,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ## Chapter Summaries
 
-### Chapter 14: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
+### Chapter 20: Consistency Models — Guarantees, Trade-offs, and Failure Behavior
 
 **Core Question**: What consistency guarantees does this system need—and what's the cost of each choice?
 
@@ -110,7 +110,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 15: Replication and Sharding — Scaling Without Losing Control
+### Chapter 21: Replication and Sharding — Scaling Without Losing Control
 
 **Core Question**: When one server isn't enough, how do you scale reads and writes independently without losing data or your sanity?
 
@@ -126,7 +126,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 16: Leader Election, Coordination, and Distributed Locks
+### Chapter 22: Leader Election, Coordination, and Distributed Locks
 
 **Core Question**: When does your system need a single coordinator—and how do you avoid coordination whenever possible?
 
@@ -141,7 +141,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 17: Backpressure, Retries, and Idempotency
+### Chapter 23: Backpressure, Retries, and Idempotency
 
 **Core Question**: How do you prevent a small failure from cascading into a total outage?
 
@@ -157,7 +157,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 18: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
+### Chapter 24: Queues, Logs, and Streams — Choosing the Right Asynchronous Model
 
 **Core Question**: Your system needs async communication—but should you use a queue, a log, or a stream?
 
@@ -173,7 +173,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 19: Failure Models and Partial Failures — Designing for Reality at Staff Level
+### Chapter 25: Failure Models and Partial Failures — Designing for Reality at Staff Level
 
 **Core Question**: How do you design for a world where your system is *always* partially failing?
 
@@ -189,7 +189,7 @@ The chapters in this section answer the fundamental question: **What are the law
 
 ---
 
-### Chapter 20: CAP Theorem — Behavior Under Partition (Applied Case Studies)
+### Chapter 26: CAP Theorem — Behavior Under Partition (Applied Case Studies)
 
 **Core Question**: When the network splits, what does your system sacrifice—and did you choose that deliberately?
 
@@ -257,13 +257,13 @@ Every chapter grounds theory in real-world incidents and production behavior. CA
 
 | Chapter | Topic | Estimated Reading Time | Estimated Practice Time |
 |---------|-------|----------------------|------------------------|
-| Chapter 14 | Consistency Models | 60–90 minutes | 1 hour applied exercises |
-| Chapter 15 | Replication and Sharding | 60–90 minutes | 1 hour applied exercises |
-| Chapter 16 | Leader Election & Locks | 60–90 minutes | 45 minutes applied exercises |
-| Chapter 17 | Backpressure, Retries, Idempotency | 60–90 minutes | 1 hour applied exercises |
-| Chapter 18 | Queues, Logs, and Streams | 60–90 minutes | 1 hour applied exercises |
-| Chapter 19 | Failure Models | 60–90 minutes | 1 hour applied exercises |
-| Chapter 20 | CAP Theorem | 45–60 minutes | 45 minutes case studies |
+| Chapter 20 | Consistency Models | 60–90 minutes | 1 hour applied exercises |
+| Chapter 21 | Replication and Sharding | 60–90 minutes | 1 hour applied exercises |
+| Chapter 22 | Leader Election & Locks | 60–90 minutes | 45 minutes applied exercises |
+| Chapter 23 | Backpressure, Retries, Idempotency | 60–90 minutes | 1 hour applied exercises |
+| Chapter 24 | Queues, Logs, and Streams | 60–90 minutes | 1 hour applied exercises |
+| Chapter 25 | Failure Models | 60–90 minutes | 1 hour applied exercises |
+| Chapter 26 | CAP Theorem | 45–60 minutes | 45 minutes case studies |
 
 **Total Section**: ~7–10 hours reading + ~6–7 hours practice
 

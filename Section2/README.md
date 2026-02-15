@@ -66,49 +66,49 @@ The chapters in this section answer the fundamental question: **How do you syste
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SECTION 2: LEARNING PATH                                 │
 │                                                                             │
-│   Chapter 7                                                                 │
+│   Chapter 13                                                                 │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │                  SYSTEM DESIGN FRAMEWORK                           │    │
 │   │  The complete 5-phase overview — why context before design         │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 8                                                                 │
+│   Chapter 14                                                                 │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  PHASE 1 — USERS & USE CASES                                       │    │
 │   │  Identify all user types and what they're trying to accomplish     │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 9                                                                 │
+│   Chapter 15                                                                 │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  PHASE 2 — FUNCTIONAL REQUIREMENTS                                 │    │
 │   │  Define what the system does with Staff-level precision            │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 10                                                                │
+│   Chapter 16                                                                │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  PHASE 3 — SCALE: CAPACITY PLANNING AND GROWTH                     │    │
 │   │  Translate vague scale into concrete numbers that drive design     │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 11                                                                │
+│   Chapter 17                                                                │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                          │    │
 │   │  The hidden dimension: can we afford what we've designed?          │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 12                                                                │
+│   Chapter 18                                                                │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  PHASE 4 & PHASE 5 — NFRs, ASSUMPTIONS, AND CONSTRAINTS            │    │
 │   │  Establish qualities, state assumptions, acknowledge limits        │    │
 │   └────────────────────────────────────────────────────────────────────┘    │
 │                              │                                              │
 │                              ▼                                              │
-│   Chapter 13                                                                │
+│   Chapter 19                                                                │
 │   ┌────────────────────────────────────────────────────────────────────┐    │
 │   │  END-TO-END SYSTEM DESIGN USING THE 5-PHASE FRAMEWORK              │    │
 │   │  Full walkthrough: News Feed system from prompt to architecture    │    │
@@ -121,7 +121,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ## Chapter Summaries
 
-### Chapter 7: System Design Framework
+### Chapter 13: System Design Framework
 
 **Core Question**: What separates a structured, Staff-level approach from ad-hoc whiteboarding?
 
@@ -136,7 +136,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 8: Phase 1 — Users & Use Cases
+### Chapter 14: Phase 1 — Users & Use Cases
 
 **Core Question**: Who are we building for, and what are they actually trying to do?
 
@@ -156,7 +156,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 9: Phase 2 — Functional Requirements
+### Chapter 15: Phase 2 — Functional Requirements
 
 **Core Question**: What must the system do—and, just as importantly, what must it *not* do?
 
@@ -171,7 +171,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 10: Phase 3 — Scale: Capacity Planning and Growth
+### Chapter 16: Phase 3 — Scale: Capacity Planning and Growth
 
 **Core Question**: How do you translate a vague "design for a large system" into concrete numbers that shape architecture?
 
@@ -191,7 +191,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 11: Cost, Efficiency, and Sustainable System Design
+### Chapter 17: Cost, Efficiency, and Sustainable System Design
 
 **Core Question**: Can we actually afford the system we've designed—and will it remain affordable as it grows?
 
@@ -207,7 +207,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 12: Phase 4 & Phase 5 — NFRs, Assumptions, and Constraints
+### Chapter 18: Phase 4 & Phase 5 — NFRs, Assumptions, and Constraints
 
 **Core Question**: What qualities must the system have, and what are we taking for granted?
 
@@ -228,7 +228,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ---
 
-### Chapter 13: End-to-End System Design Using the 5-Phase Framework
+### Chapter 19: End-to-End System Design Using the 5-Phase Framework
 
 **Core Question**: What does it look like when all five phases come together in a real design?
 
@@ -245,7 +245,7 @@ The chapters in this section answer the fundamental question: **How do you syste
 
 ## How to Use This Section
 
-1. **Read Chapter 7 first**: It provides the complete framework overview that the subsequent chapters expand upon
+1. **Read Chapter 13 first**: It provides the complete framework overview that the subsequent chapters expand upon
 2. **Study each phase deeply**: Chapters 8–12 unpack individual phases—read them sequentially to build the full picture
 3. **Practice with Chapter 13**: After understanding the phases, study the end-to-end walkthrough to see how they connect
 4. **Apply to real problems**: Pick any system design prompt and practice running through the 5 phases before designing. Time yourself—Phases 1–5 should take ~15–20 minutes in a 45-minute interview
@@ -306,13 +306,13 @@ After completing Section 2, you'll be ready for:
 
 | Chapter | Topic | Estimated Reading Time | Estimated Practice Time |
 |---------|-------|----------------------|------------------------|
-| Chapter 7 | The 5-Phase Framework | 45–60 minutes | 30 minutes reflection |
-| Chapter 8 | Phase 1 — Users & Use Cases | 45–60 minutes | 45 minutes practice |
-| Chapter 9 | Phase 2 — Functional Requirements | 45–60 minutes | 45 minutes practice |
-| Chapter 10 | Phase 3 — Scale | 45–60 minutes | 1 hour practice |
-| Chapter 11 | Cost & Sustainable Design | 60–90 minutes | 1 hour practice |
-| Chapter 12 | Phase 4 & 5 — NFRs, Assumptions | 45–60 minutes | 45 minutes practice |
-| Chapter 13 | End-to-End Walkthrough | 45–60 minutes | 2 hours mock interviews |
+| Chapter 13 | The 5-Phase Framework | 45–60 minutes | 30 minutes reflection |
+| Chapter 14 | Phase 1 — Users & Use Cases | 45–60 minutes | 45 minutes practice |
+| Chapter 15 | Phase 2 — Functional Requirements | 45–60 minutes | 45 minutes practice |
+| Chapter 16 | Phase 3 — Scale | 45–60 minutes | 1 hour practice |
+| Chapter 17 | Cost & Sustainable Design | 60–90 minutes | 1 hour practice |
+| Chapter 18 | Phase 4 & 5 — NFRs, Assumptions | 45–60 minutes | 45 minutes practice |
+| Chapter 19 | End-to-End Walkthrough | 45–60 minutes | 2 hours mock interviews |
 
 **Total Section**: ~7–9 hours reading + ~6–7 hours practice
 
