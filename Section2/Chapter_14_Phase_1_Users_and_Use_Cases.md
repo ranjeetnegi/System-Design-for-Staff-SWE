@@ -51,15 +51,15 @@
 
 # Introduction
 
-Every system exists to serve someone. Before you draw a single box or choose a single technology, you need to understand who that someone is and what they're trying to accomplish.
+Every system exists to serve someone. Before you draw a single box or pick a technology, you need to understand who that someone is and what they're trying to do.
 
-This sounds obvious. And yet, it's where many experienced engineers stumble in Staff-level interviews. They hear "design a rate limiter" and immediately start thinking about token buckets and sliding windows. They hear "design a messaging system" and jump to message queues and delivery guarantees. They're solving before they've understood.
+That sounds obvious. But it's where many experienced engineers stumble in Staff-level interviews. They hear "design a rate limiter" and jump straight to token buckets and sliding windows. They hear "design a messaging system" and go right to message queues and delivery guarantees. They're solving before they've understood.
 
-Staff engineers do something different. They pause. They ask: Who will use this system? What are they actually trying to do? What matters most to them? Only after understanding the users and their goals do they begin to design.
+Staff engineers do something different. They pause. They ask: Who will use this system? What are they actually trying to do? What matters most to them? Only after they understand the users and their goals do they start designing.
 
-This section is about Phase 1 of the Staff-Level System Design Framework: Users & Use Cases. We'll explore what "user" means at Staff level (it's broader than you might think), how to distinguish primary from secondary users, how to separate user intent from implementation details, how to identify core versus edge use cases, and how to make intentional scope decisions that shape everything that follows.
+This section is about Phase 1 of the Staff-Level System Design Framework: Users & Use Cases. We'll look at what "user" means at Staff level (it's broader than you might think), how to tell primary from secondary users apart, how to separate user intent from implementation details, how to spot core vs. edge use cases, and how to make clear scope decisions that shape everything that follows.
 
-By the end of this section, you'll approach the opening minutes of any system design interview with confidence and structure. You'll know what questions to ask, what to listen for, and how to establish a foundation that makes the rest of your design coherent.
+By the end, you'll approach the opening minutes of any system design interview with confidence and structure. You'll know what questions to ask, what to listen for, and how to build a foundation that makes the rest of your design coherent.
 
 ---
 
@@ -67,15 +67,15 @@ By the end of this section, you'll approach the opening minutes of any system de
 
 ## Beyond the Human User
 
-When most engineers think "user," they picture a person—someone clicking buttons, viewing screens, receiving notifications. This is a natural starting point, but it's incomplete.
+When most engineers think "user," they picture a person—someone clicking buttons, viewing screens, getting notifications. That's a natural starting point, but it's incomplete.
 
 At Staff level, you need to think about users more broadly:
 
-**Human users**: People who interact with the system directly. This includes end consumers, but also internal users like operations staff, customer support, data analysts, and administrators.
+**Human users**: People who interact with the system directly. This includes end consumers, but also internal users like operations staff, customer support, data analysts, and admins.
 
-**System users**: Other software systems that call your APIs, consume your events, or depend on your data. These might be internal services within your organization or external systems from partners and third parties.
+**System users**: Other software systems that call your APIs, consume your events, or depend on your data. These might be internal services or external systems from partners and third parties.
 
-**Service users**: Internal microservices, batch jobs, and automated processes that interact with your system programmatically.
+**Service users**: Internal microservices, batch jobs, and automated processes that talk to your system programmatically.
 
 **Operational users**: Engineers who deploy, monitor, debug, and maintain the system. Their needs are often invisible but critically important.
 
@@ -85,7 +85,7 @@ A notification system, for example, has:
 - **Service users**: Batch jobs that send marketing notifications, analytics pipelines that consume delivery events
 - **Operational users**: SREs monitoring delivery rates, support engineers debugging missed notifications
 
-Each user type has different needs, different scale characteristics, and different quality requirements. A design that serves human users well might fail to serve system users—or vice versa.
+Each user type has different needs, different scale characteristics, and different quality requirements. A design that serves human users well might fail system users—or the other way around.
 
 ## Why This Matters for Design
 
@@ -111,7 +111,7 @@ Different user types drive different design decisions:
 - Debuggability (easy to diagnose problems)
 - Controllability (ability to adjust behavior without code changes)
 
-If you design only for human users, you might create a system with beautiful UX but terrible APIs. If you design only for system users, you might create a system that's powerful but impossible to operate when things go wrong.
+If you design only for human users, you might create a system with great UX but terrible APIs. If you design only for system users, you might create a system that's powerful but impossible to operate when things go wrong.
 
 ## Identifying All User Types
 
@@ -126,7 +126,7 @@ In an interview, systematically surface all user types:
 **The lifecycle approach:**
 "During normal operation, these users interact with the system. During incidents, who gets involved? During scaling events? During maintenance windows?"
 
-The goal is to avoid the trap of designing for the obvious user while ignoring the others.
+The goal is to avoid designing for the obvious user while ignoring the others.
 
 ---
 
@@ -134,13 +134,13 @@ The goal is to avoid the trap of designing for the obvious user while ignoring t
 
 ## Defining the Distinction
 
-Not all users are equally important to your design. Primary users are the ones whose needs you optimize for; secondary users are important but subordinate.
+Not all users are equally important to your design. Primary users are the ones whose needs you optimize for; secondary users matter but are subordinate.
 
 **Primary users**: The users whose needs drive the core design decisions. If you had to choose between serving them well or serving someone else well, you'd choose them.
 
-**Secondary users**: Users whose needs matter, but not at the expense of primary users. You accommodate them where possible without compromising the primary experience.
+**Secondary users**: Users whose needs matter, but not at the expense of primary users. You accommodate them where you can without hurting the primary experience.
 
-This distinction isn't about who's "more important" in an abstract sense—it's about who drives the design. A payment system might have consumers as primary users and fraud analysts as secondary users. The core design optimizes for consumer experience (fast, reliable payments), while accommodating analyst needs (audit logs, investigation tools) in ways that don't degrade the primary experience.
+This distinction isn't about who's "more important" in the abstract—it's about who drives the design. A payment system might have consumers as primary users and fraud analysts as secondary. The core design optimizes for consumer experience (fast, reliable payments), while accommodating analyst needs (audit logs, investigation tools) in ways that don't degrade the primary experience.
 
 ## Why This Matters
 
@@ -151,17 +151,17 @@ Consider a real-time feed system:
 - **Secondary users**: Content creators, advertisers, analytics systems
 
 If you had to choose between:
-- Fast feed rendering for viewers vs. Detailed analytics for advertisers
+- Fast feed rendering for viewers vs. detailed analytics for advertisers
 
 The primary/secondary distinction tells you: optimize for viewers, accommodate advertisers.
 
-This doesn't mean you ignore secondary users—it means you have a clear priority when trade-offs arise.
+This doesn't mean you ignore secondary users—it means you have a clear priority when trade-offs come up.
 
 ## Determining Primary vs. Secondary
 
-Several factors help you determine which users are primary:
+Several factors help you decide which users are primary:
 
-**Business criticality**: Which users are most important to the business? For a consumer app, end users are usually primary. For an internal platform, developers using the platform might be primary.
+**Business criticality**: Which users matter most to the business? For a consumer app, end users are usually primary. For an internal platform, developers using the platform might be primary.
 
 **Interaction frequency**: Users who interact constantly often take priority over occasional users.
 
@@ -169,7 +169,7 @@ Several factors help you determine which users are primary:
 
 **Revenue relationship**: Users who directly generate revenue (or whose satisfaction enables revenue) are often primary.
 
-In an interview, make this determination explicit:
+In an interview, make this explicit:
 
 "I'm going to treat end consumers as primary users because they're the core of the product. Internal analytics and operations are secondary—I'll design to accommodate them without compromising the consumer experience. Does that priority make sense for this problem?"
 
@@ -192,7 +192,7 @@ Let's apply this to designing a rate limiter:
 - Operations teams (need configuration interfaces, but not at the cost of latency)
 - Security and product teams (need visibility, but as a secondary concern)
 
-This classification drives decisions: the rate limiter's core path must be fast and reliable (for primary users), while configuration and analytics interfaces can be eventually consistent and slightly slower.
+This classification drives decisions: the rate limiter's core path must be fast and reliable (for primary users), while configuration and analytics interfaces can be eventually consistent and a bit slower.
 
 ---
 
@@ -212,12 +212,12 @@ This classification drives decisions: the rate limiter's core path must be fast 
 
 ## Separating the "What" from the "How"
 
-A critical Staff-level skill is distinguishing between what users want to accomplish (intent) and how they might accomplish it (implementation).
+A critical Staff-level skill is telling apart what users want to accomplish (intent) and how they might accomplish it (implementation).
 
 **User intent**: The underlying goal or problem the user is trying to solve
 **Implementation**: A specific way of achieving that goal
 
-Users often express themselves in terms of implementation rather than intent. Your job is to dig deeper.
+Users often express themselves in terms of implementation, not intent. Your job is to dig deeper.
 
 **User says**: "I need a button that refreshes the data."
 **Implementation**: A refresh button
@@ -231,10 +231,10 @@ Users often express themselves in terms of implementation rather than intent. Yo
 
 ## Why This Matters for System Design
 
-When you design for implementation rather than intent, you often:
-- Build the wrong thing (solving the stated problem, not the real problem)
+When you design for implementation instead of intent, you often:
+- Build the wrong thing (solving the stated problem, not the real one)
 - Over-constrain your design (locking into a specific approach)
-- Miss simpler solutions (the stated implementation might be more complex than necessary)
+- Miss simpler solutions (the stated implementation might be more complex than needed)
 
 Staff engineers constantly ask: "What are you really trying to accomplish?" This question surfaces the true requirements.
 
@@ -255,7 +255,7 @@ Your job is to uncover the intent behind these implementations:
 "What problem are we solving with short URLs? Is it character limits in tweets? Cleaner appearance in marketing materials? Tracking clicks? Analytics on sharing patterns? Each of these intents suggests a different design emphasis."
 
 **For a rate limiter:**
-"What are we protecting against? DDoS attacks? Expensive operations by a few users? Ensuring fair access across all users? Preventing accidental abuse from bug loops? The threat model shapes the design."
+"What are we protecting against? DDoS attacks? Expensive operations by a few users? Fair access across all users? Accidental abuse from bug loops? The threat model shapes the design."
 
 ## Example: Messaging System
 
@@ -265,7 +265,7 @@ Your job is to uncover the intent behind these implementations:
 
 **Uncovering intent through questions:**
 
-"What's the core use case? Is this chat (real-time, conversational, presence-aware) or messaging (asynchronous, like email)? Are messages typically short and rapid, or longer and thoughtful?"
+"What's the core use case? Is this chat (real-time, conversational, presence-aware) or messaging (async, like email)? Are messages typically short and rapid, or longer and thoughtful?"
 
 "What matters more: guaranteed delivery or low latency? If a message takes 5 seconds to deliver but is never lost, versus usually instant but occasionally lost, which is preferable?"
 
@@ -321,11 +321,11 @@ Core use cases determine your architecture. Edge cases are handled within that a
 
 If you design for edge cases first, you'll often create unnecessary complexity. If you ignore edge cases entirely, you'll have gaps that cause real problems.
 
-The Staff-level skill is identifying which is which, and allocating design attention appropriately.
+The Staff-level skill is telling which is which and allocating design attention accordingly.
 
 ## Identifying Core Use Cases
 
-Core use cases typically have these characteristics:
+Core use cases typically have these traits:
 
 **High frequency**: They happen often—most of your traffic
 **High value**: They deliver the primary value of the system
@@ -348,7 +348,7 @@ Edge cases shouldn't be ignored, but they shouldn't drive core design decisions 
 
 **Simple over perfect**: "For this edge case, a simple solution is fine. It doesn't need to be optimized because it's rare."
 
-**Explicit degradation**: "If this edge case happens, the system will gracefully degrade to [fallback behavior]. That's acceptable given the rarity."
+**Explicit degradation**: "If this edge case happens, the system will gracefully degrade to [fallback behavior]. That's acceptable given how rare it is."
 
 ## Example: Feed System
 
@@ -423,7 +423,7 @@ The matrix guides several decisions:
 
 **API design**: Which operations need to be exposed? To whom?
 
-**Quality requirements**: Which use cases need the highest availability/lowest latency?
+**Quality requirements**: Which use cases need the highest availability and lowest latency?
 
 **Access control**: Who can perform which operations?
 
@@ -439,7 +439,7 @@ In an interview, you might sketch this matrix quickly:
 
 ## The Importance of Scope
 
-In a 45-minute interview, you cannot design everything. In a 6-month project, you cannot build everything. Scope control—deciding what's in and what's out—is a critical Staff-level skill.
+In a 45-minute interview, you can't design everything. In a 6-month project, you can't build everything. Scope control—deciding what's in and what's out—is a critical Staff-level skill.
 
 Scope control isn't about doing less; it's about doing the right amount. Under-scoping means you miss critical requirements. Over-scoping means you waste time on things that don't matter.
 
@@ -466,14 +466,14 @@ Instead, make exclusions explicit:
 - "I'm designing for 10 million users. The 1 billion user case would require different architectural choices."
 
 **Quality exclusions**: Quality levels you're not achieving
-- "I'm designing for 99.9% availability, not 99.99%. The additional nine would require significantly different infrastructure."
+- "I'm designing for 99.9% availability, not 99.99%. The extra nine would require significantly different infrastructure."
 
 **Integration exclusions**: Systems you're not connecting to
 - "I'm assuming notifications are delivered via existing push infrastructure. I'm not designing the push delivery system itself."
 
 ## Scope Control Phrases
 
-Develop a vocabulary for scope control:
+Build a vocabulary for scope control:
 
 **Setting scope:**
 - "For this design, I'm focusing on..."
@@ -560,7 +560,7 @@ Your primary users determine where you invest in quality:
 
 **Example**: If consumers are primary and analytics is secondary:
 - Notification delivery path: 99.99% availability, <500ms latency
-- Analytics data export: 99.9% availability, eventual consistency fine
+- Analytics data export: 99.9% availability, eventual consistency is fine
 
 ### Scope Decisions → Component Boundaries
 
@@ -581,13 +581,13 @@ In your design, make these connections explicit:
 
 "Because viewing history is a core use case, I need persistent storage. If it were out of scope, I could use a simpler fire-and-forget architecture."
 
-This tracing demonstrates that your design is coherent—that later decisions follow logically from earlier ones.
+This tracing shows that your design is coherent—that later decisions follow logically from earlier ones.
 
 ---
 
 # Part 8: Interview-Style Clarification Questions
 
-Let me provide concrete examples of how to apply Phase 1 thinking in interview contexts.
+Here are concrete examples of how to apply Phase 1 thinking in interview contexts.
 
 ## Rate Limiter
 
@@ -746,7 +746,7 @@ Does this scope work?"
 | **Prioritization** | All use cases treated equally | Core vs edge; primary vs secondary with rationale | Design effort spread thin; nothing optimized well |
 | **Cost** | Rarely mentioned in Phase 1 | "Which user type dominates cost? What do we not build?" | Cost surprise at scale; over-engineering for edge users |
 
-**Risk accepted (L6):** Staff engineers accept that secondary users may get degraded service during failure. They document this explicitly rather than pretending everyone gets perfect service.
+**Risk accepted (L6):** Staff engineers accept that secondary users may get degraded service during failure. They document this explicitly instead of pretending everyone gets perfect service.
 
 ---
 
@@ -762,7 +762,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 **The problem**: You design a system that serves consumers but is impossible for operations to maintain, or that has no API for other services to integrate with.
 
-**The fix**: Systematically enumerate user types. Ask: "Who else interacts with this system? Who operates it? Who integrates with it?"
+**The fix**: Systematically list all user types. Ask: "Who else interacts with this system? Who operates it? Who integrates with it?"
 
 **Example**:
 - **Senior approach**: "Users send notifications to other users."
@@ -774,7 +774,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 **Why it happens**: Senior engineers are trained to execute on requirements, not to question them.
 
-**The problem**: You might design an excellent rate limiter when what's actually needed is a circuit breaker, or a quota system, or a CDN.
+**The problem**: You might design an excellent rate limiter when what's actually needed is a circuit breaker, a quota system, or a CDN.
 
 **The fix**: Probe the intent behind the prompt. "What problem is this solving? Is rate limiting the only approach, or are there alternatives we should consider?"
 
@@ -786,9 +786,9 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 **The pattern**: Spending 30 seconds on clarifying questions and jumping into architecture.
 
-**Why it happens**: The interview feels short. You want to demonstrate building skills, not asking skills.
+**Why it happens**: The interview feels short. You want to show building skills, not asking skills.
 
-**The problem**: You design for the wrong requirements. Or you design for correct requirements but can't articulate why your design choices are appropriate.
+**The problem**: You design for the wrong requirements. Or you design for correct requirements but can't explain why your design choices are appropriate.
 
 **The fix**: Invest 5-10 minutes in Phase 1. This investment pays off in a more focused, defensible design.
 
@@ -804,7 +804,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 **The problem**: You spread design effort thinly across many use cases, none designed well.
 
-**The fix**: Explicitly categorize use cases as core vs. edge. Announce what you're optimizing for.
+**The fix**: Explicitly categorize use cases as core vs. edge. State what you're optimizing for.
 
 **Example**:
 - **Senior approach**: "The system needs to handle sending, receiving, preferences, history, search, export..."
@@ -812,7 +812,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 ## Mistake 5: Implicit Scope
 
-**The pattern**: Having a mental model of scope but not articulating it.
+**The pattern**: Having a mental model of scope but not saying it out loud.
 
 **Why it happens**: Scope feels obvious to you. You don't realize the interviewer might have different expectations.
 
@@ -826,7 +826,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 ## Mistake 6: Conflating Users and Roles
 
-**The pattern**: Describing users by their role in the system (sender, receiver) rather than who they actually are.
+**The pattern**: Describing users by their role in the system (sender, receiver) instead of who they actually are.
 
 **Why it happens**: Roles feel more relevant to system design than user identities.
 
@@ -842,7 +842,7 @@ Strong Senior engineers often stumble in Phase 1—not because they lack skill, 
 
 # Part 11: Examples from Real Systems
 
-Let me walk through Phase 1 thinking for three real system types.
+Here's Phase 1 thinking applied to three real system types.
 
 ## Example 1: Rate Limiter
 
@@ -982,7 +982,7 @@ Let me walk through Phase 1 thinking for three real system types.
 | **Failure by user** | "How does each user type experience failure?" | Same outage, different impact — design for each |
 | **Cost and users** | "Which user type dominates cost? What do we not build?" | User mix determines cost structure |
 
-**Staff-level analogy:** Phase 1 is like a doctor taking a history before prescribing. Skipping it means solving the wrong problem.
+**Staff-level analogy:** Phase 1 is like a doctor taking a history before prescribing. Skipping it means you might solve the wrong problem.
 
 ## Key Phrases for Phase 1
 
@@ -1047,7 +1047,7 @@ Let me walk through Phase 1 thinking for three real system types.
 
 # Part 12: User Needs Under Failure — Staff-Level Thinking
 
-A critical gap in most Senior engineers' thinking: they identify users and use cases for the happy path, but forget that failures affect different users differently. Staff engineers think about user needs under failure from the beginning.
+A critical gap in most Senior engineers' thinking: they identify users and use cases for the happy path, but forget that failures affect different users differently. Staff engineers think about user needs under failure from the start.
 
 ## The Failure Experience Matrix
 
@@ -1163,7 +1163,7 @@ When different user types have incompatible needs, Staff engineers reason throug
 
 ## The Conflict Pattern
 
-User conflicts arise when:
+User conflicts come up when:
 - Optimizing for one user degrades experience for another
 - Resource constraints force trade-offs
 - Quality attributes conflict (latency vs. durability, simplicity vs. flexibility)
@@ -1283,7 +1283,7 @@ I'll surface this trade-off: 'We prioritize perceived speed over zero-loss. Loss
 
 ## Security and Compliance as User Types
 
-Security teams and compliance stakeholders are often overlooked users. At Staff level, they are secondary but critical—their needs affect architecture.
+Security teams and compliance stakeholders are often overlooked as users. At Staff level, they are secondary but critical—their needs affect architecture.
 
 | Concern | Phase 1 Question | Design Impact |
 |---------|------------------|---------------|
@@ -1291,7 +1291,7 @@ Security teams and compliance stakeholders are often overlooked users. At Staff 
 | **Compliance** | "Retention? Export? Audit? Regulatory constraints?" | Storage design; export-friendly schema from day one |
 | **Trust boundaries** | "Who can call this? Internal only? Partners? Untrusted clients?" | API design; rate limiting and validation per boundary |
 
-**Example:** A messaging system with human users and compliance users. Compliance needs audit logs and export. Design message storage with export-friendliness; don't lock into a schema that makes compliance impossible later.
+**Example:** A messaging system with human users and compliance users. Compliance needs audit logs and export. Design message storage with export-friendliness from the start; don't lock into a schema that makes compliance impossible later.
 
 ## Human Errors and Operational Burdens
 
@@ -1301,7 +1301,7 @@ Operational users are affected by human error—mistakes in configuration, deplo
 - "What happens when someone runs the wrong admin command?"
 - "How does on-call burden scale with user types and use cases?"
 
-**Staff-level insight:** Systems with many user types and use cases create more operational surface area. Explicit primary/secondary classification helps prioritize which operational controls to build first.
+**Staff-level insight:** Systems with many user types and use cases create more operational surface area. Explicit primary/secondary classification helps you prioritize which operational controls to build first.
 
 ## Cross-Team and Org Impact
 
@@ -1311,7 +1311,7 @@ Users often span teams. A notification system serves product teams (sending), pl
 - "What guarantees do we offer cross-team? What do we not guarantee?"
 - "How do we reduce complexity for teams that depend on us?"
 
-**Trade-off:** Serving many teams can dilute focus. Staff engineers designate primary vs secondary and document what each team gets—and what they don't—explicitly.
+**Trade-off:** Serving many teams can dilute focus. Staff engineers designate primary vs. secondary and document what each team gets—and what they don't—explicitly.
 
 ## Data, Consistency, and Correctness by User Type
 
@@ -1330,7 +1330,7 @@ Different user types impose different consistency requirements. Phase 1 helps su
 
 # Part 15: Designing for Operational Users — First-Class Citizenship
 
-The most commonly overlooked user type is operational users. Staff engineers treat them as first-class citizens from the start.
+The most commonly overlooked user type is operational users. Staff engineers treat them as first-class citizens from the beginning.
 
 ## What Operational Users Actually Need
 
@@ -1442,13 +1442,13 @@ When identifying users and use cases, Staff engineers add:
 
 **Staff-level trade-off:** "If system users generate 95% of notifications, we optimize for their API efficiency. Per-call cost adds up. Human users get cached preferences; we don't re-resolve on every delivery. That reduces compute and storage cost."
 
-**What a Staff engineer intentionally does not build (initially):** Full-text search over notification history for all users — cost scales with retention and search volume. Design for export-friendly storage instead; build search when a specific user type (e.g., compliance) justifies it.
+**What a Staff engineer intentionally does not build (initially):** Full-text search over notification history for all users—cost scales with retention and search volume. Design for export-friendly storage instead; build search when a specific user type (e.g., compliance) justifies it.
 
 ---
 
 # Part 17: Real Incident — Notification Delivery Cascade
 
-A structured real incident illustrates why Phase 1 user thinking matters when things go wrong.
+A structured real incident shows why Phase 1 user thinking matters when things go wrong.
 
 | Part | Content |
 |------|---------|
@@ -1465,7 +1465,7 @@ A structured real incident illustrates why Phase 1 user thinking matters when th
 
 # Part 18: Use Case Evolution and Degradation
 
-Staff engineers think about use cases dynamically: how they evolve over scale, and how they degrade under failure.
+Staff engineers think about use cases dynamically: how they evolve over scale and how they degrade under failure.
 
 ## Use Case Evolution Over Scale
 
@@ -1658,7 +1658,7 @@ As you work through Phase 1, imagine the interviewer asking themselves:
 ☐ "Did they consider operational needs?"
 ☐ "Did they confirm alignment with me?"
 
-Hit all of these, and you've demonstrated Staff-level Phase 1 thinking.
+Hit all of these and you've demonstrated Staff-level Phase 1 thinking.
 
 ## How to Explain Phase 1 to Leadership
 
@@ -1672,7 +1672,7 @@ Hit all of these, and you've demonstrated Staff-level Phase 1 thinking.
 
 **For mentees:** Start with the four user types. Have them list users for a system they know. Then ask: "Who did you miss? Operations? Other services? Compliance?" The gap is the lesson.
 
-**For interview prep:** Practice the 5–10 minute Phase 1 block. Do not skip it. Set a timer: "I will not draw a single box until I've stated users, primary/secondary, core use cases, and scope."
+**For interview prep:** Practice the 5–10 minute Phase 1 block. Don't skip it. Set a timer: "I will not draw a single box until I've stated users, primary/secondary, core use cases, and scope."
 
 **Key teaching phrase:** "The solution is only as good as the problem you understood. Phase 1 is where you get the problem right."
 
@@ -1793,7 +1793,7 @@ Hit all of these, and you've demonstrated Staff-level Phase 1 thinking.
 
 # Reflection Prompts
 
-Set aside 15-20 minutes for each of these reflection exercises.
+Set aside 15–20 minutes for each of these reflection exercises.
 
 ## Reflection 1: Your User Awareness
 
@@ -1931,13 +1931,13 @@ While others rush to architecture, Staff engineers invest time understanding:
 - **How** to map users to use cases clearly
 - **What's** in scope and what's not (explicit boundaries)
 
-This investment pays dividends throughout the design:
+This investment pays off throughout the design:
 - Your architecture reflects actual requirements
 - Your trade-offs are grounded in user priorities
 - Your scope is defensible
 - Your design is coherent—later decisions trace back to earlier understanding
 
-In interviews, this manifests as a calm, structured opening. You don't panic. You don't rush. You ask thoughtful questions, establish clarity, and build a foundation. The interviewer sees someone who understands that good design starts with good understanding.
+In interviews, this shows up as a calm, structured opening. You don't panic. You don't rush. You ask thoughtful questions, establish clarity, and build a foundation. The interviewer sees someone who understands that good design starts with good understanding.
 
 The techniques in this section are simple. The challenge is discipline—resisting the urge to start solving before you've finished understanding.
 

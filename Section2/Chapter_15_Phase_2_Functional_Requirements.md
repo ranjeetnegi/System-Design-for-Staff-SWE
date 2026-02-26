@@ -40,15 +40,15 @@
 
 # Introduction
 
-After understanding your users and their use cases, the next step is defining what the system actually does. This is Phase 2: Functional Requirements.
+Once you understand your users and their use cases, the next step is to define what the system actually does. That's Phase 2: Functional Requirements.
 
-Functional requirements describe the behaviors and capabilities of your system. They answer the question: "What must this system do?" Not how it does it (that's architecture), not how well it does it (that's non-functional requirements), but what it does.
+Functional requirements describe what your system does—its behaviors and capabilities. They answer: "What must this system do?" Not how it does it (that's architecture), not how well it does it (that's non-functional requirements), but what it does.
 
-This sounds straightforward, and in some ways it is. But Staff-level precision in functional requirements is harder than it appears. Too vague, and your design has no foundation. Too detailed, and you've wasted precious interview time on specifications that don't matter. Too broad, and you'll never finish. Too narrow, and you've missed critical functionality.
+This sounds simple, and in some ways it is. But getting Staff-level precision in functional requirements is harder than it looks. Too vague, and your design has no foundation. Too detailed, and you've wasted interview time on specs that don't matter. Too broad, and you'll never finish. Too narrow, and you've missed critical functionality.
 
-Staff engineers hit the sweet spot: precise enough to drive design decisions, focused enough to fit the time available, complete enough to cover the core, and explicit enough about what's excluded.
+Staff engineers hit the sweet spot: precise enough to drive design decisions, focused enough to fit the time you have, complete enough to cover the core, and explicit about what's excluded.
 
-This section will teach you how to define functional requirements with Staff-level precision. We'll cover what functional requirements really mean, how to distinguish core from supporting functionality, how to think about different types of system operations, how to handle edge cases explicitly, and how to avoid the feature creep that derails many designs.
+This section teaches you how to define functional requirements with Staff-level precision. You'll learn what functional requirements really mean, how to tell core from supporting functionality, how to think about different types of system operations, how to handle edge cases explicitly, and how to avoid the feature creep that derails many designs.
 
 ---
 
@@ -62,7 +62,7 @@ Functional requirements describe what a system does—the capabilities it provid
 **Testable**: You can verify whether the system meets them
 **Behavior-focused**: They describe what happens, not how it happens internally
 
-Contrast with non-functional requirements, which describe qualities like performance, availability, and security. Functional requirements say "the system sends notifications"; non-functional requirements say "notifications are delivered within 5 seconds."
+Non-functional requirements are different. They describe qualities like performance, availability, and security. Functional requirements say "the system sends notifications"; non-functional requirements say "notifications are delivered within 5 seconds."
 
 ## Functional vs. Non-Functional: The Line
 
@@ -94,7 +94,7 @@ A single use case often requires multiple functional requirements. And a single 
 
 Functional requirements should be:
 
-**Specific enough** to guide design decisions:
+**Specific enough** to drive design decisions:
 - ❌ "System handles messages" (too vague)
 - ✅ "System allows users to send text messages up to 10,000 characters to other users"
 
@@ -102,7 +102,7 @@ Functional requirements should be:
 - ❌ "System stores messages in a Cassandra table with user_id as partition key" (implementation)
 - ✅ "System stores messages and allows retrieval by conversation"
 
-**Bounded enough** to be achievable:
+**Bounded enough** to be doable:
 - ❌ "System handles all possible message types" (unbounded)
 - ✅ "System handles text messages and image attachments"
 
@@ -221,9 +221,9 @@ Ask these questions:
 - Saving posts for later
 - Feed refresh controls
 
-## Articulating the Distinction in Interviews
+## Stating the Distinction in Interviews
 
-Make your prioritization explicit:
+State your prioritization clearly:
 
 "For this notification system, the core functionality is:
 1. Accepting notification requests from services
@@ -235,7 +235,7 @@ Supporting functionality includes:
 - Analytics on open rates
 - A/B testing notification content
 
-I'll design the core in detail. Supporting functionality will inform my data model but won't be fully designed unless we have time."
+I'll design the core in detail. Supporting functionality will inform my data model but I won't fully design it unless we have time."
 
 ---
 
@@ -271,7 +271,7 @@ I'll design the core in detail. Supporting functionality will inform my data mod
 
 ## The Three Flow Types
 
-Most systems have three types of operations. Understanding these helps you enumerate functional requirements systematically.
+Most systems have three types of operations. Understanding these helps you list functional requirements in a structured way.
 
 **Read flows**: Operations that retrieve data without modifying it
 - View messages
@@ -293,7 +293,7 @@ Most systems have three types of operations. Understanding these helps you enume
 
 ## Why This Taxonomy Matters
 
-Different flow types have different characteristics:
+Each flow type has different characteristics:
 
 | Aspect | Read | Write | Control |
 |--------|------|-------|---------|
@@ -303,11 +303,11 @@ Different flow types have different characteristics:
 | Failure tolerance | Can serve stale | Must not lose data | Must not corrupt state |
 | Cacheability | Often cacheable | Not cacheable | Rarely relevant |
 
-These differences drive design decisions. A system that's 99% reads might be designed completely differently from one that's 50% writes.
+These differences drive design decisions. A system that's 99% reads might be designed very differently from one that's 50% writes.
 
-## Enumerating Flows Systematically
+## Listing Flows Systematically
 
-For each flow type, ask: "What operations exist?"
+For each flow type, ask: "What operations are there?"
 
 ### Example: Notification System
 
@@ -365,9 +365,9 @@ For each flow type, ask: "What operations exist?"
 
 ## Using Flows to Structure Requirements
 
-In an interview, use this taxonomy to ensure completeness:
+In an interview, use this taxonomy to check you're complete:
 
-"Let me enumerate the functional requirements by flow type.
+"Let me list the functional requirements by flow type.
 
 **Read flows:**
 - Users can view their notification history
@@ -383,7 +383,7 @@ In an interview, use this taxonomy to ensure completeness:
 - Ops can configure notification routing
 - Ops can enable/disable notification types
 
-Does this cover the functionality you had in mind, or are there flows I'm missing?"
+Does this cover what you had in mind, or are there flows I'm missing?"
 
 ---
 
@@ -391,7 +391,7 @@ Does this cover the functionality you had in mind, or are there flows I'm missin
 
 ## The Goldilocks Zone
 
-Functional requirements need to be specific enough to be useful but not so detailed that they constrain implementation or waste time.
+Functional requirements need to be specific enough to be useful but not so detailed that they lock you into an implementation or waste time.
 
 **Too vague:**
 "System sends notifications"
@@ -414,7 +414,7 @@ Functional requirements need to be specific enough to be useful but not so detai
 
 ## The Behavior Specification Pattern
 
-A useful pattern for specifying behavior:
+Here's a useful pattern for specifying behavior:
 
 **When** [trigger condition] **the system** [action] **for** [affected entities] **according to** [relevant rules/conditions]
 
@@ -456,7 +456,7 @@ Examples:
 
 ## Avoiding Premature Commitment
 
-A common mistake is committing to details too early:
+A common mistake is locking in details too early:
 
 **Premature commitment:**
 "The notification is stored in Cassandra with the user_id as partition key, then published to a Kafka topic, which triggers a consumer that calls the FCM API..."
@@ -506,7 +506,7 @@ A common mistake is committing to details too early:
 
 ## What Are Edge Cases?
 
-Edge cases are scenarios that deviate from the typical flow. They include:
+Edge cases are scenarios that differ from the typical flow. They include:
 
 **Unusual inputs**: Empty values, maximum values, invalid formats
 **Error conditions**: Network failures, service unavailable, timeout
@@ -516,28 +516,28 @@ Edge cases are scenarios that deviate from the typical flow. They include:
 
 ## Why Edge Cases Matter
 
-Edge cases reveal the true complexity of a system. A design that only handles the happy path will fail in production.
+Edge cases reveal the real complexity of a system. A design that only handles the happy path will fail in production.
 
-But edge cases can also be a trap. Trying to enumerate every possible edge case leads to analysis paralysis and wasted time.
+But edge cases can also be a trap. Trying to list every possible edge case leads to analysis paralysis and wasted time.
 
-Staff engineers find the balance: they identify significant edge cases, decide how to handle them (fully, gracefully, or explicitly exclude), and move on.
+Staff engineers find the balance: they identify the important edge cases, decide how to handle them (fully, gracefully, or explicitly exclude), and move on.
 
 ## The Edge Case Triage
 
 For each edge case, decide:
 
 **Handle fully**: Design a complete solution
-- Use for: Edge cases that happen frequently or have severe consequences
+- Use when: The edge case happens often or has severe consequences
 
 **Handle gracefully**: Provide degraded but acceptable behavior
-- Use for: Edge cases that are rare but shouldn't crash the system
+- Use when: The edge case is rare but shouldn't crash the system
 
 **Exclude explicitly**: State that this case is out of scope
-- Use for: Edge cases that are very rare or would add disproportionate complexity
+- Use when: The edge case is very rare or would add disproportionate complexity
 
 ## Identifying Significant Edge Cases
 
-Ask these questions:
+Ask yourself:
 
 **What if inputs are extreme?**
 - Empty list, zero value, maximum allowed value
@@ -603,9 +603,9 @@ Ask these questions:
 | All followed accounts inactive | Handle gracefully (show recommendations) |
 | Content flagged during feed generation | Handle gracefully (filter, refresh on next load) |
 
-## Articulating Edge Cases in Interviews
+## Stating Edge Cases in Interviews
 
-Be explicit about your edge case decisions:
+State your edge case decisions clearly:
 
 "Let me address a few edge cases.
 
@@ -646,32 +646,32 @@ Clear scope boundaries:
 - Focus your design effort
 - Set expectations with the interviewer
 - Prevent scope creep
-- Enable integration assumptions
+- Let you assume integrations exist
 
 ## Types of Scope Boundaries
 
 ### Functional Boundaries
 
-What features are included vs. excluded:
+Which features are in vs. out:
 - "I'm designing message delivery, not message search"
 - "I'm designing notification sending, not notification content creation"
 - "I'm designing the rate limiter, not the quota billing system"
 
 ### User Boundaries
 
-Which users are served:
+Which users you're designing for:
 - "I'm designing for end consumers, not for admin users"
 - "I'm designing for API clients, not for web UI"
 
 ### Scale Boundaries
 
-What scale range is addressed:
+What scale range you're designing for:
 - "I'm designing for 1-10 million users, not for 1 billion"
 - "I'm designing for the initial launch, not for the 10-year vision"
 
 ### Integration Boundaries
 
-What's assumed to exist vs. what's being built:
+What you assume exists vs. what you're building:
 - "I'm assuming authentication exists; I'm not designing it"
 - "I'm assuming we have a message queue; I'm not choosing which one"
 
@@ -683,15 +683,15 @@ For each potential scope item, ask:
 
 **Is this interesting or differentiating?** If yes, consider including it.
 
-**Is this well-understood/standard?** If yes, consider excluding it.
+**Is this well-understood or standard?** If yes, consider excluding it.
 
 **Does the interviewer seem interested?** If yes, include it.
 
 **Do I have time?** If no, exclude it.
 
-## Articulating Scope Clearly
+## Stating Scope Clearly
 
-Use explicit language:
+Use clear language:
 
 **Positive scope (what's in):**
 - "I will design..."
@@ -742,7 +742,7 @@ Does this scope work?"
 
 ## What Is Feature Creep?
 
-Feature creep is the gradual expansion of scope beyond original boundaries. It happens when:
+Feature creep is when scope slowly grows beyond what you originally planned. It happens when:
 - You keep adding "just one more thing"
 - You design for hypothetical future needs
 - You can't say no to nice-to-have features
@@ -757,13 +757,13 @@ In interviews:
 
 In real projects:
 - Timelines slip
-- Complexity increases
+- Complexity grows
 - Quality suffers
-- The core product is delayed
+- The core product gets delayed
 
 ## Staff-Level Discipline
 
-Staff engineers avoid feature creep through:
+Staff engineers avoid feature creep by:
 
 ### 1. Ruthless Prioritization
 
@@ -773,7 +773,7 @@ Rank everything: must-have, should-have, could-have, won't-have. Design only the
 
 ### 2. Explicit "Not Now" Lists
 
-Instead of vaguely deferring things, explicitly list what's excluded:
+Instead of vaguely deferring things, clearly list what's excluded:
 
 "These features are valuable but out of scope for this design:
 - Message search
@@ -784,7 +784,7 @@ They can be added later without changing the core architecture."
 
 ### 3. Scope Checkpoints
 
-Periodically reassess scope:
+Check your scope periodically:
 
 "I've been designing for 15 minutes. Let me check: am I still focused on core functionality? Have I drifted into supporting features?"
 
@@ -807,7 +807,7 @@ This is where feature creep starts. The answer is usually: "We could, but we won
 
 **Common pattern:**
 
-Candidate is designing a messaging system. They cover:
+A candidate is designing a messaging system. They cover:
 - Message sending ✓
 - Message delivery ✓
 - Message history ✓
@@ -822,7 +822,7 @@ Then they keep going:
 
 They run out of time having shallowly covered many features, with none designed well.
 
-**Better pattern:**
+**Better approach:**
 
 "For core functionality, I'm focusing on sending, delivery, and history. Those are the must-haves for a messaging system.
 
@@ -836,7 +836,7 @@ Let me spend our time going deep on the core."
 
 # Part 8: Functional Requirements for Common Systems
 
-Let me provide detailed functional requirements for several common system design problems.
+Here are detailed functional requirements for several common system design problems.
 
 ## Rate Limiter
 
@@ -1029,7 +1029,7 @@ Let me provide detailed functional requirements for several common system design
 
 ## The Requirement Statement Pattern
 
-A clear format for stating requirements:
+Here's a clear format for stating requirements:
 
 **[User/System] can [action] [object] [optional: conditions/constraints]**
 
@@ -1040,7 +1040,7 @@ Examples:
 
 ## Grouping Requirements
 
-Organize requirements for clarity:
+Group requirements for clarity:
 
 **By flow type:**
 - "For read operations: ... For write operations: ... For control operations: ..."
@@ -1053,7 +1053,7 @@ Organize requirements for clarity:
 
 ## Checking Completeness
 
-After listing requirements, verify:
+After you list requirements, verify:
 
 "Let me check completeness:
 - Can users do all the things they need to do? [lists]
@@ -1064,7 +1064,7 @@ Is there functionality I'm missing?"
 
 ## Confirming with the Interviewer
 
-Always confirm your requirements:
+Always confirm your requirements with the interviewer:
 
 "Based on my understanding, here are the functional requirements:
 [lists requirements]
@@ -1119,7 +1119,7 @@ Force yourself to be specific. Use the pattern: "[User] can [action] [object]." 
 "Messages are stored in Cassandra and delivered via Kafka" is implementation, not requirements.
 
 **Why it happens:**
-Experienced engineers naturally jump to solutions. They conflate what with how.
+Experienced engineers naturally jump to solutions. They mix up what with how.
 
 **How to avoid:**
 Ask yourself: "Am I describing observable behavior, or internal mechanism?" Requirements describe behavior; implementation describes mechanism.
@@ -1137,7 +1137,7 @@ Listing 15 requirements with no distinction between essential and nice-to-have.
 Candidates don't want to "miss" anything. Prioritization feels like excluding things.
 
 **How to avoid:**
-Explicitly categorize: core, supporting, out-of-scope. Announce what you're optimizing for.
+Clearly categorize: core, supporting, out-of-scope. State what you're optimizing for.
 
 **Example:**
 - ❌ "The system should send notifications, track delivery, aggregate similar ones, support A/B testing, provide analytics..."
@@ -1149,10 +1149,10 @@ Explicitly categorize: core, supporting, out-of-scope. Announce what you're opti
 Only describing the happy path. "Users send messages" but what about failures, limits, invalid inputs?
 
 **Why it happens:**
-Happy path is the obvious case. Edge cases require more thought.
+The happy path is the obvious case. Edge cases require more thought.
 
 **How to avoid:**
-Systematically ask: "What if input is invalid? What if something fails? What about boundaries?"
+Ask yourself: "What if input is invalid? What if something fails? What about boundaries?"
 
 **Example:**
 - ❌ "Users can send messages to other users"
@@ -1182,7 +1182,7 @@ Assuming your understanding is correct without checking.
 Candidates want to seem confident. Checking feels like uncertainty.
 
 **How to avoid:**
-Confirmation is not weakness; it's collaboration. Always check: "Does this capture what you had in mind?"
+Confirmation is not weakness; it's collaboration. Always ask: "Does this capture what you had in mind?"
 
 **Example:**
 - ❌ [States requirements and immediately moves to design]
@@ -1197,7 +1197,7 @@ Your requirements don't actually support the use cases you identified.
 Requirements and use cases were defined separately without checking alignment.
 
 **How to avoid:**
-After defining requirements, trace each use case: "Can a user accomplish [use case] with these requirements?"
+After you define requirements, trace each use case: "Can a user accomplish [use case] with these requirements?"
 
 **Example:**
 - Use case: "User views conversation history"
@@ -1213,7 +1213,7 @@ Focusing entirely on user-facing functionality, forgetting about system manageme
 User flows are more interesting. Admin flows seem boring.
 
 **How to avoid:**
-Explicitly enumerate control flows: "What operations do administrators need? What configuration is required?"
+Explicitly list control flows: "What operations do administrators need? What configuration is required?"
 
 **Example:**
 - ❌ [Only describes user sending/receiving messages]
@@ -1229,7 +1229,7 @@ Explicitly enumerate control flows: "What operations do administrators need? Wha
 |------|-----------------|----------------|
 | **Define what, not how** | "What does the system do?" | "Users can send messages" (not "stores in Cassandra") |
 | **Identify core vs supporting** | "Is system useless without this?" | Core: send/receive. Supporting: reactions |
-| **Enumerate all flow types** | "What are read, write, control flows?" | Read: view history. Write: send. Control: configure |
+| **List all flow types** | "What are read, write, control flows?" | Read: view history. Write: send. Control: configure |
 | **Handle edge cases** | "What if X fails/is extreme?" | "If offline, queue. If too long, reject." |
 | **Set scope boundaries** | "What's in? What's out?" | "In: delivery. Out: analytics" |
 | **Confirm with interviewer** | "Does this match your expectations?" | Get explicit agreement |
@@ -1303,7 +1303,7 @@ A critical gap in most requirements gathering: candidates define what happens wh
 
 ## Why Failure Requirements Matter
 
-Functional requirements that only describe the happy path leave critical questions unanswered:
+Functional requirements that only describe the happy path leave important questions unanswered:
 - What does the user see when delivery fails?
 - What happens to data when a write partially succeeds?
 - How does the system behave when a dependency is unavailable?
@@ -1394,7 +1394,7 @@ For each core functional requirement, define the failure behavior:
 
 ## Blast Radius and Partial Failure Propagation
 
-Staff engineers don't just define "what happens when X fails"—they reason about **blast radius** and **partial failure propagation**.
+Staff engineers don't just define "what happens when X fails"—they think about **blast radius** and **partial failure propagation**.
 
 **Blast radius**: How many users, services, or data flows are affected when a component fails?
 
@@ -1405,7 +1405,7 @@ Staff engineers don't just define "what happens when X fails"—they reason abou
 | Message queue backing up | All pending notifications | Shed load by priority; never drop transactional |
 | Rate limiter unavailable | All API traffic | Fail-open vs fail-closed by endpoint risk |
 
-**Partial failure propagation**: When one step fails, does the failure cascade or contain?
+**Partial failure propagation**: When one step fails, does the failure cascade or stay contained?
 
 - **Cascade**: Preference lookup fails → blocks delivery → user never gets notification
 - **Contain**: Preference lookup fails → use defaults → delivery proceeds
@@ -1414,7 +1414,7 @@ Staff engineers don't just define "what happens when X fails"—they reason abou
 
 **Real-world example**: A notification system had no blast-radius requirement for preference lookup. When the preference service had a 2-hour outage, every notification blocked on it. Result: zero notifications delivered during the outage. The fix: a requirement that preference lookup failure never blocks delivery—use cached or default preferences.
 
-## Articulating Failure Requirements in Interviews
+## Stating Failure Requirements in Interviews
 
 **L5 Approach:** "System delivers notifications." (Happy path only)
 
@@ -1504,7 +1504,7 @@ Operational requirements define what operators (SREs, on-call, platform teams) c
 | Operators can drain messages for a user (migration) | User-level operations |
 | Operators can view storage utilization per shard | Capacity planning |
 
-## Articulating Operational Requirements in Interviews
+## Stating Operational Requirements in Interviews
 
 **L5 Approach:** [Doesn't mention operational requirements]
 
@@ -1529,7 +1529,7 @@ Operational requirements should account for **human factors**: operators make mi
 
 **L6 insight**: Requirements that assume perfect operators fail in production. Design for the 3am page, not the well-rested engineer.
 
-**Example**: A notification system allowed "disable all channels" with one click. An operator mistakenly clicked it during a channel-specific incident. Requirement fix: "Operators can disable individual channels; global disable requires confirmation and audit log."
+**Example**: A notification system allowed "disable all channels" with one click. An operator mistakenly clicked it during a channel-specific incident. The fix: "Operators can disable individual channels; global disable requires confirmation and audit log."
 
 ---
 
@@ -1555,7 +1555,7 @@ Staff engineers treat security and compliance as **functional requirements**, no
 | **Messaging** | "Messages encrypted in transit and at rest; only participants can read" |
 | **URL shortener** | "Short URLs do not leak long URL to unauthenticated resolvers; blocklist for malicious long URLs" |
 
-## Articulating Security in Requirements
+## Stating Security in Requirements
 
 **L5 Approach:** "We'll add auth later" or [Doesn't mention security]
 
@@ -1575,7 +1575,7 @@ Requirements don't exist in isolation. Staff engineers capture **downstream cons
 
 ## Downstream Consumer Requirements
 
-When your system serves other teams or systems, their needs become functional requirements:
+When your system serves other teams or systems, their needs become your functional requirements:
 
 | Your System | Downstream Consumer | Implied Requirement |
 |-------------|---------------------|----------------------|
@@ -1603,14 +1603,14 @@ Staff engineers identify which requirements depend on others and where the criti
 
 ## Why Dependencies Matter
 
-Some requirements are prerequisites for others. Understanding these dependencies:
+Some requirements are prerequisites for others. Understanding these dependencies helps you:
 - Reveals what must be built first
 - Identifies shared infrastructure needs
 - Exposes critical paths that block multiple features
 
 ## Requirements Dependency Analysis
 
-### Dependency Types
+### Types of Dependencies
 
 | Type | Description | Example |
 |------|-------------|---------|
@@ -1673,20 +1673,20 @@ Supporting features (reactions, search) are off the critical path—they can fai
 
 ## Using Dependencies in Design
 
-**L5 Approach:** Lists requirements flat, designs them independently.
+**L5 Approach:** Lists requirements flat and designs them independently.
 
 **L6 Approach:** "Let me map the dependencies:
 - Delivery depends on preference lookup—if preferences fail, I need a fallback
 - History depends on storage—but storage shouldn't block delivery
 - Metrics depend on delivery status—can be eventually consistent
 
-My critical path is: accept → validate → queue → lookup → deliver. I'll design this path for maximum reliability. Supporting features fork off the critical path and can have lower guarantees."
+My critical path is: accept → validate → queue → lookup → deliver. I'll design this path for maximum reliability. Supporting features branch off the critical path and can have lower guarantees."
 
 ---
 
 # Part 14: Requirements Conflicts and Trade-offs
 
-When requirements conflict, Staff engineers reason through the trade-off explicitly rather than making arbitrary choices.
+When requirements conflict, Staff engineers work through the trade-off explicitly instead of making arbitrary choices.
 
 ## Common Requirement Conflicts
 
@@ -1842,7 +1842,7 @@ Staff engineers anticipate how requirements change as systems scale.
 
 ## Anticipating Evolution in Requirements
 
-**L5 Approach:** Defines requirements for current state only.
+**L5 Approach:** Defines requirements for the current state only.
 
 **L6 Approach:** "Let me define requirements for V1, but note what intensifies at scale:
 
@@ -1857,7 +1857,7 @@ What changes at V2/V3:
 - Auto-scaling becomes critical
 - Operational requirements become core, not supporting
 
-I'll design V1 to not block these evolutions. For example, I'll include correlation IDs from day one even if we don't have distributed tracing yet."
+I'll design V1 so it doesn't block these evolutions. For example, I'll include correlation IDs from day one even if we don't have distributed tracing yet."
 
 ---
 
@@ -1873,7 +1873,7 @@ Requirements that ignore cost lead to designs that are technically correct but e
 - **Rate limiter**: "Exact per-second limits across all regions" → requires synchronous coordination; high network and compute cost
 - **Feed system**: "Recompute feed on every scroll" → compute cost grows with usage; unsustainable at scale
 
-**L6 insight**: Requirements often imply cost structures. Making cost explicit prevents over-engineering and guides scope.
+**L6 insight**: Requirements often imply cost structures. Making cost explicit prevents over-engineering and helps guide scope.
 
 ## Cost-Conscious Requirement Patterns
 
@@ -1892,7 +1892,7 @@ Requirements that ignore cost lead to designs that are technically correct but e
 | **Feed** | Compute per request | "Cache feed for N minutes; invalidation on write" |
 | **Messaging** | Storage, fan-out | "Archive old conversations; fan-out only to online users" |
 
-## Articulating Cost in Requirements
+## Stating Cost in Requirements
 
 **L5 Approach:** [Doesn't mention cost until architecture]
 
@@ -1934,7 +1934,7 @@ At each scale stage, a different requirement tends to become the limiter:
 |--------|-------------------------|------------------|
 | **Precision** | Are requirements specific enough to implement? | "[User] can [action] [object]" pattern |
 | **Prioritization** | Do you distinguish core from supporting? | Explicit "Core: X. Supporting: Y" |
-| **Completeness** | Did you cover read, write, AND control? | All flow types enumerated |
+| **Completeness** | Did you cover read, write, AND control? | All flow types listed |
 | **Failure thinking** | Do you define failure behaviors? | Explicit failure requirements |
 | **Operational awareness** | Did you include operator needs? | Observability/debuggability requirements |
 | **Scope discipline** | Did you set boundaries? | "In scope: X. Out of scope: Y" |
@@ -1999,7 +1999,7 @@ This trade-off is acceptable because [rationale]."
 
 ## Interviewer's Mental Checklist for Phase 2
 
-As you work through Phase 2, imagine the interviewer asking:
+As you work through Phase 2, imagine the interviewer asking you:
 
 ☐ "Are requirements specific enough to implement?"
 ☐ "Did they distinguish core from supporting?"
@@ -2010,7 +2010,7 @@ As you work through Phase 2, imagine the interviewer asking:
 ☐ "Did they set scope boundaries?"
 ☐ "Did they check alignment with me?"
 
-Hit all of these, and you've demonstrated Staff-level Phase 2 thinking.
+Hit all of these, and you've shown Staff-level Phase 2 thinking.
 
 ## What Interviewers Probe
 
@@ -2024,7 +2024,7 @@ Interviewers probe for Staff-level thinking by asking:
 
 ## How to Explain to Leadership
 
-Leadership cares about risk, timeline, and scope. Frame requirements accordingly:
+Leadership cares about risk, timeline, and scope. Frame your requirements accordingly:
 
 - **"We've defined core vs supporting—core is what we're betting on; supporting can slip."**
 - **"Failure requirements are captured—we know what happens when things break, which reduces incident surprise."**
@@ -2037,7 +2037,7 @@ When mentoring others on functional requirements:
 
 1. **Start with the pattern**: "[Actor] can [action] [object] [constraints]." Have them rewrite vague requirements.
 2. **Core vs supporting drill**: Give them 10 features; have them classify. Debate the gray areas.
-3. **Edge case triage**: Pick one flow; enumerate 10 edge cases; for each, decide handle fully / gracefully / exclude.
+3. **Edge case triage**: Pick one flow; list 10 edge cases; for each, decide handle fully / gracefully / exclude.
 4. **Failure requirement drill**: For each core requirement, add "When X fails, system does Y."
 5. **Scope negotiation practice**: Give an intentionally broad prompt; have them negotiate down and confirm.
 
@@ -2157,29 +2157,29 @@ Think about how you specify functional requirements.
 - Do you distinguish between "the system must" vs. "the system should"?
 - How often do your requirements change after you start designing?
 
-Take one of your recent design docs and rewrite the requirements using the format: "[Actor] can [action] [object] [constraints]."
+Take one of your recent design docs and rewrite the requirements using: "[Actor] can [action] [object] [constraints]."
 
 ## Reflection 2: Your Core vs. Supporting Judgment
 
 Consider how you prioritize requirements.
 
-- What criteria do you use to determine if something is core vs. supporting?
+- What criteria do you use to decide if something is core vs. supporting?
 - Have you ever built supporting features before core ones? What happened?
 - How do you communicate priority to stakeholders who want everything?
 - What's your process for cutting scope when timeline pressure hits?
 
-List 10 features of a system you know well. Categorize each as core, supporting, or nice-to-have.
+List 10 features of a system you know well. Label each as core, supporting, or nice-to-have.
 
 ## Reflection 3: Your Edge Case Coverage
 
-Examine how you handle edge cases.
+Look at how you handle edge cases.
 
-- Do you systematically identify edge cases, or do they surprise you?
+- Do you identify edge cases in a structured way, or do they surprise you?
 - What categories of edge cases do you tend to miss (concurrency, failure, boundary)?
 - How do you decide between handling fully vs. graceful degradation vs. exclusion?
 - Have edge cases caused production issues for you? Which ones?
 
-For a familiar system, enumerate at least 15 edge cases across all categories.
+For a familiar system, list at least 15 edge cases across all categories.
 
 ---
 
@@ -2215,7 +2215,7 @@ Now imagine you're building V1 with 50% of the features. Which 5 do you build?
 
 Pick a system (or use: Stripe, Dropbox, Spotify).
 
-Enumerate all the flows you can identify:
+List all the flows you can identify:
 - At least 5 read flows
 - At least 5 write flows
 - At least 3 control flows
@@ -2227,7 +2227,7 @@ For each flow, note:
 
 ## Exercise 4: Edge Case Catalog
 
-For a messaging system, enumerate edge cases across these categories:
+For a messaging system, list edge cases across these categories:
 - Invalid inputs (at least 5)
 - Failure conditions (at least 5)
 - Boundary conditions (at least 3)
@@ -2239,7 +2239,7 @@ For each, decide: handle fully, handle gracefully, or exclude?
 
 Practice scope negotiation with a partner.
 
-Partner gives you an intentionally broad prompt:
+Your partner gives you an intentionally broad prompt:
 "Design a complete social media platform."
 
 Your task: negotiate it down to something designable in 45 minutes.
@@ -2254,12 +2254,12 @@ Practice:
 
 Take your requirements from Exercise 1.
 
-For each use case you identified in Phase 1 (users & use cases), trace:
+For each use case you identified in Phase 1 (users and use cases), trace:
 - Which requirements enable this use case?
 - Are any use cases unsupported by requirements?
 - Are any requirements not linked to use cases?
 
-This validates that your requirements and use cases are aligned.
+This checks that your requirements and use cases are aligned.
 
 ---
 
@@ -2271,7 +2271,7 @@ Staff-level precision in functional requirements means:
 
 **Being specific enough** to drive design decisions—not vague hand-waving like "system handles messages"
 
-**Being abstract enough** to avoid implementation details—not premature commitment to technologies
+**Being abstract enough** to avoid implementation details—not locking in technologies too early
 
 **Distinguishing core from supporting**—knowing what's essential vs. what's nice-to-have
 

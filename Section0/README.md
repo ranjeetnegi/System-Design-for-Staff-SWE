@@ -4,9 +4,9 @@
 
 ## Overview
 
-This section covers the **foundational concepts** that ALL system design builds upon. Before frameworks, before distributed systems, before Staff-level thinking—you need the basics. What is a system? How do clients and servers communicate? What happens when you type a URL? How do you estimate scale, QPS, and availability? What are the core building blocks—hash functions, caching, state, idempotency, queues, sync and async?
+This section covers the **foundational concepts** that ALL system design builds upon. Before frameworks, before distributed systems, before Staff-level thinking—you need the basics. What is a system? How do clients and servers talk to each other? What happens when you type a URL? How do you estimate scale, QPS, and availability? What are the core building blocks—hash functions, caching, state, idempotency, queues, sync and async?
 
-These aren't "beginner" topics you outgrow. Staff Engineers who truly understand the basics make better architecture decisions. When you design a rate limiter, you're using hash functions and state. When you design a payment flow, you're using idempotency. When you design a notification system, you're using queues and async patterns. This section gives you the vocabulary, the numbers, and the mental models you'll use for every design that follows.
+These aren't "beginner" topics you outgrow. Staff Engineers who really get the basics make better architecture decisions. When you design a rate limiter, you're using hash functions and state. When you design a payment flow, you're using idempotency. When you design a notification system, you're using queues and async patterns. This section gives you the vocabulary, the numbers, and the mental models you'll use for every design that follows.
 
 ---
 
@@ -77,19 +77,19 @@ These aren't "beginner" topics you outgrow. Staff Engineers who truly understand
 
 ### Chapter 1: Systems, Servers, and Clients — The Foundation of Everything
 
-Every distributed system rests on the same foundation: systems composed of servers and clients exchanging requests and responses. This chapter defines what a "system" means, distinguishes servers from clients (and why the same process can be both), traces the full journey from typing a URL to rendered page, and shows how the request/response pattern scales—and breaks—in production. You'll learn system boundaries, the role of CDN/load balancer/reverse proxy, and how Staff Engineers think about the full request path.
+Every distributed system rests on the same foundation: systems made of servers and clients that exchange requests and responses. This chapter defines what a "system" means, explains the difference between servers and clients (and why the same process can be both), walks through what happens from typing a URL to seeing a rendered page, and shows how the request/response pattern scales—and breaks—in production. You'll learn about system boundaries, the role of CDN/load balancer/reverse proxy, and how Staff Engineers think about the full request path.
 
 ---
 
 ### Chapter 2: APIs, Frontend, Backend, and Databases — The Building Blocks
 
-APIs define how components communicate. The frontend is what users see; the backend does the work; the database persists data. This chapter covers APIs as contracts and organizational boundaries, the frontend/backend split (including BFF and rendering strategies), and databases as the hardest thing to scale. You'll learn when to use REST vs GraphQL, how read/write ratios drive architecture, and why Staff Engineers obsess over data modeling and query patterns.
+APIs define how components talk to each other. The frontend is what users see; the backend does the work; the database stores data. This chapter covers APIs as contracts and organizational boundaries, the frontend/backend split (including BFF and rendering strategies), and why databases are the hardest thing to scale. You'll learn when to use REST vs GraphQL, how read/write ratios drive architecture, and why Staff Engineers obsess over data modeling and query patterns.
 
 ---
 
 ### Chapter 3: Microservices and Request Flow
 
-From monolith to services: when and why to split. This chapter covers request flow across multiple services, fan-out and amplification, and how a single user action can trigger many internal calls. You'll learn to trace requests through load balancers, API gateways, and downstream services—and why Staff Engineers model request amplification for capacity planning.
+From monolith to services: when and why to split. This chapter covers how requests flow across multiple services, fan-out and amplification, and how a single user action can trigger many internal calls. You'll learn to trace requests through load balancers, API gateways, and downstream services—and why Staff Engineers model request amplification for capacity planning.
 
 ---
 
@@ -101,7 +101,7 @@ Databases are usually the bottleneck. This chapter covers the progression: singl
 
 ### Chapter 5: Numbers Every Engineer Must Know — Estimation, QPS, and Availability
 
-Staff Engineers make architecture decisions based on rough numbers. This chapter gives you orders of magnitude (1K, 1M, 1B, 1T), data sizes (KB to PB), scale and what breaks at each level, latency numbers every programmer should know, QPS derivation from DAU, availability (the nines, composite availability, redundancy), and server capacity. Includes full worked examples for a URL shortener and chat system. By the end, you'll do back-of-the-envelope estimation with Staff-level fluency.
+Staff Engineers make architecture decisions based on rough numbers. This chapter gives you orders of magnitude (1K, 1M, 1B, 1T), data sizes (KB to PB), what breaks at each scale level, latency numbers every programmer should know, how to derive QPS from DAU, availability (the nines, composite availability, redundancy), and server capacity. It includes full worked examples for a URL shortener and chat system. By the end, you'll do back-of-the-envelope estimation with Staff-level fluency.
 
 ---
 
@@ -124,11 +124,11 @@ Every distributed system is built from a small set of primitives. This chapter c
 
 ### 1. Fundamentals Aren't Just for Beginners
 
-Staff Engineers who truly understand the basics—what a request is, how scale manifests, what each building block does—make better architecture decisions. The basics compound. Weak fundamentals show up as vague designs and missed trade-offs.
+Staff Engineers who really understand the basics—what a request is, how scale manifests, what each building block does—make better architecture decisions. The basics compound. Weak fundamentals show up as vague designs and missed trade-offs.
 
 ### 2. Numbers Ground Design
 
-"You need to scale" is not a design. "10M DAU × 20 requests/day = ~2.3K QPS average, ~9K peak" is. Numbers transform vague requirements into concrete architecture. Master the estimation formulas.
+"You need to scale" is not a design. "10M DAU × 20 requests/day = ~2.3K QPS average, ~9K peak" is. Numbers turn vague requirements into concrete architecture. Master the estimation formulas.
 
 ### 3. Every System Composes the Same Blocks
 

@@ -61,13 +61,13 @@
 
 # Introduction
 
-Every Staff engineer I've worked with at Google approaches system design interviews the same way—without realizing they do it.
+Every Staff engineer I've worked with at Google approaches system design interviews the same way—without realizing it.
 
-When a Senior engineer is asked to "design a notification system," they often jump straight into components: "We'll need a database, a message queue, some servers..." They're building. When a Staff engineer hears the same prompt, something different happens. They pause. They ask questions. They explore the problem space before touching the solution space.
+When a Senior engineer is asked to "design a notification system," they often jump straight to components: "We'll need a database, a message queue, some servers..." They're building. When a Staff engineer hears the same prompt, something different happens. They pause. They ask questions. They explore the problem before touching the solution.
 
 This isn't hesitation—it's discipline. And it follows a pattern.
 
-Over years of observing Staff engineers design systems (both in interviews and in production), I've codified that pattern into what I call the Staff-Level System Design Framework. It has five phases:
+Over years of watching Staff engineers design systems (in interviews and in production), I've turned that pattern into what I call the Staff-Level System Design Framework. It has five phases:
 
 1. **Users & Use Cases** — Who are we building for, and what are they trying to do?
 2. **Functional Requirements** — What must the system do?
@@ -75,9 +75,9 @@ Over years of observing Staff engineers design systems (both in interviews and i
 4. **Non-Functional Requirements** — What qualities must the system have?
 5. **Assumptions & Constraints** — What are we taking as given, and what limits us?
 
-This section will teach you this framework in depth. We'll explore why each phase matters, how Google Staff engineers use it implicitly, how interviewers evaluate candidates through its lens, and most importantly—how to apply it yourself to transform how you approach system design.
+This section teaches you this framework in depth. We'll look at why each phase matters, how Google Staff engineers use it without thinking, how interviewers judge candidates through it, and how you can use it yourself.
 
-By the end of this section, you'll have a structured mental model that makes system design interviews significantly more tractable. You won't be guessing what to do next. You'll know.
+By the end, you'll have a clear mental model. You won't be guessing what to do next. You'll know.
 
 Let's begin.
 
@@ -87,82 +87,82 @@ Let's begin.
 
 ## The Problem with "Just Design"
 
-When you're an experienced engineer, you've designed a lot of systems. You have intuition. You can look at a problem and see solutions immediately. This intuition is valuable—it's what makes you good at your job.
+When you're an experienced engineer, you've designed a lot of systems. You have intuition. You can look at a problem and see solutions right away. That intuition is valuable—it's what makes you good at your job.
 
-But in Staff-level interviews, this intuition can hurt you.
+But in Staff-level interviews, it can hurt you.
 
-Here's why: Your intuition leads you to *a* solution. Not *the right* solution for this specific context. When you jump to implementation, you're revealing that you don't differentiate between contexts. You treat every problem the same way—with whatever architecture pattern is currently in your head.
+Here's why: Your intuition leads you to *a* solution. Not *the right* solution for this specific context. When you jump to implementation, you show that you don't distinguish between contexts. You treat every problem the same—with whatever architecture pattern is in your head.
 
-Staff engineers think differently. They recognize that the "right" design depends entirely on context:
+Staff engineers think differently. They know the "right" design depends entirely on context:
 - A notification system for 1,000 users is different from one for 100 million users
-- A payment system with 99.99% uptime requirements is different from a social feed with 99% uptime requirements
-- A greenfield system with unlimited budget is different from a migration under resource constraints
+- A payment system with 99.99% uptime is different from a social feed with 99% uptime
+- A new system with unlimited budget is different from a migration with tight resources
 
-Without establishing context first, any design you propose is essentially random—it might fit the problem, or it might not.
+Without context first, any design you propose is basically random—it might fit, or it might not.
 
 ## What a Framework Provides
 
-A structured framework gives you several crucial advantages:
+A structured framework gives you several important advantages:
 
 ### 1. Completeness
 
-Without a framework, you'll miss things. Maybe you'll forget to ask about scale. Maybe you'll assume functional requirements that weren't intended. Maybe you'll optimize for latency when durability was the real concern.
+Without a framework, you'll miss things. Maybe you'll forget to ask about scale. Maybe you'll assume requirements that weren't intended. Maybe you'll optimize for latency when durability was the real concern.
 
-A framework is a checklist. It ensures you cover the ground you need to cover.
+A framework is a checklist. It makes sure you cover what you need to cover.
 
 ### 2. Prioritization
 
-Not all requirements are equal. Some are make-or-break; others are nice-to-have. A framework forces you to identify which is which, so you can allocate your design time appropriately.
+Not all requirements are equal. Some are make-or-break; others are nice-to-have. A framework forces you to tell them apart so you can spend your design time wisely.
 
 ### 3. Communication
 
-When you articulate your framework to the interviewer, you're showing them how you think. You're giving them a map of your approach. This makes you easier to follow—and easier to evaluate positively.
+When you explain your framework to the interviewer, you're showing them how you think. You're giving them a map of your approach. That makes you easier to follow—and easier to rate positively.
 
 ### 4. Flexibility
 
-Paradoxically, structure gives you flexibility. When you've explicitly established requirements, you can explicitly change them. "Earlier we said latency was critical—but if we relax that, we could simplify the design significantly. Is that worth considering?"
+Oddly, structure gives you flexibility. When you've clearly stated requirements, you can clearly change them. "Earlier we said latency was critical—but if we relax that, we could simplify the design a lot. Is that worth considering?"
 
 ### 5. Calibration
 
-A framework helps you avoid two failure modes: over-engineering and under-engineering. By understanding the actual requirements, you design to the right level of complexity.
+A framework helps you avoid two failure modes: over-engineering and under-engineering. By understanding the real requirements, you design at the right level of complexity.
 
 ## Why Senior Engineers Often Skip This
 
-Senior engineers frequently skip the framework phase because:
+Senior engineers often skip the framework phase because:
 
-**They think it's obvious**: "Of course we need a database. Of course we need caching." They treat requirements as background assumptions rather than explicit decisions.
+**They think it's obvious**: "Of course we need a database. Of course we need caching." They treat requirements as background assumptions instead of explicit decisions.
 
-**They want to demonstrate building skills**: They're eager to show they can design complex systems, so they rush to the complex parts.
+**They want to show they can build**: They're eager to prove they can design complex systems, so they rush to the complex parts.
 
-**They feel time pressure**: 45 minutes feels short, so they think they need to start designing immediately.
+**They feel time pressure**: 45 minutes feels short, so they think they need to start designing right away.
 
-**They've internalized patterns**: They've seen enough systems that they pattern-match immediately. "This is a pub-sub system" → default pub-sub architecture.
+**They've internalized patterns**: They've seen enough systems that they pattern-match right away. "This is a pub-sub system" → default pub-sub architecture.
 
-These instincts are understandable but counterproductive. Staff interviews are specifically testing whether you can slow down, establish context, and design for the actual problem—not a generic version of the problem.
+These instincts make sense but they work against you. Staff interviews are testing whether you can slow down, establish context, and design for the actual problem—not a generic one.
 
 ## The Framework as a Contract
 
-Think of the framework phase as establishing a contract with your interviewer.
+Think of the framework phase as making a contract with your interviewer.
 
-Before you design, you're saying: "Here's what I understand we're building, for whom, at what scale, with what quality requirements, under what constraints. Do you agree?"
+Before you design, you're saying: "Here's what I understand we're building, for whom, at what scale, with what quality, under what constraints. Do you agree?"
 
-The interviewer either confirms or corrects. Now you have shared understanding.
+The interviewer either confirms or corrects. Now you're on the same page.
 
-Without this contract, you might design brilliantly—but for the wrong problem. That's not a success; that's a demonstration that you don't validate requirements before building.
+Without this contract, you might design something great—but for the wrong problem. That's not success; that shows you don't validate requirements before building.
 
-At Google, Staff engineers are responsible for ensuring they're solving the right problem. The framework phase is where you demonstrate that capability.
+At Google, Staff engineers are responsible for making sure they're solving the right problem. The framework phase is where you show that.
 
 ---
 
 # Part 2: The Five Phases in Depth
 
-Let me walk through each phase of the framework, explaining what to cover, why it matters, and how to execute it well.
+Let me walk through each phase: what to cover, why it matters, and how to do it well.
 
 ## Phase 1: Users & Use Cases
 
 ### What This Phase Covers
 
-Before you can design a system, you need to understand who will use it and what they're trying to accomplish. This seems obvious, but it's frequently skipped or rushed.
+Before you design a system, you need to know who will use it and what they're trying to do. This seems obvious, but it's often skipped or rushed.
 
 **Key questions to explore:**
 - Who are the users of this system? End users? Internal services? Both?
@@ -174,12 +174,12 @@ Before you can design a system, you need to understand who will use it and what 
 
 ### Why This Phase Matters
 
-Different users have different needs. A notification system for consumers (people checking their phones) has different requirements than a notification system for trading systems (algorithms reacting to market events).
+Different users have different needs. A notification system for consumers (people on their phones) has different requirements than one for trading systems (algorithms reacting to market events).
 
 Understanding users helps you:
-- Prioritize features and capabilities
-- Choose appropriate quality levels
-- Identify the most important flows to optimize
+- Prioritize features
+- Choose the right quality levels
+- Find the most important flows to optimize
 - Anticipate edge cases and failure modes
 
 ### How to Execute This Phase
@@ -198,7 +198,7 @@ Understanding users helps you:
 
 **Identify power users and edge cases:**
 
-"Are there users who will push the system harder than typical? For example, celebrity accounts with millions of followers, or system integrations that generate high volumes?"
+"Are there users who will push the system harder than usual? For example, celebrity accounts with millions of followers, or system integrations that create high volume?"
 
 ### Example Application
 
@@ -206,25 +206,25 @@ Understanding users helps you:
 
 **Poor approach**: "Okay, so we need to match riders with drivers..."
 
-**Staff approach**: "Let me understand the users first. I see at least three user types: riders who want transportation, drivers who provide rides, and potentially internal operations staff who manage the system. For riders, the primary use case is requesting a ride and getting picked up quickly. For drivers, it's receiving ride requests and navigating to pickups. Are there other user types or use cases I should consider?"
+**Staff approach**: "Let me understand the users first. I see at least three user types: riders who want a ride, drivers who provide rides, and maybe internal ops staff who manage the system. For riders, the main use case is requesting a ride and getting picked up quickly. For drivers, it's getting ride requests and navigating to pickups. Are there other user types or use cases I should consider?"
 
 ### Common Mistakes in This Phase
 
 **Mistake 1: Assuming a single user type**
 
-Many systems serve multiple users with different needs. A marketplace serves buyers and sellers. A notification system serves senders and receivers. A data pipeline serves data producers and data consumers.
+Many systems serve multiple users with different needs. A marketplace serves buyers and sellers. A notification system serves senders and receivers. A data pipeline serves producers and consumers.
 
 **Mistake 2: Focusing only on happy-path use cases**
 
-Users also need to cancel, undo, recover from errors, and handle edge cases. These use cases matter too.
+Users also need to cancel, undo, recover from errors, and handle edge cases. Those matter too.
 
 **Mistake 3: Ignoring internal users**
 
-Many systems have internal users (operations, customer support, data science) whose needs differ from external users.
+Many systems have internal users (ops, support, data science) whose needs differ from external users.
 
 **Mistake 4: Not quantifying user behavior**
 
-"Users browse products" is less useful than "Users browse an average of 20 products per session, with sessions lasting about 10 minutes, and 2% of sessions resulting in a purchase."
+"Users browse products" is less useful than "Users browse about 20 products per session, sessions last about 10 minutes, and 2% of sessions lead to a purchase."
 
 ---
 
@@ -232,7 +232,7 @@ Many systems have internal users (operations, customer support, data science) wh
 
 ### What This Phase Covers
 
-Functional requirements describe what the system must do. These are the capabilities and behaviors that define the system's purpose.
+Functional requirements describe what the system must do. These are the capabilities and behaviors that define its purpose.
 
 **Key questions to explore:**
 - What are the core features this system must provide?
@@ -243,12 +243,12 @@ Functional requirements describe what the system must do. These are the capabili
 
 ### Why This Phase Matters
 
-Functional requirements determine the scope of your design. Without clarity here, you might:
+Functional requirements set the scope of your design. Without clarity here, you might:
 - Design for features that weren't required
 - Miss features that were essential
 - Build the wrong abstractions
 
-They also help you identify what's technically interesting. A simple CRUD API is straightforward. A real-time collaborative editor is complex. Knowing which you're building affects everything.
+They also help you see what's technically interesting. A simple CRUD API is straightforward. A real-time collaborative editor is complex. Knowing which you're building changes everything.
 
 ### How to Execute This Phase
 
@@ -265,11 +265,11 @@ Am I missing anything critical?"
 
 **Prioritize ruthlessly:**
 
-"For this interview, I'll focus on requirements 1, 2, and 5—the core sending and receiving flow. I'll acknowledge preferences and history but design them at a high level. Does that prioritization make sense?"
+"For this interview, I'll focus on requirements 1, 2, and 5—the core send and receive flow. I'll acknowledge preferences and history but only design them at a high level. Does that prioritization work?"
 
 **Identify what's NOT in scope:**
 
-"I'm assuming we don't need to build the email or SMS sending infrastructure—we'll integrate with external providers. And I'm assuming authentication is handled by another service. Is that correct?"
+"I'm assuming we don't need to build the email or SMS sending infrastructure—we'll use external providers. And I'm assuming authentication is handled by another service. Is that right?"
 
 ### Example Application
 
@@ -277,7 +277,7 @@ Am I missing anything critical?"
 
 **Poor approach**: "We need to generate short URLs and redirect to long URLs."
 
-**Staff approach**: "Let me enumerate the functional requirements:
+**Staff approach**: "Let me list the functional requirements:
 
 **Core features:**
 1. Create a short URL from a long URL
@@ -293,21 +293,21 @@ Am I missing anything critical?"
 7. List URLs created by a user
 8. Delete or disable a short URL
 
-For this design, I'll focus on 1, 2, and 5 as the core. The others are additions we can discuss if time permits. Does this scope work?"
+For this design, I'll focus on 1, 2, and 5 as the core. The others we can discuss if time permits. Does this scope work?"
 
 ### Common Mistakes in This Phase
 
 **Mistake 1: Being too vague**
 
-"The system should handle notifications" is not a requirement. "Users can send notifications to specific users or broadcast to groups, with delivery across push, email, and SMS channels" is a requirement.
+"The system should handle notifications" is not a requirement. "Users can send notifications to specific users or broadcast to groups, with delivery across push, email, and SMS" is a requirement.
 
 **Mistake 2: Gold-plating**
 
-Adding every possible feature makes your design unfocused. Prioritize ruthlessly. You can always mention nice-to-haves without designing them in detail.
+Adding every possible feature makes your design unfocused. Prioritize ruthlessly. You can mention nice-to-haves without designing them in detail.
 
 **Mistake 3: Not confirming with the interviewer**
 
-State your requirements explicitly and ask if they're correct. The interviewer might have a specific feature in mind that you missed.
+State your requirements clearly and ask if they're correct. The interviewer might have a feature in mind that you missed.
 
 **Mistake 4: Confusing functional with non-functional**
 
@@ -319,7 +319,7 @@ State your requirements explicitly and ask if they're correct. The interviewer m
 
 ### What This Phase Covers
 
-Scale determines the magnitude of the problem. This phase quantifies the load the system must handle.
+Scale is how big the problem is. This phase puts numbers on the load the system must handle.
 
 **Key dimensions to explore:**
 - Number of users (total, daily active, concurrent)
@@ -330,15 +330,15 @@ Scale determines the magnitude of the problem. This phase quantifies the load th
 
 ### Why This Phase Matters
 
-Scale is the single biggest determinant of system architecture.
+Scale is the biggest factor in system architecture.
 
-A system for 1,000 users can run on a single server with a simple database. A system for 100 million users requires distributed systems, caching, sharding, and sophisticated infrastructure.
+A system for 1,000 users can run on a single server with a simple database. A system for 100 million users needs distributed systems, caching, sharding, and more complex infrastructure.
 
-Designing for the wrong scale is a critical failure:
+Designing for the wrong scale is a serious mistake:
 - Under-designing means your system falls over when it hits real load
 - Over-designing means you've built complexity you don't need and can't maintain
 
-Staff engineers calibrate their designs to actual scale—not hypothetical scale, not impressive scale, actual scale.
+Staff engineers match their designs to actual scale—not hypothetical or impressive scale, but real scale.
 
 ### How to Execute This Phase
 
@@ -359,11 +359,11 @@ Do these estimates seem reasonable for what you have in mind?"
 
 **Think about growth:**
 
-"What's the growth trajectory? Are we designing for current scale or anticipating 10x growth? I want to make sure my design has headroom without over-engineering."
+"What's the growth trajectory? Are we designing for current scale or expecting 10x growth? I want to make sure my design has headroom without over-engineering."
 
 **Consider the hard cases:**
 
-"Are there any extreme cases? For example, a celebrity with 50 million followers posting—that's a massive fan-out. Or a viral event causing 100x normal traffic. How much do we need to handle?"
+"Are there any extreme cases? For example, a celebrity with 50 million followers posting—that's a huge fan-out. Or a viral event causing 100x normal traffic. How much do we need to handle?"
 
 ### Quick Reference: Back-of-Envelope Cheat Sheet
 
@@ -399,17 +399,17 @@ Do these estimates seem reasonable for what you have in mind?"
 
 ### Back-of-Envelope Calculations
 
-This is where back-of-envelope math becomes essential. Staff engineers should be comfortable with quick estimations:
+This is where back-of-envelope math matters. Staff engineers should be comfortable with quick estimates:
 
 **Storage calculation example:**
 
 "If we have 100 million users and each user has 1,000 notifications in their history, at 1KB per notification, that's:
 - 100M × 1,000 × 1KB = 100 billion KB = 100TB of notification storage
-- That's substantial but manageable with distributed storage."
+- That's a lot but manageable with distributed storage."
 
 **Throughput calculation example:**
 
-"2,500 notifications/second, at 25,000/second peak:
+"2,500 notifications/second, 25,000/second peak:
 - A single machine can handle maybe 10,000 simple requests/second
 - We need at least 3 machines for peak, probably 10 for redundancy
 - With geographic distribution, maybe 30-50 machines globally"
@@ -452,7 +452,7 @@ This scale tells me we need: distributed messaging, sharded storage, connection 
 
 **Mistake 1: Not asking about scale at all**
 
-This is surprisingly common. Candidates dive into architecture without knowing whether they're building for a startup or for Google-scale.
+This is surprisingly common. Candidates dive into architecture without knowing if they're building for a startup or for Google-scale.
 
 **Mistake 2: Assuming massive scale**
 
@@ -468,7 +468,7 @@ A system designed for today's scale might not survive tomorrow's growth. But a s
 
 **Mistake 5: Forgetting about data scale**
 
-Request volume is obvious, but data volume often determines architecture choices. A system storing petabytes is different from one storing terabytes.
+Request volume is obvious, but data volume often drives architecture. A system storing petabytes is different from one storing terabytes.
 
 ### Staff-Level: First Bottlenecks Over Time
 
@@ -500,7 +500,7 @@ Staff engineers think about *which bottleneck hits first* as the system grows—
 
 ### What This Phase Covers
 
-Non-functional requirements describe the qualities the system must have. While functional requirements are about *what* the system does, non-functional requirements are about *how well* it does it.
+Non-functional requirements describe the qualities the system must have. Functional requirements are about *what* the system does; non-functional requirements are about *how well* it does it.
 
 **Key dimensions to explore:**
 
@@ -522,33 +522,33 @@ Non-functional requirements describe the qualities the system must have. While f
 
 ### Why This Phase Matters
 
-Non-functional requirements drive architectural decisions more than functional requirements do.
+Non-functional requirements drive architectural decisions more than functional requirements.
 
-Consider two notification systems with identical functional requirements:
+Consider two notification systems with the same functional requirements:
 - System A: 99% availability, 1-second latency, eventual consistency acceptable
 - System B: 99.99% availability, 100ms latency, strong consistency required
 
-These are completely different architectures. System A can be simple and forgiving. System B requires redundancy, geographic distribution, careful consistency protocols, and sophisticated monitoring.
+These are completely different architectures. System A can be simple and forgiving. System B needs redundancy, geographic distribution, careful consistency protocols, and solid monitoring.
 
-Without understanding non-functional requirements, you might build System A when System B was needed—or vice versa, wasting effort on unnecessary complexity.
+Without understanding non-functional requirements, you might build System A when System B was needed—or the other way around, wasting effort on unnecessary complexity.
 
 ### How to Execute This Phase
 
 **Availability:**
 
-"What are the availability requirements? Is this a system where an hour of downtime is acceptable, or is it critical infrastructure where even minutes of downtime are catastrophic? For a consumer notification app, I'd expect 99.9% availability—about 8 hours of downtime per year. Is that the right ballpark?"
+"What are the availability requirements? Is an hour of downtime okay, or is this critical infrastructure where even minutes matter? For a consumer notification app, I'd expect 99.9% availability—about 8 hours of downtime per year. Is that the right ballpark?"
 
 **Latency:**
 
-"What latency targets are we designing for? For push notifications, I'd expect users to receive them within a few seconds of sending. For API calls, maybe 200ms P99. Are there specific latency requirements I should know about?"
+"What latency targets are we designing for? For push notifications, I'd expect users to get them within a few seconds of sending. For API calls, maybe 200ms P99. Are there specific latency requirements I should know about?"
 
 **Durability:**
 
-"How important is data durability? Can we ever lose a notification, or is every notification sacred? For consumer notifications, I'd assume some loss is acceptable—better to occasionally miss a notification than to significantly slow down the system. But for financial notifications, we might need stronger guarantees."
+"How important is data durability? Can we ever lose a notification, or is every one critical? For consumer notifications, I'd assume some loss is okay—better to occasionally miss one than to slow down the system a lot. But for financial notifications, we might need stronger guarantees."
 
 **Consistency:**
 
-"Do all users need to see the same state at the same time? For notification read status, eventual consistency is probably fine—if it takes a few seconds for 'read' status to propagate, that's acceptable. But for notification preferences, maybe we need stronger consistency so users don't get notifications they've disabled."
+"Do all users need to see the same state at the same time? For notification read status, eventual consistency is probably fine—if it takes a few seconds for 'read' to propagate, that's okay. But for notification preferences, maybe we need stronger consistency so users don't get notifications they've disabled."
 
 **Security:**
 
@@ -556,14 +556,14 @@ Without understanding non-functional requirements, you might build System A when
 
 ### The Trade-off Awareness
 
-Staff engineers understand that non-functional requirements trade off against each other:
+Staff engineers know that non-functional requirements trade off against each other:
 
-- **Consistency vs. Availability**: Strong consistency often requires sacrificing availability during network partitions (CAP theorem)
+- **Consistency vs. Availability**: Strong consistency often means giving up availability during network partitions (CAP theorem)
 - **Latency vs. Durability**: Waiting for writes to be fully durable adds latency
-- **Availability vs. Cost**: Higher availability requires more redundancy, which costs more
+- **Availability vs. Cost**: Higher availability needs more redundancy, which costs more
 - **Security vs. Usability**: Stronger security often adds friction for users
 
-When clarifying non-functional requirements, be aware of these trade-offs and surface them:
+When clarifying non-functional requirements, be aware of these trade-offs and bring them up:
 
 "You mentioned both strong consistency and high availability. Those can conflict during network partitions. Which should we prioritize if we can't have both?"
 
@@ -581,11 +581,11 @@ When clarifying non-functional requirements, be aware of these trade-offs and su
 
 **Durability**: This is non-negotiable for payments. We cannot lose transaction records. I'd design for 11 nines of durability with multi-region replication.
 
-**Consistency**: Strong consistency required. We cannot have a payment succeed in one view and fail in another. ACID transactions essential.
+**Consistency**: Strong consistency required. We cannot have a payment succeed in one view and fail in another. ACID transactions are essential.
 
 **Compliance**: PCI-DSS is mandatory for handling card data. This constrains how we store data, who can access it, and our audit requirements.
 
-These requirements tell me this is a high-stakes system requiring significant infrastructure investment, redundancy, and careful design. We can't take shortcuts here."
+These requirements tell me this is a high-stakes system that needs significant infrastructure, redundancy, and careful design. We can't take shortcuts here."
 
 ### Common Mistakes in This Phase
 
@@ -603,11 +603,11 @@ Asking for strong consistency, high availability, low latency, AND perfect durab
 
 **Mistake 4: Assuming highest standards everywhere**
 
-Not every system needs 99.99% availability. An internal dashboard might be fine with 99%. Calibrate to actual needs.
+Not every system needs 99.99% availability. An internal dashboard might be fine with 99%. Match your design to actual needs.
 
 **Mistake 5: Forgetting security and compliance**
 
-These are often afterthoughts, but they significantly constrain architecture, especially for financial, healthcare, or user data systems.
+These are often afterthoughts, but they heavily constrain architecture, especially for financial, healthcare, or user data systems.
 
 ---
 
@@ -615,7 +615,7 @@ These are often afterthoughts, but they significantly constrain architecture, es
 
 ### What This Phase Covers
 
-This phase makes explicit the things you're taking for granted and the boundaries you're operating within.
+This phase makes clear what you're taking for granted and the boundaries you're working within.
 
 **Assumptions** are things you believe to be true that you're not designing for:
 - "I assume authentication is handled by a separate service."
@@ -630,16 +630,16 @@ This phase makes explicit the things you're taking for granted and the boundarie
 
 ### Why This Phase Matters
 
-Assumptions and constraints bound the problem. They prevent you from:
+Assumptions and constraints define the problem. They stop you from:
 - Re-solving already-solved problems (authentication, logging, monitoring)
-- Proposing solutions that are infeasible given constraints
+- Proposing solutions that won't work given the constraints
 - Designing in a vacuum without organizational context
 
 They also make your design defensible. If someone later asks "Why didn't you design for X?", you can point to your stated assumptions.
 
 ### How to Execute This Phase
 
-**State your assumptions explicitly:**
+**State your assumptions clearly:**
 
 "I'm going to make a few assumptions—please correct me if any are wrong:
 1. We have existing authentication and authorization services I can integrate with
@@ -661,9 +661,9 @@ With those assumptions, I don't need to design those pieces—I can focus on the
 
 **Surface hidden constraints:**
 
-Sometimes constraints are implied rather than stated. If the interviewer mentions "a small startup," that implies limited resources. If they mention "a legacy migration," that implies integration requirements.
+Sometimes constraints are implied rather than stated. If the interviewer says "a small startup," that implies limited resources. If they say "a legacy migration," that implies integration requirements.
 
-"You mentioned this is for a startup. That suggests we should favor simple, low-operational-overhead solutions over complex distributed systems, even if we sacrifice some theoretical scalability. Is that the right trade-off?"
+"You mentioned this is for a startup. That suggests we should favor simple, low-overhead solutions over complex distributed systems, even if we give up some theoretical scalability. Is that the right trade-off?"
 
 ### Example Application
 
@@ -692,7 +692,7 @@ Sometimes constraints are implied rather than stated. If the interviewer mention
 
 **Mistake 1: Not stating assumptions**
 
-When you don't state assumptions, the interviewer can't correct them. You might design based on incorrect beliefs.
+When you don't state assumptions, the interviewer can't correct them. You might design based on wrong beliefs.
 
 **Mistake 2: Making unrealistic assumptions**
 
@@ -712,7 +712,7 @@ Assumptions made early might not hold as you design. Check back: "I assumed even
 
 ### Cost as a First-Class Constraint (L6)
 
-Staff engineers treat cost as a design constraint, not an afterthought. At scale, cost often becomes the dominant constraint—before latency or availability.
+Staff engineers treat cost as a design constraint, not an afterthought. At scale, cost often becomes the main constraint—before latency or availability.
 
 **Major cost drivers by system type:**
 
@@ -726,7 +726,7 @@ Staff engineers treat cost as a design constraint, not an afterthought. At scale
 
 **Interview phrase**: "What's the cost budget for this system? At 70K notifications/second with 1-year retention, we're looking at roughly 200TB storage and significant compute for fan-out. If cost is a first-class constraint, I'd consider: tiered retention (90 days hot, 1 year cold), aggregation to reduce notification count, and shedding analytics features from the critical path. If we don't have a cost constraint, I'd design for maximum reliability first."
 
-**Trade-off**: Optimizing for cost often means accepting degraded latency (cold storage), eventual consistency (fewer replicas), or reduced features (no long-term analytics). Staff engineers make this trade-off explicit and tie it to business priorities.
+**Trade-off**: Optimizing for cost often means accepting worse latency (cold storage), eventual consistency (fewer replicas), or fewer features (no long-term analytics). Staff engineers make this trade-off clear and tie it to business priorities.
 
 ### Cross-Team & Org Impact (L6)
 
@@ -746,7 +746,7 @@ Staff engineers frame requirements in terms of *who else is affected*—not just
 
 # Part 3: How Google Staff Engineers Use This Framework Implicitly
 
-Walk into any design review at Google, and you'll hear Staff engineers ask the same questions—without referencing any formal framework. They've internalized the pattern through experience. Let me show you what this looks like in practice.
+Walk into any design review at Google, and you'll hear Staff engineers ask the same questions—without referencing any formal framework. They've internalized the pattern through experience. Here's what that looks like in practice.
 
 ## The Instinctive Clarification
 
@@ -769,7 +769,7 @@ Staff engineers don't treat all requirements as equal. They negotiate priorities
 
 **Product Manager**: "We need this to be really fast, super reliable, and cost-effective."
 
-**Staff Engineer**: "Those three can tension against each other. Let me understand the priorities:
+**Staff Engineer**: "Those three can work against each other. Let me understand the priorities:
 - If we had to choose between faster delivery and lower cost, which wins?
 - If we had to choose between reliability and speed, which wins?
 
@@ -816,15 +816,15 @@ Staff engineers connect decisions to requirements throughout the design.
 
 **Not this**: "I chose Kafka for the message queue."
 
-**But this**: "I chose Kafka because we established that we need to handle 100K messages/second with the ability to replay in case of consumer failures. Kafka gives us the throughput we need and native replay capability. If we didn't need replay, RabbitMQ would be simpler to operate. If we didn't need this throughput, we could use a simple database queue. The specific requirements drove this choice."
+**But this**: "I chose Kafka because we established that we need to handle 100K messages/second with the ability to replay in case of consumer failures. Kafka gives us the throughput we need and native replay. If we didn't need replay, RabbitMQ would be simpler to operate. If we didn't need this throughput, we could use a simple database queue. The specific requirements drove this choice."
 
-Every decision references back to the requirements established in the framework phases.
+Every decision ties back to the requirements from the framework phases.
 
 ---
 
 # Part 4: How This Framework Differs from Senior (L5) Approaches
 
-Understanding the difference between Senior and Staff approaches helps you calibrate your own behavior. Let me contrast them phase by phase.
+Understanding the difference between Senior and Staff approaches helps you calibrate your own behavior. Here's the contrast phase by phase.
 
 ## Phase 1: Users & Use Cases
 
@@ -868,9 +868,9 @@ Understanding the difference between Senior and Staff approaches helps you calib
 
 ## The Overall Difference
 
-**Senior engineers** treat the framework phases as a checklist they know they "should" do. They ask the right questions, but sometimes mechanically. The requirements-gathering feels like a warm-up before the "real" design work.
+**Senior engineers** treat the framework phases as a checklist they know they "should" do. They ask the right questions, but sometimes mechanically. Requirements-gathering feels like a warm-up before the "real" design work.
 
-**Staff engineers** treat the framework phases as the foundation of the design. The requirements aren't just gathered—they're analyzed, prioritized, and used to drive every subsequent decision. A Staff engineer would say: "The requirements we established tell us this MUST be a distributed system" or "Given the constraints we identified, the simple approach is actually appropriate."
+**Staff engineers** treat the framework phases as the foundation of the design. The requirements aren't just gathered—they're analyzed, prioritized, and used to drive every decision. A Staff engineer would say: "The requirements we established tell us this MUST be a distributed system" or "Given the constraints we identified, the simple approach is actually right."
 
 The framework isn't a box to check—it's a lens through which all design decisions are filtered.
 
@@ -878,7 +878,7 @@ The framework isn't a box to check—it's a lens through which all design decisi
 
 # Part 5: How Interviewers Evaluate Candidates Using This Framework
 
-Google interviewers are trained to assess specific signals. Understanding their rubric helps you demonstrate the right behaviors.
+Google interviewers are trained to look for specific signals. Understanding their rubric helps you show the right behaviors.
 
 ## What Interviewers Look For in Each Phase
 
@@ -975,19 +975,19 @@ A candidate who presents their design as optimal without acknowledging trade-off
 
 **"Would I trust this candidate to own a significant project?"**
 
-Staff engineers own projects—meaning they ensure the right thing gets built, not just that something gets built. The framework phases demonstrate this ownership mindset.
+Staff engineers own projects—meaning they make sure the right thing gets built, not just that something gets built. The framework phases show this ownership mindset.
 
 ---
 
 # Part 6: Mental Models for Each Phase
 
-Mental models are thinking tools. Here are models that help in each phase of the framework.
+Mental models are thinking tools. Here are models that help in each phase.
 
 ## Phase 1: Users & Use Cases
 
 ### The Stakeholder Map
 
-Visualize all the people and systems that interact with your system:
+Picture all the people and systems that interact with your system:
 - **Primary users**: The main people using the system
 - **Secondary users**: People who use it less frequently but have important needs
 - **Internal users**: Operations, support, analytics teams
@@ -1008,7 +1008,7 @@ This framing surfaces deeper requirements: personalization, preference managemen
 
 ### The MVP Concentric Circles
 
-Visualize requirements as concentric circles:
+Picture requirements as concentric circles:
 - **Core** (innermost): Must have these for the system to function at all
 - **Important**: Should have these for the system to be useful
 - **Nice-to-have**: Would be good but can be added later
@@ -1041,7 +1041,7 @@ Think about scale in orders of magnitude:
 - 10^9 (1,000,000,000): Needs sharding, distributed systems
 - 10^12 (1,000,000,000,000): Needs specialized infrastructure, custom solutions
 
-What order of magnitude are you designing for? Each level up requires fundamentally different approaches.
+What order of magnitude are you designing for? Each level up needs fundamentally different approaches.
 
 ### The Bottleneck Hunt
 
@@ -1060,13 +1060,13 @@ Current scale tells you what works today. Growth rate tells you when it breaks:
 - If you're at 50% of capacity and growing 10%/month, you have about 7 months before crisis
 - If you're at 50% of capacity and growing 100%/month, you have about 1 month
 
-"Capacity" isn't just servers—it's also team ability to maintain complexity, budget for infrastructure, and debt in the codebase.
+"Capacity" isn't just servers—it's also the team's ability to maintain complexity, budget for infrastructure, and debt in the codebase.
 
 ## Phase 4: Non-Functional Requirements
 
 ### The SLA Pyramid
 
-Visualize non-functional requirements as a pyramid where violations are increasingly severe:
+Picture non-functional requirements as a pyramid where violations get more severe as you go up:
 - **Bottom**: Performance (things are slow but work)
 - **Middle**: Availability (things are down but recoverable)
 - **Top**: Durability (data is lost permanently)
@@ -1097,7 +1097,7 @@ Know what level you're designing for and what it costs.
 
 ### The Dependency Web
 
-Visualize what your system depends on:
+Picture what your system depends on:
 - What infrastructure must exist for your system to work?
 - What other systems do you integrate with?
 - What team capabilities do you assume?
@@ -1113,7 +1113,7 @@ Not all constraints are equally fixed:
 - **Negotiable**: Timeline, scope, technology choices
 - **Soft**: Best practices, past decisions, preferences
 
-Know which constraints are truly fixed and which might have flexibility.
+Know which constraints are truly fixed and which might be flexible.
 
 ### The Build vs. Buy Matrix
 
@@ -1127,7 +1127,7 @@ Your assumptions about what's available (internal services, external tools) shap
 
 # Part 7: End-to-End Example
 
-Let me walk through a complete example applying the framework.
+Here's a complete example applying the framework.
 
 ## The Problem
 
@@ -1143,7 +1143,7 @@ Let me walk through a complete example applying the framework.
 - "What are the primary use cases? I'm thinking: social interactions (someone liked your post), content updates (someone you follow posted), and system messages (security alerts, announcements). Are there others?"
 - "Are there internal users? Operations monitoring delivery rates, customer support looking up specific notifications?"
 
-**After clarification**: "So we're building for a consumer social platform. Users send notifications through actions (like, comment, follow), and users receive notifications on mobile (push) and in-app. There's also an operations team that needs visibility into delivery health. Primary use case is social interactions—that's 80% of notification volume."
+**After clarification**: "So we're building for a consumer social platform. Users send notifications through actions (like, comment, follow), and users receive them on mobile (push) and in-app. There's also an operations team that needs visibility into delivery health. The main use case is social interactions—that's 80% of notification volume."
 
 ## Phase 2: Functional Requirements
 
@@ -1162,11 +1162,11 @@ Let me walk through a complete example applying the framework.
 6. Analytics (open rates, engagement)
 7. Scheduling (send at optimal times)
 
-For this design, I'll focus on core requirements 1-3 and address #4 (preferences) at the data model level. I'll mention #5 (aggregation) but not design it in detail. Does this scope work?"
+For this design, I'll focus on core requirements 1-3 and address #4 (preferences) at the data model level. I'll mention #5 (aggregation) but won't design it in detail. Does this scope work?"
 
 ## Phase 3: Scale
 
-**My estimation**: "Let me understand the scale:
+**My estimation**: "Let me figure out the scale:
 - How many users? Let's say 100 million monthly active, 30 million daily active
 - Notification volume: Average user generates maybe 5 notifications/day (posting once, liking 4 things). Average user receives maybe 20 notifications/day
 - That's 150 million sent and 600 million delivered per day
@@ -1177,19 +1177,19 @@ For storage:
 - 600 million notifications/day × 365 days × 1KB = 220TB/year if we keep a year of history
 - That's substantial but manageable
 
-This scale tells me we need distributed message processing and horizontally scalable storage. A single database won't handle this."
+This scale tells me we need distributed message processing and horizontally scalable storage. A single database won't cut it."
 
 ## Phase 4: Non-Functional Requirements
 
-**My probing**: "Let me understand the quality requirements:
+**My probing**: "Let me figure out the quality requirements:
 
-**Availability**: I'd target 99.9%—8 hours of downtime per year maximum. Missing a notification is annoying but not catastrophic for a social app. Does that match your expectations?
+**Availability**: I'd target 99.9%—8 hours of downtime per year max. Missing a notification is annoying but not catastrophic for a social app. Does that match your expectations?
 
 **Latency**: For push notifications, I'd target 95% delivered within 5 seconds of the triggering action. For in-app history, I'd target 200ms P99 to load. Does that seem right?
 
-**Durability**: I'd say notifications are important but not sacred. We shouldn't lose them routinely, but if 0.01% of notifications are lost due to system issues, that's acceptable. We're not dealing with financial transactions.
+**Durability**: I'd say notifications are important but not sacred. We shouldn't lose them routinely, but if 0.01% are lost due to system issues, that's acceptable. We're not dealing with financial transactions.
 
-**Consistency**: Eventual consistency is fine. If it takes a few seconds for 'notification read' status to propagate across devices, that's acceptable.
+**Consistency**: Eventual consistency is fine. If it takes a few seconds for 'notification read' status to propagate across devices, that's okay.
 
 **Security**: Notifications can contain user-generated content, so we need standard content moderation. Personal notifications should only be visible to the recipient."
 
@@ -1207,7 +1207,7 @@ Are there specific constraints?
 - Are there technology mandates or preferences?
 - What's the team situation—new team or existing team with relevant expertise?"
 
-**After clarification**: "Understood. This is greenfield for the notification system, but we need to consume events from existing services via our standard Kafka infrastructure. The team is small—3 engineers—so operational simplicity is valuable."
+**After clarification**: "Got it. This is greenfield for the notification system, but we need to consume events from existing services via our standard Kafka infrastructure. The team is small—3 engineers—so operational simplicity matters."
 
 ## Summary Before Designing
 
@@ -1235,7 +1235,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: Celebrity fan-out (1 post → 10 million notifications) is a completely different scaling challenge than regular users
 
-**Fix**: Always ask "Are there user segments with significantly different behaviors or needs?"
+**Fix**: Always ask "Are there user segments with very different behaviors or needs?"
 
 ---
 
@@ -1243,7 +1243,7 @@ With this foundation, let me design the system..."
 
 **Example**: Designing the API only for end users, not for operations or support teams
 
-**Why it matters**: Operations needs monitoring endpoints, support needs debugging tools, analytics needs data access
+**Why it matters**: Ops needs monitoring endpoints, support needs debugging tools, analytics needs data access
 
 **Fix**: Explicitly list internal users and their needs alongside external users
 
@@ -1253,7 +1253,7 @@ With this foundation, let me design the system..."
 
 **Example**: Focusing on "user receives notification" without considering "user wants to stop receiving notifications" or "user missed notifications and wants to catch up"
 
-**Why it matters**: These edge cases often drive significant design decisions (preference storage, history depth)
+**Why it matters**: These edge cases often drive big design decisions (preference storage, history depth)
 
 **Fix**: For each happy path, ask "What's the opposite? What's the error case? What's the recovery?"
 
@@ -1265,7 +1265,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: Time is limited; focus on what matters most
 
-**Fix**: Explicitly categorize requirements into core/important/nice-to-have and allocate effort accordingly
+**Fix**: Explicitly categorize requirements into core/important/nice-to-have and spend effort accordingly
 
 ---
 
@@ -1275,7 +1275,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: You'll run out of time before covering anything well
 
-**Fix**: State your scope explicitly: "I'm focusing on X, acknowledging Y, deferring Z"
+**Fix**: State your scope clearly: "I'm focusing on X, acknowledging Y, deferring Z"
 
 ---
 
@@ -1283,9 +1283,9 @@ With this foundation, let me design the system..."
 
 **Example**: Starting to design without confirming what the system should do
 
-**Why it matters**: The interviewer might have different expectations; implicit misalignment wastes time
+**Why it matters**: The interviewer might have different expectations; misalignment wastes time
 
-**Fix**: Always enumerate requirements and confirm alignment before designing
+**Fix**: Always list requirements and confirm alignment before designing
 
 ## Phase 3: Scale Mistakes
 
@@ -1293,9 +1293,9 @@ With this foundation, let me design the system..."
 
 **Example**: Designing an architecture without knowing if it's for 1,000 or 100 million users
 
-**Why it matters**: Scale determines architecture; wrong scale assumptions mean wrong architecture
+**Why it matters**: Scale drives architecture; wrong scale assumptions mean wrong architecture
 
-**Fix**: Always ask about scale, or estimate explicitly and confirm
+**Fix**: Always ask about scale, or estimate clearly and confirm
 
 ---
 
@@ -1305,7 +1305,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: Complexity has costs; premature optimization wastes resources
 
-**Fix**: Design for current scale + expected growth, not infinite theoretical scale
+**Fix**: Design for current scale plus expected growth, not infinite theoretical scale
 
 ---
 
@@ -1335,7 +1335,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: These properties trade off; claiming all of them suggests you don't understand the trade-offs
 
-**Fix**: Acknowledge trade-offs explicitly: "I'm prioritizing X over Y because..."
+**Fix**: Acknowledge trade-offs clearly: "I'm prioritizing X over Y because..."
 
 ---
 
@@ -1345,7 +1345,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: Compliance requirements can fundamentally change architecture
 
-**Fix**: Ask about regulatory requirements for any system handling sensitive data
+**Fix**: Ask about regulatory requirements for any system that handles sensitive data
 
 ## Phase 5: Assumptions & Constraints Mistakes
 
@@ -1365,7 +1365,7 @@ With this foundation, let me design the system..."
 
 **Why it matters**: The best technical solution might be wrong if the team can't implement or maintain it
 
-**Fix**: Ask about team skills, existing infrastructure, and organizational preferences
+**Fix**: Ask about team skills, existing infrastructure, and org preferences
 
 ---
 
@@ -1373,7 +1373,7 @@ With this foundation, let me design the system..."
 
 **Example**: Accepting a 2-week deadline without exploring whether it could be extended
 
-**Why it matters**: Some constraints are negotiable; understanding which ones helps you make better trade-offs
+**Why it matters**: Some constraints are negotiable; knowing which ones helps you make better trade-offs
 
 **Fix**: Probe constraints: "Is this fixed, or is there flexibility if we can justify it?"
 
@@ -1490,7 +1490,7 @@ With this foundation, let me design the system..."
 
 # Part 9: Failure Requirements—The Missing Phase (L6 Gap Coverage)
 
-This section addresses a critical dimension of Staff-level requirements gathering: **explicitly gathering requirements about failure modes, degradation behavior, and recovery expectations**.
+This section covers a critical part of Staff-level requirements gathering: **explicitly gathering requirements about failure modes, degradation behavior, and recovery expectations**.
 
 Senior engineers focus on what the system should do when it works. Staff engineers also establish what the system should do when things go wrong.
 
@@ -1498,7 +1498,7 @@ Senior engineers focus on what the system should do when it works. Staff enginee
 
 ## Why Failure Requirements Matter at L6
 
-Most requirements-gathering frameworks focus on functional and non-functional requirements during normal operation. But Staff engineers know that systems spend significant time in degraded states.
+Most requirements-gathering frameworks focus on functional and non-functional requirements during normal operation. But Staff engineers know that systems spend a lot of time in degraded states.
 
 ### The Failure Requirements Test
 
@@ -1561,7 +1561,7 @@ I'm recommending Option B—critical notifications like 2FA and fraud alerts sho
 - Duplicate notification: Mildly annoying but acceptable for all types
 - Delayed notification: Acceptable up to 5 minutes for social, unacceptable for time-sensitive (2FA expires)
 
-This tells me we need different reliability guarantees for different notification types—not a one-size-fits-all approach."
+This tells me we need different reliability guarantees for different notification types—not one size fits all."
 
 ### 3. Recovery Requirements
 
@@ -1576,7 +1576,7 @@ This tells me we need different reliability guarantees for different notificatio
 - RPO: Notifications generated during outage should be delivered after recovery (no loss)
 - Backlog processing: Spread over 30 minutes to avoid thundering herd
 
-This tells me we need durable message storage and controlled replay capability."
+This tells me we need durable message storage and controlled replay."
 
 ---
 
@@ -1641,13 +1641,13 @@ The five phases now look like:
 - If one payment processor (Visa) is down, should we fail all transactions or only Visa transactions?
 - If our database is slow, should we fail all transactions or degrade to a simplified flow?
 
-These answers will significantly shape the architecture. A system that can never lose transactions needs different infrastructure than one that can occasionally delay them."
+These answers will heavily shape the architecture. A system that can never lose transactions needs different infrastructure than one that can occasionally delay them."
 
 ---
 
 # Real Incident: Cascading Notification Storm
 
-A structured production incident illustrates why the framework—especially failure requirements and scale—matters.
+A real production incident shows why the framework—especially failure requirements and scale—matters.
 
 | Part | Content |
 |------|---------|
@@ -1664,13 +1664,13 @@ A structured production incident illustrates why the framework—especially fail
 
 # Part 10: Requirements-to-Architecture Mapping
 
-This section addresses how requirements drive specific architectural decisions. Staff engineers don't just gather requirements—they trace each requirement to its architectural implication.
+This section covers how requirements drive specific architectural decisions. Staff engineers don't just gather requirements—they trace each requirement to its architectural implication.
 
 ---
 
 ## The Requirements-Decision Chain
 
-Every architectural decision should trace back to a requirement. If you can't explain why a design choice exists in terms of requirements, it's potentially unnecessary complexity.
+Every architectural decision should trace back to a requirement. If you can't explain why a design choice exists in terms of requirements, it might be unnecessary complexity.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1708,7 +1708,7 @@ Every architectural decision should trace back to a requirement. If you can't ex
 
 ## Concrete Example: Notification System Requirements-to-Architecture
 
-Let me show how each requirement from our notification system example drives specific architectural decisions.
+Here's how each requirement from our notification system example drives specific architectural decisions.
 
 ### Requirement: "30M DAU, 7K notifications/second"
 
@@ -1717,8 +1717,8 @@ Let me show how each requirement from our notification system example drives spe
 - Single server won't handle connection load → Need connection server fleet
 - Can't fan-out synchronously → Need async processing pipeline
 
-**What I'd say in interview**:
-"At 7K notifications/second, a single database can't handle the write load. I'm introducing a message queue—Kafka—to decouple ingestion from processing. This also gives us replay capability for failure recovery, which addresses our durability requirement."
+**What I'd say in an interview**:
+"At 7K notifications/second, a single database can't handle the write load. I'm introducing a message queue—Kafka—to decouple ingestion from processing. This also gives us replay for failure recovery, which addresses our durability requirement."
 
 ### Requirement: "99.9% availability"
 
@@ -1727,7 +1727,7 @@ Let me show how each requirement from our notification system example drives spe
 - Need automated health checks and failover → Load balancers with health probes
 - Need to handle partial failures → Circuit breakers between services
 
-**What I'd say in interview**:
+**What I'd say in an interview**:
 "99.9% availability means 8 hours of downtime per year. To achieve this, I'm designing with no single points of failure. Every service has at least 3 replicas. The message queue has replication factor 3. The database has a hot standby with automatic failover."
 
 ### Requirement: "5-second delivery P95"
@@ -1737,8 +1737,8 @@ Let me show how each requirement from our notification system example drives spe
 - Can't have long queues → Need horizontal scaling with low queue depth
 - Need to prioritize → Separate queues for priority levels
 
-**What I'd say in interview**:
-"5-second P95 delivery means we can't batch notifications. I'm designing a streaming pipeline where each notification is processed immediately. To handle the 10x peak (70K/sec), the processing tier auto-scales based on queue depth, targeting <1 second queue wait time."
+**What I'd say in an interview**:
+"5-second P95 delivery means we can't batch notifications. I'm designing a streaming pipeline where each notification is processed immediately. To handle the 10x peak (70K/sec), the processing tier auto-scales based on queue depth, targeting under 1 second queue wait time."
 
 ### Requirement: "Eventual consistency acceptable"
 
@@ -1747,8 +1747,8 @@ Let me show how each requirement from our notification system example drives spe
 - Can use caching aggressively → Better read performance
 - Can tolerate temporary inconsistency → Simpler architecture
 
-**What I'd say in interview**:
-"Since eventual consistency is acceptable, I can use async replication for the notification database, which gives us lower write latency. Read status might be slightly stale across devices for a few seconds, but that's acceptable for this use case. If we needed strong consistency, I'd need synchronous replication, which would add latency."
+**What I'd say in an interview**:
+"Since eventual consistency is acceptable, I can use async replication for the notification database, which gives us lower write latency. Read status might be slightly stale across devices for a few seconds, but that's okay for this use case. If we needed strong consistency, I'd need synchronous replication, which would add latency."
 
 ### Requirement: "Critical notifications (2FA) must have higher reliability"
 
@@ -1757,8 +1757,8 @@ Let me show how each requirement from our notification system example drives spe
 - Need different SLAs → Dedicated capacity for critical path
 - Need different failure handling → Fail-safe for critical, best-effort for regular
 
-**What I'd say in interview**:
-"The requirement for different reliability levels means I can't have a one-size-fits-all pipeline. I'm splitting into two paths: a critical path for 2FA/security notifications with dedicated capacity and stricter delivery guarantees, and a standard path for social notifications that can shed load during peaks."
+**What I'd say in an interview**:
+"The requirement for different reliability levels means I can't have one pipeline for everything. I'm splitting into two paths: a critical path for 2FA/security notifications with dedicated capacity and stricter delivery guarantees, and a standard path for social notifications that can shed load during peaks."
 
 ---
 
@@ -1776,17 +1776,17 @@ The trade-off I'm accepting is [COST/DOWNSIDE], which is acceptable because [REQ
 
 **Example**:
 
-"I'm choosing Kafka over a simpler queue like RabbitMQ because our requirement for replay capability during failure recovery. 
+"I'm choosing Kafka over a simpler queue like RabbitMQ because of our requirement for replay during failure recovery.
 
 The alternative would be RabbitMQ, which would be simpler to operate if we didn't need replay.
 
-The trade-off I'm accepting is operational complexity. Kafka requires more expertise to run. This is acceptable because we have a dedicated platform team and the replay capability is essential for our durability requirements."
+The trade-off I'm accepting is operational complexity. Kafka requires more expertise to run. This is acceptable because we have a dedicated platform team and replay is essential for our durability requirements."
 
 ---
 
 # Part 11: Requirements Evolution
 
-Requirements aren't static. Staff engineers understand that requirements change as systems scale, as users evolve, and as business needs shift.
+Requirements aren't static. Staff engineers know that requirements change as systems scale, users evolve, and business needs shift.
 
 ---
 
@@ -1833,7 +1833,7 @@ Requirements aren't static. Staff engineers understand that requirements change 
 | Durability | Best-effort | Social notifications, loss acceptable |
 | Team | 2 engineers | Startup mode |
 
-**V1 Architecture Implications**:
+**V1 Architecture**:
 - Single region, simple infrastructure
 - Synchronous processing acceptable
 - Single database, no sharding
@@ -1849,7 +1849,7 @@ Requirements aren't static. Staff engineers understand that requirements change 
 | Durability | At-least-once for all | Premium users paying |
 | Team | 6 engineers | Can handle more complexity |
 
-**V2 Architecture Implications**:
+**V2 Architecture**:
 - Need message queue for async processing
 - Need database sharding or NoSQL
 - Need multi-AZ redundancy
@@ -1865,7 +1865,7 @@ Requirements aren't static. Staff engineers understand that requirements change 
 | Durability | Exactly-once for payments | Financial notifications added |
 | Team | 15 engineers | Dedicated platform team |
 
-**V3 Architecture Implications**:
+**V3 Architecture**:
 - Multi-region deployment
 - Separate critical and standard paths
 - Sophisticated traffic management
@@ -1873,7 +1873,7 @@ Requirements aren't static. Staff engineers understand that requirements change 
 
 ### Staff-Level Requirements Evolution Thinking
 
-**What I'd say in interview**:
+**What I'd say in an interview**:
 
 "Before I design, I want to understand where we are in the product lifecycle. The right architecture for V1 (1M users, early product) is very different from V3 (300M users, critical infrastructure).
 
@@ -1988,7 +1988,7 @@ When evaluating requirements gathering, interviewers ask themselves:
 
 ### The Mistake
 
-Strong L5 engineers often treat requirements gathering as a checklist to complete before the "real" design work. They ask the right questions but don't use the answers to drive architectural decisions.
+Strong L5 engineers often treat requirements gathering as a checklist to complete before the "real" design work. They ask the right questions but don't use the answers to drive design decisions.
 
 **L5 Pattern**:
 ```
@@ -2027,7 +2027,7 @@ Staff engineers translate technical rigor into business language:
 - "The framework is a contract: we agree on what we're building before we design. That alignment reduces surprises and scope creep."
 - "We also establish what happens when things fail. Most systems break in production because we only designed for the happy path."
 
-**Avoid**: Don't present the five phases as a process. Present the *outcome*: shared understanding, prioritized scope, and explicit trade-offs.
+**Avoid**: Don't present the five phases as a process. Present the *outcome*: shared understanding, prioritized scope, and clear trade-offs.
 
 ---
 
@@ -2043,7 +2043,7 @@ When mentoring engineers on the framework:
 
 **4. Correct the checklist trap**: When they ask "What are the 5 phases?" and recite them, ask: "Now, how does each phase drive your next design decision?" If they can't connect requirements to architecture, they're still at L5.
 
-**5. Inject failure**: Give them a prompt and then say "The database just went down. What happens to your design?" Force them to think about failure requirements.
+**5. Inject failure**: Give them a prompt and then say "The database just went down. What happens to your design?" Make them think about failure requirements.
 
 ---
 
@@ -2051,9 +2051,9 @@ When mentoring engineers on the framework:
 
 ## Final Statement
 
-**This chapter now meets Google Staff Engineer (L6) expectations.**
+**This chapter meets Google Staff Engineer (L6) expectations.**
 
-The document provides comprehensive coverage of the System Design Framework with Staff-level depth: 5-phase structure, failure requirements, cost and cross-team impact, requirements-to-architecture mapping, evolution thinking, and a structured real incident. All L6 dimensions (A–J) are addressed.
+The document provides full coverage of the System Design Framework with Staff-level depth: 5-phase structure, failure requirements, cost and cross-team impact, requirements-to-architecture mapping, evolution thinking, and a structured real incident. All L6 dimensions (A–J) are addressed.
 
 ---
 
@@ -2132,7 +2132,7 @@ The document provides comprehensive coverage of the System Design Framework with
 
 ## Self-Assessment
 
-1. When you hear a new design problem, what's your instinctive first action—do you start solving, or do you start understanding?
+1. When you hear a new design problem, what's your first instinct—do you start solving, or do you start understanding?
 
 2. Can you list five different types of users for a system you've built? (If you can't, you might be missing important perspectives.)
 
@@ -2142,13 +2142,13 @@ The document provides comprehensive coverage of the System Design Framework with
 
 5. What's the highest availability system you've worked on? What design patterns made that availability possible?
 
-6. What assumptions are you making right now about your current work that you've never stated explicitly?
+6. What assumptions are you making right now about your current work that you've never stated out loud?
 
 ## Framework Application
 
 7. Pick a system you know well. Walk through all five phases of the framework for it. What new insights emerge?
 
-8. For your current project, can you articulate the non-functional requirements in quantitative terms? (Not "high availability" but "99.9% availability"?)
+8. For your current project, can you state the non-functional requirements in numbers? (Not "high availability" but "99.9% availability"?)
 
 9. What are the constraints on your current project? Which are truly fixed vs. potentially negotiable?
 
@@ -2156,7 +2156,7 @@ The document provides comprehensive coverage of the System Design Framework with
 
 ## Interview Preparation
 
-11. Practice introducing yourself to a framework: "Before I design, I want to understand..." What are the first three questions you'd ask for any problem?
+11. Practice introducing the framework: "Before I design, I want to understand..." What are the first three questions you'd ask for any problem?
 
 12. Practice scoping: For a notification system, how would you divide requirements into core/important/nice-to-have?
 
@@ -2196,7 +2196,7 @@ Practice one back-of-envelope calculation daily for a week. Track your confidenc
 
 ## Reflection 3: Your Trade-off Reasoning
 
-Examine how you make trade-off decisions.
+Look at how you make trade-off decisions.
 
 - Do you make trade-offs explicitly or implicitly?
 - When was the last time you documented a trade-off decision?
@@ -2222,7 +2222,7 @@ Goal: The framework phase should become natural and take 5-10 minutes.
 
 ## Exercise 2: The Scale Calibration
 
-Choose five different system types:
+Pick five different system types:
 - Personal project (you and a few friends)
 - Startup MVP (1,000 users)
 - Growing startup (100,000 users)
@@ -2234,7 +2234,7 @@ For each scale:
 - What's the team size to build and maintain it?
 - What's the infrastructure cost (order of magnitude)?
 
-Goal: Develop intuition for what scale requires what complexity.
+Goal: Build intuition for what scale requires what complexity.
 
 ## Exercise 3: The Trade-off Matrix
 
@@ -2251,12 +2251,12 @@ Goal: Internalize the fundamental trade-offs in distributed systems.
 
 ## Exercise 4: The Assumption Excavation
 
-Take a system you've recently built or designed:
+Pick a system you've recently built or designed:
 - List every assumption you made (aim for at least 20)
 - Categorize them: infrastructure, team, organization, technology, user behavior
 - For each one, ask: what if this assumption was wrong?
 
-Goal: Develop the habit of making assumptions explicit.
+Goal: Build the habit of making assumptions explicit.
 
 ## Exercise 5: The Requirements Interview
 
@@ -2276,7 +2276,7 @@ For a system you know well:
 - List all the constraints you're operating under
 - Categorize: truly fixed vs. potentially flexible
 - For each flexible constraint, identify what you'd need to change it
-- Identify one constraint that, if removed, would significantly improve the system
+- Find one constraint that, if removed, would greatly improve the system
 
 Goal: Understand that constraints are often more negotiable than they appear.
 
@@ -2287,7 +2287,7 @@ Goal: Understand that constraints are often more negotiable than they appear.
 
 # Conclusion
 
-System Design Framework is simple:
+The System Design Framework is simple:
 
 1. **Users & Use Cases**: Who are we building for and what are they trying to do?
 2. **Functional Requirements**: What must the system do?
@@ -2307,7 +2307,7 @@ Applying this extended framework well requires:
 - The judgment to prioritize ruthlessly
 - The ability to trace every design decision to a requirement
 - The foresight to design for evolution, not just today's needs
-- The communication ability to articulate your understanding clearly
+- The ability to articulate your understanding clearly
 
 This framework isn't just for interviews—it's how Staff engineers approach real work. Every design document at Google implicitly covers these phases. Every technical discussion starts with understanding before solving.
 
@@ -2315,7 +2315,7 @@ When you internalize this framework, two things happen:
 
 First, your interviews become more structured and confident. You know what to do in the first ten minutes. You know what questions to ask. You know how to establish a foundation before designing.
 
-Second, your actual engineering becomes more effective. You start asking the right questions before writing code. You start calibrating your designs to actual requirements. You start making trade-offs explicit instead of implicit. You start designing for failure, not just success.
+Second, your actual engineering becomes more effective. You start asking the right questions before writing code. You start matching your designs to actual requirements. You start making trade-offs explicit instead of implicit. You start designing for failure, not just success.
 
 The framework is your lens. Every design problem looks different through it—and that differentiation is exactly what makes your designs appropriate rather than generic.
 

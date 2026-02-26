@@ -56,11 +56,11 @@
 
 Scale changes everything.
 
-A system serving 1,000 users can run on a single server with a simple database. A system serving 100 million users requires distributed infrastructure, careful capacity planning, and fundamentally different architectural decisions. The same functional requirements lead to completely different designs depending on scale.
+A system with 1,000 users can run on one server and a simple database. A system with 100 million users needs distributed infrastructure, careful capacity planning, and very different design choices. Same features, very different designs—all because of scale.
 
-This is why Phase 3—Scale—is where Staff engineers spend significant time. Before you can design an architecture, you need to know how big the problem is. Before you can choose technologies, you need to understand the load they'll face. Before you can make trade-offs, you need to quantify what you're trading.
+That's why Phase 3—Scale—matters so much for Staff engineers. You need to know how big the problem is before you design. You need to understand the load before you pick technologies. You need real numbers before you can make trade-offs.
 
-In this section, we'll cover how to think about scale at Staff level. We'll explore the key metrics you need to understand, how to translate vague prompts into concrete numbers, how to reason about growth, and how to identify the patterns—like fan-out and hot keys—that make scale challenging. By the end, you'll approach scale estimation with confidence and precision.
+In this section, you'll learn how to think about scale at Staff level. We'll cover the key metrics, how to turn vague prompts into concrete numbers, how to think about growth, and how to spot patterns like fan-out and hot keys that make scale hard. By the end, you'll be able to estimate scale with confidence.
 
 ---
 
@@ -68,47 +68,47 @@ In this section, we'll cover how to think about scale at Staff level. We'll expl
 
 ## Scale Determines Architecture
 
-The most fundamental truth in system design: **scale determines architecture**.
+The main rule in system design: **scale determines architecture**.
 
-At small scale, almost anything works. You can use a monolith, a single database, synchronous processing. Simplicity is a virtue because the overhead of distributed systems isn't justified.
+At small scale, almost anything works. A monolith, one database, synchronous processing—all fine. Simple is good because distributed systems add overhead you don't need yet.
 
-At large scale, you have no choice but to distribute. A single database can't handle a million writes per second. A single server can't maintain 10 million concurrent connections. The laws of physics and the limits of hardware force you into distributed systems.
+At large scale, you have to distribute. One database can't do a million writes per second. One server can't hold 10 million connections. Physics and hardware limits push you into distributed systems.
 
-The transition points—where simple solutions break and complex solutions become necessary—are driven by scale. Knowing where you are relative to these points is essential for making appropriate design choices.
+The key is knowing when simple solutions break and complex ones become necessary. That's driven by scale. You need to know where you sit relative to those points to make the right design choices.
 
 ## Scale Reveals Hidden Complexity
 
-Systems that work perfectly at small scale often fail in surprising ways at large scale:
+Systems that work great at small scale often fail in surprising ways at large scale:
 
-- A database query that takes 10ms becomes a bottleneck when executed 10,000 times per second
-- A fan-out that's negligible with 100 followers becomes catastrophic with 10 million followers
-- An algorithm that's linear in complexity becomes unusable when N grows by 1000x
-- A hot key that's invisible at low load causes cascading failures at high load
+- A 10ms database query becomes a bottleneck when you run it 10,000 times per second
+- A fan-out that's fine with 100 followers becomes a disaster with 10 million
+- A linear algorithm becomes unusable when N grows 1000x
+- A hot key you barely notice at low load can cause cascading failures at high load
 
 Staff engineers anticipate these failure modes. They don't just ask "Will this work?" They ask "Will this work at our expected scale? What about 10x that scale?"
 
 ## Scale Affects Cost
 
-Every unit of scale costs money:
+Every bit of scale costs money:
 
 - More users = more servers
 - More data = more storage
 - More requests = more bandwidth
 - More complexity = more engineering time
 
-Staff engineers think about cost efficiency at scale. A 10% inefficiency is negligible at 1,000 users but costs millions of dollars at 100 million users. The design decisions you make at the whiteboard translate directly to infrastructure bills.
+Staff engineers care about cost efficiency at scale. A 10% inefficiency barely matters at 1,000 users but can cost millions at 100 million users. The choices you make on the whiteboard show up directly on your infrastructure bills.
 
 ## Interviewers Test Scale Thinking
 
-In Staff-level interviews, interviewers probe your scale awareness:
+In Staff-level interviews, they probe your scale awareness:
 
 - Do you ask about scale before designing?
-- Can you translate user numbers into technical metrics?
-- Do you recognize when scale changes design choices?
+- Can you turn user numbers into technical metrics?
+- Do you see when scale changes design choices?
 - Can you estimate capacity with reasonable accuracy?
 - Do you anticipate scale-related failure modes?
 
-A candidate who designs without establishing scale is showing Senior-level (or below) behavior. A candidate who uses scale to drive every design decision is showing Staff-level thinking.
+If you design without establishing scale, that's Senior-level (or below) behavior. If you use scale to drive every design decision, that's Staff-level thinking.
 
 ---
 
@@ -116,28 +116,28 @@ A candidate who designs without establishing scale is showing Senior-level (or b
 
 ## The Problem with Vague Scale
 
-Interviewers often provide vague scale hints:
+Interviewers often give vague scale hints:
 
 - "Design for a large social network"
 - "Assume this is for a major e-commerce platform"
 - "Think about Netflix-scale"
 - "This should work for millions of users"
 
-These hints are deliberately imprecise. The interviewer wants to see if you can translate vagueness into specificity.
+These hints are vague on purpose. They want to see if you can turn vagueness into concrete numbers.
 
 ## The Translation Process
 
-Staff engineers translate vague scale into concrete metrics through a systematic process:
+Staff engineers turn vague scale into concrete metrics with a clear process:
 
 ### Step 1: Anchor on Users
 
-Start with the user count. This is usually the most grounded number:
+Start with user count. That's usually the most solid number:
 
 - "For a large social network, I'm thinking 500 million monthly active users, 200 million daily active users. Does that match your expectations?"
 
-If the interviewer hasn't given a hint, propose a range:
+If they haven't given a hint, propose a range:
 
-- "Let me assume we're designing for a significant scale—say 10 million daily active users. I can adjust if you have a different scale in mind."
+- "Let me assume we're designing for significant scale—say 10 million daily active users. I can adjust if you have something different in mind."
 
 ### Step 2: Derive Activity Metrics
 
@@ -153,11 +153,11 @@ From users, derive activity:
 
 ### Step 3: Convert to Requests
 
-Activity translates to system requests:
+Activity turns into system requests:
 
-- Each item view might require 1-3 API calls
-- Each action (like, comment) might require 1-2 API calls
-- Background sync might add additional requests
+- Each item view might need 1-3 API calls
+- Each action (like, comment) might need 1-2 API calls
+- Background sync might add more requests
 
 "20 billion item views, let's say 1.5 API calls each = 30 billion API calls per day"
 
@@ -170,16 +170,16 @@ Daily totals become per-second rates:
 
 ### Step 5: Account for Peaks
 
-Average is not peak. Systems must handle peak load:
+Average is not peak. Systems have to handle peak load:
 
-- Peak is typically 2-10x average depending on usage patterns
+- Peak is usually 2-10x average depending on usage patterns
 - Events (sports, news, product launches) can cause spikes
 
 "350K average RPS, but peak during prime time might be 3x, so ~1 million RPS. And during major events, we might see 2-3x peak, so design for 2-3 million RPS burst capacity."
 
 ## When Numbers Aren't Given
 
-If the interviewer provides no scale hints, you have two options:
+If the interviewer gives no scale hints, you have two options:
 
 ### Option A: Ask Directly
 
@@ -192,7 +192,7 @@ If the interviewer provides no scale hints, you have two options:
 - 500 requests per second per million users = 25,000 RPS average
 - 100,000 RPS peak
 
-If the scale is significantly different, some architectural choices might change. Does this order of magnitude work?"
+If the scale is very different, some architectural choices might change. Does this order of magnitude work?"
 
 ---
 
@@ -229,19 +229,19 @@ If the scale is significantly different, some architectural choices might change
 
 ## DAU and MAU
 
-**DAU (Daily Active Users)**: Unique users who engage with the product each day.
+**DAU (Daily Active Users)**: Unique users who use the product each day.
 
-**MAU (Monthly Active Users)**: Unique users who engage at least once per month.
+**MAU (Monthly Active Users)**: Unique users who use it at least once per month.
 
-**DAU/MAU Ratio**: Indicates engagement stickiness.
+**DAU/MAU Ratio**: Shows how sticky the product is.
 - 10-20%: Low engagement (occasional use apps)
 - 30-50%: Moderate engagement (social media, news)
 - 50%+: High engagement (messaging, essential tools)
 
 **Why they matter**:
-- DAU determines daily load
-- MAU determines total data scale (profiles, history)
-- DAU/MAU affects caching strategies (active user data is hot)
+- DAU drives daily load
+- MAU drives total data scale (profiles, history)
+- DAU/MAU affects caching (active user data is hot)
 
 **Example calculation**:
 - MAU: 100 million
@@ -250,14 +250,14 @@ If the scale is significantly different, some architectural choices might change
 
 ## QPS (Queries Per Second)
 
-**QPS**: The number of requests your system handles each second.
+**QPS**: How many requests your system handles each second.
 
 **Variants**:
 - Read QPS vs Write QPS
 - Average QPS vs Peak QPS
 - External QPS vs Internal QPS (microservices amplify)
 
-**Calculating QPS**:
+**How to calculate QPS**:
 ```
 QPS = (DAU × actions_per_user_per_day) / seconds_per_day
     = (DAU × actions_per_user_per_day) / 86,400
@@ -275,11 +275,11 @@ QPS = (DAU × actions_per_user_per_day) / seconds_per_day
 
 ## Throughput and Bandwidth
 
-**Throughput**: Data volume processed per unit time (bytes/second, records/second).
+**Throughput**: How much data you process per unit time (bytes/second, records/second).
 
 **Bandwidth**: Network capacity (bits/second or bytes/second).
 
-**Calculating data throughput**:
+**How to calculate data throughput**:
 ```
 Throughput = QPS × average_payload_size
 ```
@@ -302,7 +302,7 @@ Throughput = QPS × average_payload_size
 - Warm storage: Occasional access (regular disk)
 - Cold storage: Archive, rarely accessed (object storage)
 
-**Calculating storage**:
+**How to calculate storage**:
 ```
 Total storage = number_of_items × average_item_size × retention_period_factor
 ```
@@ -313,7 +313,7 @@ Total storage = number_of_items × average_item_size × retention_period_factor
 - Keep 1 year of history
 - Storage = 1B × 500 bytes × 365 = 182 TB
 
-**Growth considerations**:
+**Growth**:
 - Data compounds over time
 - 182 TB year 1, 364 TB year 2, 546 TB year 3
 - Plan for 3-5 years of growth
@@ -324,9 +324,9 @@ Total storage = number_of_items × average_item_size × retention_period_factor
 
 ## Why Peak Matters
 
-Systems don't fail at average load—they fail at peak load. Designing for average leaves you vulnerable when usage spikes.
+Systems fail at peak load, not average. If you design for average, you're exposed when usage spikes.
 
-**The peak/average ratio** varies by use case:
+**The peak/average ratio** depends on the use case:
 
 | System Type | Typical Peak/Average Ratio |
 |-------------|---------------------------|
@@ -340,14 +340,14 @@ Systems don't fail at average load—they fail at peak load. Designing for avera
 
 ### Daily Patterns
 
-Most consumer applications follow daily patterns:
+Most consumer apps follow daily patterns:
 - Low: 3 AM - 6 AM local time
 - Ramp: 6 AM - 9 AM
 - Moderate: 9 AM - 6 PM
 - Peak: 6 PM - 11 PM
 - Decline: 11 PM - 3 AM
 
-**Global systems** see smoother curves because time zones overlap, but still have patterns.
+**Global systems** have smoother curves because time zones overlap, but patterns still exist.
 
 ### Weekly Patterns
 
@@ -357,7 +357,7 @@ Most consumer applications follow daily patterns:
 
 ### Event-Driven Spikes
 
-Unpredictable but significant:
+Unpredictable but big:
 - Breaking news
 - Celebrity activity
 - Product launches
@@ -368,24 +368,24 @@ Unpredictable but significant:
 
 ### Option 1: Provision for Peak
 
-Size your system for maximum expected load.
+Size your system for the maximum expected load.
 
-**Pros**: Always available, simple operations
+**Pros**: Always available, simple to run
 **Cons**: Expensive, wasted capacity at low load
 
 ### Option 2: Auto-Scaling
 
-Dynamically add/remove capacity based on load.
+Add or remove capacity based on load.
 
 **Pros**: Cost-efficient, handles variability
-**Cons**: Scale-up latency, complexity, may not handle sudden spikes
+**Cons**: Scale-up takes time, more complex, may not handle sudden spikes
 
 ### Option 3: Graceful Degradation
 
-Accept that extreme peaks may receive degraded service.
+Accept that extreme peaks may get degraded service.
 
 **Pros**: Practical for extreme events
-**Cons**: User experience impact, requires careful design
+**Cons**: Hurts user experience, needs careful design
 
 ### Hybrid Approach (Most Common)
 
@@ -397,7 +397,7 @@ Accept that extreme peaks may receive degraded service.
 
 "The average load is 50,000 QPS. Peak during primetime is 3x, so 150,000 QPS. During major events—a celebrity announcement or breaking news—we might see 10x average, so 500,000 QPS.
 
-I'll design the system to auto-scale from 50K to 200K smoothly. Beyond that, we'll have graceful degradation: non-critical features (like recommendations) might be disabled, but core functionality (posting, viewing) remains available."
+I'll design the system to auto-scale from 50K to 200K smoothly. Beyond that, we'll use graceful degradation: non-critical features (like recommendations) might be disabled, but core functionality (posting, viewing) stays available."
 
 ---
 
@@ -405,23 +405,23 @@ I'll design the system to auto-scale from 50K to 200K smoothly. Beyond that, we'
 
 ## Why the Ratio Matters
 
-Most systems have asymmetric read/write patterns. Understanding this ratio drives fundamental architecture decisions.
+Most systems have uneven read/write patterns. Understanding this ratio drives big architecture decisions.
 
 **Read-heavy systems** (read/write >> 1):
-- Can benefit heavily from caching
-- Can use read replicas
-- Eventually consistent often acceptable
+- Caching helps a lot
+- Read replicas work well
+- Eventually consistent is often fine
 - Examples: Social feeds, e-commerce product pages, news sites
 
 **Write-heavy systems** (read/write ≈ 1 or < 1):
-- Caching provides limited benefit
-- Write scaling is the challenge
-- Need fast, efficient write path
+- Caching helps less
+- Write scaling is the hard part
+- Need a fast, efficient write path
 - Examples: Logging, metrics, IoT data ingestion
 
 **Balanced systems** (read/write ≈ 1-10):
-- Need balanced optimization
-- Can't ignore either path
+- Need to optimize both paths
+- Can't ignore either one
 - Examples: Messaging, collaborative documents
 
 ## Typical Ratios by System Type
@@ -450,29 +450,29 @@ Per session: ~15 reads, 2 writes → 7.5:1
 
 But likes affect many users' feeds (fan-out), while reads are singular.
 
-Actual system ratio: Very read-heavy on the database, but write fan-out means significant write processing.
+Actual system ratio: Very read-heavy on the database, but write fan-out means a lot of write processing.
 
 ## Impact on Architecture
 
 ### For Read-Heavy (100:1+)
 
 - **Caching is essential**: Cache aggressively; cache hits avoid database load
-- **Read replicas**: Distribute read load across replicas
+- **Read replicas**: Spread read load across replicas
 - **CDN for static content**: Push content to the edge
 - **Precomputation**: Compute results ahead of time
-- **Eventually consistent is often fine**: Stale data acceptable for seconds
+- **Eventually consistent is often fine**: Stale data for a few seconds is OK
 
 ### For Write-Heavy (1:1 or below)
 
 - **Write optimization is critical**: Fast write path, minimal overhead
-- **Append-only designs**: Write ahead, process later
-- **Partitioning/sharding**: Distribute writes across nodes
+- **Append-only designs**: Write first, process later
+- **Partitioning/sharding**: Spread writes across nodes
 - **Asynchronous processing**: Accept writes quickly, process in background
 - **Batching**: Group small writes into larger operations
 
 ### For Balanced (10:1)
 
-- **Can't ignore either path**: Need reasonable read and write performance
+- **Can't ignore either path**: Need decent read and write performance
 - **Careful cache invalidation**: Writes must invalidate/update caches correctly
 - **Trade-off awareness**: Improving one path might hurt the other
 
@@ -484,7 +484,7 @@ Actual system ratio: Very read-heavy on the database, but write fan-out means si
 - Occasionally they like or comment—maybe 2-3 times per session
 - Rarely they post—maybe once per day if active
 
-This is heavily read-biased—probably 100:1 or more for the feed reads. This tells me caching is essential, read replicas make sense, and eventual consistency is acceptable for the feed. The write path is less frequent but has fan-out implications—when someone posts, it affects many feeds."
+This is heavily read-biased—probably 100:1 or more for feed reads. So caching is essential, read replicas make sense, and eventual consistency is fine for the feed. The write path is less frequent but has fan-out—when someone posts, it affects many feeds."
 
 ---
 
@@ -527,7 +527,7 @@ This is heavily read-biased—probably 100:1 or more for the feed reads. This te
 
 ## What Is Fan-Out?
 
-**Fan-out** occurs when a single action triggers multiple subsequent actions or operations.
+**Fan-out** is when one action triggers many follow-up actions or operations.
 
 **Examples**:
 - One post → notify 1000 followers
@@ -537,7 +537,7 @@ This is heavily read-biased—probably 100:1 or more for the feed reads. This te
 
 ## Why Fan-Out Is Critical
 
-Fan-out multiplies load. What looks like a reasonable operation at the source becomes massive at the destination.
+Fan-out multiplies load. What looks reasonable at the source becomes huge at the destination.
 
 **The math**:
 - 1,000 posts per second
@@ -550,16 +550,16 @@ Your "1,000 posts per second" system actually needs to handle a million notifica
 
 ### Write-Time Fan-Out (Push Model)
 
-When content is created, immediately push to all destinations.
+When content is created, push it to all destinations right away.
 
 **Pros**:
 - Fast reads (data already at destination)
 - Simple read path
 
 **Cons**:
-- Slow writes (must complete fan-out)
+- Slow writes (must finish fan-out)
 - High storage (duplicated data)
-- Wasted work if content never read
+- Wasted work if content is never read
 
 **Good for**:
 - Users with small follower counts
@@ -568,17 +568,17 @@ When content is created, immediately push to all destinations.
 
 ### Read-Time Fan-Out (Pull Model)
 
-When content is requested, pull from all sources.
+When content is requested, pull it from all sources.
 
 **Pros**:
-- Fast writes (minimal work at write time)
+- Fast writes (little work at write time)
 - Storage efficient
 - No wasted work
 
 **Cons**:
 - Slow reads (must aggregate at read time)
 - Complex read path
-- Repeated work if content read multiple times
+- Repeated work if content is read many times
 
 **Good for**:
 - Users with large follower counts (celebrities)
@@ -587,7 +587,7 @@ When content is requested, pull from all sources.
 
 ### Hybrid Fan-Out
 
-Combine approaches based on characteristics:
+Combine both based on user type:
 - Push for "normal" users (< 10K followers)
 - Pull for celebrities (> 10K followers)
 
@@ -615,7 +615,7 @@ Celebrities (1% of posts) cause 99% of fan-out load!
 
 ## Microservice Amplification
 
-In microservice architectures, a single external request often triggers many internal requests:
+In microservice architectures, one external request often triggers many internal requests:
 
 **Example**:
 - 1 feed request → 10 content service calls → 50 user service calls → 5 recommendation calls
@@ -667,7 +667,7 @@ But we have celebrity accounts with millions of followers. Pushing to them at wr
 
 ## What Are Hot Keys?
 
-**Hot keys** are specific keys (user IDs, product IDs, etc.) that receive disproportionate traffic. They create load imbalance and can overwhelm individual nodes.
+**Hot keys** are specific keys (user IDs, product IDs, etc.) that get way more traffic than others. They create load imbalance and can overwhelm individual nodes.
 
 **Examples**:
 - Celebrity user posting (millions rush to see)
@@ -690,13 +690,13 @@ Distributed systems spread load by partitioning data:
 Total capacity: 200,000 QPS
 Actual capacity limited by Partition B: ~500,000 QPS or failure
 
-A single hot key can bring down a partition, causing cascading failures.
+One hot key can bring down a partition and cause cascading failures.
 
 ## Types of Skew
 
 ### Temporal Skew
 
-Load concentrated in time periods:
+Load concentrated in time:
 - Flash sales
 - Event starts (concert tickets on sale)
 - Time-zone-aligned activity
@@ -710,7 +710,7 @@ Load concentrated on specific keys:
 
 ### Partition Skew
 
-Uneven data/load distribution across partitions:
+Uneven data/load across partitions:
 - Poor partition key choice
 - Natural data distribution (power law)
 
@@ -762,7 +762,7 @@ Route hot keys to dedicated infrastructure:
 
 ## Anticipating Hot Keys
 
-In an interview, proactively address hot keys:
+In an interview, proactively bring up hot keys:
 
 "I need to think about hot keys. In a social platform, celebrity accounts are hot keys—one user might have 50 million followers, all trying to see their latest post.
 
@@ -781,9 +781,9 @@ For celebrities with over 1 million followers, I'll use the pull model for feed 
 
 ## The Growth Planning Dilemma
 
-You can't design for current scale and ignore growth—you'll constantly be rebuilding. But you also can't design for 100x scale day one—you'll waste time and money on complexity you don't need.
+You can't design only for current scale and ignore growth—you'll keep rebuilding. But you also can't design for 100x scale on day one—you'll waste time and money on complexity you don't need.
 
-Staff engineers find the balance: design for reasonable growth, with a migration path to higher scale.
+Staff engineers find the balance: design for reasonable growth, with a path to higher scale.
 
 ## Time Horizons
 
@@ -796,7 +796,7 @@ Staff engineers find the balance: design for reasonable growth, with a migration
 ### Near-term (6 months - 2 years)
 
 - Plan for 5-10x growth
-- Architecture should handle without major redesign
+- Architecture should handle it without major redesign
 - May need to add capacity, optimize, tune
 
 ### Medium-term (2-5 years)
@@ -807,7 +807,7 @@ Staff engineers find the balance: design for reasonable growth, with a migration
 
 ### Long-term (5+ years)
 
-- Plan for 100x+ only if business trajectory supports it
+- Plan for 100x+ only if the business trajectory supports it
 - Focus on extensibility, not specific solutions
 - Accept significant uncertainty
 
@@ -815,9 +815,9 @@ Staff engineers find the balance: design for reasonable growth, with a migration
 
 ### Design Principles
 
-**Horizontal scaling**: Prefer architectures that scale by adding nodes, not by upgrading nodes.
+**Horizontal scaling**: Prefer architectures that scale by adding nodes, not upgrading nodes.
 
-**Stateless services**: Stateless components scale easily; state should be in dedicated stores.
+**Stateless services**: Stateless components scale easily; state should live in dedicated stores.
 
 **Partition-ready data**: Choose partition keys that will work at 10x scale.
 
@@ -825,7 +825,7 @@ Staff engineers find the balance: design for reasonable growth, with a migration
 
 ### Migration Paths
 
-For each component, know the migration path:
+For each component, know how you'd migrate:
 
 | Scale | Database Approach | Migration Path |
 |-------|-------------------|----------------|
@@ -860,7 +860,7 @@ The key is: my initial design supports 10x growth with operational changes (addi
 
 # Part 9: Step-by-Step Scale Estimation Examples
 
-Let me walk through complete scale estimations for common systems.
+Here are complete scale estimations for common systems.
 
 ## Example 1: URL Shortener
 
@@ -976,7 +976,7 @@ This is infeasible with push. Must use pull model for celebrities.
 ### Step 5: Design Implications
 
 - High throughput system
-- Fan-out is the key challenge
+- Fan-out is the main challenge
 - Hybrid push/pull for celebrities
 - Need efficient per-user storage
 - Delivery reliability matters (retry logic)
@@ -998,7 +998,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 ### Step 1: Understand the Load
 - 1 million RPS to the API gateway
-- Every request needs rate limit check
+- Every request needs a rate limit check
 - Rate limit check must be extremely fast
 
 ### Step 2: Calculate Rate Limiter Load
@@ -1022,7 +1022,7 @@ This is infeasible with push. Must use pull model for celebrities.
 - Average: 500 RPS per power client
 
 **Hot Client Risk**:
-- A single scrapy client might send 10K+ RPS
+- A single scraper client might send 10K+ RPS
 - That's 10K increments/second on one counter
 - Potential hot key
 
@@ -1088,7 +1088,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 ## Mistake 4: Assuming Uniform Distribution
 
-**The problem**: Designing for average case when reality has hot keys and skew.
+**The problem**: Designing for the average case when reality has hot keys and skew.
 
 **Example**: "100,000 clients × 10 RPS each = 1M RPS spread evenly." But actually 1% of clients generate 50% of traffic.
 
@@ -1096,7 +1096,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 ## Mistake 5: Round Numbers Without Derivation
 
-**The problem**: Throwing out impressive numbers without showing how they're derived.
+**The problem**: Throwing out impressive numbers without showing how you got them.
 
 **Example**: "Let's assume 1 billion QPS." Without explanation, this is meaningless.
 
@@ -1104,7 +1104,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 ## Mistake 6: Over-Engineering for Hypothetical Scale
 
-**The problem**: Building massive infrastructure for scale that may never materialize.
+**The problem**: Building massive infrastructure for scale that may never happen.
 
 **Example**: Designing for billion-user scale when building an internal tool for 500 people.
 
@@ -1124,7 +1124,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 **Example**: "50K QPS—that's fine." But 50K QPS × 1 KB × 1 year = 1.5 PB of data.
 
-**The fix**: Calculate all dimensions. "50K writes/second × 1 KB = 50 MB/second = 4 TB/day = 1.5 PB/year. Storage is actually the primary challenge."
+**The fix**: Calculate all dimensions. "50K writes/second × 1 KB = 50 MB/second = 4 TB/day = 1.5 PB/year. Storage is actually the main challenge."
 
 ---
 
@@ -1212,7 +1212,7 @@ This is infeasible with push. Must use pull model for celebrities.
 
 # Part 11: Scale and Failure Modes — Staff-Level Thinking
 
-Scale doesn't just affect performance—it fundamentally changes how systems fail. Staff engineers understand that failure modes transform as scale increases.
+Scale doesn't just affect performance—it changes how systems fail. Staff engineers know that failure modes change as scale increases.
 
 ## How Scale Changes Failure Behavior
 
@@ -1253,7 +1253,7 @@ Scale doesn't just affect performance—it fundamentally changes how systems fai
 
 ## Blast Radius at Scale
 
-At small scale, a failure typically affects everyone equally. At large scale, failure containment becomes the primary concern.
+At small scale, a failure usually affects everyone equally. At large scale, containing failure becomes the main concern.
 
 **Small Scale Blast Radius:**
 - Single database → All users affected
@@ -1265,7 +1265,7 @@ At small scale, a failure typically affects everyone equally. At large scale, fa
 - Recovery: Gradual, shard by shard
 
 **Staff-Level Insight:**
-"At 100M users, I expect partial failures to be normal, not exceptional. My design needs to tolerate shard-level failures, service-level degradation, and regional issues—while keeping most users unaffected. Complete outages should be almost impossible because no single component serves everyone."
+"At 100M users, I expect partial failures to be normal, not rare. My design needs to tolerate shard-level failures, service-level degradation, and regional issues—while keeping most users unaffected. Complete outages should be almost impossible because no single component serves everyone."
 
 ## Scale Thresholds That Force Architectural Decisions
 
@@ -1285,7 +1285,7 @@ At small scale, a failure typically affects everyone equally. At large scale, fa
 **L6 Approach:** "At 10M users, failure modes change. I expect:
 - Partial failures are normal—some shards may be degraded
 - Hot keys during events will stress specific partitions
-- Network partitions between regions will occur
+- Network partitions between regions will happen
 - Cascading failures are the biggest risk
 
 My design accounts for this:
@@ -1300,7 +1300,7 @@ I'm not trying to prevent all failures—I'm trying to contain blast radius."
 
 # Part 11a: Real Incident Case Study — Hot Key and Cache Stampede
 
-A structured incident illustrates how scale-related failures unfold and how Staff-level thinking changes the response.
+A real incident shows how scale-related failures unfold and how Staff-level thinking changes the response.
 
 ## Context
 
@@ -1353,7 +1353,7 @@ A celebrity with 50M followers posted during peak traffic (150K QPS overall). Th
 
 # Part 12: Scale Estimation Under Uncertainty
 
-Real-world scale estimation involves uncertainty. Staff engineers communicate this uncertainty explicitly rather than hiding behind false precision.
+Real-world scale estimation involves uncertainty. Staff engineers state this uncertainty clearly instead of hiding behind false precision.
 
 ## The Problem with Point Estimates
 
@@ -1405,13 +1405,13 @@ The core abstractions are the same; the implementation differs."
 
 **L5 Approach:** "We'll have 100K QPS." (False precision)
 
-**L6 Approach:** "Based on 50M DAU and 20 actions per user, I derive roughly 10-15K QPS average. Peak might be 3-5x, so 30-75K QPS. Given uncertainty in our DAU assumption, I'll design for 100K QPS sustained capacity, with graceful degradation beyond that. This gives us buffer for estimation error and unexpected growth."
+**L6 Approach:** "Based on 50M DAU and 20 actions per user, I get roughly 10-15K QPS average. Peak might be 3-5x, so 30-75K QPS. Given uncertainty in our DAU assumption, I'll design for 100K QPS sustained capacity, with graceful degradation beyond that. This gives us buffer for estimation error and unexpected growth."
 
 ---
 
 # Part 13: Scale-Driven Trade-offs
 
-Scale forces trade-offs. Staff engineers articulate these trade-offs explicitly rather than making silent compromises.
+Scale forces trade-offs. Staff engineers state these trade-offs clearly instead of making silent compromises.
 
 ## The Trade-offs Scale Forces
 
@@ -1449,7 +1449,7 @@ Scale forces trade-offs. Staff engineers articulate these trade-offs explicitly 
 
 ## Scale Trade-off Decision Framework
 
-For each scale-driven trade-off, Staff engineers reason through:
+For each scale-driven trade-off, Staff engineers think through:
 
 1. **What scale threshold triggers this trade-off?**
 2. **What are we giving up? What are we gaining?**
@@ -1494,7 +1494,7 @@ But I won't over-optimize for current scale—if we're growing 50% annually, the
 
 **L5 Approach:** "We'll use eventual consistency." (No rationale)
 
-**L6 Approach:** "At 50K writes/second, strong consistency across regions becomes expensive—we'd need synchronous cross-region replication adding 100-200ms latency. I'm trading strong consistency for performance:
+**L6 Approach:** "At 50K writes/second, strong consistency across regions gets expensive—we'd need synchronous cross-region replication adding 100-200ms latency. I'm trading strong consistency for performance:
 - Writes are locally consistent (same region sees immediately)
 - Cross-region replication is async (seconds of lag)
 - For this use case (social posts), this is acceptable
@@ -1505,7 +1505,7 @@ The trade-off becomes problematic for financial transactions—there I'd accept 
 
 # Part 14: Operational Scale Considerations
 
-Scale affects not just the system, but how you operate it. Staff engineers think about operational scale from the start.
+Scale affects not just the system, but how you run it. Staff engineers think about operational scale from the start.
 
 ## How Scale Affects Operations
 
@@ -1561,7 +1561,7 @@ Scale multiplies operational burden. Staff engineers design knowing that humans 
 ## On-Call Reality at Scale
 
 At small scale, "restart the server" works. At large scale:
-- **Alert fatigue:** Thousands of metrics; most are noise. Staff engineers insist on high-signal alerting—no page unless action is required.
+- **Alert fatigue:** Thousands of metrics; most are noise. Staff engineers insist on high-signal alerting—no page unless action is needed.
 - **Blast radius awareness:** A bad deploy at 100M users affects millions in minutes. Canary, staging, and feature flags are not optional.
 - **Recovery complexity:** You can't "restart everything." Rollback, traffic shift, and partial disable become the tools.
 
@@ -1581,12 +1581,12 @@ Humans make mistakes. At scale, a typo in a config can take down a region.
 
 ## Operational Toil and Sustainability
 
-Systems that require constant human intervention do not scale. Staff engineers design for:
+Systems that need constant human intervention don't scale. Staff engineers design for:
 - **Self-healing:** Restart failed nodes, failover replicas, clear stuck queues
 - **Automated remediation:** Common failures have runbooks that run automatically
 - **Reduced toil:** If the same fix is done weekly, automate it
 
-**Trade-off:** Automation has a cost. Staff judgment: automate the 80% case; keep humans for the 20% that requires judgment.
+**Trade-off:** Automation has a cost. Staff judgment: automate the 80% case; keep humans for the 20% that needs judgment.
 
 ---
 
@@ -1616,11 +1616,11 @@ Systems that require constant human intervention do not scale. Staff engineers d
 
 # Part 14c: Data, Consistency, and Durability at Scale
 
-Scale changes what you can guarantee. Staff engineers are explicit about invariants and consistency models.
+Scale changes what you can guarantee. Staff engineers are clear about invariants and consistency models.
 
 ## Invariants That Must Hold
 
-Regardless of scale, some invariants are non-negotiable:
+No matter the scale, some invariants are non-negotiable:
 - **Financial:** Debits must equal credits; no double-spend
 - **Identity:** User X’s data must not appear as User Y’s
 - **Ordering:** Within a partition, messages must be ordered
@@ -1683,7 +1683,7 @@ Regulations (GDPR, CCPA, etc.) apply per user. At scale:
 
 # Part 14e: Observability and Debuggability at Scale
 
-At scale, you cannot SSH into a box. You need metrics, logs, and traces.
+At scale, you can't SSH into a box. You need metrics, logs, and traces.
 
 ## The Three Pillars
 
@@ -1697,7 +1697,7 @@ At scale, you cannot SSH into a box. You need metrics, logs, and traces.
 
 ## Debuggability Under Load
 
-When the system is failing, you need to diagnose fast:
+When the system is failing, you need to diagnose quickly:
 - **Request tracing:** One ID from edge to storage and back
 - **Partial failure visibility:** "Which shard? Which region?"
 - **Replay:** Ability to replay a problematic request in staging
@@ -1714,7 +1714,7 @@ Scale affects more than the system—it affects how teams and orgs work.
 
 At scale, your system depends on many others—and many depend on you. A change in your API affects dozens of teams.
 
-**Staff-level behavior:** "We version our APIs. Breaking changes require a migration path. We notify dependent teams 6 months in advance. We measure adoption of new versions."
+**Staff-level behavior:** "We version our APIs. Breaking changes need a migration path. We notify dependent teams 6 months in advance. We measure adoption of new versions."
 
 ## Team Topology at Scale
 
@@ -1838,7 +1838,7 @@ Interviewers at Staff level are testing whether you:
 
 **The mistake:** Jumping to architecture before establishing scale. "We'll use a distributed database" without knowing whether the system needs 1K or 1M QPS.
 
-**Why it matters:** A Senior can design a correct system for the wrong scale. A Staff engineer ensures the design matches the problem. Interviewers notice when you skip the scale conversation.
+**Why it matters:** A Senior can design a correct system for the wrong scale. A Staff engineer makes sure the design matches the problem. Interviewers notice when you skip the scale conversation.
 
 ## How to Explain to Leadership
 
@@ -1865,7 +1865,7 @@ Leadership cares about risk, cost, and timeline—not QPS or sharding. Translate
 
 ## Master Review Prompt Check (All 11 Items)
 
-Use this checklist to verify chapter completeness:
+Use this checklist to verify the chapter is complete:
 
 | # | Check | Status |
 |---|-------|--------|
@@ -1924,7 +1924,7 @@ Use this checklist to verify chapter completeness:
 ## Remaining Gaps (Acceptable)
 
 - **Specific technology benchmarks**: Intentionally abstracted—varies by implementation
-- **Cost modeling details**: Would require specific pricing information
+- **Cost modeling details**: Would need specific pricing information
 - **Regional/global distribution**: Covered in later architecture discussions
 
 ---
@@ -1935,7 +1935,7 @@ Use this checklist to verify chapter completeness:
 
 1. For a system you've built, what was the actual scale vs. what you designed for? Were you over or under?
 
-2. Can you identify a system where scale forced a fundamental architecture change? What was the trigger?
+2. Can you name a system where scale forced a fundamental architecture change? What was the trigger?
 
 3. Think of a hot key incident you've experienced or heard about. What caused it? How was it handled?
 
@@ -1977,7 +1977,7 @@ Set aside 15-20 minutes for each of these reflection exercises.
 
 Think about your track record with scale estimation.
 
-- What's the largest scale system you've designed? What was the actual vs. estimated load?
+- What's the largest scale system you've designed? What was the actual load vs. what you estimated?
 - Which scale dimensions (QPS, storage, connections) do you estimate accurately?
 - What assumptions in your estimates have been wrong?
 - Do you show your math in interviews, or just state numbers?
@@ -1986,7 +1986,7 @@ Practice one complete scale derivation and check it against reality for a known 
 
 ## Reflection 2: Your Growth Planning
 
-Consider how you think about system evolution.
+Think about how you approach system evolution.
 
 - How far ahead do you typically design? 2x? 10x? 100x?
 - What factors determine how much headroom to build in?
@@ -1997,7 +1997,7 @@ Map out when your current system would hit scaling walls at 2x, 5x, and 10x curr
 
 ## Reflection 3: Your Hot Key Awareness
 
-Examine how you identify and handle hotspots.
+Think about how you identify and handle hotspots.
 
 - Can you identify potential hot keys in systems you've designed?
 - What strategies do you use to mitigate hot keys?
@@ -2100,7 +2100,7 @@ Staff engineers approach scale systematically:
 
 **They quantify before designing.** Before drawing any boxes, they establish: How many users? How many requests? How much data? What's the growth trajectory?
 
-**They derive, not guess.** Numbers come from first principles: users × actions × multipliers. They show their work so it can be validated and adjusted.
+**They derive, not guess.** Numbers come from first principles: users × actions × multipliers. They show their work so it can be checked and adjusted.
 
 **They think in peaks, not averages.** Systems fail at peak, not average. Peak during normal operation, peak during events, peak during failures.
 
@@ -2110,7 +2110,7 @@ Staff engineers approach scale systematically:
 
 **They plan for growth.** Not infinite growth, but reasonable growth. They know where the current design breaks and what the migration path looks like.
 
-In interviews, scale estimation demonstrates maturity. It shows you've operated real systems at real scale. It shows you understand that the whiteboard design must survive contact with production reality.
+In interviews, scale estimation shows maturity. It shows you've operated real systems at real scale. It shows you understand that the whiteboard design must survive contact with production reality.
 
 Take the time to get scale right. It's the foundation for everything that follows.
 

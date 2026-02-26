@@ -6,7 +6,7 @@
 
 Staff Engineers make architecture decisions based on rough numbers. When an interviewer says "design a system for 50 million users," the candidate who pauses, does the math, and says "that's roughly 12K QPS average, 50K peak—we'll need a cache layer and read replicas" has already signaled Staff-level thinking. The candidate who draws boxes without numbers has not.
 
-This chapter teaches you to think in numbers. Not memorization—derivation. You'll learn the anchor points (orders of magnitude, data sizes, latency tiers), the formulas (DAU to QPS, availability composition, server capacity), and the mental habits that turn vague requirements into concrete, defensible designs. The goal is fluency: when you hear "100M DAU" or "99.99% availability," you instantly know what that implies for architecture. When someone says "design a URL shortener for 100 million users," the difference between an L5 and L6 response often comes down to one thing: **can you quickly estimate whether your design will work?** This chapter gives you the numerical foundations—orders of magnitude, scale, latency, QPS, availability, and server capacity—that every system designer must internalize.
+This chapter teaches you to think in numbers. Not memorization—derivation. You'll learn the anchor points (orders of magnitude, data sizes, latency tiers), the formulas (DAU to QPS, availability composition, server capacity), and the habits that turn vague requirements into concrete designs. The goal is fluency: when you hear "100M DAU" or "99.99% availability," you instantly know what that implies for architecture. When someone says "design a URL shortener for 100 million users," the difference between an L5 and L6 response often comes down to one thing: **can you quickly estimate whether your design will work?** This chapter gives you the numerical foundations—orders of magnitude, scale, latency, QPS, availability, and server capacity—that every system designer must internalize.
 
 These aren't numbers to memorize for an exam. They're the raw material for back-of-the-envelope estimation: the 60-second calculation that tells you if a single database will suffice, if you need 10 servers or 1000, and whether your availability target is achievable. By the end of this chapter, you'll be able to derive capacity, estimate cost, and reason about scale with Staff-level fluency.
 
@@ -16,7 +16,7 @@ These aren't numbers to memorize for an exam. They're the raw material for back-
 
 ### The Power of Rough Numbers
 
-Before diving into specific values, understand the mindset: **precision is the enemy of estimation**. When a Staff Engineer estimates, they aim for "right order of magnitude"—is it thousands, millions, or billions? Being off by 2x usually doesn't change the architecture. Being off by 1000x does. Orders of magnitude are your anchor points.
+Before diving into specific values, understand the mindset: **precision is the enemy of estimation**. When a Staff Engineer estimates, they aim for "right order of magnitude"—is it thousands, millions, or billions? Being off by 2x usually doesn't change the architecture. Being off by 1000x does. These orders of magnitude are your anchor points.
 
 ### 1 Thousand (1K), 1 Million (1M), 1 Billion (1B), 1 Trillion (1T)
 
@@ -27,7 +27,7 @@ Before diving into specific values, understand the mindset: **precision is the e
 | **1B** | 1,000,000,000 | Big tech scale, thousands of servers, serious infrastructure |
 | **1T** | 1,000,000,000,000 | Hyperscale: Google, AWS, Facebook-level |
 
-**Why this matters**: When you hear "10 million daily active users," you immediately know you're in the 1M–10M range—not single-server territory, but not yet hyperscale. When you hear "1 billion requests per day," you're in the 10K–20K QPS range (1B ÷ 86,400 seconds ≈ 11,500). These mental conversions are instant for Staff Engineers.
+**Why this matters**: When you hear "10 million daily active users," you know you're in the 1M–10M range—not single-server territory, but not yet hyperscale. When you hear "1 billion requests per day," you're in the 10K–20K QPS range (1B ÷ 86,400 seconds ≈ 11,500). Staff Engineers do these mental conversions instantly.
 
 ### Data Sizes: From Bytes to Petabytes
 
@@ -59,7 +59,7 @@ These numbers show up constantly in system design. Internalize them:
 | **Session cookie** | 100–500 B | Session ID + metadata |
 | **JWT token** | 200–2 KB | Depends on claims |
 
-**Staff-level implication**: When estimating storage, you multiply these by user count and retention. "10M users, 1 KB profile each, 2 years retention" = 10M × 1 KB × 1 (no growth) ≈ 10 GB. Trivial. "10M users, 100 requests/day, 500 B each, 30 days" = 10M × 100 × 500 × 30 = 15 TB. Very different architecture.
+**What this means for you**: When estimating storage, multiply these by user count and retention. "10M users, 1 KB profile each, 2 years retention" = 10M × 1 KB × 1 (no growth) ≈ 10 GB. Trivial. "10M users, 100 requests/day, 500 B each, 30 days" = 10M × 100 × 500 × 30 = 15 TB. Very different architecture.
 
 ### Powers of 2: Why They Matter
 
@@ -74,7 +74,7 @@ Computers think in binary. Many system limits and designs use powers of 2:
 | 2^32 | ~4.3 billion | Max int32, IPv4 address space |
 | 2^64 | ~1.8 × 10^19 | Max int64, huge ID spaces |
 
-**Why estimation matters**: Staff Engineers use these to sanity-check. "Can we fit 100M user IDs in memory?" 100M × 8 bytes (int64) = 800 MB. Yes, on a single server. "Can we fit 1B?" 8 GB. Still possible. "10B?" 80 GB. Now we're talking distributed.
+**Why this matters**: Use these to sanity-check. "Can we fit 100M user IDs in memory?" 100M × 8 bytes (int64) = 800 MB. Yes, on a single server. "Can we fit 1B?" 8 GB. Still possible. "10B?" 80 GB. Now you need distributed.
 
 ### L5 vs L6: Orders of Magnitude
 
@@ -97,7 +97,7 @@ Computers think in binary. Many system limits and designs use powers of 2:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Staff-Level Insight**: The ability to go from "a lot" to "roughly X" in seconds is what separates designers who can validate their architecture from those who guess. Every architecture decision—single DB vs sharded, sync vs async, cache or not—depends on numbers. Get the numbers wrong, and the architecture collapses.
+**The key insight**: Going from "a lot" to "roughly X" in seconds is what separates designers who can validate their architecture from those who guess. Every architecture decision—single DB vs sharded, sync vs async, cache or not—depends on numbers. Get the numbers wrong, and the architecture collapses.
 
 ### Practical Estimation Drill: Sanity-Check Your Intuition
 
@@ -107,7 +107,7 @@ Before moving on, practice this mental exercise. When someone says:
 - "Our database is 500 GB" → That's half a TB. Single server can hold it. Replication doubles it. At 1 PB you're in distributed territory.
 - "We process 10 billion events per day" → 10B/86,400 ≈ 115K QPS. Peak ~350K–575K. You need a queue, workers, and distributed storage.
 
-**Staff-Level Habit**: When you hear a number, immediately convert it to QPS, storage, or whatever dimension matters for your design. The conversion becomes automatic with practice.
+**Build this habit**: When you hear a number, immediately convert it to QPS, storage, or whatever dimension matters for your design. The conversion becomes automatic with practice.
 
 ---
 
@@ -131,7 +131,7 @@ A system "at scale" is one where these dimensions are large enough that naive so
 | **Vertical (scale up)** | Bigger machine: more CPU, RAM, disk | Simple, no distributed complexity | Hit ceiling (biggest instance exists), single point of failure |
 | **Horizontal (scale out)** | More machines | No theoretical limit, redundancy | Complexity: coordination, consistency, failure modes |
 
-**The Staff-level reality**: Every system starts vertical. At some point, you hit limits. The question is *when* you need to go horizontal—and whether your architecture allows it. A monolith with in-memory state is hard to scale horizontally. A stateless service behind a load balancer scales easily.
+**The reality**: Every system starts vertical. At some point, you hit limits. The question is *when* you need to go horizontal—and whether your architecture allows it. A monolith with in-memory state is hard to scale horizontally. A stateless service behind a load balancer scales easily.
 
 ### What Breaks at Different Scales
 
@@ -174,7 +174,7 @@ Traffic (QPS) is one dimension. Others matter equally:
 
 ### Scale and Team Structure
 
-Scale isn't only technical. At 100 engineers, you have 20+ teams. Each team needs clear ownership. API boundaries become team boundaries. A system that "scales" technically but requires 5 teams to ship a feature has scaled wrong. Staff Engineers design for both technical and organizational scale: services that one team can own, APIs that enable parallel work, and boundaries that reduce coordination cost.
+Scale isn't only technical. At 100 engineers, you have 20+ teams. Each team needs clear ownership. API boundaries become team boundaries. A system that "scales" technically but requires 5 teams to ship a feature has scaled wrong. Staff Engineers design for both: services that one team can own, APIs that enable parallel work, and boundaries that reduce coordination cost.
 
 ### Geographic Scale: Single Region vs Multi-Region
 
@@ -184,7 +184,7 @@ Scale isn't only technical. At 100 engineers, you have 20+ teams. Each team need
 | **Multi-region (same continent)** | 20–50 ms | Medium | Users spread across US, EU |
 | **Global** | 100–300 ms | High | Worldwide user base, compliance (data residency) |
 
-Going multi-region introduces: replication lag, conflict resolution, data residency (GDPR), and failover complexity. Don't do it until you need it—but design with it in mind (e.g., partition keys that allow regional sharding).
+Going multi-region introduces replication lag, conflict resolution, data residency (GDPR), and failover complexity. Don't do it until you need it—but design with it in mind (e.g., partition keys that allow regional sharding).
 
 ---
 
@@ -205,11 +205,11 @@ Jeff Dean's famous list (approximate, varies by hardware):
 | Round-trip cross-datacenter (US) | 40 ms | — |
 | Round-trip cross-continent | 100–200 ms | — |
 
-**Key insight**: There's a **million-fold** gap between L1 cache and disk. Memory is ~1000x faster than SSD. Network within a datacenter is ~1000x faster than cross-continent. Where you put data and how many network hops you make dominates latency.
+**Key insight**: There's a **million-fold** gap between L1 cache and disk. Memory is ~1000x faster than SSD. Network within a datacenter is ~1000x faster than cross-continent. Where you put data and how many network hops you make—that's what dominates latency.
 
 ### p50 vs p99: Why Averages Lie
 
-Users don't experience average latency. They experience *their* latency. And the worst experiences—the tail—drive perception.
+Users don't experience average latency. They experience *their* latency. The worst experiences—the tail—drive perception.
 
 | Percentile | Meaning | Why It Matters |
 |------------|---------|----------------|
@@ -226,7 +226,7 @@ Here's the subtle trap: **if you make N parallel or sequential calls, the p99 of
 
 **Sequential**: If Service A calls B, C, D in sequence, and each has p99 of 100 ms, the p99 of the total is roughly 300 ms (latencies add).
 
-**Parallel**: If Service A calls B, C, D in parallel and waits for all, the p99 of the total is the p99 of the *slowest*. With 3 services, the chance that at least one is in its tail is higher than for one service. So p99(total) ≈ max(p99(B), p99(C), p99(D))—and in practice, with correlation, it can be worse.
+**Parallel**: If Service A calls B, C, D in parallel and waits for all, the p99 of the total is the p99 of the *slowest*. With 3 services, the chance that at least one hits its tail is higher than for one service. So p99(total) ≈ max(p99(B), p99(C), p99(D))—and in practice, with correlation, it can be worse.
 
 **Rule of thumb**: 10 parallel calls, each with p99 of 100 ms → combined p99 can be 200–400 ms or more. Tail latency amplifies.
 
@@ -255,20 +255,20 @@ Here's the subtle trap: **if you make N parallel or sequential calls, the p99 of
     └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Staff-level practice**: Instrument each hop. When p99 degrades, you identify which hop is responsible. "Our p99 went from 150 ms to 400 ms—the user service's p99 went from 50 ms to 300 ms. That's our culprit."
+**Practice**: Instrument each hop. When p99 degrades, you identify which hop is responsible. "Our p99 went from 150 ms to 400 ms—the user service's p99 went from 50 ms to 300 ms. That's our culprit."
 
 ### Latency vs Throughput: Not the Same
 
-Latency = time for one request. Throughput = requests per second. They're related but distinct. A system can have:
+Latency = time for one request. Throughput = requests per second. They're related but distinct. Your system can have:
 - **Low latency, high throughput**: e.g., Redis—sub-millisecond per op, 100K+ ops/sec
 - **High latency, high throughput**: e.g., batch job—each item takes 10 seconds, but 1000 parallel workers = 100 items/sec throughput
 - **Low latency, low throughput**: e.g., complex query—50 ms each, but DB can only run 100 concurrent = 2K QPS
 
-When you optimize, know which you're optimizing for. User-facing APIs: latency. Batch pipelines: throughput. Don't conflate them.
+When you optimize, know which you're optimizing for. User-facing APIs: latency. Batch pipelines: throughput. Don't mix them up.
 
 ### Queuing and Latency Degradation
 
-Under load, requests queue. If your service handles 1K QPS and receives 2K QPS, the queue grows. Latency grows linearly with queue depth: each new request waits for all previous ones. Little's Law: Average requests in system = arrival rate × average latency. So if you want to bound latency, you must either increase capacity or reject/load-shed excess traffic.
+Under load, requests queue. If your service handles 1K QPS and receives 2K QPS, the queue grows. Latency grows linearly with queue depth: each new request waits for all previous ones. Little's Law: Average requests in system = arrival rate × average latency. To bound latency, you must either increase capacity or reject/load-shed excess traffic.
 
 ### L5 vs L6: Latency Thinking
 
@@ -284,9 +284,9 @@ Under load, requests queue. If your service handles 1K QPS and receives 2K QPS, 
 
 ### QPS: Queries Per Second
 
-**QPS** (sometimes RPS—Requests Per Second) = how many requests your system handles per second. It's the primary metric for capacity planning.
+**QPS** (sometimes RPS—Requests Per Second) = how many requests your system handles per second. It's the main metric for capacity planning.
 
-**Throughput** = how much *data* your system processes per second (MB/s, GB/s). A system can have high QPS (many small requests) or high throughput (few large requests). Different bottlenecks.
+**Throughput** = how much *data* your system processes per second (MB/s, GB/s). You can have high QPS (many small requests) or high throughput (few large requests). Different bottlenecks.
 
 | Metric | Unit | What It Measures |
 |--------|------|-------------------|
@@ -327,7 +327,7 @@ Most systems are **read-heavy**:
 | Metrics/analytics | 1:10 (write-heavy) | Optimize for writes, batch inserts |
 | Chat | 2:1 to 5:1 | More balanced |
 
-**Why it matters**: Read-heavy systems can use caches and read replicas. Write-heavy systems need different strategies—batching, append-only logs, column stores. Design changes based on the ratio.
+**Why it matters**: Read-heavy systems can use caches and read replicas. Write-heavy systems need different strategies—batching, append-only logs, column stores. Your design changes based on the ratio.
 
 ### How to Estimate QPS: Step by Step
 
@@ -353,7 +353,7 @@ QPS doesn't stop at the API. A single user request can trigger:
 - Each service: 2 DB queries, 1 cache lookup
 - Total: 1 + 3×3 = 10 operations, or more with fan-out
 
-If you have 10K user-facing QPS and 5× internal amplification, your backend handles 50K internal QPS. Capacity planning must account for this **cascade**. Staff Engineers map the full dependency graph and ensure every node is provisioned for its share.
+If you have 10K user-facing QPS and 5× internal amplification, your backend handles 50K internal QPS. Capacity planning must account for this **cascade**. Staff Engineers map the full dependency graph and provision every node for its share.
 
 ### Burst Traffic and Peak Estimation
 
@@ -369,13 +369,13 @@ Most systems combine 2 and 3: auto-scale with a queue buffer. Staff Engineers de
 
 ## Complete Back-of-Envelope Estimation Framework
 
-A systematic methodology turns vague requirements into defensible numbers. Follow these five steps for any system design.
+A systematic approach turns vague requirements into defensible numbers. Follow these five steps for any system design.
 
 ### Step-by-Step Methodology
 
 **Step 1: Identify the Core Entity**
 
-What is the primary thing being created, read, or processed? Examples: users, messages, orders, video uploads, feed views, search queries. Everything flows from this entity.
+What's the primary thing being created, read, or processed? Examples: users, messages, orders, video uploads, feed views, search queries. Everything flows from this entity.
 
 | System Type | Core Entity | Secondary Entities |
 |-------------|-------------|-------------------|
@@ -387,7 +387,7 @@ What is the primary thing being created, read, or processed? Examples: users, me
 
 **Step 2: Estimate Volume**
 
-Volume = DAU × actions per user per day. Be explicit about assumptions.
+Volume = DAU × actions per user per day. State your assumptions clearly.
 
 ```
     Volume = DAU × (primary actions per user per day)
@@ -402,14 +402,14 @@ Volume = DAU × actions per user per day. Be explicit about assumptions.
     Peak QPS = Average QPS × (3 to 5)
 ```
 
-Traffic is not uniform. Peak is typically 4× average; some systems see 10× for events.
+Traffic isn't uniform. Peak is typically 4× average; some systems see 10× for events.
 
 **Step 4: Estimate Storage**
 
 ```
     Storage = (entities per day × retention days) × size per entity
     
-    Size per entity: sum of all fields. Be explicit.
+    Size per entity: sum of all fields. State it clearly.
     Retention: how long do you keep it?
 ```
 
@@ -433,7 +433,7 @@ Account for internal fan-out: one user request may trigger 5 internal calls.
 - **Storage**: Assume 6B feed impressions logged for analytics. 100 B per impression × 90 days = 54 TB
 - **Bandwidth**: 69,400 × 2 KB ≈ **139 MB/s** average. Peak ~556 MB/s
 
-**Architecture implication**: 278K read QPS → cache layer mandatory. At 95% cache hit, DB sees ~14K QPS. Read replicas + CDN for static assets.
+**What this means**: 278K read QPS → cache layer is mandatory. At 95% cache hit, DB sees ~14K QPS. You need read replicas + CDN for static assets.
 
 ### Worked Example 2: Messaging Platform
 
@@ -444,7 +444,7 @@ Account for internal fan-out: one user request may trigger 5 internal calls.
 - **Storage** (2 years): 4B × 365 × 2 × 700 B ≈ **2 PB**
 - **Bandwidth (writes)**: 46K × 700 B ≈ 32 MB/s. Reads: 116K × 700 B ≈ 81 MB/s
 
-**Architecture implication**: Fan-out for delivery (1 message → N recipients). If average 2 recipients, 46K writes → 92K+ delivery operations. Queue-based architecture. WebSocket or long-poll for real-time. Storage sharding by conversation or user.
+**What this means**: Fan-out for delivery (1 message → N recipients). If average 2 recipients, 46K writes → 92K+ delivery operations. You need a queue-based architecture. WebSocket or long-poll for real-time. Shard storage by conversation or user.
 
 ### Worked Example 3: Video Streaming Platform
 
@@ -455,7 +455,7 @@ Account for internal fan-out: one user request may trigger 5 internal calls.
 - **Upload storage** (1 year): 10K × 365 × 500 MB ≈ **1.8 PB**
 - **Transcode output** (assume 3 renditions, same total): ~5.4 PB
 
-**Architecture implication**: Bandwidth dominates. CDN is mandatory—99%+ of bytes from edge. Origin only for cache fill. Upload: queue to transcode workers; store in object storage (S3/GCS). Transcode pipeline: parallel workers, multiple output formats.
+**What this means**: Bandwidth dominates. CDN is mandatory—99%+ of bytes from edge. Origin only for cache fill. Upload: queue to transcode workers; store in object storage (S3/GCS). Transcode pipeline: parallel workers, multiple output formats.
 
 ---
 
@@ -478,7 +478,7 @@ Account for internal fan-out: one user request may trigger 5 internal calls.
 | 99.99% | 52.6 minutes | ~4.3 minutes | "Four nines"—enterprise grade |
 | 99.999% | 5.26 minutes | ~26 seconds | "Five nines"—very expensive |
 
-**Quick math**: Each "nine" multiplies the allowed downtime by ~0.1. Going from 99.9% to 99.99% means 10× less allowed downtime. Going to 99.999% means another 10×.
+**Quick math**: Each "nine" cuts allowed downtime by ~10×. Going from 99.9% to 99.99% means 10× less downtime. Going to 99.999% means another 10×.
 
 ### Composite Availability: Serial Dependencies
 
@@ -510,16 +510,16 @@ If you have **redundancy**—multiple independent components, and you only need 
 - P(both fail) = 0.001 × 0.001 = 0.000001
 - P(at least one up) = 1 - 0.000001 = **99.9999%**
 
-**Caveat**: Only if failures are *independent*. Same datacenter, same bug, shared dependency—failures can correlate. Real redundancy often means different regions, different implementations.
+**Caveat**: This only works if failures are *independent*. Same datacenter, same bug, shared dependency—failures can correlate. Real redundancy often means different regions, different implementations.
 
 ### Why 99.99% is 10× Harder Than 99.9%
 
 To go from 99.9% to 99.99%:
 - You need 10× less downtime (52 min vs 8.76 hours per year)
-- Requires: redundant everything, automated failover, practiced runbooks, fewer single points of failure
+- You need: redundant everything, automated failover, practiced runbooks, fewer single points of failure
 - Cost and complexity grow nonlinearly
 
-**Staff-level reality**: Most products target 99.9%. Some critical systems (payment, auth) aim for 99.99%. Five nines (99.999%) is rare—reserved for telecom, financial critical path.
+**Reality**: Most products target 99.9%. Some critical systems (payment, auth) aim for 99.99%. Five nines (99.999%) is rare—reserved for telecom, financial critical path.
 
 ### SLA, SLO, SLI (Brief Intro)
 
@@ -529,7 +529,7 @@ To go from 99.9% to 99.99%:
 | **SLO** (Service Level Objective) | Target you aim for | "99% of requests complete in < 200 ms" |
 | **SLA** (Service Level Agreement) | Contractual commitment, often with penalties | "We guarantee 99.9% uptime or credit" |
 
-**Hierarchy**: You define SLIs (metrics). You set SLOs (targets). For external customers, you may offer SLAs (legal commitments). SLOs are usually stricter than SLAs (you want headroom).
+**How they relate**: You define SLIs (metrics). You set SLOs (targets). For external customers, you may offer SLAs (legal commitments). SLOs are usually stricter than SLAs—you want headroom.
 
 ### Planned vs Unplanned Downtime
 
@@ -537,7 +537,7 @@ Not all downtime counts the same. Planned maintenance (e.g., deployments, schema
 
 ### Error Budgets: Availability as a Consumable Resource
 
-An **error budget** = 1 − availability. For 99.9%, budget = 0.1% = 8.76 hours/year. You "spend" the budget on incidents. When the budget is exhausted, you freeze risky changes and focus on reliability. This creates a shared understanding: we're not aiming for perfect; we're managing a finite budget. Staff Engineers use error budgets to balance velocity and reliability.
+An **error budget** = 1 − availability. For 99.9%, budget = 0.1% = 8.76 hours/year. You "spend" the budget on incidents. When the budget is exhausted, you freeze risky changes and focus on reliability. The idea: we're not aiming for perfect; we're managing a finite budget. Staff Engineers use error budgets to balance velocity and reliability.
 
 ---
 
@@ -564,7 +564,7 @@ An **error budget** = 1 − availability. For 99.9%, budget = 0.1% = 8.76 hours/
 | **Database (OLTP)** | 5K–50K | Depends on query complexity |
 | **Database (complex queries)** | 100–1K | Joins, aggregations |
 
-**These vary wildly** with payload size, complexity, and hardware. Use them as starting points, not gospel.
+**These vary wildly** with payload size, complexity, and hardware. Use them as starting points, not gospel truth.
 
 ### Back-of-the-Envelope: Number of Servers
 
@@ -581,7 +581,7 @@ An **error budget** = 1 − availability. For 99.9%, budget = 0.1% = 8.76 hours/
 
 ### Capacity Planning: The Full Picture
 
-Before the worked examples, here's the mental framework Staff Engineers use:
+Before the worked examples, here's the mental framework Staff Engineers use when planning capacity:
 
 1. **Identify the bottleneck** — Is it CPU, memory, disk I/O, or network? Different bottlenecks need different solutions.
 2. **Account for redundancy** — Single points of failure are unacceptable. N+1 or 2x redundancy is typical.
@@ -710,7 +710,7 @@ The interviewer sees: assumptions stated, math done, conclusion derived. That's 
 | **Latency** | Ignoring p99 | p99 can be 5–10× p50; size and timeouts for p99 so SLO is met |
 | **Units** | Mixing QPS and daily volume | Convert: daily → QPS = divide by 86,400; state "peak 4× average" if needed |
 
-**Edge cases**: **Cold start**: First request after deploy may be slow (JIT, lazy init). Don't let one slow request set SLO. **Long tail**: One slow dependency can dominate p99; design timeouts and fallbacks. **Correlated load**: Flash sales or viral events—plan for 10× or more spike; use queues, caching, and backpressure.
+**Edge cases**: **Cold start**: The first request after deploy may be slow (JIT, lazy init). Don't let one slow request set your SLO. **Long tail**: One slow dependency can dominate p99; design timeouts and fallbacks. **Correlated load**: Flash sales or viral events—plan for 10× or more spike; use queues, caching, and backpressure.
 
 ---
 
@@ -723,7 +723,7 @@ The numbers in this chapter are design inputs. You don't memorize them—you use
 3. **Set targets**: "What availability do we need?" → Derive infrastructure requirements.
 4. **Communicate**: "We need ~20 API servers for peak" → Stakeholders understand scope.
 
-**Staff-Level Insight**: When you present an architecture, the numbers should justify it. "We use 10 API servers because peak QPS is 100K and each handles 10K" is Staff-level. "We'll add servers as needed" is not. Master the numbers, and your designs will be credible, defensible, and built on solid ground.
+**Key insight**: When you present an architecture, the numbers should justify it. "We use 10 API servers because peak QPS is 100K and each handles 10K" is Staff-level. "We'll add servers as needed" is not. Master the numbers, and your designs will be credible and built on solid ground.
 
 ---
 
@@ -777,7 +777,7 @@ In a system design interview:
 3. **Apply peak factor**: "Peak is typically 4×, so ~9,200 QPS."
 4. **Derive architecture**: "At 9K QPS, with 10K per server, we need about 1 server—plus redundancy, so 2–3."
 
-This demonstrates Staff-level fluency. The interviewer sees that your design is grounded in numbers, not guesswork.
+This shows Staff-level fluency. The interviewer sees that your design is grounded in numbers, not guesswork.
 
 ### Estimation Practice Problems: 5 Worked Solutions
 
@@ -866,7 +866,7 @@ This demonstrates Staff-level fluency. The interviewer sees that your design is 
 
 ### Why Orders of Magnitude Matter in Interviews
 
-In a 45-minute system design interview, the numbers you derive in the first 10 minutes shape everything. If you estimate 100 QPS when the real answer is 100K QPS, you'll design a single-server solution when you need hundreds. Getting the order of magnitude right (1K vs 100K vs 1M) is more important than precision. A design for 50K QPS when the real number is 30K is fine. A design for 5K when it's 500K is a fail.
+In a 45-minute system design interview, the numbers you derive in the first 10 minutes shape everything. If you estimate 100 QPS when the real answer is 100K QPS, you'll design a single-server solution when you need hundreds. Getting the order of magnitude right (1K vs 100K vs 1M) matters more than precision. A design for 50K QPS when the real number is 30K is fine. A design for 5K when it's 500K is a fail.
 
 ### Common Estimation Mistakes
 
@@ -880,13 +880,13 @@ In a 45-minute system design interview, the numbers you derive in the first 10 m
 
 ### Cost Estimation: Rough Numbers
 
-Infrastructure cost is often a constraint. Rough cloud pricing: App server (4 vCPU, 16 GB) $50–150/month. Redis (8 GB) $50–200. Database primary $150–500. For 20 app servers + 2 Redis + 1 DB + 2 replicas + 1 LB: roughly $2K–5K/month. At 100K QPS, that's $0.02–0.05 per 1K requests. Staff Engineers do this math to validate the design is affordable.
+Infrastructure cost is often a constraint. Rough cloud pricing: App server (4 vCPU, 16 GB) $50–150/month. Redis (8 GB) $50–200. Database primary $150–500. For 20 app servers + 2 Redis + 1 DB + 2 replicas + 1 LB: roughly $2K–5K/month. At 100K QPS, that's $0.02–0.05 per 1K requests. Staff Engineers do this math to check if the design is affordable.
 
 ---
 
 ## Appendix: Latency Numbers Deep Dive
 
-Jeff Dean's latency numbers are from a specific era. Modern hardware has improved. The *ratios* matter more than absolute values: RAM is ~100× slower than L1; SSD is ~1000× slower than RAM; network is ~1000× slower than local disk. These ratios drive design: keep hot data in memory, minimize network hops, batch when possible.
+Jeff Dean's latency numbers are from a specific era. Modern hardware has improved. The *ratios* matter more than absolute values: RAM is ~100× slower than L1; SSD is ~1000× slower than RAM; network is ~1000× slower than local disk. These ratios drive design: keep hot data in memory, minimize network hops, batch when you can.
 
 ### Expanded Jeff Dean's Numbers with Practical Examples
 
@@ -901,7 +901,7 @@ Jeff Dean's latency numbers are from a specific era. Modern hardware has improve
 | Round-trip cross-datacenter (US) | 40 ms | us-east-1 → us-west-2 |
 | Round-trip cross-continent | 100–200 ms | US → EU or Asia |
 
-**Practical implication**: A single cross-region call adds 40–100 ms. A request that makes 5 cross-region calls: 200–500 ms just from network. Keep the critical path local.
+**What this means**: A single cross-region call adds 40–100 ms. A request that makes 5 cross-region calls: 200–500 ms just from network. Keep the critical path local.
 
 ### Network Latency Between AWS Regions (Approximate RTT)
 
@@ -914,7 +914,7 @@ Jeff Dean's latency numbers are from a specific era. Modern hardware has improve
 
 *Values are typical; actual latency varies by path and load.*
 
-**Design implication**: Multi-region active-active adds latency. Route users to nearest region. Replicate data asynchronously; don't make synchronous cross-region reads on the hot path.
+**What this means**: Multi-region active-active adds latency. Route users to the nearest region. Replicate data asynchronously; don't make synchronous cross-region reads on the hot path.
 
 ### How CDN Reduces Latency
 
@@ -925,7 +925,7 @@ Jeff Dean's latency numbers are from a specific era. Modern hardware has improve
 | Cache hit at edge | N/A | 20–50 ms end-to-end |
 | Cache miss | Full origin round-trip | Edge fetches from origin once; subsequent requests served from edge |
 
-**Rule of thumb**: CDN typically reduces latency by 5–10× for globally distributed users. For static content, 90%+ of requests hit edge. For dynamic content, edge caching is harder—use edge compute (Cloudflare Workers, Lambda@Edge) for personalized-but-cacheable logic.
+**Rule of thumb**: CDN typically reduces latency by 5–10× for globally distributed users. For static content, 90%+ of requests hit the edge. For dynamic content, edge caching is harder—use edge compute (Cloudflare Workers, Lambda@Edge) for personalized-but-cacheable logic.
 
 ### Why p99 Matters More Than p50: A Real Production Incident
 
@@ -937,7 +937,7 @@ Jeff Dean's latency numbers are from a specific era. Modern hardware has improve
 
 **Fix**: Identified the N+1 path. Batched queries. p99 dropped to 150 ms. Incident resolved.
 
-**Staff-level lesson**: Always instrument and alert on p95 and p99. p50 can mask tail latency that affects millions of users at scale.
+**Lesson**: Always instrument and alert on p95 and p99. p50 can mask tail latency that affects millions of users at scale.
 
 ### Tail Latency Amplification: Worked Math Example
 
@@ -955,7 +955,7 @@ Jeff Dean's latency numbers are from a specific era. Modern hardware has improve
 
 ## Appendix: Availability Deep Dive
 
-**Measuring availability**: "99.9% availability" needs a definition. Most use successful_requests / total_requests. Be explicit. **Multi-region**: To achieve 99.99%+, you typically need multi-region. Single region: one datacenter fire can take you down. Multi-region: failures isolated. Trade-off: replication lag, consistency challenges, cost. Staff Engineers weigh the availability gain against complexity.
+**Measuring availability**: "99.9% availability" needs a definition. Most use successful_requests / total_requests. Be explicit. **Multi-region**: To achieve 99.99%+, you typically need multi-region. Single region: one datacenter fire can take you down. Multi-region: failures are isolated. Trade-off: replication lag, consistency challenges, cost. Staff Engineers weigh the availability gain against complexity.
 
 ### Compound Availability Examples
 
@@ -1001,7 +1001,7 @@ Map your dependency graph. A chain of 10 services at 99.9% each:
     A_chain = 0.999^10 ≈ 0.990
 ```
 
-You're at 99.0%—one nine lost. Every additional service costs you. Reduce the chain: consolidate services, or make some calls optional (best-effort analytics, etc.).
+You're at 99.0%—one nine lost. Every additional service costs you. Reduce the chain: consolidate services, or make some calls optional (e.g., best-effort analytics).
 
 ### How to Improve Availability
 
@@ -1031,4 +1031,4 @@ You're at 99.0%—one nine lost. Every additional service costs you. Reduce the 
 
 **Action**: After week 4, budget nearly exhausted. Freeze risky changes. Focus on reliability. Postmortems. Fix root causes. Next month: fresh budget. If you consistently consume 100% of budget, either improve reliability or relax the SLO (and communicate to stakeholders).
 
-**Staff-level practice**: Track budget consumption weekly. Set alerts at 50% and 80%. When budget is low, prioritize reliability work over feature work. Use error budget as a shared language with product: "We've used 80% of our downtime budget—we need to pause risky deployments and focus on stability."
+**Practice**: Track budget consumption weekly. Set alerts at 50% and 80%. When budget is low, prioritize reliability work over feature work. Use error budget as a shared language with product: "We've used 80% of our downtime budget—we need to pause risky deployments and focus on stability."

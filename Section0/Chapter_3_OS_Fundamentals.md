@@ -4,9 +4,9 @@
 
 # Introduction
 
-Every server you deploy—every container, every VM, every microservice—runs on an operating system. The OS manages **processes**, **threads**, **memory (RAM)**, **CPU**, and **disk I/O**. At first glance, these feel like Computer Science 101. And yet, Staff-level system design interviews repeatedly surface a gap: candidates who can architect distributed systems struggle to articulate *why* Java services consume more memory than Go services, *why* their p99 latency shows periodic spikes, or *when* to add CPU versus when to optimize I/O.
+Every server you deploy—every container, every VM, every microservice—runs on an operating system. The OS manages **processes**, **threads**, **memory (RAM)**, **CPU**, and **disk I/O**. At first glance, these feel like Computer Science 101. And yet, Staff-level system design interviews keep revealing a gap: candidates who can architect distributed systems often can't explain *why* Java services use more memory than Go services, *why* their p99 latency spikes from time to time, or *when* to add CPU versus when to optimize I/O.
 
-This chapter grounds you in operating system fundamentals from a **server and system design perspective**. We don't aim to make you an OS kernel engineer. We aim to give you the mental models to reason about capacity, bottlenecks, and trade-offs when designing and operating production systems. By the end, you'll understand how process and thread models shape concurrency strategies, why memory and disk hierarchies dictate caching decisions, and when CPU—often the least of your concerns—actually becomes the bottleneck.
+This chapter gives you a solid grounding in OS fundamentals from a **server and system design perspective**. We're not trying to make you an OS kernel engineer. We want to give you the mental models to think clearly about capacity, bottlenecks, and trade-offs when you design and run production systems. By the end, you'll understand how process and thread models shape your concurrency choices, why memory and disk hierarchies drive caching decisions, and when CPU—often the least of your worries—actually becomes the bottleneck.
 
 ---
 
@@ -37,11 +37,11 @@ This chapter grounds you in operating system fundamentals from a **server and sy
 
 ## Why OS Fundamentals Matter for System Design
 
-At first glance, process and thread models seem like implementation details. "We just run our service; the OS handles it." But the choices your runtime makes—thread-per-request vs event loop, blocking vs non-blocking I/O, stack size per unit of concurrency—directly affect how many requests one instance can handle, how much memory it uses, and where your bottlenecks appear. When you're designing for 10K QPS or 100K concurrent connections, these fundamentals become the constraint. Staff engineers understand them because they determine the shape of every scaling decision.
+At first glance, process and thread models seem like implementation details. "We just run our service; the OS handles it." But the choices your runtime makes—thread-per-request vs event loop, blocking vs non-blocking I/O, stack size per unit of concurrency—directly affect how many requests one instance can handle, how much memory it uses, and where your bottlenecks show up. When you're designing for 10K QPS or 100K concurrent connections, these fundamentals become the real constraint. Staff engineers understand them because they shape every scaling decision you make.
 
 ## A Process Is an Instance of a Running Program with Its Own Memory Space
 
-A **process** is the OS's representation of a running program. When you start your API server, the OS creates a process. That process gets:
+A **process** is the OS's way of representing a running program. When you start your API server, the OS creates a process. That process gets:
 
 - **Its own virtual address space** — memory that is isolated from other processes. Process A cannot directly read or write Process B's memory.
 - **Its own file descriptor table** — handles to open files, sockets, pipes.
@@ -53,7 +53,7 @@ Think of a process as a **kitchen**: its own stove, fridge, and counter. If one 
 
 A **thread** is a unit of execution *inside* a process. Multiple threads share the same process's memory space—the same heap, the same code, the same global variables. They each have their own stack for local variables and call frames.
 
-Think of threads as **chefs in the same kitchen**: they share the stove, fridge, and counter. They can work in parallel. But they can also conflict—two chefs grabbing the same ingredient at once. That's a race condition. Threads require coordination (locks, mutexes) when accessing shared data.
+Think of threads as **chefs in the same kitchen**: they share the stove, fridge, and counter. They can work in parallel. But they can also conflict—two chefs grabbing the same ingredient at once. That's a race condition. Threads need coordination (locks, mutexes) when they access shared data.
 
 | Aspect | Process | Thread |
 |--------|---------|--------|
@@ -114,7 +114,7 @@ Every incoming HTTP request must be handled. Two dominant models:
     └─────────────────────────────────────────────────────────────────┘
 ```
 
-- One thread per request. Thread blocks while waiting for DB, network, etc.
+- One thread per request. The thread blocks while waiting for DB, network, etc.
 - **Pros**: Simple mental model. Each request has its own stack. Easy to debug (thread dumps show request state).
 - **Cons**: Each thread has stack memory (~1 MB default in Java). 1000 threads ≈ 1 GB just for stacks. Thread creation and context switching overhead. Limited concurrency by thread count.
 
@@ -139,7 +139,7 @@ Every incoming HTTP request must be handled. Two dominant models:
 
 - Single thread (or few threads) + non-blocking I/O. When a request waits for DB, the thread serves other requests. Callbacks or promises resume when I/O completes.
 - **Pros**: Very high concurrency with low memory. 10,000 connections on one thread is feasible. No thread context switching.
-- **Cons**: CPU-bound work blocks the whole loop. Must not do heavy computation on the main thread. Callback hell or async/await complexity.
+- **Cons**: CPU-bound work blocks the whole loop. You must not do heavy computation on the main thread. Callback hell or async/await complexity.
 
 ### Goroutines (Go): Lightweight Threads
 
@@ -155,7 +155,7 @@ Go uses **goroutines** — user-space threads (M:N scheduling). Thousands of gor
 - Its own network namespace.
 - Resource limits (cgroups: CPU, memory).
 
-Containers provide process-level isolation without the overhead of full VMs. Each microservice runs in its own container = its own process (or process group). Crash isolation: one service OOM-killed doesn't kill others. Deployment isolation: you can scale or restart one service independently.
+Containers give you process-level isolation without the overhead of full VMs. Each microservice runs in its own container = its own process (or process group). Crash isolation: one service OOM-killed doesn't kill others. Deployment isolation: you can scale or restart one service independently.
 
 **Staff-Level Insight**: The progression from "one process per server" to "many containers per host" is an organizational and isolation story as much as a technical one. Containers make it natural to deploy one service per container, which aligns with team ownership and independent scaling.
 
@@ -207,7 +207,7 @@ Today we talk about **C100K** and **C1M** — same idea, bigger numbers. The sol
 
 ### Coroutines and Async/Await: The Modern Alternative
 
-**Async/await** (JavaScript, Python, C#, Rust) and **coroutines** (Kotlin) provide a programming model where you write sequential-looking code that yields at I/O points. The runtime schedules many such "coroutines" on a small thread pool. When one awaits a DB call, the thread serves another coroutine. Effectively: cooperative multitasking with a familiar syntax.
+**Async/await** (JavaScript, Python, C#, Rust) and **coroutines** (Kotlin) give you a programming model where you write sequential-looking code that yields at I/O points. The runtime schedules many such "coroutines" on a small thread pool. When one awaits a DB call, the thread serves another coroutine. Effectively: cooperative multitasking with a familiar syntax.
 
 **Comparison**: Thread-per-request blocks a full OS thread. Coroutines/async share threads. One thread can run thousands of logical "tasks." Memory per task: kilobytes, not megabytes. The trade-off: you must use non-blocking I/O everywhere. Blocking calls (e.g., synchronous DB driver) defeat the purpose—they block the whole thread.
 

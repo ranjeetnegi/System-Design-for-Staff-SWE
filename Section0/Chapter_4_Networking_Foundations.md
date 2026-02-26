@@ -4,9 +4,9 @@
 
 # Introduction
 
-Every system you design—every API, every microservice, every distributed architecture—rests on networking fundamentals. When a request times out, is it a DNS issue, a TCP handshake problem, or an application-layer failure? When users in Asia experience high latency, is it bandwidth or round-trip time? Staff engineers can answer these questions because they understand the **layers** of networking and where each problem lives.
+Every system you design—every API, every microservice, every distributed architecture—rests on networking fundamentals. When a request times out, is it a DNS issue, a TCP handshake problem, or an application-layer failure? When users in Asia see high latency, is it bandwidth or round-trip time? Staff engineers can answer these questions because they understand the **layers** of networking and where each problem lives.
 
-This chapter builds that foundation. We'll cover the OSI model (and which layers actually matter), TCP vs UDP (and when each wins), sockets and connections (and why connection pooling is non-negotiable), HTTP methods and status codes (and why idempotency matters for retries), and bandwidth vs latency (and why you can't fix one with the other). By the end, you'll have the vocabulary and mental models to debug production issues and design systems that respect the realities of the network.
+This chapter builds that foundation. You'll learn the OSI model (and which layers actually matter), TCP vs UDP (and when to use each), sockets and connections (and why connection pooling is a must), HTTP methods and status codes (and why idempotency matters for retries), and bandwidth vs latency (and why you can't fix one with the other). By the end, you'll have the vocabulary and mental models to debug production issues and design systems that respect how networks really work.
 
 ---
 
@@ -33,7 +33,7 @@ This chapter builds that foundation. We'll cover the OSI model (and which layers
 
 ## From Physical Wires to Your Application
 
-The **OSI (Open Systems Interconnection) model** divides networking into seven layers. Each layer has a job. Data flows down (from application to physical) when sending, and up (from physical to application) when receiving. Understanding which layer a problem exists at helps you know where to look—and what to fix.
+The **OSI (Open Systems Interconnection) model** splits networking into seven layers. Each layer has a job. Data flows down (from application to physical) when you send, and up (from physical to application) when you receive. Knowing which layer a problem lives in tells you where to look—and what to fix.
 
 | Layer | Name | Purpose | Examples |
 |-------|------|---------|----------|
@@ -54,7 +54,7 @@ In practice, system designers care most about:
 - **Layer 4 (Transport)**: TCP vs UDP. Connection setup. Retransmission. Flow control. Head-of-line blocking.
 - **Layer 7 (Application)**: HTTP methods, status codes, headers, REST, API design.
 
-Layers 5 and 6 are often folded into L7 (e.g., TLS happens "at" the application layer in the TCP/IP model). Layers 1–3 are typically handled by infrastructure—you configure routing and switches, but most application debugging focuses on L4 and L7.
+Layers 5 and 6 are often folded into L7 (e.g., TLS happens "at" the application layer in the TCP/IP model). Layers 1–3 are usually handled by infrastructure—you configure routing and switches, but most application debugging focuses on L4 and L7.
 
 ## Why Staff Engineers Care
 
@@ -125,15 +125,15 @@ When you write an API, you work at the Application layer. When you debug a "conn
 
 ## The Transport Layer: Where Reliability Meets Speed
 
-The transport layer (L4) is where we choose between **reliability** and **speed**. TCP gives you delivery guarantees: every byte arrives, in order, or the connection fails. UDP gives you none of that—but it's fast and simple. The choice ripples through your entire design. Use TCP for payments, file transfers, and APIs where correctness is non-negotiable. Use UDP (or UDP-based protocols like QUIC) for real-time media and games where a late packet is worse than a lost one. Staff engineers make this choice consciously, not by default.
+The transport layer (L4) is where you choose between **reliability** and **speed**. TCP gives you delivery guarantees: every byte arrives, in order, or the connection fails. UDP gives you none of that—but it's fast and simple. The choice affects your entire design. Use TCP for payments, file transfers, and APIs where correctness is non-negotiable. Use UDP (or UDP-based protocols like QUIC) for real-time media and games where a late packet is worse than a lost one. Staff engineers make this choice on purpose, not by default.
 
 ## TCP: Reliable, Ordered, Connection-Oriented
 
-**TCP (Transmission Control Protocol)** provides:
+**TCP (Transmission Control Protocol)** gives you:
 
 - **Reliability**: Acknowledgment (ACK) for each segment. Lost packets are retransmitted. No data loss (under normal conditions).
 - **Ordering**: Packets may arrive out of order; TCP reassembles them in order before delivering to the application.
-- **Connection-oriented**: A **three-way handshake** establishes the connection before any data flows.
+- **Connection-oriented**: A **three-way handshake** sets up the connection before any data flows.
 - **Flow control**: Receiver tells sender how much it can accept. Prevents overwhelming the receiver.
 - **Congestion control**: Sender slows down when the network is congested. Avoids collapse.
 
@@ -175,7 +175,7 @@ The transport layer (L4) is where we choose between **reliability** and **speed*
 
 ## UDP: Unreliable, Unordered, Connectionless
 
-**UDP (User Datagram Protocol)** provides:
+**UDP (User Datagram Protocol)** gives you:
 
 - **Fire and forget**: Send a packet. No handshake. No ACK. No retransmission.
 - **No ordering**: Packets may arrive out of order or not at all.
@@ -258,7 +258,7 @@ A **connection** (in TCP) is a bidirectional channel between:
 - **Client socket**: e.g., `192.168.1.10:54321` (client IP + ephemeral port)
 - **Server socket**: e.g., `93.184.216.34:443` (server IP + service port)
 
-The server creates a **listening socket**—it binds to a port and calls `listen()`. When a client calls `connect()`, the server accepts. A new **connection** is established. Each side can send and receive. When either side closes, the connection ends. The server's listening socket remains—ready for the next connection.
+The server creates a **listening socket**—it binds to a port and calls `listen()`. When a client calls `connect()`, the server accepts. A new **connection** is established. Each side can send and receive. When either side closes, the connection ends. The server's listening socket stays open—ready for the next connection.
 
 ## File Descriptors and Limits
 
@@ -271,7 +271,7 @@ Each open connection uses a **file descriptor** (on Unix-like systems). Sockets 
 
 ## Connection Overhead: Memory and Setup Cost
 
-Each TCP connection consumes:
+Each TCP connection uses:
 
 - **Kernel buffers**: Send and receive buffers (often 4–64 KB each per connection)
 - **Connection state**: TCP state machine, sequence numbers, etc.
@@ -299,7 +299,7 @@ Creating a new TCP connection is expensive:
 
 **Total**: 50–150 ms or more per new connection. For a single request that takes 5 ms to process, you're spending 10–30x the request time just on connection setup.
 
-**Connection pooling**: Pre-create connections. Keep them open. Reuse. Grab one, use it, return it. Amortize the setup cost across many requests. **HikariCP** (Java) can hand out a connection in ~250 nanoseconds. Creating new: ~5–10 ms. That's 20,000–40,000x faster.
+**Connection pooling**: Pre-create connections. Keep them open. Reuse. Grab one, use it, return it. Spread the setup cost across many requests. **HikariCP** (Java) can hand out a connection in ~250 nanoseconds. Creating new: ~5–10 ms. That's 20,000–40,000x faster.
 
 ## Keep-Alive: Reuse Connections Across HTTP Requests
 
@@ -637,7 +637,7 @@ When requests fail or are slow, work through this checklist:
 
 **Tracing the full path**: Use **X-Request-ID** (or similar) from the client. Propagate through every service. When a request fails, search logs by that ID. You'll see: client → LB → gateway → service A → service B → DB. The slow or failing hop becomes obvious.
 
-**Staff-Level Insight**: Network issues often manifest as "random" failures or "it works sometimes." The key is correlation: same user? same region? same service? Add tracing, metrics, and structured logging. The data will point you to the layer and the component.
+**Staff-Level Insight**: Network issues often show up as "random" failures or "it works sometimes." The key is correlation: same user? same region? same service? Add tracing, metrics, and structured logging. The data will point you to the layer and the component.
 
 ---
 
@@ -682,7 +682,7 @@ Consider a user in Tokyo loading a page from an API hosted in Virginia:
 A user in **Tokyo** hits an API in **Virginia**. One GET, small payload. Where does the time go?
 
 | Phase | What happens | Latency | Notes |
-|-------|---------------|---------|--------|
+|-------|---------------|---------|-------|
 | DNS | Resolve `api.example.com` (often cached) | 0–50 ms | Geo-DNS may return Virginia IP; resolver cache can make this 0 |
 | TCP | SYN, SYN-ACK, ACK (1 RTT) | ~140 ms | Tokyo–Virginia RTT ~140 ms; unavoidable for first connection |
 | TLS | Handshake (1–2 RTT) | ~140–280 ms | Session resume can reduce; first connection pays full cost |
