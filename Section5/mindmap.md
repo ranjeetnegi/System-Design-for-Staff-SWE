@@ -3,9 +3,9 @@
 ```
 Section 5: Senior (L5) Design Problems
 │
-├── Core Infrastructure (Ch 34–37)
+├── Core Infrastructure (Ch 42–37)
 │   │
-│   ├── Ch 34: URL Shortener
+│   ├── Ch 42: URL Shortener
 │   │   ├── Key-value store, read-heavy (~100:1 read/write)
 │   │   ├── Short Code Generation
 │   │   │   ├── Counter-based
@@ -18,7 +18,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Caching for redirects
 │   │   └── Abuse prevention
 │   │
-│   ├── Ch 35: Single-Region Rate Limiter
+│   ├── Ch 43: Single-Region Rate Limiter
 │   │   ├── Algorithms
 │   │   │   ├── Fixed window
 │   │   │   ├── Sliding window log
@@ -30,7 +30,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Rate limiter as library, not service
 │   │   └── Headers: X-RateLimit-Limit, Remaining, Reset, Retry-After
 │   │
-│   ├── Ch 36: Distributed Cache (Single Cluster)
+│   ├── Ch 44: Distributed Cache (Single Cluster)
 │   │   ├── Cache Patterns
 │   │   │   ├── Read-through: miss → DB → populate
 │   │   │   ├── Write-through: update DB + cache together
@@ -41,7 +41,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Eviction: LRU, LFU
 │   │   └── Cache-down failure handling
 │   │
-│   └── Ch 37: Object / File Storage
+│   └── Ch 45: Object / File Storage
 │       ├── Durability via replication + erasure coding
 │       ├── Metadata vs data storage (separate)
 │       ├── Operations: PUT, GET, DELETE, LIST
@@ -49,9 +49,9 @@ Section 5: Senior (L5) Design Problems
 │       ├── Silent data corruption detection
 │       └── Durability target: 11 nines
 │
-├── Application Systems (Ch 38–41)
+├── Application Systems (Ch 46–41)
 │   │
-│   ├── Ch 38: Notification System
+│   ├── Ch 46: Notification System
 │   │   ├── Channels: push, email, SMS, in-app
 │   │   ├── User preferences & do-not-disturb
 │   │   ├── Delivery: at-least-once + deduplication
@@ -59,7 +59,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Channel priority & fallback chains
 │   │   └── Centralized system vs per-service delivery
 │   │
-│   ├── Ch 39: Authentication System (AuthN)
+│   ├── Ch 47: Authentication System (AuthN)
 │   │   ├── Fail closed — deny if can't verify
 │   │   ├── Token lifecycle: issue → validate → refresh → revoke
 │   │   ├── Access token (short-lived, 15 min) + refresh token
@@ -67,7 +67,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Secure credential storage (bcrypt)
 │   │   └── Rate limiting on login (prevent credential stuffing)
 │   │
-│   ├── Ch 40: Search System (Single Cluster)
+│   ├── Ch 48: Search System (Single Cluster)
 │   │   ├── Inverted index: token → doc IDs
 │   │   ├── Query parsing, tokenization, analysis
 │   │   ├── Ranking: TF-IDF, BM25, boosting
@@ -75,7 +75,7 @@ Section 5: Senior (L5) Design Problems
 │   │   ├── Autocomplete & faceted search
 │   │   └── Relevance tuning & feedback
 │   │
-│   └── Ch 41: Metrics Collection System
+│   └── Ch 49: Metrics Collection System
 │       ├── Time-series: counters, gauges, histograms
 │       ├── High-throughput ingestion (millions of points/sec)
 │       ├── Write: emit → scrape → ingest → store
@@ -84,9 +84,9 @@ Section 5: Senior (L5) Design Problems
 │       ├── Query: dashboards + alert evaluation
 │       └── Last system that should go down
 │
-└── Advanced Patterns (Ch 42–46)
+└── Advanced Patterns (Ch 50–46)
     │
-    ├── Ch 42: Background Job Queue
+    ├── Ch 50: Background Job Queue
     │   ├── Enqueue → persist → dispatch → execute
     │   ├── Retry: exponential backoff with jitter
     │   ├── Lease-based visibility: no ACK → re-dispatch
@@ -94,7 +94,7 @@ Section 5: Senior (L5) Design Problems
     │   ├── Priority scheduling & fair queueing
     │   └── Never silently lose work
     │
-    ├── Ch 43: Payment Flow
+    ├── Ch 51: Payment Flow
     │   ├── Flow: authorize → capture → ledger
     │   ├── Idempotency keys — first-class concern
     │   │   └── Deterministic, never timestamps or random
@@ -104,14 +104,14 @@ Section 5: Senior (L5) Design Problems
     │   ├── Reconciliation: internal vs processor
     │   └── Money must never be created or destroyed by a bug
     │
-    ├── Ch 44: API Gateway
+    ├── Ch 52: API Gateway
     │   ├── Request routing to backends
     │   ├── Cross-cutting: auth, rate limiting, logging
     │   ├── Request/response transformation
     │   ├── Graceful degradation on backend failure
     │   └── Must never become the bottleneck
     │
-    ├── Ch 45: Real-Time Chat
+    ├── Ch 53: Real-Time Chat
     │   ├── WebSocket connection management at scale
     │   ├── Connection registry: user_id → connections
     │   ├── Message routing: 1:1 and group fan-out
@@ -121,7 +121,7 @@ Section 5: Senior (L5) Design Problems
     │   ├── Offline delivery via push notification
     │   └── Reconnection storm handling
     │
-    └── Ch 46: Configuration Management
+    └── Ch 54: Configuration Management
         ├── Config change = production deployment
         ├── Storage, versioning, schema validation
         ├── Propagation: push + local cache (15s convergence)

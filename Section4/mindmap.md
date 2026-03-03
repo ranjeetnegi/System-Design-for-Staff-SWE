@@ -3,7 +3,7 @@
 ```
 Section 4: Data Systems & Global Scale
 │
-├── Ch 27: Databases — Choosing, Using & Evolving
+├── Ch 28: Databases — Choosing, Using & Evolving
 │   ├── Decision Framework
 │   │   └── Data shape → access patterns → consistency → scale → team
 │   ├── "SQL vs NoSQL" Is the Wrong Question
@@ -29,7 +29,7 @@ Section 4: Data Systems & Global Scale
 │       └── NewSQL — Spanner, CockroachDB, TiDB, YugabyteDB
 │           └── SQL + horizontal scale + strong consistency
 │
-├── Ch 28: Caching at Scale
+├── Ch 31: Caching at Scale
 │   ├── Three Reasons to Cache
 │   │   ├── Protection (absorb spikes)
 │   │   ├── Cost (cheaper than DB)
@@ -58,7 +58,7 @@ Section 4: Data Systems & Global Scale
 │       ├── Time-Series DB — append-only, delta compression
 │       └── Inverted Index — term → posting list, TF-IDF, BM25
 │
-├── Ch 29: Event-Driven Architectures
+├── Ch 33: Event-Driven Architectures
 │   ├── Temporal Coupling
 │   │   └── Events decouple producers & consumers in time
 │   ├── When Events Help
@@ -85,7 +85,7 @@ Section 4: Data Systems & Global Scale
 │       ├── When Kafka Is Overkill → SQS or simpler
 │       └── Pub/Sub vs Kafka — push/no-replay vs pull/replay
 │
-├── Ch 30: Multi-Region Systems
+├── Ch 36: Multi-Region Systems
 │   ├── Multi-Region = Consistency Choice
 │   │   └── Not only availability
 │   ├── Three Definitions
@@ -102,7 +102,7 @@ Section 4: Data Systems & Global Scale
 │   ├── Regional Failover — danger of untested failover
 │   └── When Single-Region + Good DR Is Enough
 │
-├── Ch 31: Data Locality, Compliance & Evolution
+├── Ch 37: Data Locality, Compliance & Evolution
 │   ├── Three Data Layers
 │   │   ├── Data at rest
 │   │   ├── Data in transit
@@ -114,7 +114,7 @@ Section 4: Data Systems & Global Scale
 │   │   └── "Deleted from DB" ≠ "deleted everywhere"
 │   └── Cost of Retrofitting vs Designing In (often 10×)
 │
-├── Ch 32: Cost, Efficiency & Sustainability
+├── Ch 38: Cost, Efficiency & Sustainability
 │   ├── Cost as Design Constraint
 │   ├── Five Dimensions
 │   │   ├── Compute, storage, network, ops, engineering
@@ -122,7 +122,7 @@ Section 4: Data Systems & Global Scale
 │   ├── Cost of Each Extra "Nine"
 │   └── When Over-Provisioning Is Cheaper Than Optimization
 │
-├── Ch 33: System Evolution & Migration
+├── Ch 39: System Evolution & Migration
 │   ├── Evolution as Default
 │   ├── Why Migrations Fail
 │   │   ├── Incomplete understanding
@@ -138,7 +138,7 @@ Section 4: Data Systems & Global Scale
 │   └── Designing for Change
 │       └── Seams, abstractions, version contracts
 │
-└── Ch 33 Supplement: Deployment & Operations
+└── Ch 39 Supplement: Deployment & Operations
     ├── Blue-Green Deployment
     │   └── Two environments, instant rollback, double cost
     ├── Canary Deployment

@@ -243,13 +243,13 @@ Every chapter grounds theory in real-world incidents and production behavior. CA
 
 | When you're designing... | You'll need... | Chapter |
 |--------------------------|----------------|---------|
-| A database layer | Consistency model selection | Ch 14 |
-| A storage system at scale | Replication + sharding strategy | Ch 15 |
-| A single-writer or scheduler | Leader election / coordination | Ch 16 |
-| API retry and error handling | Backpressure + retries + idempotency | Ch 17 |
-| Async processing pipeline | Queue vs log vs stream selection | Ch 18 |
-| Failure handling and degradation | Failure models + partial failure design | Ch 19 |
-| Multi-region / partition behavior | CAP trade-off reasoning | Ch 20 |
+| A database layer | Consistency model selection | Ch 20 |
+| A storage system at scale | Replication + sharding strategy | Ch 21 |
+| A single-writer or scheduler | Leader election / coordination | Ch 22 |
+| API retry and error handling | Backpressure + retries + idempotency | Ch 23 |
+| Async processing pipeline | Queue vs log vs stream selection | Ch 24 |
+| Failure handling and degradation | Failure models + partial failure design | Ch 25 |
+| Multi-region / partition behavior | CAP trade-off reasoning | Ch 26 |
 
 ---
 

@@ -29,27 +29,27 @@ The chapters in this section answer the fundamental question: **Can you design a
 │                    SECTION 5: DESIGN PROBLEMS                               │
 │                                                                             │
 │   ┌── Core Infrastructure ──────────────────────────────────────────────┐   │
-│   │  Ch 34: URL Shortener                                               │   │
-│   │  Ch 35: Single-Region Rate Limiter                                  │   │
-│   │  Ch 36: Distributed Cache (Single Cluster)                          │   │
-│   │  Ch 37: Object / File Storage System                                │   │
+│   │  Ch 42: URL Shortener                                               │   │
+│   │  Ch 43: Single-Region Rate Limiter                                  │   │
+│   │  Ch 44: Distributed Cache (Single Cluster)                          │   │
+│   │  Ch 45: Object / File Storage System                                │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
 │   ┌── Application Systems ──────────────────────────────────────────────┐   │
-│   │  Ch 38: Notification System                                         │   │
-│   │  Ch 39: Authentication System                                       │   │
-│   │  Ch 40: Search System                                               │   │
-│   │  Ch 41: Metrics Collection System                                   │   │
+│   │  Ch 46: Notification System                                         │   │
+│   │  Ch 47: Authentication System                                       │   │
+│   │  Ch 48: Search System                                               │   │
+│   │  Ch 49: Metrics Collection System                                   │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
 │   ┌── Advanced Patterns ────────────────────────────────────────────────┐   │
-│   │  Ch 42: Background Job Queue                                        │   │
-│   │  Ch 43: Payment Flow                                                │   │
-│   │  Ch 44: API Gateway                                                 │   │
-│   │  Ch 45: Real-Time Chat                                              │   │
-│   │  Ch 46: Configuration Management                                    │   │
+│   │  Ch 50: Background Job Queue                                        │   │
+│   │  Ch 51: Payment Flow                                                │   │
+│   │  Ch 52: API Gateway                                                 │   │
+│   │  Ch 53: Real-Time Chat                                              │   │
+│   │  Ch 54: Configuration Management                                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -59,7 +59,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ## Chapter Summaries
 
-### Chapter 34: URL Shortener
+### Chapter 42: URL Shortener
 
 **Core Question**: How do you design a deceptively simple system that must handle massive read-to-write ratios at scale?
 
@@ -74,7 +74,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 35: Single-Region Rate Limiter
+### Chapter 43: Single-Region Rate Limiter
 
 **Core Question**: How do you protect APIs from abuse without degrading performance for legitimate users?
 
@@ -89,7 +89,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 36: Distributed Cache (Single Cluster)
+### Chapter 44: Distributed Cache (Single Cluster)
 
 **Core Question**: How do you build a caching layer that actually improves performance without introducing consistency nightmares?
 
@@ -104,7 +104,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 37: Object / File Storage System (Single Cluster)
+### Chapter 45: Object / File Storage System (Single Cluster)
 
 **Core Question**: How do you store arbitrary files with extreme durability guarantees and retrieve them reliably at scale?
 
@@ -119,7 +119,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 38: Notification System
+### Chapter 46: Notification System
 
 **Core Question**: How do you deliver the right message, to the right user, on the right channel, at the right time—without overwhelming them?
 
@@ -134,7 +134,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 39: Authentication System (AuthN)
+### Chapter 47: Authentication System (AuthN)
 
 **Core Question**: How do you build a front door that keeps attackers out while letting legitimate users in seamlessly?
 
@@ -149,7 +149,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 40: Search System (Single Cluster)
+### Chapter 48: Search System (Single Cluster)
 
 **Core Question**: How do you build a system that returns relevant results in under 200ms across millions of documents?
 
@@ -164,7 +164,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 41: Metrics Collection System
+### Chapter 49: Metrics Collection System
 
 **Core Question**: How do you build the system that monitors everything else—and keep it more reliable than what it monitors?
 
@@ -179,7 +179,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 42: Background Job Queue
+### Chapter 50: Background Job Queue
 
 **Core Question**: How do you reliably process deferred work at scale without losing jobs or silently failing?
 
@@ -194,7 +194,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 43: Payment Flow
+### Chapter 51: Payment Flow
 
 **Core Question**: How do you move money correctly, exactly once, in a world of network partitions and ambiguous responses?
 
@@ -209,7 +209,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 44: API Gateway
+### Chapter 52: API Gateway
 
 **Core Question**: How do you build the single entry point to your entire system—one that must never become the bottleneck?
 
@@ -224,7 +224,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 45: Real-Time Chat
+### Chapter 53: Real-Time Chat
 
 **Core Question**: How do you deliver messages instantly, reliably, and in order to millions of concurrent users?
 
@@ -239,7 +239,7 @@ The chapters in this section answer the fundamental question: **Can you design a
 
 ---
 
-### Chapter 46: Configuration Management
+### Chapter 54: Configuration Management
 
 **Core Question**: How do you safely change production behavior without deploying code—when a single key-value change can take down your fleet?
 
@@ -292,9 +292,9 @@ Capacity estimates, latency budgets, and storage calculations appear throughout.
 
 | Category | Chapters | Key Skills Tested |
 |----------|----------|-------------------|
-| **Core Infrastructure** | 28, 29, 30, 31 | Data modeling, sharding, caching, durability |
-| **Application Systems** | 32, 33, 34, 35 | Multi-channel delivery, security, indexing, time-series |
-| **Advanced Patterns** | 36, 37, 38, 39, 40 | Async processing, financial correctness, real-time delivery, dynamic config |
+| **Core Infrastructure** | 42, 43, 44, 45 | Data modeling, sharding, caching, durability |
+| **Application Systems** | 46, 47, 48, 49 | Multi-channel delivery, security, indexing, time-series |
+| **Advanced Patterns** | 50, 51, 52, 53, 54 | Async processing, financial correctness, real-time delivery, dynamic config |
 
 ---
 
@@ -302,19 +302,19 @@ Capacity estimates, latency budgets, and storage calculations appear throughout.
 
 | Chapter | Topic | Estimated Reading Time | Estimated Practice Time |
 |---------|-------|----------------------|------------------------|
-| Chapter 34 | URL Shortener | 60–90 minutes | 45 minutes design practice |
-| Chapter 35 | Rate Limiter | 60–90 minutes | 45 minutes design practice |
-| Chapter 36 | Distributed Cache | 60–90 minutes | 45 minutes design practice |
-| Chapter 37 | Object Storage | 60–90 minutes | 45 minutes design practice |
-| Chapter 38 | Notification System | 90–120 minutes | 60 minutes design practice |
-| Chapter 39 | Authentication System | 60–90 minutes | 45 minutes design practice |
-| Chapter 40 | Search System | 60–90 minutes | 45 minutes design practice |
-| Chapter 41 | Metrics Collection | 60–90 minutes | 45 minutes design practice |
-| Chapter 42 | Background Job Queue | 60–90 minutes | 45 minutes design practice |
-| Chapter 43 | Payment Flow | 60–90 minutes | 60 minutes design practice |
-| Chapter 44 | API Gateway | 60–90 minutes | 45 minutes design practice |
-| Chapter 45 | Real-Time Chat | 60–90 minutes | 60 minutes design practice |
-| Chapter 46 | Configuration Management | 60–90 minutes | 45 minutes design practice |
+| Chapter 42 | URL Shortener | 60–90 minutes | 45 minutes design practice |
+| Chapter 43 | Rate Limiter | 60–90 minutes | 45 minutes design practice |
+| Chapter 44 | Distributed Cache | 60–90 minutes | 45 minutes design practice |
+| Chapter 45 | Object Storage | 60–90 minutes | 45 minutes design practice |
+| Chapter 46 | Notification System | 90–120 minutes | 60 minutes design practice |
+| Chapter 47 | Authentication System | 60–90 minutes | 45 minutes design practice |
+| Chapter 48 | Search System | 60–90 minutes | 45 minutes design practice |
+| Chapter 49 | Metrics Collection | 60–90 minutes | 45 minutes design practice |
+| Chapter 50 | Background Job Queue | 60–90 minutes | 45 minutes design practice |
+| Chapter 51 | Payment Flow | 60–90 minutes | 60 minutes design practice |
+| Chapter 52 | API Gateway | 60–90 minutes | 45 minutes design practice |
+| Chapter 53 | Real-Time Chat | 60–90 minutes | 60 minutes design practice |
+| Chapter 54 | Configuration Management | 60–90 minutes | 45 minutes design practice |
 
 **Total Section**: ~16–22 hours reading + ~10–12 hours practice
 

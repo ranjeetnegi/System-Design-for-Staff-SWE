@@ -30,21 +30,21 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 │                                                                             │
 │   ┌── Core Data Systems ────────────────────────────────────────────────┐   │
 │   │                                                                     │   │
-│   │  Chapter 27                                                         │   │
+│   │  Chapter 28                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  DATABASES                                                   │   │   │
 │   │  │  Choosing, using, and evolving data stores                   │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 28                                                         │   │
+│   │  Chapter 31                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  CACHING AT SCALE                                            │   │   │
 │   │  │  Redis, CDN, and edge systems — reliability, not just speed  │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 29                                                         │   │
+│   │  Chapter 33                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  EVENT-DRIVEN ARCHITECTURES                                  │   │   │
 │   │  │  Kafka, streams, and when events make things worse           │   │   │
@@ -55,14 +55,14 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 │                            ▼                                                │
 │   ┌── Global Scale ─────────────────────────────────────────────────────┐   │
 │   │                                                                     │   │ 
-│   │  Chapter 30                                                         │   │
+│   │  Chapter 36                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  MULTI-REGION SYSTEMS                                        │   │   │
 │   │  │  Geo-replication, latency, and regional failure              │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 31                                                         │   │
+│   │  Chapter 37                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  DATA LOCALITY, COMPLIANCE, AND SYSTEM EVOLUTION             │   │   │
 │   │  │  Where data lives, who says so, and what it costs            │   │   │
@@ -73,14 +73,14 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 │                            ▼                                                │
 │   ┌── Long-Term Viability ──────────────────────────────────────────────┐   │
 │   │                                                                     │   │
-│   │  Chapter 32                                                         │   │
+│   │  Chapter 38                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  COST, EFFICIENCY, AND SUSTAINABLE DESIGN                    │   │   │
 │   │  │  Can we afford this at 10x? 100x?                            │   │   │
 │   │  └──────────────────────────────────────────────────────────────┘   │   │
 │   │                            │                                        │   │
 │   │                            ▼                                        │   │
-│   │  Chapter 33                                                         │   │
+│   │  Chapter 39                                                         │   │
 │   │  ┌──────────────────────────────────────────────────────────────┐   │   │
 │   │  │  SYSTEM EVOLUTION, MIGRATION, AND RISK MANAGEMENT            │   │   │
 │   │  │  Build it to change safely                                   │   │   │
@@ -95,7 +95,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ## Chapter Summaries
 
-### Chapter 27: Databases — Choosing, Using, and Evolving Data Stores
+### Chapter 28: Databases — Choosing, Using, and Evolving Data Stores
 
 **Core Question**: How do you choose a database—and when do you choose three?
 
@@ -111,7 +111,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 28: Caching at Scale — Redis, CDN, and Edge Systems
+### Chapter 31: Caching at Scale — Redis, CDN, and Edge Systems
 
 **Core Question**: When is caching a reliability strategy, and when is it a liability?
 
@@ -127,7 +127,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 29: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
+### Chapter 33: Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs
 
 **Core Question**: When do events make systems better—and when do they make systems worse?
 
@@ -143,7 +143,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 30: Multi-Region Systems — Geo-Replication, Latency, and Failure
+### Chapter 36: Multi-Region Systems — Geo-Replication, Latency, and Failure
 
 **Core Question**: When does multi-region make things better—and when does it just make things more expensive and more broken?
 
@@ -159,7 +159,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 31: Data Locality, Compliance, and System Evolution
+### Chapter 37: Data Locality, Compliance, and System Evolution
 
 **Core Question**: Where does every piece of user data live—including copies, caches, logs, and derived data?
 
@@ -175,7 +175,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 32: Cost, Efficiency, and Sustainable System Design
+### Chapter 38: Cost, Efficiency, and Sustainable System Design
 
 **Core Question**: Can we afford this system at 10x scale? At 100x?
 
@@ -192,7 +192,7 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ---
 
-### Chapter 33: System Evolution, Migration, and Risk Management
+### Chapter 39: System Evolution, Migration, and Risk Management
 
 **Core Question**: How do you change a running system without breaking it?
 
@@ -211,9 +211,9 @@ The chapters in this section answer the fundamental question: **How do Staff Eng
 
 ## How to Use This Section
 
-1. **Read Chapters 21–23 first**: These three cover the core data systems (databases, caches, events) you'll use in nearly every design problem
-2. **Read Chapters 24–25 for global scope**: Multi-region and compliance are critical for Staff interviews—they demonstrate thinking beyond a single data center
-3. **Read Chapters 26–27 for the long view**: Cost and evolution are what separate Senior designs ("does it work?") from Staff designs ("does it work *sustainably*?")
+1. **Read Ch 28, 31, 33 first**: These three cover the core data systems (databases, caches, events) you'll use in nearly every design problem
+2. **Read Ch 36–37 for global scope**: Multi-region and compliance are critical for Staff interviews—they demonstrate thinking beyond a single data center
+3. **Read Ch 38–39 for the long view**: Cost and evolution are what separate Senior designs ("does it work?") from Staff designs ("does it work *sustainably*?")
 4. **Apply to Section 5 problems**: As you practice Senior-level designs, return here when choosing databases, designing cache layers, or reasoning about failure
 5. **Revisit for Section 6 depth**: Staff-level problems in Section 6 require multi-region reasoning, cost analysis, and evolution planning—these chapters are your reference
 
@@ -247,13 +247,27 @@ Caching trades consistency for latency. Events trade debuggability for decouplin
 
 | When you're designing... | You'll need... | Chapter |
 |--------------------------|----------------|---------|
-| Storage and data access layer | Database selection framework | Ch 21 |
-| Read-heavy performance optimization | Caching strategy (app, distributed, CDN, edge) | Ch 22 |
-| Async processing or decoupled services | Event-driven architecture assessment | Ch 23 |
-| Global user base or regional failover | Multi-region topology and replication | Ch 24 |
-| Systems handling PII or regulated data | Data locality and compliance architecture | Ch 25 |
-| Capacity planning or budget justification | Cost modeling and sustainability analysis | Ch 26 |
-| Schema changes, platform migrations, rewrites | Evolution strategy and risk management | Ch 27 |
+| Storage and data access layer | Database selection framework | Ch 28 |
+| Read-heavy performance optimization | Caching strategy (app, distributed, CDN, edge) | Ch 31 |
+| Async processing or decoupled services | Event-driven architecture assessment | Ch 33 |
+| Global user base or regional failover | Multi-region topology and replication | Ch 36 |
+| Systems handling PII or regulated data | Data locality and compliance architecture | Ch 37 |
+| Capacity planning or budget justification | Cost modeling and sustainability analysis | Ch 38 |
+| Schema changes, platform migrations, rewrites | Evolution strategy and risk management | Ch 39 |
+
+---
+
+## Supplements
+
+| Supplement | Topic | Senior (L5) | Staff (L6) |
+|------------|-------|-------------|------------|
+| [Ch 29: Database Internals](Chapter_29_Database_Internals_Deep_Dive.md) | B-tree, WAL, MVCC, connection pooling | Optional | Recommended |
+| [Ch 30: Data Encoding & Schema Evolution](Chapter_30_Data_Encoding_and_Schema_Evolution.md) | JSON vs Protobuf vs Avro, compatibility rules | Skim | Full |
+| [Ch 32: Redis & Cache Internals](Chapter_32_Redis_and_Cache_Internals.md) | Redis Cluster, eviction, persistence | Optional | Recommended |
+| [Ch 34: Kafka Internals](Chapter_34_Kafka_Internals.md) | Partitions, consumer groups, ISR | Optional | Recommended |
+| [Ch 35: Batch Processing](Chapter_35_Batch_Processing_and_Data_Pipelines.md) | Batch vs stream, ETL, MapReduce/Spark | Reference | Full |
+| [Ch 40: Deployment & Ops](Chapter_40_Deployment_Strategies_and_Operations.md) | SLO/error budget, runbooks, observability | **Recommended** | **Required** |
+| [Ch 41: Service Mesh](Chapter_41_Service_Mesh_When_Why_and_Trade_offs.md) | Istio/Envoy, when to adopt, trade-offs | Skip | **Recommended** |
 
 ---
 
@@ -261,15 +275,17 @@ Caching trades consistency for latency. Events trade debuggability for decouplin
 
 | Chapter | Topic | Estimated Reading Time | Estimated Practice Time |
 |---------|-------|----------------------|------------------------|
-| Chapter 27 | Databases | 60–90 minutes | 1 hour applied exercises |
-| Chapter 28 | Caching at Scale | 60–90 minutes | 1 hour applied exercises |
-| Chapter 29 | Event-Driven Architectures | 60–90 minutes | 1 hour applied exercises |
-| Chapter 30 | Multi-Region Systems | 60–90 minutes | 1 hour case studies |
-| Chapter 31 | Data Locality & Compliance | 45–60 minutes | 45 minutes applied exercises |
-| Chapter 32 | Cost & Sustainable Design | 60–90 minutes | 1 hour cost modeling practice |
-| Chapter 33 | Evolution & Migration | 60–90 minutes | 1 hour migration planning practice |
+| Chapter 28 | Databases | 60–90 minutes | 1 hour applied exercises |
+| Chapter 31 | Caching at Scale | 60–90 minutes | 1 hour applied exercises |
+| Chapter 33 | Event-Driven Architectures | 60–90 minutes | 1 hour applied exercises |
+| Chapter 36 | Multi-Region Systems | 60–90 minutes | 1 hour case studies |
+| Chapter 37 | Data Locality & Compliance | 45–60 minutes | 45 minutes applied exercises |
+| Chapter 38 | Cost & Sustainable Design | 60–90 minutes | 1 hour cost modeling practice |
+| Chapter 39 | Evolution & Migration | 60–90 minutes | 1 hour migration planning practice |
 
-**Total Section**: ~7–10 hours reading + ~6–7 hours practice
+**Supplements**: 20–45 minutes each, depending on depth.
+
+**Total Section**: ~7–10 hours reading + ~6–7 hours practice (+ supplements as needed)
 
 ---
 

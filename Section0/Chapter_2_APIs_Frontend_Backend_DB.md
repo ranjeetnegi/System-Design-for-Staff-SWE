@@ -1242,6 +1242,173 @@ The interviewer is listening for: Do you make intentional trade-offs? Do you con
 
 ---
 
+# Appendix: API Versioning Strategy — Staff-Level Depth
+
+At Staff level, API versioning isn't just "use /v1/" — it's a strategy that affects consumer trust, migration cost, and team velocity. A poorly versioned API creates friction for every consumer; a well-versioned one enables independent evolution.
+
+**The Staff Engineer's API Versioning Principle**: An API is a promise. Versioning is how you manage that promise over time. Break it carelessly, and consumers stop trusting you. Never evolve it, and your system calcifies.
+
+**One-liners**:
+- "The best version is the one you never have to create — evolve in place."
+- "Breaking an API is easy. Migrating 200 consumers off the old one is the hard part."
+- "Sunset headers are cheaper than angry Slack messages."
+
+## L5 vs L6: API Versioning Thinking
+
+| Scenario | L5 Approach | L6 Approach |
+|----------|-------------|-------------|
+| **New field needed** | "Release v2" | "Add as optional field to v1. Old consumers ignore it. No version needed. We version only for breaking changes, not additive ones." |
+| **Breaking change needed** | "Just push v2 and deprecate v1" | "Expand-contract: add new field in v1, migrate consumers over 3 months, remove old field. If restructuring is needed, create v2 with 6-month overlap, sunset headers, usage monitoring, direct outreach to top consumers." |
+| **Internal API versioning** | "Same as public" | "Internal APIs evolve in place — add optional, never remove. Versioning overhead isn't worth it for 3 consumer teams we can Slack. For public APIs with 10K consumers, formal versioning is essential." |
+| **Version proliferation** | "We're on v7" | "If you're on v7, you shipped 6 breaking changes. Each required migration work from every consumer. Better: evolve in place for 90% of changes, version only when unavoidable. Two active versions max." |
+
+## Versioning Strategies
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   API VERSIONING: FOUR APPROACHES                                            │
+│                                                                             │
+│   1. URL PATH VERSIONING:                                                   │
+│      GET /v1/users/123                                                      │
+│      GET /v2/users/123                                                      │
+│      ✓ Explicit, visible, cacheable                                         │
+│      ✗ URL proliferation, routing complexity                                │
+│      BEST FOR: Public APIs (most common, most understood)                   │
+│                                                                             │
+│   2. HEADER VERSIONING:                                                     │
+│      GET /users/123                                                         │
+│      Accept: application/vnd.company.v2+json                                │
+│      ✓ Clean URLs, content negotiation native                               │
+│      ✗ Hidden (not visible in URL), harder to cache, harder to test        │
+│      BEST FOR: APIs where URL aesthetics matter                             │
+│                                                                             │
+│   3. QUERY PARAMETER:                                                       │
+│      GET /users/123?version=2                                               │
+│      ✓ Easy to add, easy to test                                            │
+│      ✗ Not RESTful, clutters URLs                                           │
+│      BEST FOR: Quick versioning for internal APIs                           │
+│                                                                             │
+│   4. NO VERSIONING (evolve in place):                                       │
+│      Always add fields, never remove. Use optional fields.                 │
+│      ✓ Simple, no version management                                        │
+│      ✗ Schema grows forever, breaking changes impossible                   │
+│      BEST FOR: Internal APIs with few consumers                             │
+│                                                                             │
+│   STAFF RECOMMENDATION: URL path (/v1/) for public APIs.                   │
+│   Evolve-in-place for internal APIs (add optional, never remove).          │
+│   Version only when breaking changes are unavoidable.                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Expand-Contract Pattern for API Changes
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   EXPAND-CONTRACT: BREAKING CHANGE WITHOUT BREAKING CONSUMERS               │
+│                                                                             │
+│   Goal: Rename "email" → "contact_email" in API response                   │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  PHASE 1 — EXPAND (Week 1):                                         │   │
+│   │  Response: { "email": "a@b.com", "contact_email": "a@b.com" }       │   │
+│   │  Both fields present. Old consumers read email. New read contact_.  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                          │                                                  │
+│                          ▼                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  PHASE 2 — MIGRATE (Weeks 2–12):                                    │   │
+│   │  Notify consumers: "Use contact_email. email is deprecated."        │   │
+│   │  Monitor: who still reads email? Dashboard tracks per-client.       │   │
+│   │  Sunset header: Deprecation: true on email field.                   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                          │                                                  │
+│                          ▼                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  PHASE 3 — CONTRACT (Week 13+):                                     │   │
+│   │  Response: { "contact_email": "a@b.com" }                           │   │
+│   │  email field removed. Only after zero consumers still read it.      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   WHY THIS MATTERS: No consumer experiences a breaking change.             │
+│   The "break" is spread across weeks, not deployed as a big bang.          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Deprecation and Sunset Strategy
+
+| Phase | Action | Duration | Headers |
+|-------|--------|----------|---------|
+| **Announce** | Document deprecation in changelog, API docs | Day 0 | — |
+| **Sunset header** | Add `Deprecation: true` and `Sunset: <date>` to v1 responses | Immediate | `Deprecation: true`, `Sunset: Sat, 01 Mar 2025 00:00:00 GMT` |
+| **Monitor** | Track v1 usage: which clients, how much traffic | Ongoing | Log client ID + API version |
+| **Warn** | Contact high-usage v1 consumers directly | Month 3 | — |
+| **Soft sunset** | Rate-limit v1 or return 299 Warning header | Month 5 | `Warning: 299 - "API v1 sunset March 2025"` |
+| **Hard sunset** | Return 410 Gone for all v1 requests | After sunset date | `410 Gone` |
+
+## Breaking vs Non-Breaking Changes
+
+| Change | Breaking? | Migration |
+|--------|-----------|-----------|
+| Add optional field | No | None needed |
+| Add new endpoint | No | None needed |
+| Remove field | **Yes** | Deprecation timeline |
+| Rename field | **Yes** | Expand-contract (add new, deprecate old) |
+| Change field type | **Yes** | New field with new type |
+| Change URL structure | **Yes** | New version |
+| Change error format | **Yes** | New version |
+| Add required field | **Yes** | New version (or add with default) |
+
+## Production Incident: The Silent Breaking Change
+
+**Context**: Payment API used by 150 partner integrations. Team changed the `amount` field from integer cents (1000 = $10.00) to a decimal string ("10.00") in a "minor" release.
+
+**Impact**: 23 partners' integrations broke. Charges were processed at wrong amounts (some partners parsed "10.00" as integer 10 → charged $0.10 instead of $10.00). $47K in under-charges over 6 hours before detection.
+
+**Root cause**: No versioning. Change deployed as a "bug fix" without consumer notification. No sunset header. No expand-contract.
+
+**Fix**: Reverted to integer. Added `amount_decimal` as new field alongside `amount`. Gave partners 6-month migration window. Added API contract tests in CI that detect field type changes.
+
+**Lesson**: Any type change is a breaking change. Use expand-contract. Never change a field's type in place — add a new field.
+
+## Quick Reference Card: API Versioning
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        QUICK REFERENCE: API VERSIONING — REMEMBER THIS                      ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  GOLDEN RULES:                                                                ║
+║  1. Add fields freely (optional, with default) — NOT a version bump          ║
+║  2. Never remove fields — deprecate, then remove after sunset                ║
+║  3. Never change field types — add new field with new type                   ║
+║  4. Version (v1→v2) ONLY for structural changes you can't evolve in place   ║
+║                                                                               ║
+║  VERSIONING CHOICE:                                                           ║
+║  Public API → URL path (/v1/)     Internal API → Evolve in place            ║
+║                                                                               ║
+║  BREAKING CHANGE PLAYBOOK:                                                    ║
+║  EXPAND → add new alongside old                                              ║
+║  MIGRATE → notify consumers, monitor usage, sunset headers                   ║
+║  CONTRACT → remove old after zero usage                                      ║
+║                                                                               ║
+║  DEPRECATION TIMELINE: 6 months (public), 1-3 months (internal)             ║
+║  MAX ACTIVE VERSIONS: 2 (anything more = maintenance nightmare)              ║
+║                                                                               ║
+║  ONE-LINER: "An API is a promise. Version it to manage that promise."        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+## Staff-Level Interview Answer
+
+**"How do you version APIs?"** — "URL path versioning (/v1/) for public APIs — explicit, cacheable, understood by everyone. For internal APIs, I prefer evolve-in-place: add optional fields, never remove. When a breaking change is unavoidable, I version (v1 → v2), support both during a 6-month migration window with sunset headers, monitor for remaining v1 clients, then sunset. The key insight: versioning is a contract with consumers, not a technical convenience. Breaking that contract breaks trust."
+
+**"How do you handle a breaking change?"** — "Expand-contract. Example: renaming a field? Add the new name alongside the old. Both are populated. Notify consumers. Monitor who reads the old field. When usage hits zero, remove. Total time: 4–12 weeks. The important part: the consumer never experiences a break. We absorb the cost of dual support so they don't absorb the cost of an outage."
+
+---
+
 # Visual Summary: Chapter 2 in One Picture
 
 ```

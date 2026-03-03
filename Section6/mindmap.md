@@ -5,7 +5,7 @@ Section 6: Staff (L6) Design Problems
 │
 ├── Infrastructure & Scale
 │   │
-│   ├── Ch 47: Global Rate Limiter
+│   ├── Ch 55: Global Rate Limiter
 │   │   ├── Protection over precision
 │   │   ├── Algorithms: fixed/sliding window, token/leaky bucket
 │   │   ├── Approximate counting often better than exact
@@ -14,7 +14,7 @@ Section 6: Staff (L6) Design Problems
 │   │   ├── Avoid global consensus for limits
 │   │   └── Failures: node crash, counter corruption, config down, partition
 │   │
-│   ├── Ch 48: Distributed Cache
+│   ├── Ch 56: Distributed Cache
 │   │   ├── "A cache is a lie you tell the system"
 │   │   ├── Edge cases: thundering herd, stampede, hot keys, negative caching
 │   │   ├── Cache down → DB overload → cascading failure
@@ -22,19 +22,19 @@ Section 6: Staff (L6) Design Problems
 │   │   ├── Cache migration patterns
 │   │   └── Cross-team ownership challenges
 │   │
-│   ├── Ch 52: Metrics / Observability System
+│   ├── Ch 60: Metrics / Observability System
 │   │   ├── Time-series ingestion, storage, querying, alerting
 │   │   ├── Cardinality limits
 │   │   ├── Cost allocation per team/service
 │   │   └── Multi-tenant isolation
 │   │
-│   ├── Ch 53: Configuration, Feature Flags & Secrets
+│   ├── Ch 61: Configuration, Feature Flags & Secrets
 │   │   ├── Runtime config + feature flags + secrets
 │   │   ├── Propagation across thousands of instances
 │   │   ├── Safety gates & validation
 │   │   └── Blast-radius containment on bad config
 │   │
-│   └── Ch 54: API Gateway / Edge Request Routing
+│   └── Ch 62: API Gateway / Edge Request Routing
 │       ├── Edge routing & request lifecycle
 │       ├── Multi-region routing
 │       ├── Failover strategies
@@ -42,47 +42,47 @@ Section 6: Staff (L6) Design Problems
 │
 ├── Application & User-Facing Systems
 │   │
-│   ├── Ch 49: News Feed
+│   ├── Ch 57: News Feed
 │   │   ├── Feed storage, content cache, fan-out workers
 │   │   ├── Celebrity index & celebrity problem
 │   │   ├── Ranking pipeline
 │   │   └── Multi-source retrieval at scale
 │   │
-│   ├── Ch 50: Real-Time Collaboration
+│   ├── Ch 58: Real-Time Collaboration
 │   │   ├── Real-time sync & conflict resolution
 │   │   ├── Operational transforms / CRDTs
 │   │   ├── Presence detection
 │   │   └── Multi-user editing consistency
 │   │
-│   ├── Ch 51: Messaging Platform
+│   ├── Ch 59: Messaging Platform
 │   │   ├── Message delivery, ordering, persistence
 │   │   ├── Multi-device fan-out
 │   │   ├── WebSocket management at scale
 │   │   ├── Connection registry
 │   │   └── Per-conversation ordering
 │   │
-│   ├── Ch 55: Search / Indexing System
+│   ├── Ch 63: Search / Indexing System
 │   │   ├── Inverted index at scale
 │   │   ├── Multi-phase ranking pipeline
 │   │   ├── Tiered freshness (real-time vs batch)
 │   │   ├── Multi-tenancy
 │   │   └── Graceful degradation under load
 │   │
-│   ├── Ch 56: Recommendation / Ranking System
+│   ├── Ch 64: Recommendation / Ranking System
 │   │   ├── Candidate retrieval → scoring → re-ranking funnel
 │   │   ├── Feature store
 │   │   ├── Feedback loop & cold start
 │   │   ├── Multi-source retrieval
 │   │   └── Fallback stack when ML fails
 │   │
-│   ├── Ch 57: Notification Delivery (Fan-out at Scale)
+│   ├── Ch 65: Notification Delivery (Fan-out at Scale)
 │   │   ├── Priority isolation: P0 / P1 / P2 queues
 │   │   ├── Celebrity fan-out
 │   │   ├── Multi-channel routing
 │   │   ├── Preference evaluation pipeline
 │   │   └── Deduplication across channels
 │   │
-│   └── Ch 58: Authentication & Authorization
+│   └── Ch 66: Authentication & Authorization
 │       ├── Auth (identity) vs authorization (access)
 │       ├── Short-lived tokens, local validation
 │       ├── Token propagation & revocation
@@ -91,28 +91,28 @@ Section 6: Staff (L6) Design Problems
 │
 ├── Platforms & Pipelines
 │   │
-│   ├── Ch 59: Distributed Scheduler / Job Orchestration
+│   ├── Ch 67: Distributed Scheduler / Job Orchestration
 │   │   ├── Job scheduling & DAG orchestration
 │   │   ├── Resource-aware placement
 │   │   ├── State durability & liveness detection
 │   │   ├── Multi-tenancy
 │   │   └── Priority preemption
 │   │
-│   ├── Ch 60: Feature Experimentation / A/B Testing
+│   ├── Ch 68: Feature Experimentation / A/B Testing
 │   │   ├── Hash-based assignment
 │   │   ├── Interaction isolation between experiments
 │   │   ├── Guardrails & safety metrics
 │   │   ├── Statistical rigor: SRM detection, CUPED
 │   │   └── Sequential testing
 │   │
-│   ├── Ch 61: Log Aggregation & Query System
+│   ├── Ch 69: Log Aggregation & Query System
 │   │   ├── Write-heavy, read-sparse
 │   │   ├── Hot / warm / cold storage tiers
 │   │   ├── Inverted index for search
 │   │   ├── Live tailing
 │   │   └── Agent disk buffer for resilience
 │   │
-│   ├── Ch 62: Payment / Transaction Processing
+│   ├── Ch 70: Payment / Transaction Processing
 │   │   ├── State machine for payment lifecycle
 │   │   ├── Idempotency & double-entry ledger
 │   │   ├── Processor failover
@@ -120,7 +120,7 @@ Section 6: Staff (L6) Design Problems
 │   │   ├── Reconciliation
 │   │   └── PCI tokenization
 │   │
-│   └── Ch 63: Media Upload & Processing Pipeline
+│   └── Ch 71: Media Upload & Processing Pipeline
 │       ├── Resumable chunked uploads
 │       ├── Processing DAG
 │       ├── Poison input isolation
@@ -128,7 +128,7 @@ Section 6: Staff (L6) Design Problems
 │       ├── CDN-first serving
 │       └── Per-stage retry
 │
-├── Ch 64: Bonus Advanced Topics
+├── Ch 72: Bonus Advanced Topics
 │   ├── OIDC vs OAuth — OAuth=authz, OIDC=identity (ID token)
 │   ├── gRPC vs REST — gRPC for internal, REST for public
 │   ├── GraphQL — client-specified queries, N+1, DataLoader

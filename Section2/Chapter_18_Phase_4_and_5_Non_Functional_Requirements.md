@@ -2126,6 +2126,186 @@ Your task:
 
 ---
 
+# Appendix: RTO and RPO as First-Class Requirements
+
+At Staff level, disaster recovery (DR) isn't an afterthought—it's a requirement that shapes architecture. RTO and RPO are the two numbers that define your DR posture, and they must be established in Phase 4 alongside availability and latency targets.
+
+**The Staff Engineer's DR Principle**: An untested backup is not a backup. An untested failover is not a failover. RTO and RPO are promises — and promises must be verified.
+
+**One-liners**:
+- "RPO is how much you lose. RTO is how long you're down. Both cost money — pick the pair you can afford."
+- "Every system has an RTO. If you haven't defined it, it's 'however long it takes you to panic-fix at 3 AM.'"
+- "RPO=0 costs 5× more than RPO=5min. Ask the business if 5 minutes of data is worth $35K/month."
+
+## Definitions
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   RTO and RPO: THE TWO NUMBERS THAT DEFINE DISASTER RECOVERY                │
+│                                                                             │
+│                     DISASTER                                                │
+│                        │                                                    │
+│   ◄── RPO ────────────►│◄──────────── RTO ──────────────►                   │
+│   (Recovery Point       │ (Recovery Time                                    │
+│    Objective)           │  Objective)                                       │
+│                         │                                                   │
+│   "How much data can    │ "How long can the                                │
+│    we afford to lose?"  │  system be down?"                                │
+│                         │                                                   │
+│   Last backup ──────── Failure ─────────── System restored                 │
+│                                                                             │
+│   RPO = 0:  No data loss (sync replication, multi-region active-active)   │
+│   RPO = 1h: Can lose up to 1 hour of data (hourly backups/snapshots)      │
+│   RPO = 24h: Can lose up to 1 day of data (daily backups)                 │
+│                                                                             │
+│   RTO = 0:  No downtime (automatic failover, active-active)               │
+│   RTO = 15m: System restored within 15 minutes (automated failover)       │
+│   RTO = 4h: System restored within 4 hours (manual restore from backup)   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## RTO/RPO Drive Architecture — The Cost Staircase
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   DR COST STAIRCASE: MORE PROTECTION = MORE MONEY                            │
+│                                                                             │
+│   Cost ($)                                                                  │
+│     │                                                                       │
+│     │                                              ┌─────────────────┐     │
+│     │                                              │ RPO=0, RTO<1m   │     │
+│     │                                              │ Active-Active    │     │
+│     │                                              │ Sync Replication │     │
+│   $$$$$                                            │ $50K/mo+         │     │
+│     │                                    ┌─────────┴─────────────────┘     │
+│     │                                    │ RPO<5m, RTO<15m               │
+│     │                                    │ Active-Passive + Async        │
+│   $$$$                                   │ Auto failover. $15K/mo        │
+│     │                          ┌─────────┴──────────────────────────┘     │
+│     │                          │ RPO<1h, RTO<1h                          │
+│   $$$                          │ Warm standby + snapshots. $5K/mo        │
+│     │                ┌─────────┴──────────────────────────────────┘       │
+│     │                │ RPO<24h, RTO<4h                                    │
+│   $$                 │ Cold standby + daily backups. $1K/mo               │
+│     │       ┌────────┴─────────────────────────────────────────┘          │
+│     │       │ RPO<7d, RTO<24h                                             │
+│   $         │ Off-site backups, manual restore. $200/mo                   │
+│     │───────┴──────────────────────────────────────────────────────────    │
+│     └─────────────────────────────────────────────────────────── →         │
+│       Less protection ────────────────────► More protection               │
+│                                                                             │
+│   STAFF MATH: E-commerce doing $10M/month revenue.                        │
+│   1 hour downtime = ~$14K lost revenue.                                   │
+│   RPO<5m + RTO<15m costs $15K/month but prevents >$14K/hour losses.       │
+│   Pays for itself after 65 minutes of avoided downtime per month.         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| RTO/RPO | Architecture | Monthly Cost | Example |
+|---------|-------------|-------------|---------|
+| **RPO=0, RTO<1m** | Active-active multi-region, synchronous replication | $50K+ | Payment processing, stock trading |
+| **RPO<5m, RTO<15m** | Active-passive with async replication, automated failover | $15K | E-commerce, SaaS products |
+| **RPO<1h, RTO<1h** | Warm standby with periodic snapshots | $5K | Internal tools, non-critical services |
+| **RPO<24h, RTO<4h** | Cold standby with daily backups | $1K | Analytics, reporting, batch systems |
+| **RPO<7d, RTO<24h** | Off-site backups, manual restore | $200 | Archives, compliance data |
+
+## L5 vs L6: DR Thinking
+
+| Scenario | L5 Approach | L6 Approach |
+|----------|-------------|-------------|
+| **Setting DR targets** | "We need high availability" | "RPO=5 min, RTO=15 min for user-facing services. RPO=1h, RTO=4h for analytics. Different tiers, different costs. I'd ask the business: 'What's 5 minutes of data worth vs $35K/month for sync replication?'" |
+| **Testing DR** | "We have backups" | "We run quarterly DR drills. Last drill: restore took 45 min (RTO target: 15 min). Three action items assigned. Backup integrity verified monthly. We've never skipped a drill — an untested failover is a fiction." |
+| **Cost justification** | "We need multi-region" | "RPO=0 requires sync replication: +$50K/month and +30ms write latency. RPO=5min with async replication: +$15K/month and no latency impact. Business acceptable data loss: 5 min. Async wins." |
+| **DR scope** | "Back up the database" | "DR includes: database, cache warm-up, DNS propagation, config stores, secrets, message queue state, and in-flight requests. Missing any one makes your RTO fictional." |
+
+## DR Maturity Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   DR MATURITY: FROM HOPE TO CONFIDENCE                                       │
+│                                                                             │
+│   Level 0 — HOPE:                                                           │
+│   "We probably have backups somewhere." No defined RTO/RPO.                │
+│   Recovery: unknown. Could be hours. Could be days.                        │
+│                                                                             │
+│   Level 1 — DOCUMENTED:                                                     │
+│   RTO/RPO defined. Backup schedule documented. Runbook exists.             │
+│   Recovery: probably works, never tested.                                  │
+│                                                                             │
+│   Level 2 — TESTED:                                                         │
+│   Quarterly DR drills. Actual restore times measured.                      │
+│   Recovery: verified. Gaps documented and tracked.                         │
+│                                                                             │
+│   Level 3 — AUTOMATED:                                                      │
+│   Automated failover. Health checks trigger switchover.                    │
+│   Recovery: minutes, not hours. Tested monthly.                            │
+│                                                                             │
+│   Level 4 — CONTINUOUS:                                                     │
+│   Active-active. No "failover" needed — both regions always serving.       │
+│   Recovery: near-zero. Chaos-tested weekly.                                │
+│                                                                             │
+│   MOST COMPANIES: Level 1. STAFF ENGINEERS PUSH TO: Level 2-3.            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Production Incident: The Untested Failover
+
+**Context**: SaaS platform with RPO<5m (async replication to standby), RTO<15m (documented manual failover runbook).
+
+**Failure**: Primary database crashed due to disk controller failure at 2 AM.
+
+**What happened**: On-call engineer followed the runbook. Step 3: "Promote standby to primary." Promotion failed — standby was 3 hours behind due to a replication lag issue that went unmonitored for weeks. Step 5: "Update DNS." DNS TTL was 1 hour, not 5 minutes as documented. Step 7: "Warm cache." No procedure for cache warming — cold cache caused thundering herd on the new primary.
+
+**Actual RTO**: 4 hours and 12 minutes (target: 15 minutes). **Actual RPO**: 3 hours of data lost (target: 5 minutes).
+
+**Root cause**: DR plan was documented (Level 1) but never tested (not Level 2). Replication lag not monitored. DNS TTL not verified. Cache warm-up not planned.
+
+**Fix**: Monthly automated replication lag alerting. Quarterly DR drill with measured RTO/RPO. DNS TTL set to 60 seconds. Cache warm-up script added to failover runbook. Promoted to Level 2 maturity.
+
+**Lesson**: A DR plan you've never executed is a DR plan you don't have. Measure your actual RTO, not your hoped-for RTO.
+
+## Establishing RTO/RPO in Phase 4
+
+**Questions to ask the interviewer**:
+- "What's the cost of downtime? Revenue-impacting or internal-only?"
+- "Is any data loss acceptable, or must we guarantee zero data loss?"
+- "Is there a compliance requirement for DR? (SOC2, PCI-DSS, HIPAA)"
+
+**How to state it**: "For this system, I'd propose RPO of 5 minutes and RTO of 15 minutes. This means we need asynchronous replication with automated failover. If RPO=0 is required, we'd need synchronous replication, which adds write latency and doubles infrastructure cost."
+
+## Quick Reference Card: RTO/RPO
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        QUICK REFERENCE: RTO/RPO — REMEMBER THIS                             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  RPO = How much data you lose.    RTO = How long you're down.                ║
+║                                                                               ║
+║  ◄── RPO ──► DISASTER ◄── RTO ──►                                            ║
+║                                                                               ║
+║  THE COST LADDER:                                                             ║
+║  RPO=0    → Sync replication → $$$$$  (payments, trading)                    ║
+║  RPO<5m   → Async + auto-failover → $$$$ (e-commerce, SaaS)                 ║
+║  RPO<1h   → Warm standby → $$$ (internal tools)                             ║
+║  RPO<24h  → Daily backups → $$ (analytics)                                   ║
+║                                                                               ║
+║  STAFF RULES:                                                                 ║
+║  1. Define RTO/RPO per SERVICE TIER (not one size fits all)                  ║
+║  2. Test DR quarterly (untested DR = no DR)                                  ║
+║  3. Measure ACTUAL RTO, not documented RTO                                   ║
+║  4. DR includes: DB + cache + DNS + config + secrets + queue state           ║
+║                                                                               ║
+║  ONE-LINER: "Every system has an RTO. Define it, or discover it at 3 AM."   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Conclusion
 
 Phase 4 and Phase 5—Non-Functional Requirements, Assumptions, and Constraints—are where Staff engineers distinguish themselves.

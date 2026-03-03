@@ -2504,6 +2504,211 @@ Systems are sociotechnical. Design for both dimensions.
 
 ---
 
+---
+
+# Appendix: Platform Engineering — Staff-Level Depth
+
+At Staff level, you're expected to reason about when to build internal platforms, how to design them for self-service, and the organizational trade-offs of platform vs product engineering.
+
+**The Staff Engineer's Platform Principle**: A platform is an internal product. Its customers are developers. If they build shadow platforms to avoid yours, you've failed. Adopt when duplication across teams becomes a tax on velocity.
+
+**One-liners**:
+- "A platform that requires a ticket to use is just a bottleneck with a Jira board."
+- "The best platforms are invisible — developers don't think about them, they just ship faster."
+- "Shadow platforms are the market signal that your platform doesn't solve the right problems."
+- "Golden path, not golden cage — opinionated defaults with escape hatches."
+
+## L5 vs L6: Platform Thinking
+
+| Scenario | L5 Approach | L6 Approach |
+|----------|-------------|-------------|
+| **Infra duplication** | "Each team manages their own deploy pipeline" | "10 teams × custom CI/CD = 10 different deploy practices, 10 sets of tribal knowledge. Platform team provides a golden path: one opinionated pipeline that covers 80% of use cases, with escape hatches for the rest. Measure: time-from-commit-to-production." |
+| **Platform adoption** | "Mandate the platform" | "Mandated platforms breed resentment and shadow platforms. Adoption must come from value: 'Our platform deploys in 5 minutes; your custom pipeline takes 45.' Measure adoption rate. If <50% after 6 months, the platform isn't solving the right problem." |
+| **Platform scope** | "Build everything" | "Start with the highest-pain, most-duplicated capability. Usually CI/CD. Then observability. Then infrastructure-as-code. Don't build a service catalog before you have reliable deploys." |
+| **Platform team size** | "Hire a platform team" | "Platform team should be 10-15% of engineering. Smaller and they can't keep up. Larger and you're over-investing in infrastructure vs product." |
+
+## What Is Platform Engineering?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   PLATFORM ENGINEERING: INTERNAL PRODUCTS FOR DEVELOPERS                     │
+│                                                                             │
+│   WITHOUT PLATFORM TEAM:                                                    │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐                     │
+│   │ Team A   │ │ Team B   │ │ Team C   │ │ Team D   │                     │
+│   │ builds:  │ │ builds:  │ │ builds:  │ │ builds:  │                     │
+│   │ own CI/CD│ │ own CI/CD│ │ own CI/CD│ │ own CI/CD│                     │
+│   │ own auth │ │ own auth │ │ own auth │ │ own auth │                     │
+│   │ own obs  │ │ own obs  │ │ own obs  │ │ own obs  │                     │
+│   └──────────┘ └──────────┘ └──────────┘ └──────────┘                     │
+│   4 teams × duplicated infrastructure = inconsistent, expensive            │
+│                                                                             │
+│   WITH PLATFORM TEAM:                                                       │
+│   ┌──────────────────────────────────────────────────────┐                  │
+│   │ Platform Team                                         │                  │
+│   │ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐        │                  │
+│   │ │CI/CD │ │Auth  │ │Obs   │ │Data  │ │Infra │        │                  │
+│   │ │Golden│ │Service│ │Stack │ │Pipeln│ │as    │        │                  │
+│   │ │Path  │ │(SSO) │ │      │ │      │ │Code  │        │                  │
+│   │ └──────┘ └──────┘ └──────┘ └──────┘ └──────┘        │                  │
+│   └──────────────────────────┬───────────────────────────┘                  │
+│                              │ self-serve APIs                              │
+│   ┌──────────┐ ┌──────────┐ │ ┌──────────┐ ┌──────────┐                   │
+│   │ Team A   │ │ Team B   │ │ │ Team C   │ │ Team D   │                   │
+│   │ uses     │ │ uses     │◄┘ │ uses     │ │ uses     │                   │
+│   │ platform │ │ platform │   │ platform │ │ platform │                   │
+│   │ → focus  │ │ → focus  │   │ → focus  │ │ → focus  │                   │
+│   │ on product│ │ on product│  │ on product│ │ on product│                  │
+│   └──────────┘ └──────────┘   └──────────┘ └──────────┘                   │
+│   4 teams focus on product. Platform handles infrastructure.               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Platform Maturity Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   PLATFORM MATURITY: FROM AD-HOC TO SELF-SERVE                               │
+│                                                                             │
+│   Level 0 — AD-HOC:                                                         │
+│   Each team builds everything themselves. No shared tooling.                │
+│   Deploy time: varies wildly. Onboarding: weeks.                           │
+│                                                                             │
+│   Level 1 — SHARED SCRIPTS:                                                 │
+│   Common deploy scripts in a shared repo. README-driven.                   │
+│   Deploy time: 30-60 min. Still manual. Inconsistent adoption.             │
+│                                                                             │
+│   Level 2 — GOLDEN PATH:                                                    │
+│   Opinionated CI/CD pipeline. "Use this, it works." Templates for          │
+│   new services. Documentation. But still some manual steps.                │
+│   Deploy time: 10-15 min. Adoption: 60-80%.                               │
+│                                                                             │
+│   Level 3 — SELF-SERVE PLATFORM:                                           │
+│   Developer portal. Spin up a new service with `platform create`.          │
+│   CI/CD, observability, secrets, auth — all wired automatically.           │
+│   Deploy time: <5 min. Adoption: 90%+. Escape hatches available.           │
+│                                                                             │
+│   Level 4 — PRODUCT-GRADE:                                                  │
+│   Platform has SLOs, on-call, roadmap, user research, NPS surveys.         │
+│   Internal developer satisfaction tracked. Platform team has PM.           │
+│   Deploy time: <2 min. Adoption: 95%+. Continuous improvement.            │
+│                                                                             │
+│   MOST ORGS: Level 1. STAFF ENGINEERS AIM FOR: Level 2-3.                 │
+│   LEVEL 4: Google, Spotify, Netflix — requires dedicated investment.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Platform vs Product Engineering
+
+| Dimension | Product Engineering | Platform Engineering |
+|-----------|-------------------|---------------------|
+| **Customer** | External users | Internal developers |
+| **Success metric** | Revenue, engagement, retention | Developer velocity, time-to-deploy, adoption rate |
+| **Failure mode** | Users leave | Teams build their own (shadow platforms) |
+| **Feedback loop** | Analytics, A/B tests | Internal surveys, support tickets, adoption metrics |
+| **Versioning** | Can break (users update apps) | Must not break (consumers are internal teams) |
+| **Roadmap** | Product-driven | Developer-pain-driven |
+
+## When to Build a Platform
+
+| Trigger | Build Platform | Don't Build |
+|---------|---------------|-------------|
+| **Team count** | 5+ teams duplicating infrastructure | <3 teams, each small |
+| **Deploy frequency** | Inconsistent deploy practices; some teams can't deploy safely | All teams deploy consistently |
+| **Onboarding time** | New engineer takes >2 weeks to deploy first change | Quick onboarding already |
+| **Compliance** | Need consistent security, audit, observability | Low compliance requirements |
+| **Tech diversity** | 3+ languages, 3+ deployment methods | Single stack |
+
+## Self-Serve Principles
+
+The key insight of platform engineering: **treat internal developers as customers**.
+
+| Principle | What It Means | Anti-Pattern |
+|-----------|---------------|-------------|
+| **Self-serve** | Developer can deploy without filing a ticket | Ticket-driven infrastructure requests |
+| **Golden path** | Opinionated defaults that work out of the box | "Figure it out yourself" |
+| **Escape hatch** | Can customize when defaults don't fit | Rigid platform with no flexibility |
+| **Documentation** | Clear docs, examples, tutorials | Tribal knowledge |
+| **Adoption by value** | Teams adopt because it's better, not mandated | Forced adoption without value |
+
+## Cost Justification
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   PLATFORM ROI: THE MATH                                                     │
+│                                                                             │
+│   WITHOUT PLATFORM (10 teams):                                              │
+│   Each team spends ~25% of time on infra/deploy/ops = 2.5 FTEs equivalent │
+│   10 teams × 2.5 FTEs × $200K/year = $5M/year on duplicated infra work   │
+│                                                                             │
+│   WITH PLATFORM (10 teams + 3 platform engineers):                         │
+│   Platform team: 3 FTEs × $200K = $600K/year                              │
+│   Each team infra overhead drops to ~5% = 0.5 FTEs                         │
+│   10 teams × 0.5 FTEs × $200K = $1M/year                                  │
+│   Total: $1.6M/year                                                         │
+│                                                                             │
+│   SAVINGS: $5M - $1.6M = $3.4M/year                                        │
+│   PLUS: faster time-to-market, consistent security, lower incident rate    │
+│                                                                             │
+│   BREAKEVEN: Platform pays for itself when 3+ teams are duplicating work.  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Production Incident: The Shadow Platform
+
+**Context**: Company with 8 product teams and a 2-person platform team. Platform provided CI/CD and infrastructure-as-code. No observability solution provided.
+
+**What happened**: Each team built their own monitoring. 3 teams used Datadog, 2 used Grafana/Prometheus, 1 used New Relic, 2 had no monitoring. During a cross-service incident, the on-call engineer couldn't debug because metrics were scattered across 4 systems with no common dashboards, no shared alerting, and no correlated traces.
+
+**Impact**: 2-hour incident that should have been 20 minutes. $80K revenue loss.
+
+**Root cause**: Platform team hadn't prioritized observability. Teams built shadow solutions out of necessity. The "shadow platforms" were worse than no platform — they created a false sense of coverage.
+
+**Fix**: Platform team added observability as their next priority: shared Grafana + Prometheus stack with standard dashboards for every service. Adoption: 100% within 3 months because the shared solution was better than every team's custom setup.
+
+**Lesson**: If teams are building shadow solutions for a capability your platform doesn't provide, that's your roadmap telling you what to build next. Shadow platforms are a signal, not a rebellion.
+
+## Quick Reference Card: Platform Engineering
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        QUICK REFERENCE: PLATFORM ENGINEERING — REMEMBER THIS                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WHAT: Internal products for developers. CI/CD, auth, observability, IaC.    ║
+║  WHY: Eliminate duplicated infra work across teams.                          ║
+║  WHEN: 5+ teams × duplicating infra = $millions wasted.                     ║
+║                                                                               ║
+║  PRINCIPLES:                                                                  ║
+║  1. Self-serve (no tickets)                                                  ║
+║  2. Golden path (opinionated defaults)                                       ║
+║  3. Escape hatch (customize when needed)                                     ║
+║  4. Adoption by value (not mandate)                                          ║
+║                                                                               ║
+║  KEY METRICS:                                                                 ║
+║  • Time-to-deploy (target: <5 min)                                           ║
+║  • Adoption rate (target: >80%)                                              ║
+║  • Shadow platform count (target: 0)                                         ║
+║  • Onboarding time (target: first deploy in <1 day)                          ║
+║                                                                               ║
+║  START ORDER: CI/CD → Observability → IaC → Auth → Developer Portal          ║
+║                                                                               ║
+║  ONE-LINER: "Platform as product. Developers as customers. Value as metric." ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+## Interview Integration
+
+**"When would you build an internal platform?"** — "When 5+ teams are duplicating infrastructure work (CI/CD, observability, auth). The signal is: teams spending >30% of time on 'undifferentiated heavy lifting' instead of product features. Platform team treats internal devs as customers—self-serve APIs, golden paths, documentation. Key metric: does the platform reduce time-to-deploy? If teams are building shadow platforms to work around yours, the platform has failed. Start small: golden CI/CD pipeline first, then add observability and infrastructure-as-code. Don't build a platform for a problem you don't have yet."
+
+**"How do you measure platform success?"** — "Four metrics: (1) Time-to-deploy — before vs after. (2) Adoption rate — if <50% after 6 months, we're solving the wrong problem. (3) Shadow platform count — if teams build their own, that's our backlog. (4) Developer NPS — quarterly survey. The ultimate measure: are product teams shipping faster because of the platform?"
+
+---
+
 **Conclusion:** This chapter meets Google Staff Engineer (L6) expectations for system design interview preparation. It demonstrates:
 - System-wide ownership thinking
 - Explicit trade-off reasoning

@@ -36,29 +36,29 @@ Every chapter follows the same deep structure: foundations, requirements, scale 
 │                    SECTION 6: STAFF-LEVEL DESIGN PROBLEMS                   │
 │                                                                             │
 │   ┌── Infrastructure & Scale ───────────────────────────────────────────┐   │
-│   │  Ch 47: Global Rate Limiter                                         │   │
-│   │  Ch 48: Distributed Cache                                           │   │
-│   │  Ch 52: Metrics / Observability System                              │   │
-│   │  Ch 53: Configuration, Feature Flags & Secrets Management           │   │
-│   │  Ch 54: API Gateway / Edge Request Routing System                    │   │
+│   │  Ch 55: Global Rate Limiter                                         │   │
+│   │  Ch 56: Distributed Cache                                           │   │
+│   │  Ch 60: Metrics / Observability System                              │   │
+│   │  Ch 61: Configuration, Feature Flags & Secrets Management           │   │
+│   │  Ch 62: API Gateway / Edge Request Routing System                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │   ┌── Application & User-Facing Systems ────────────────────────────────┐   │
-│   │  Ch 49: News Feed                                                   │   │
-│   │  Ch 50: Real-Time Collaboration                                    │   │
-│   │  Ch 51: Messaging Platform                                          │   │
-│   │  Ch 55: Search / Indexing System (Read-heavy, Latency-sensitive)      │   │
-│   │  Ch 56: Recommendation / Ranking System (Simplified)                │   │
-│   │  Ch 57: Notification Delivery System (Fan-out at Scale)              │   │
-│   │  Ch 58: Authentication & Authorization System                        │   │
+│   │  Ch 57: News Feed                                                   │   │
+│   │  Ch 58: Real-Time Collaboration                                    │   │
+│   │  Ch 59: Messaging Platform                                          │   │
+│   │  Ch 63: Search / Indexing System (Read-heavy, Latency-sensitive)      │   │
+│   │  Ch 64: Recommendation / Ranking System (Simplified)                │   │
+│   │  Ch 65: Notification Delivery System (Fan-out at Scale)              │   │
+│   │  Ch 66: Authentication & Authorization System                        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │   ┌── Platforms & Pipelines ────────────────────────────────────────────┐   │
-│   │  Ch 59: Distributed Scheduler / Job Orchestration System             │   │
-│   │  Ch 60: Feature Experimentation / A/B Testing Platform               │   │
-│   │  Ch 61: Log Aggregation & Query System                              │   │
-│   │  Ch 62: Payment / Transaction Processing System                      │   │
-│   │  Ch 63: Media Upload & Processing Pipeline                          │   │
+│   │  Ch 67: Distributed Scheduler / Job Orchestration System             │   │
+│   │  Ch 68: Feature Experimentation / A/B Testing Platform               │   │
+│   │  Ch 69: Log Aggregation & Query System                              │   │
+│   │  Ch 70: Payment / Transaction Processing System                      │   │
+│   │  Ch 71: Media Upload & Processing Pipeline                          │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -70,23 +70,24 @@ Every chapter follows the same deep structure: foundations, requirements, scale 
 
 | # | Chapter | Link |
 |---|---------|------|
-| 47 | Global Rate Limiter | [Chapter 47](Chapter_47_Global_Rate_Limiter.md) |
-| 48 | Distributed Cache | [Chapter 48](Chapter_48_Distributed_Cache.md) |
-| 49 | News Feed | [Chapter 49](Chapter_49_News_Feed.md) |
-| 50 | Real-Time Collaboration | [Chapter 50](Chapter_50_Real_Time_Collaboration.md) |
-| 51 | Messaging Platform | [Chapter 51](Chapter_51_Messaging_Platform.md) |
-| 52 | Metrics / Observability System | [Chapter 52](Chapter_52_Metrics_and_Observability_System.md) |
-| 53 | Configuration, Feature Flags & Secrets Management | [Chapter 53](Chapter_53_Configuration_Feature_Flags_and_Secrets_Management.md) |
-| 54 | API Gateway / Edge Request Routing System | [Chapter 54](Chapter_54_API_Gateway_and_Edge_Request_Routing.md) |
-| 55 | Search / Indexing System (Read-Heavy, Latency-Sensitive) | [Chapter 55](Chapter_55_Search_and_Indexing_System.md) |
-| 56 | Recommendation / Ranking System (Simplified) | [Chapter 56](Chapter_56_Recommendation_and_Ranking_System.md) |
-| 57 | Notification Delivery System (Fan-out at Scale) | [Chapter 57](Chapter_57_Notification_Delivery_System_Fan_out_at_Scale.md) |
-| 58 | Authentication & Authorization System | [Chapter 58](Chapter_58_Authentication_and_Authorization_System.md) |
-| 59 | Distributed Scheduler / Job Orchestration System | [Chapter 59](Chapter_59_Distributed_Scheduler_and_Job_Orchestration.md) |
-| 60 | Feature Experimentation / A/B Testing Platform | [Chapter 60](Chapter_60_Feature_Experimentation_and_AB_Testing_Platform.md) |
-| 61 | Log Aggregation & Query System | [Chapter 61](Chapter_61_Log_Aggregation_and_Query_System.md) |
-| 62 | Payment / Transaction Processing System | [Chapter 62](Chapter_62_Payment_and_Transaction_Processing_System.md) |
-| 63 | Media Upload & Processing Pipeline | [Chapter 63](Chapter_63_Media_Upload_and_Processing_Pipeline.md) |
+| 55 | Global Rate Limiter | [Chapter 55](Chapter_55_Global_Rate_Limiter.md) |
+| 56 | Distributed Cache | [Chapter 56](Chapter_56_Distributed_Cache.md) |
+| 57 | News Feed | [Chapter 57](Chapter_57_News_Feed.md) |
+| 58 | Real-Time Collaboration | [Chapter 58](Chapter_58_Real_Time_Collaboration.md) |
+| 59 | Messaging Platform | [Chapter 59](Chapter_59_Messaging_Platform.md) |
+| 60 | Metrics / Observability System | [Chapter 60](Chapter_60_Metrics_and_Observability_System.md) |
+| 61 | Configuration, Feature Flags & Secrets Management | [Chapter 61](Chapter_61_Configuration_Feature_Flags_and_Secrets_Management.md) |
+| 62 | API Gateway / Edge Request Routing System | [Chapter 62](Chapter_62_API_Gateway_and_Edge_Request_Routing.md) |
+| 63 | Search / Indexing System (Read-Heavy, Latency-Sensitive) | [Chapter 63](Chapter_63_Search_and_Indexing_System.md) |
+| 64 | Recommendation / Ranking System (Simplified) | [Chapter 64](Chapter_64_Recommendation_and_Ranking_System.md) |
+| 65 | Notification Delivery System (Fan-out at Scale) | [Chapter 65](Chapter_65_Notification_Delivery_System_Fan_out_at_Scale.md) |
+| 66 | Authentication & Authorization System | [Chapter 66](Chapter_66_Authentication_and_Authorization_System.md) |
+| 67 | Distributed Scheduler / Job Orchestration System | [Chapter 67](Chapter_67_Distributed_Scheduler_and_Job_Orchestration.md) |
+| 68 | Feature Experimentation / A/B Testing Platform | [Chapter 68](Chapter_68_Feature_Experimentation_and_AB_Testing_Platform.md) |
+| 69 | Log Aggregation & Query System | [Chapter 69](Chapter_69_Log_Aggregation_and_Query_System.md) |
+| 70 | Payment / Transaction Processing System | [Chapter 70](Chapter_70_Payment_and_Transaction_Processing_System.md) |
+| 71 | Media Upload & Processing Pipeline | [Chapter 71](Chapter_71_Media_Upload_and_Processing_Pipeline.md) |
+| 72 | Bonus Advanced Topics | [Chapter 72](Chapter_72_Bonus_Advanced_Topics.md) |
 
 ---
 
@@ -115,7 +116,7 @@ Chapters that have been **L6-reviewed** (e.g. with MASTER_REVIEWER) also include
 
 - **Interview prep**: Pick 3–5 chapters in domains you know well and 2–3 in domains you don’t. Practice explaining the design and defending trade-offs; use the “Interview Calibration” and “Common L5 Mistakes” sections to self-check.
 - **Deep dives**: Use a chapter as a reference when designing or reviewing a similar system (rate limiting, payments, media pipeline, etc.).
-- **Reading order**: You can read in any order. Chapters 41–45 and 49–52 map most directly to Section 5 (28–40); 46–48, 53–57 are more platform/infra-focused and stand alone.
+- **Reading order**: You can read in any order. Ch 55–56, 59–60, 62–63, 65–67, 70 map most directly to Section 5 counterparts; Ch 57–58, 64, 68–69, 71–72 are more platform/infra-focused and stand alone.
 
 ---
 
@@ -123,7 +124,7 @@ Chapters that have been **L6-reviewed** (e.g. with MASTER_REVIEWER) also include
 
 **17 / 17 chapters** — Section 6 complete.
 
-All chapters are written to Staff depth. Selected chapters (e.g. 56, 57) have been augmented with MASTER_REVIEWER for cascading failures, migration strategy, team ownership, and organizational stress tests; others can be reviewed the same way for consistency.
+All chapters are written to Staff depth. Selected chapters (e.g. Ch 64, 65) have been augmented with MASTER_REVIEWER for cascading failures, migration strategy, team ownership, and organizational stress tests; others can be reviewed the same way for consistency.
 
 ---
 

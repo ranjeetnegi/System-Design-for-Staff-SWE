@@ -67,7 +67,7 @@ Skim for interview presence: designing under ambiguity and leading the conversat
 | 24 | [Ch 24: Queues, Logs, Streams](Section3/Chapter_24_Queues_Logs_and_Streams.md) |
 | 25 | [Ch 25: Failure Models and Partial Failures](Section3/Chapter_25_Failure_Models_and_Partial_Failures.md) |
 | 26 | [Ch 26: CAP — Case Studies](Section3/Chapter_26_CAP_Theorem_Applied_Case_Studies.md) *(optional)* |
-| 26S | [Ch 26 Supplement: Advanced Distributed Systems](Section3/Chapter_26_Supplement_Advanced_Distributed_Systems.md) *(optional)* |
+| 27 | [Ch 27: Advanced Distributed Systems](Section3/Chapter_27_Advanced_Distributed_Systems.md) *(optional)* |
 
 ---
 
@@ -77,11 +77,23 @@ Use when practicing problems that need DB, cache, or async flows. Don't skip —
 
 | Ch | Link |
 |----|------|
-| 27 | [Ch 27: Databases](Section4/Chapter_27_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
-| 28 | [Ch 28: Caching at Scale](Section4/Chapter_28_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
-| 29 | [Ch 29: Event-Driven Architectures, Kafka](Section4/Chapter_29_Event_Driven_Architectures_Kafka_and_Streams.md) |
+| 28 | [Ch 28: Databases](Section4/Chapter_28_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
+| 31 | [Ch 31: Caching at Scale](Section4/Chapter_31_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
+| 33 | [Ch 33: Event-Driven Architectures, Kafka](Section4/Chapter_33_Event_Driven_Architectures_Kafka_and_Streams.md) |
 
-*Full section also includes:* Ch 30 (Multi-Region), 31 (Data Locality), 32 (Cost Efficiency), 33 (System Evolution) + supplements.
+### Supplements (use as needed)
+
+| Supplement | Senior (L5) | Staff (L6) | When to use |
+|------------|-------------|------------|-------------|
+| [Ch 29: DB Internals](Section4/Chapter_29_Database_Internals_Deep_Dive.md) | Optional | Recommended | Deep DB questions (B-tree, WAL, MVCC) |
+| [Ch 30: Data Encoding & Schema Evolution](Section4/Chapter_30_Data_Encoding_and_Schema_Evolution.md) | Skim | Full | API contracts, Kafka schema, Protobuf vs JSON |
+| [Ch 32: Redis Internals](Section4/Chapter_32_Redis_and_Cache_Internals.md) | Optional | Recommended | Cache design, Redis Cluster, eviction |
+| [Ch 34: Kafka Internals](Section4/Chapter_34_Kafka_Internals.md) | Optional | Recommended | Kafka partitions, consumer lag, ISR |
+| [Ch 35: Batch Processing](Section4/Chapter_35_Batch_Processing_and_Data_Pipelines.md) | Reference | Full | Ch 50 (Background Jobs), ETL, batch vs stream |
+| [Ch 40: Deployment & Ops](Section4/Chapter_40_Deployment_Strategies_and_Operations.md) | **Recommended** | **Required** | SLO/error budget, runbooks, observability, rollback |
+| [Ch 41: Service Mesh](Section4/Chapter_41_Service_Mesh_When_Why_and_Trade_offs.md) | Skip | **Recommended** | 50+ services, mTLS, retry consistency |
+
+*Full section also includes:* Ch 36 (Multi-Region), Ch 37 (Data Locality), Ch 38 (Cost Efficiency), Ch 39 (System Evolution).
 
 ---
 
@@ -95,24 +107,24 @@ Practice end-to-end with these 13 problems. Each has a full walkthrough: require
 
 | Ch | Link |
 |----|------|
-| 34 | [Ch 34: URL Shortener](Section5/Chapter_34_URL_Shortener.md) |
-| 35 | [Ch 35: Single-Region Rate Limiter](Section5/Chapter_35_Single_Region_Rate_Limiter.md) |
-| 36 | [Ch 36: Distributed Cache](Section5/Chapter_36_Distributed_Cache_Single_Cluster.md) |
-| 37 | [Ch 37: Object and File Storage](Section5/Chapter_37_Object_and_File_Storage_System.md) |
-| 38 | [Ch 38: Notification System](Section5/Chapter_38_Notification_System.md) |
-| 45 | [Ch 45: Real-Time Chat](Section5/Chapter_45_Real_Time_Chat.md) |
+| 42 | [Ch 42: URL Shortener](Section5/Chapter_42_URL_Shortener.md) |
+| 43 | [Ch 43: Single-Region Rate Limiter](Section5/Chapter_43_Single_Region_Rate_Limiter.md) |
+| 44 | [Ch 44: Distributed Cache](Section5/Chapter_44_Distributed_Cache_Single_Cluster.md) |
+| 45 | [Ch 45: Object and File Storage](Section5/Chapter_45_Object_and_File_Storage_System.md) |
+| 46 | [Ch 46: Notification System](Section5/Chapter_46_Notification_System.md) |
+| 53 | [Ch 53: Real-Time Chat](Section5/Chapter_53_Real_Time_Chat.md) |
 
 ### Second tier
 
 | Ch | Link |
 |----|------|
-| 39 | [Ch 39: Authentication System](Section5/Chapter_39_Authentication_System.md) |
-| 40 | [Ch 40: Search System](Section5/Chapter_40_Search_System.md) |
-| 41 | [Ch 41: Metrics Collection](Section5/Chapter_41_Metrics_Collection_System.md) |
-| 42 | [Ch 42: Background Job Queue](Section5/Chapter_42_Background_Job_Queue.md) |
-| 43 | [Ch 43: Payment Flow](Section5/Chapter_43_Payment_Flow.md) |
-| 44 | [Ch 44: API Gateway](Section5/Chapter_44_API_Gateway.md) |
-| 46 | [Ch 46: Configuration Management](Section5/Chapter_46_Configuration_Management.md) |
+| 47 | [Ch 47: Authentication System](Section5/Chapter_47_Authentication_System.md) |
+| 48 | [Ch 48: Search System](Section5/Chapter_48_Search_System.md) |
+| 49 | [Ch 49: Metrics Collection](Section5/Chapter_49_Metrics_Collection_System.md) |
+| 50 | [Ch 50: Background Job Queue](Section5/Chapter_50_Background_Job_Queue.md) |
+| 51 | [Ch 51: Payment Flow](Section5/Chapter_51_Payment_Flow.md) |
+| 52 | [Ch 52: API Gateway](Section5/Chapter_52_API_Gateway.md) |
+| 54 | [Ch 54: Configuration Management](Section5/Chapter_54_Configuration_Management.md) |
 
 ---
 
@@ -127,12 +139,25 @@ Practice end-to-end with these 13 problems. Each has a full walkthrough: require
 
 ## Roadmap Summary
 
-| Section | Chapters |
-|---------|----------|
-| 0 | Ch 1–6 (fundamentals; do first if rusty) |
-| 1 | Skim Ch 10, 12 |
-| 2 | Ch 13–19 (full) |
-| 3 | Ch 20–26 |
-| 4 | Ch 27–29 (core); full section 27–33 |
-| 5 | Ch 34–46; prioritize 6–8 in depth (must-practice first) |
-| 6 | Skip for Senior |
+| Section | Chapters | Supplements |
+|---------|----------|-------------|
+| 0 | Ch 1–6 (fundamentals; do first if rusty) | — |
+| 1 | Skim Ch 10, 12 | — |
+| 2 | Ch 13–19 (full) | — |
+| 3 | Ch 20–27 (Ch 27 optional) | — |
+| 4 | Ch 28, 31, 33 (core); Ch 36–39 as needed | Ch 40 (Deployment & Ops) **recommended** |
+| 5 | Ch 42–54; prioritize 6–8 in depth (must-practice first) | — |
+| 6 | Skip for Senior | — |
+
+---
+
+## Staff Path Additions (L6)
+
+If preparing for **Staff Engineer (L6)** interviews, add:
+
+| Section | Additional material |
+|---------|---------------------|
+| **4** | All supplements; especially Ch 41 (Service Mesh), Ch 30 (Data Encoding), Ch 35 (Batch Processing) |
+| **6** | Full Section 6 (Ch 55–72) — 18 Staff-level design problems |
+
+See [README](README.md) for the full Staff path.

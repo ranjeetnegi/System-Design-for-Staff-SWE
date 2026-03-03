@@ -52,18 +52,18 @@ System-Design/
 ├── Section2/                  ← System Design Framework — 5 Phases (Ch. 13–19)
 │   ├── README.md
 │   └── Chapter_13_* … Chapter_19_* (chapter names)
-├── Section3/                  ← Distributed Systems (Ch. 20–26)
+├── Section3/                  ← Distributed Systems (Ch. 20–27)
 │   ├── README.md
-│   └── Chapter_20_* … Chapter_26_* (chapter names)
-├── Section4/                  ← Data Systems & Global Scale (Ch. 27–33)
+│   └── Chapter_20_* … Chapter_27_* (chapter names)
+├── Section4/                  ← Data Systems & Global Scale (Ch. 28–41)
 │   ├── README.md
-│   └── Chapter_27_* … Chapter_33_* (chapter names)
-├── Section5/                  ← Senior-Level Design Problems (Ch. 34–46)
+│   └── Chapter_28_* … Chapter_41_* (chapter names)
+├── Section5/                  ← Senior-Level Design Problems (Ch. 42–54)
 │   ├── README.md
-│   └── Chapter_34_* … Chapter_46_* (chapter names)
-└── Section6/                  ← Staff-Level Design Problems (Ch. 47–64)
+│   └── Chapter_42_* … Chapter_54_* (chapter names)
+└── Section6/                  ← Staff-Level Design Problems (Ch. 55–72)
     ├── README.md
-    └── Chapter_47_* … Chapter_64_* (chapter names)
+    └── Chapter_55_* … Chapter_72_* (chapter names)
 ```
 
 Each section has its own `README.md` with an overview, learning objectives, and reading guidance.
@@ -115,7 +115,8 @@ The technical bedrock — deep vocabulary for designing systems that actually wo
 | 23 | Backpressure, Retries, and Idempotency | [Chapter 23 (Section3/Chapter_23_Backpressure_Retries_and_Idempotency.md) |
 | 24 | Queues, Logs, and Streams — Choosing the Right Asynchronous Model | [Chapter 24 (Section3/Chapter_24_Queues_Logs_and_Streams.md) |
 | 25 | Failure Models and Partial Failures — Designing for Reality at Staff Level | [Chapter 25 (Section3/Chapter_25_Failure_Models_and_Partial_Failures.md) |
-| 26 | CAP Theorem — Behavior Under Partition (Applied Case Studies) | [Chapter 26 (Section3/Chapter_26_CAP_Theorem_Applied_Case_Studies.md) |
+| 26 | CAP Theorem — Behavior Under Partition (Applied Case Studies) | [Chapter 26](Section3/Chapter_26_CAP_Theorem_Applied_Case_Studies.md) |
+| 27 | Advanced Distributed Systems | [Chapter 27](Section3/Chapter_27_Advanced_Distributed_Systems.md) |
 
 ---
 
@@ -125,13 +126,20 @@ Bridges theory and practice — databases, caches, event pipelines, multi-region
 
 | # | Chapter | Link |
 |---|---------|------|
-| 27 | Databases — Choosing, Using, and Evolving Data Stores | [Chapter 27 (Section4/Chapter_27_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
-| 28 | Caching at Scale — Redis, CDN, and Edge Systems | [Chapter 28 (Section4/Chapter_28_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
-| 29 | Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs | [Chapter 29 (Section4/Chapter_29_Event_Driven_Architectures_Kafka_and_Streams.md) |
-| 30 | Multi-Region Systems — Geo-Replication, Latency, and Failure | [Chapter 30 (Section4/Chapter_30_Multi_Region_Systems.md) |
-| 31 | Data Locality, Compliance, and System Evolution | [Chapter 31 (Section4/Chapter_31_Data_Locality_Compliance_and_System_Evolution.md) |
-| 32 | Cost, Efficiency, and Sustainable System Design | [Chapter 32 (Section4/Chapter_32_Cost_Efficiency_and_Sustainable_System_Design.md) |
-| 33 | System Evolution, Migration, and Risk Management | [Chapter 33 (Section4/Chapter_33_System_Evolution_Migration_and_Risk_Management.md) |
+| 28 | Databases — Choosing, Using, and Evolving Data Stores | [Chapter 28](Section4/Chapter_28_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
+| 29 | Database Internals Deep Dive | [Chapter 29](Section4/Chapter_29_Database_Internals_Deep_Dive.md) |
+| 30 | Data Encoding and Schema Evolution | [Chapter 30](Section4/Chapter_30_Data_Encoding_and_Schema_Evolution.md) |
+| 31 | Caching at Scale — Redis, CDN, and Edge Systems | [Chapter 31](Section4/Chapter_31_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
+| 32 | Redis and Cache Internals | [Chapter 32](Section4/Chapter_32_Redis_and_Cache_Internals.md) |
+| 33 | Event-Driven Architectures — Kafka, Streams, and Staff-Level Trade-offs | [Chapter 33](Section4/Chapter_33_Event_Driven_Architectures_Kafka_and_Streams.md) |
+| 34 | Kafka Internals | [Chapter 34](Section4/Chapter_34_Kafka_Internals.md) |
+| 35 | Batch Processing and Data Pipelines | [Chapter 35](Section4/Chapter_35_Batch_Processing_and_Data_Pipelines.md) |
+| 36 | Multi-Region Systems — Geo-Replication, Latency, and Failure | [Chapter 36](Section4/Chapter_36_Multi_Region_Systems.md) |
+| 37 | Data Locality, Compliance, and System Evolution | [Chapter 37](Section4/Chapter_37_Data_Locality_Compliance_and_System_Evolution.md) |
+| 38 | Cost, Efficiency, and Sustainable System Design | [Chapter 38](Section4/Chapter_38_Cost_Efficiency_and_Sustainable_System_Design.md) |
+| 39 | System Evolution, Migration, and Risk Management | [Chapter 39](Section4/Chapter_39_System_Evolution_Migration_and_Risk_Management.md) |
+| 40 | Deployment Strategies and Operations | [Chapter 40](Section4/Chapter_40_Deployment_Strategies_and_Operations.md) |
+| 41 | Service Mesh — When, Why, and Trade-offs | [Chapter 41](Section4/Chapter_41_Service_Mesh_When_Why_and_Trade_offs.md) |
 
 ---
 
@@ -141,19 +149,19 @@ Bridges theory and practice — databases, caches, event pipelines, multi-region
 
 | # | Chapter | Link |
 |---|---------|------|
-| 34 | URL Shortener | [Chapter 34 (Section5/Chapter_34_URL_Shortener.md) |
-| 35 | Single-Region Rate Limiter | [Chapter 35 (Section5/Chapter_35_Single_Region_Rate_Limiter.md) |
-| 36 | Distributed Cache (Single Cluster) | [Chapter 36 (Section5/Chapter_36_Distributed_Cache_Single_Cluster.md) |
-| 37 | Object / File Storage System | [Chapter 37 (Section5/Chapter_37_Object_and_File_Storage_System.md) |
-| 38 | Notification System | [Chapter 38 (Section5/Chapter_38_Notification_System.md) |
-| 39 | Authentication System (AuthN) | [Chapter 39 (Section5/Chapter_39_Authentication_System.md) |
-| 40 | Search System | [Chapter 40 (Section5/Chapter_40_Search_System.md) |
-| 41 | Metrics Collection System | [Chapter 41 (Section5/Chapter_41_Metrics_Collection_System.md) |
-| 42 | Background Job Queue | [Chapter 42 (Section5/Chapter_42_Background_Job_Queue.md) |
-| 43 | Payment Flow | [Chapter 43 (Section5/Chapter_43_Payment_Flow.md) |
-| 44 | API Gateway | [Chapter 44 (Section5/Chapter_44_API_Gateway.md) |
-| 45 | Real-Time Chat | [Chapter 45 (Section5/Chapter_45_Real_Time_Chat.md) |
-| 46 | Configuration Management | [Chapter 46 (Section5/Chapter_46_Configuration_Management.md) |
+| 42 | URL Shortener | [Chapter 42](Section5/Chapter_42_URL_Shortener.md) |
+| 43 | Single-Region Rate Limiter | [Chapter 43](Section5/Chapter_43_Single_Region_Rate_Limiter.md) |
+| 44 | Distributed Cache (Single Cluster) | [Chapter 44](Section5/Chapter_44_Distributed_Cache_Single_Cluster.md) |
+| 45 | Object / File Storage System | [Chapter 45](Section5/Chapter_45_Object_and_File_Storage_System.md) |
+| 46 | Notification System | [Chapter 46](Section5/Chapter_46_Notification_System.md) |
+| 47 | Authentication System (AuthN) | [Chapter 47](Section5/Chapter_47_Authentication_System.md) |
+| 48 | Search System | [Chapter 48](Section5/Chapter_48_Search_System.md) |
+| 49 | Metrics Collection System | [Chapter 49](Section5/Chapter_49_Metrics_Collection_System.md) |
+| 50 | Background Job Queue | [Chapter 50](Section5/Chapter_50_Background_Job_Queue.md) |
+| 51 | Payment Flow | [Chapter 51](Section5/Chapter_51_Payment_Flow.md) |
+| 52 | API Gateway | [Chapter 52](Section5/Chapter_52_API_Gateway.md) |
+| 53 | Real-Time Chat | [Chapter 53](Section5/Chapter_53_Real_Time_Chat.md) |
+| 54 | Configuration Management | [Chapter 54](Section5/Chapter_54_Configuration_Management.md) |
 
 ---
 
@@ -165,23 +173,24 @@ Each Staff-level chapter elevates a Senior problem to global scale, introducing 
 
 | # | Chapter | Status | Link |
 |---|---------|--------|------|
-| 47 | Global Rate Limiter | Done | [Chapter 47 (Section6/Chapter_47_Global_Rate_Limiter.md) |
-| 48 | Distributed Cache | Done | [Chapter 48 (Section6/Chapter_48_Distributed_Cache.md) |
-| 49 | News Feed | Done | [Chapter 49 (Section6/Chapter_49_News_Feed.md) |
-| 50 | Real-Time Collaboration | Done | [Chapter 50 (Section6/Chapter_50_Real_Time_Collaboration.md) |
-| 51 | Messaging Platform | Done | [Chapter 51 (Section6/Chapter_51_Messaging_Platform.md) |
-| 52 | Metrics / Observability System | Done | [Chapter 52 (Section6/Chapter_52_Metrics_and_Observability_System.md) |
-| 53 | Configuration, Feature Flags & Secrets Management | Done | [Chapter 53 (Section6/Chapter_53_Configuration_Feature_Flags_and_Secrets_Management.md) |
-| 54 | API Gateway / Edge Request Routing System | Done | [Chapter 54 (Section6/Chapter_54_API_Gateway_and_Edge_Request_Routing.md) |
-| 55 | Search / Indexing System (Read-heavy, Latency-sensitive) | Done | [Chapter 55 (Section6/Chapter_55_Search_and_Indexing_System.md) |
-| 56 | Recommendation / Ranking System (Simplified) | Done | [Chapter 56 (Section6/Chapter_56_Recommendation_and_Ranking_System.md) |
-| 57 | Notification Delivery System (Fan-out at Scale) | Done | [Chapter 57 (Section6/Chapter_57_Notification_Delivery_System_Fan_out_at_Scale.md) |
-| 58 | Authentication & Authorization System | Done | [Chapter 58 (Section6/Chapter_58_Authentication_and_Authorization_System.md) |
-| 59 | Distributed Scheduler / Job Orchestration System | Done | [Chapter 59 (Section6/Chapter_59_Distributed_Scheduler_and_Job_Orchestration.md) |
-| 60 | Feature Experimentation / A/B Testing Platform | Done | [Chapter 60 (Section6/Chapter_60_Feature_Experimentation_and_AB_Testing_Platform.md) |
-| 61 | Log Aggregation & Query System | Done | [Chapter 61 (Section6/Chapter_61_Log_Aggregation_and_Query_System.md) |
-| 62 | Payment / Transaction Processing System | Done | [Chapter 62 (Section6/Chapter_62_Payment_and_Transaction_Processing_System.md) |
-| 63 | Media Upload & Processing Pipeline | Done | [Chapter 63 (Section6/Chapter_63_Media_Upload_and_Processing_Pipeline.md) |
+| 55 | Global Rate Limiter | Done | [Chapter 55](Section6/Chapter_55_Global_Rate_Limiter.md) |
+| 56 | Distributed Cache | Done | [Chapter 56](Section6/Chapter_56_Distributed_Cache.md) |
+| 57 | News Feed | Done | [Chapter 57](Section6/Chapter_57_News_Feed.md) |
+| 58 | Real-Time Collaboration | Done | [Chapter 58](Section6/Chapter_58_Real_Time_Collaboration.md) |
+| 59 | Messaging Platform | Done | [Chapter 59](Section6/Chapter_59_Messaging_Platform.md) |
+| 60 | Metrics / Observability System | Done | [Chapter 60](Section6/Chapter_60_Metrics_and_Observability_System.md) |
+| 61 | Configuration, Feature Flags & Secrets Management | Done | [Chapter 61](Section6/Chapter_61_Configuration_Feature_Flags_and_Secrets_Management.md) |
+| 62 | API Gateway / Edge Request Routing System | Done | [Chapter 62](Section6/Chapter_62_API_Gateway_and_Edge_Request_Routing.md) |
+| 63 | Search / Indexing System (Read-heavy, Latency-sensitive) | Done | [Chapter 63](Section6/Chapter_63_Search_and_Indexing_System.md) |
+| 64 | Recommendation / Ranking System (Simplified) | Done | [Chapter 64](Section6/Chapter_64_Recommendation_and_Ranking_System.md) |
+| 65 | Notification Delivery System (Fan-out at Scale) | Done | [Chapter 65](Section6/Chapter_65_Notification_Delivery_System_Fan_out_at_Scale.md) |
+| 66 | Authentication & Authorization System | Done | [Chapter 66](Section6/Chapter_66_Authentication_and_Authorization_System.md) |
+| 67 | Distributed Scheduler / Job Orchestration System | Done | [Chapter 67](Section6/Chapter_67_Distributed_Scheduler_and_Job_Orchestration.md) |
+| 68 | Feature Experimentation / A/B Testing Platform | Done | [Chapter 68](Section6/Chapter_68_Feature_Experimentation_and_AB_Testing_Platform.md) |
+| 69 | Log Aggregation & Query System | Done | [Chapter 69](Section6/Chapter_69_Log_Aggregation_and_Query_System.md) |
+| 70 | Payment / Transaction Processing System | Done | [Chapter 70](Section6/Chapter_70_Payment_and_Transaction_Processing_System.md) |
+| 71 | Media Upload & Processing Pipeline | Done | [Chapter 71](Section6/Chapter_71_Media_Upload_and_Processing_Pipeline.md) |
+| 72 | Bonus Advanced Topics | Done | [Chapter 72](Section6/Chapter_72_Bonus_Advanced_Topics.md) |
 
 ---
 
