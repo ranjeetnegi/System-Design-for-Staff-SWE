@@ -833,3 +833,96 @@ Use this foundation when designing systems. When latency spikes, think: process 
     ║   Keep hot data in RAM. That's the whole game.                         ║
     ╚═══════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: Diagnose CPU Steal
+
+Your service is experiencing intermittent p99 latency spikes every 90 seconds. CPU utilization shows 40% user, 5% system, and **30% CPU steal** (the `%st` field in `top`).
+
+1. What does "CPU steal" mean? Who is stealing CPU time from whom?
+2. Why would CPU steal cause intermittent spikes rather than sustained high latency?
+3. What are your three immediate mitigation options? Evaluate each by: time to implement, cost, and risk.
+4. You move to a dedicated host (no neighbors). CPU steal drops to 0%. Does this fix all latency spikes? What else might cause 90-second periodic spikes in a JVM service?
+5. Design a production alert for CPU steal. What threshold (e.g., >10% for >5 minutes), what action does it trigger, and what's the runbook?
+
+---
+
+## Exercise 2: Thread Pool Sizing for Mixed Workloads
+
+You're designing a thread pool for a Java service handling two request types:
+- **Type A** (70% of traffic): DB queries, ~50ms average blocking I/O
+- **Type B** (30% of traffic): In-memory computation, ~10ms CPU, no I/O
+
+Total QPS: 2,000. Available CPU cores: 8.
+
+1. Apply Little's Law (`L = λW`): for Type A at 1,400 QPS with 50ms latency, what's the minimum thread count to avoid queuing?
+2. For Type B at 600 QPS with 10ms processing, how many threads do you need?
+3. Single pool or two separate pools? What's the failure mode of a single pool when Type A requests spike?
+4. Your pool uses an unbounded queue. At 3× traffic (6,000 QPS), what happens to queue depth, heap memory, and p99 latency?
+5. Redesign with a bounded queue and rejection policy. What should the rejection policy be for each request type? What HTTP status code do you return when the pool is exhausted?
+
+---
+
+## Exercise 3: JVM OOM Investigation
+
+Your Java service is `OOMKilled` every 2–4 hours. Heap is `-Xmx4g`. Pod memory limit: 5 GB.
+
+1. What are the four most likely causes of JVM OOM at 80% heap?
+2. A heap dump (captured via `-XX:+HeapDumpOnOutOfMemoryError`) shows 60% of live objects are `byte[]`, retained by a Netty ByteBuf pool. What does this indicate? How do you fix it?
+3. GC logs show Full GC every 5 minutes, taking 3 seconds each. Your SLO is p99 < 200ms. Which GC algorithm change would you evaluate (G1 → ZGC)? What are the trade-offs in terms of throughput vs pause time?
+4. After fixing the heap leak, you're still `OOMKilled`. `jcmd <pid> VM.native_memory` shows: heap=4 GB, threads=500 MB, metaspace=200 MB, code cache=150 MB. Pod limit is 5 GB. What's over the limit? What do you cut?
+5. Your service runs in Docker/Kubernetes. Without `-XX:+UseContainerSupport`, JVM reads the host machine's total RAM (128 GB) and sets `-Xmx` to 30 GB. What happens to the container? How does `-XX:+UseContainerSupport` fix this?
+
+---
+
+## Exercise 4: Design a Proxy Service Thread Model
+
+You're building a reverse proxy (like Nginx) forwarding requests to 500 upstream backends.
+- Each upstream call: ~20ms network I/O, negligible CPU
+- Target: 50,000 QPS, 16 CPU cores available
+
+1. Thread-per-request model: how many threads would you need? What's the memory cost (assume 1 MB stack per thread)?
+2. Event-loop model (epoll): how many threads? Why is this sufficient for I/O-bound work?
+3. A single event-loop thread is processing a request when a malicious client sends a 100 MB request body. How does this affect all other clients sharing the event loop? What is the mitigation?
+4. You have 500 upstreams. How many connections per upstream in your connection pool? What factors determine this number?
+5. One upstream degrades to p99 = 2 seconds. Without circuit breaking, describe the cascade: connection pool exhaustion → thread/event queue buildup → impact on healthy upstreams.
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**Processes and threads:**
+- "A memory corruption bug in thread 47 corrupts shared heap memory. What happens to the other 99 threads in the same process? How would the same bug behave with 100 separate processes (process-per-request model)?"
+- "A context switch takes ~1–10 µs. You have 200 threads handling 100K QPS. How many context switches per second does the OS perform? Is this a bottleneck compared to your request processing time?"
+- "You're choosing between multiprocessing (fork) and multithreading for a CPU-intensive image resizing service. The service handles 5,000 images/second, each taking 2ms. Which model and why?"
+
+**Memory:**
+- "Your JVM service caches 10M user profiles in a HashMap, each ~2 KB. Total: 20 GB. Your container has 16 GB. What happens? Redesign the cache with a size bound and eviction policy."
+- "Your Go service uses `mmap` to read large files. The file is 50 GB and your server has 32 GB RAM. What does the OS do? What performance characteristic do you observe when the working set exceeds RAM?"
+
+**CPU and GC:**
+- "CPU profiling shows 35% of CPU is spent in JSON deserialization (`ObjectMapper.readValue`). You're handling 50,000 QPS. What are your three mitigation options and their trade-offs (Protocol Buffers, pre-parsing, async deserialization)?"
+- "Your Go service has sub-millisecond GC pauses. You need to port it to Java for organizational reasons. Your SLO is p99 < 5ms. What GC tuning approach do you take? Is it achievable?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Thread Leak**
+A new deployment causes thread count to grow from 50 to 5,000 over 6 hours. Memory is fine (40% heap). CPU is at 95%. Service becomes unresponsive.
+
+- What is a thread leak and how does it happen in Java? (Common causes: ExecutorService not shut down, listener not deregistered)
+- What's consuming 95% CPU with 5,000 threads? (Hint: context switching overhead, scheduler contention)
+- The thread dump shows 4,950 threads blocked on `ReentrantLock.lock()`. What does this indicate? (Hint: a lock holder died or is hung)
+- Fix: how do you detect a thread leak in CI before it reaches production? What test metric do you monitor?
+
+**Scenario 2: Memory Pressure and Swapping**
+At peak load, your container starts swapping to disk. p99 jumps from 50ms to 5,000ms.
+
+- Why does a single page fault (disk access, ~10ms) cause a 100× latency increase for an in-memory operation that takes 0.1ms normally? Connect your answer to the memory hierarchy numbers in this chapter.
+- What Kubernetes resource configuration prevents the OS from allocating swap for your container?
+- You can't redeploy right now. What immediate OS-level mitigations reduce memory pressure (without restart)? (Drop caches, adjust swappiness, kill low-priority processes)
+- Design a Kubernetes liveness probe that detects "service is alive but too slow due to memory pressure" and triggers a pod restart.

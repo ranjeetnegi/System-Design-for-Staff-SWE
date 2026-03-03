@@ -987,3 +987,127 @@ Batch jobs fail. Networks partition. Nodes crash. If re-running a job produces d
 ---
 
 *This supplement supports Chapter 24 (Queues, Logs, Streams), Chapter 33 (Event-Driven), and Chapter 50 (Background Job Queue). Read alongside Ch 28 Supplement (Data Encoding) for serialization in pipelines, Ch 33 Supplement (Kafka Internals) for stream source details, and Ch 69 (Log Aggregation) for batch ingestion of logs.*
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: 10× Data Volume Overnight
+
+Your nightly Spark batch job processes 100 GB of user event data in 2 hours, finishing at 6 AM before business hours. A viral product launch causes data volume to spike to 1 TB overnight.
+
+1. What breaks first? Walk through: Spark executor memory, shuffle partitions, S3 I/O, Airflow task timeout.
+2. The job is still running at 10 AM. Business stakeholders need the daily report. What do you do right now?
+3. Design two fixes: one for immediate mitigation (today), one for long-term resilience. What's the cost difference between auto-scaling the Spark cluster and pre-provisioning headroom?
+4. Your shuffle partition count is set to 200 (Spark default). At 1 TB, what should it be? How do you calculate the right number?
+5. How would you instrument the job to detect "this run is tracking 3× over normal duration" within the first 20 minutes?
+
+---
+
+## Exercise 2: Cost Reduction — Redesign for 1/10 the Budget
+
+Your current batch pipeline costs $30,000/month:
+- Spark cluster on on-demand EC2: $18,000
+- S3 storage (hot tier, all data): $8,000
+- Data transfer (S3 → Redshift): $4,000
+
+You've been asked to cut pipeline costs by 90% without changing business SLAs (daily reports by 7 AM).
+
+1. Identify the highest-ROI optimization in each cost category.
+2. On-demand → spot instances: what's the risk, and how do you make Spark checkpointing work with spot interruptions?
+3. Hot S3 → tiered storage (S3 Intelligent-Tiering, Glacier for data > 90 days): which data can safely be archived? What's the query latency trade-off?
+4. Replace Spark with serverless SQL (Athena on S3 Parquet): when does this make sense? What's the break-even point in query frequency?
+5. Produce a revised cost estimate with your optimizations applied.
+
+---
+
+## Exercise 3: PII Deletion — GDPR Retrofit
+
+A new compliance requirement: all PII must be purged within 72 hours of a user deletion request. Your batch pipeline has:
+- Raw event data in S3 (partitioned by date, retained 2 years)
+- Aggregated metrics in Redshift (anonymized, retained 5 years)
+- User profile snapshots in S3 (daily, retained 1 year)
+- Derived ML features in a feature store (retained indefinitely)
+
+1. For each data store, describe the deletion mechanism and its complexity.
+2. S3 partitioning by date makes row-level deletion expensive. What are your options? (Delete and rewrite partition vs. cryptographic erasure vs. pseudonymization)
+3. Aggregated metrics contain user counts and click rates but not user IDs. Does GDPR require you to delete these? When is aggregated data no longer "personal data"?
+4. The feature store has no deletion API. How do you handle this gap? What's the escalation path?
+5. Design an end-to-end deletion pipeline: user deletes account → what triggers, what runs, what's the verification step, what's the audit trail?
+
+---
+
+## Exercise 4: Airflow DAG Deadlock
+
+Your Airflow DAG has 50 tasks across 5 upstream data sources. Monday morning, the DAG stops making progress. No tasks are failing — they're all stuck in `queued` state. The Airflow UI shows 50 tasks waiting and 0 running.
+
+1. What are the three most likely causes of this symptom?
+2. How do you distinguish between: (a) worker capacity exhaustion, (b) a deadlock in task dependencies, (c) a database connection pool exhaustion in Airflow's metadata DB?
+3. Your DAG has a critical dependency: Task A and Task B each wait for the other's output (circular dependency, introduced by a recent schema change). How do you detect this from the Airflow graph? How do you break the cycle?
+4. You fix the immediate issue. What monitoring do you add to detect this class of problem earlier: (a) task queue depth alert, (b) slot utilization alert, (c) DAG run duration SLA?
+5. Write a 5-line incident runbook for "DAG stuck in queued state."
+
+---
+
+## Exercise 5: Lambda Architecture Trade-off Decision
+
+Your team currently runs a **batch-only architecture**: nightly Spark jobs producing daily reports. Product wants "near real-time" dashboards updating every 5 minutes. Engineering proposes three options:
+
+- **Option A**: Keep batch, add micro-batch with Spark Streaming (5-minute windows)
+- **Option B**: Full Lambda architecture (keep existing batch + add Flink stream layer, merge results at query time)
+- **Option C**: Kappa architecture (replace batch with a single Flink streaming pipeline, reprocess from Kafka on schema change)
+
+1. Compare operational complexity of each option. How many distinct systems does each team need to operate?
+2. Lambda architecture risk: the batch and stream layers produce different numbers. How does this happen, and how do you reconcile?
+3. Kappa architecture risk: you need to reprocess 2 years of historical data. Your Kafka retention is 7 days. How do you handle this?
+4. For a team of 4 engineers, which option do you recommend? Justify with the constraint that the team also owns 3 other services.
+5. "Near real-time" is ambiguous. Before choosing an architecture, what clarifying questions do you ask product?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**Pipeline failures and recovery:**
+- "Your nightly batch job fails at step 7 of 15 at 3 AM. It's idempotent. Do you restart from step 1 or step 7? How does Spark checkpointing factor into this decision?"
+- "A data quality check catches that 30% of records in today's input have null user IDs. Do you fail the pipeline or proceed with the valid 70%? What's your escalation path?"
+- "Your pipeline produces a daily aggregate that's 40% lower than yesterday. Is this a data quality issue, a pipeline bug, or a real business signal? Walk through your diagnosis."
+
+**Schema evolution:**
+- "Upstream service adds a new field to their event schema without notice. Your Spark job reads the schema from a registry. What breaks? How do you design for backward compatibility?"
+- "You need to add a new column to a 5 TB Parquet dataset. You can't rewrite the whole dataset tonight. How do you handle reads from both old and new partitions that have different schemas?"
+
+**Scale and cost:**
+- "Your pipeline is the #2 cost line in your AWS bill. Your VP asks what you'd cut first to reduce costs by 30%. How do you answer? What data would you need first?"
+- "A single Spark job is reading 500 GB, but only 10 GB is relevant (the rest is filtered out early). How do you restructure data layout to avoid reading the irrelevant 490 GB?"
+
+**Compliance and correctness:**
+- "You discover that a batch job has been silently dropping ~0.1% of records for 6 months due to a deserialization error. How do you scope the impact? How do you recover the data? How do you prevent this from happening again?"
+- "Your ML training pipeline uses point-in-time correct features (no future leakage). A new engineer adds a feature that accidentally includes data from 'tomorrow.' How would you detect this in your pipeline testing?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Data Skew Cascade**
+Your Spark job is joining user events (1 TB) with user profiles (10 GB). One user (a bot) has 200 million events — 20% of the entire dataset. When Spark shuffles for the join, all 200M rows route to a single partition on one executor.
+
+- What symptoms do you see in the Spark UI? (executor metrics, task duration distribution)
+- What is "data skew" and why does it cause this failure mode?
+- Describe two mitigations: (a) salting the join key, (b) broadcast join. When is each appropriate?
+- The bot user has no valid profile. Should their 200M events be included in your output? What's the business decision and how do you implement it efficiently?
+
+**Scenario 2: Backfill Without Idempotency**
+A bug in your pipeline caused incorrect aggregations for the past 14 days. You fix the bug and need to reprocess those 14 days. However, your pipeline was not designed to be idempotent — re-running it appends duplicate records to the output table.
+
+- What's the risk of running the backfill as-is?
+- Design a safe backfill strategy: what steps do you take before re-running? How do you make the reprocessed output correct?
+- How would you design the pipeline from scratch to be idempotent, so this problem can't occur?
+- The 14-day backfill will take 6 hours. Downstream dashboards are wrong during this window. How do you communicate to stakeholders?
+
+**Scenario 3: Regulatory Audit**
+A regulator asks your company to produce all data processed for user ID 12345 over the past 2 years, along with a record of every transformation applied to that data.
+
+- Which of your data stores contain data about user 12345? (raw events, aggregates, snapshots, feature store, backups)
+- Do you have a data lineage system? If not, how do you reconstruct what transformations were applied?
+- How long would this audit response take with your current system? What's your target SLA for regulatory requests?
+- Design a "right-to-access" (GDPR Article 15) pipeline that can answer this query in < 24 hours.

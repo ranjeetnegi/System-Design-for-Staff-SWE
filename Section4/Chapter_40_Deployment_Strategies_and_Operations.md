@@ -1575,3 +1575,113 @@ For infrastructure (CPU, disk, network):
 | **SLI** | Service Level Indicator. The measurement (e.g., % of requests < 200ms). |
 | **SLO** | Service Level Objective. The target (e.g., 99.9% of requests < 200ms). |
 | **SLA** | Service Level Agreement. Legal contract with customers. Financial penalties for missing SLO. |
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: Canary Decision — Promote or Roll Back?
+
+Your canary is at 5% traffic. Baseline metrics (95% of traffic, existing version):
+- Error rate: 0.05%
+- p99 latency: 120ms
+- p50 latency: 25ms
+
+Canary metrics (5% of traffic, new version):
+- Error rate: 0.12%
+- p99 latency: 145ms
+- p50 latency: 24ms
+
+1. Is the canary's error rate increase (0.05% → 0.12%) statistically significant at 5% traffic sample? What sample size do you need to be confident this is a real regression?
+2. The p99 increased by 25ms. Your SLO is p99 < 200ms. Does this breach the SLO? Is it still worth investigating? What might cause p99 to increase but p50 to stay flat?
+3. Define your promote/rollback policy: what numeric thresholds (error rate delta, latency delta) trigger automatic rollback vs require human review?
+4. After 2 hours at 5% with borderline metrics, the on-call wants to promote to 100% to "see if it stabilizes." What's your counter-argument? What do you do instead?
+5. Write the Prometheus alert expression that would fire when canary error rate exceeds baseline by more than 2×.
+
+---
+
+## Exercise 2: Database Migration Rollback Runbook
+
+Write a runbook for rolling back a bad database migration. The migration added a new column `user_tier` (NOT NULL with default 'free') to the `users` table and deployed a new service version that reads it.
+
+**The problem**: 30 minutes after deploy, you discover the migration ran incorrectly — `user_tier` was set to 'free' for all premium users. Revenue impact is immediate (premium features disabled).
+
+Your runbook (fill in each step):
+
+1. **Detect**: What monitoring alert fires first? How do you confirm this is a data issue, not a code issue?
+2. **Contain**: The new service code reads `user_tier`. If you roll back the service to the old version (which doesn't read this column), what happens?
+3. **Fix data**: Write the SQL statement to identify affected users and restore their tier from your billing service.
+4. **Schema rollback decision**: Can you drop the column? The new service code uses it. If you can't drop it yet, what's the safe sequence?
+5. **Validation**: What query confirms the fix is complete? How long do you monitor before declaring the incident resolved?
+6. **Prevention**: What process change prevents this class of migration error? (Hint: expand-contract pattern, data validation in migration, shadow testing)
+
+---
+
+## Exercise 3: Error Budget Calculation and Policy
+
+Your service SLO is 99.9% availability (measured over a rolling 30-day window).
+
+1. Calculate your total error budget in minutes for a 30-day month.
+2. In the past 30 days: one 45-minute outage, two 10-minute partial outages (50% of requests failed), one 5-minute full outage. Calculate total error budget consumed in equivalent "full-outage minutes."
+3. Budget remaining? Are you allowed to ship new features this week?
+4. Your team has two priorities: (a) fix a latent bug that would likely cause a 2-hour outage if triggered, (b) ship a new feature that product needs by end-of-quarter. Apply your error budget policy to decide.
+5. Design a policy table: at what remaining budget % do you (a) continue normal shipping, (b) require extra review for risky changes, (c) freeze all features, (d) escalate to VP?
+
+---
+
+## Exercise 4: Incident Response Drill
+
+At 2:47 AM, your PagerDuty fires: `SLO burn rate critical — consuming 14.4× budget`. You're the incident commander.
+
+Walk through the first 15 minutes:
+
+1. **Minute 0–2**: What are your first 3 actions? (Not "fix the problem" — *manage the incident*)
+2. **Minute 2–5**: You check the dashboard. Error rate is 45%. p99 is 8 seconds. Affected service: `checkout-api`. What do you check next, in what order? (Logs? Deployments? Dependencies? DB?)
+3. **Minute 5–10**: You find a deploy happened 7 minutes before the alert fired. The deploy is a 3-line config change. What do you do?
+4. **Minute 10–15**: Rollback is in progress (takes 3 minutes). Error rate is still 45%. Do you do anything else while waiting?
+5. **Post-incident**: The 5-day postmortem is scheduled. What are the 5 sections of your blameless postmortem document?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**Deployment strategies:**
+- "You're doing a blue-green deployment. The new (green) environment processes 100% of traffic. 10 minutes later, you discover a subtle data corruption bug — green wrote bad data to the database. Can you roll back? What's different about blue-green rollback when the database is involved?"
+- "Your canary strategy is percentage-based (5% of requests). A latent bug only triggers for users whose account age is > 5 years. Your canary has 1% of such users. Will your canary catch this bug? How do you design a better canary strategy?"
+- "You're deploying a machine learning model update. The new model performs 2% better on your offline eval set but shows 0.5% higher error rate in canary. What additional signals do you check beyond error rate and latency?"
+
+**SLO and error budget:**
+- "Your SLO is 99.95% but your actual reliability last quarter was 99.99%. A PM argues you should tighten the SLO to 99.99%. What's the risk of a tighter SLO? What's the benefit?"
+- "Two services have the same 99.9% SLO. Service A is a payment processing service; service B is an internal analytics dashboard. Should they have the same SLO? What factors should drive SLO selection?"
+- "Your error budget is exhausted on the 15th of the month. You have a critical security patch that must be deployed. How do you handle this? What's the error budget exception process?"
+
+**Operations and on-call:**
+- "Your on-call receives 15 pages per shift, most of which are noise (auto-resolving in < 5 minutes). What's the threshold at which you declare alert fatigue a problem, and what process do you use to reduce alert volume?"
+- "A junior engineer accidentally deploys to production instead of staging. What process controls prevent this? If it happens, what's the immediate response?"
+- "Your runbook for 'high DB CPU' says 'scale up the database.' Your current DB is the largest instance type available. What does this reveal about runbook quality? How do you improve it?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Rolling Deploy with a Database Migration**
+You're doing a rolling deploy of a new version that drops an old column (`legacy_user_type`) from the users table. The migration runs first, then pods are updated one-by-one.
+
+- Pod 1 (old version) is still running and reading `legacy_user_type`. It just errored. Why? What's the correct deploy sequence? (Hint: expand-contract)
+- You realize the mistake 5 minutes in. 20% of pods are already on the new version. What do you do? Can you pause the rolling deploy?
+- How does the expand-contract pattern prevent this? Walk through the 3-phase process for this column removal.
+
+**Scenario 2: Feature Flag Storm**
+You enable a feature flag for 100% of users. The new feature queries a new endpoint that has insufficient capacity (designed for 10% traffic, not 100%). The endpoint starts returning 503s. Your feature flag service marks the feature as "degraded" but continues serving it.
+
+- What's the circuit breaker pattern, and why didn't it activate here?
+- Design the feature flag rollout strategy: 1% → 5% → 20% → 100% with automated progression gates. What metrics gate each stage?
+- The flag is at 100% and you need to roll it back to 0% in under 30 seconds. How do you design your feature flag system to support near-instant rollback?
+
+**Scenario 3: SLO Burn Rate Alert at 3 AM**
+Your SLO burn rate alert fires: "1-hour window burn rate = 20×, 6-hour window burn rate = 2×". This means you're burning budget 20× faster than sustainable in the last hour.
+
+- What does a 20× burn rate mean in concrete terms? (If normal budget depletion is X%/hour, you're depleting at 20X%/hour)
+- The 6-hour burn rate is only 2× — the incident is recent. What does this tell you about when the issue started?
+- You investigate and find no recent deploys. DB metrics are clean. CPU is fine. What do you check next? (Hint: upstream dependency, DNS, TLS certificate, third-party API)
+- After resolving the incident (30 minutes of 20× burn), how much of your monthly budget did you consume? Is feature shipping still permitted?

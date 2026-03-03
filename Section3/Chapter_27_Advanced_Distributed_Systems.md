@@ -1245,3 +1245,118 @@ Because 2PC blocks and 3PC breaks under partitions, many systems **avoid distrib
 - **HLC**: Kulkarni et al. (2014). CockroachDB docs on timestamps. Mental model: physical for "when," logical for "order."
 - **CRDTs**: Shapiro et al. (2011). "A comprehensive study of Convergent and Commutative Replicated Data Types." Know G-Counter, OR-Set. Understand commutativity, associativity, idempotence—why they guarantee convergence.
 - **Chaos**: "Chaos Engineering" (O'Reilly). Netflix Chaos Monkey. Principles of Chaos Engineering (principlesofchaos.org). Mental model: scientific method for failure. Hypothesis → experiment → learn.
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: 3PC Partition Walkthrough
+
+Three nodes (coordinator C, participants P1, P2) are mid-3PC commit. C has sent `PREPARE-TO-COMMIT` to both participants and received `READY` from P1, but the network partitions before P2 responds.
+
+1. Walk through every possible state each node can be in when the partition occurs.
+2. Which states are safe to continue from? Which require recovery?
+3. A new coordinator takes over. What does it observe? What decision can it make?
+4. Compare: in 2PC at the same point (coordinator has sent `PREPARE`, received YES from P1, partition before P2 responds), what can the new coordinator determine that it couldn't in 3PC? What *can't* it determine?
+5. Given both 2PC and 3PC have blocking failure modes under partitions, what does the Saga pattern offer that they don't?
+
+---
+
+## Exercise 2: Read-Your-Writes Without a Primary Replica
+
+Your collaborative document system uses 3 replicas (R1, R2, R3) with leader-based replication. The leader (R1) is removed from the design — all replicas are equal peers.
+
+1. User Alice writes a document update. Her request lands on R2. Replication lag to R3 is ~200ms.
+2. Alice's next request (read) routes to R3 (load balancer). She sees her old document.
+3. Design a read-your-writes guarantee without a primary. Consider: sticky sessions, version tokens, causal tokens, quorum reads.
+4. For each approach: what's the added latency? What happens when the node tracking Alice's session fails?
+5. How does DynamoDB's Sessions Token approach work for this problem?
+
+---
+
+## Exercise 3: HLC Clock Skew — What Breaks?
+
+Your distributed database uses Hybrid Logical Clocks (HLC). Physical clocks across 10 nodes are synchronized via NTP, typically within ±10ms.
+
+1. A rogue NTP server causes node N7 to drift +500ms ahead of wall clock. Walk through: which operations does N7 timestamp incorrectly? Which dependent operations on other nodes are affected?
+2. CockroachDB uses HLC and bounds clock uncertainty to 500ms ("max clock skew"). What does it do when it encounters a timestamp in the uncertainty window? What's the performance cost?
+3. Your HLC invariant is: `HLC(e) >= physical_time(e)`. N7's physical clock is now 500ms *ahead*. Does this violate the invariant? What if it were 500ms *behind*?
+4. How would you detect a drifting node in production monitoring? What alert threshold would you set?
+
+---
+
+## Exercise 4: CRDT vs OT for Collaborative Editing
+
+Two users (Alice and Bob) are simultaneously editing a shared text document. Alice inserts "Hello" at position 0. Bob deletes the character at position 0. Both operations are concurrent — neither has seen the other's change.
+
+1. With Last-Write-Wins (LWW): what's the outcome? What data is lost?
+2. With an Operational Transform (OT) approach: how does the server transform Bob's delete against Alice's insert? What's the final state?
+3. With a CRDT (specifically, an RGA — Replicated Growable Array): how does RGA resolve this? What does the final merged document look like?
+4. Why is OR-Set insufficient for this problem? What property of RGA makes it better for ordered sequences?
+5. Figma uses CRDT-like structures for vector graphics. Why is LWW acceptable for position properties (X, Y coordinates) but not for list operations (adding/removing layers)?
+
+---
+
+## Exercise 5: Chaos Engineering — Design a Game Day
+
+Your team owns a payment processing service with a 99.95% SLO. You want to run your first Game Day to validate your circuit breakers and fallback paths.
+
+1. Write a steady-state hypothesis: what does "normal" look like for this service in metrics terms? (Include: QPS, p99 latency, error rate, circuit breaker state)
+2. Design three specific fault injection experiments, ordered by blast radius (smallest to largest):
+   - Experiment A: localized, low risk
+   - Experiment B: moderate blast radius
+   - Experiment C: worst-case scenario (run in staging only)
+3. For each experiment, define: the action, expected system behavior, pass/fail criterion, and rollback trigger.
+4. Your circuit breaker opens during Experiment B. What should happen to in-flight requests? What happens to new requests? How long does the half-open probe wait?
+5. How do you link the Game Day results to your error budget policy? If Experiment C reveals a gap that would consume 20% of your monthly error budget, how does that change your feature release schedule?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**3PC and Transactions:**
+- "Your payment system uses 2PC. The coordinator crashes mid-transaction. How long are participants blocked? What's the maximum blocking time in your design?"
+- "You're asked to guarantee exactly-once payment processing across 3 microservices without 2PC. What pattern do you propose?"
+- "A Saga's compensating transaction fails. Now what? Design a dead-letter handling strategy for failed compensations."
+
+**Read Consistency:**
+- "A user changes their email address and is immediately redirected to their profile page. The profile is served from a read replica with 500ms replication lag. What does the user see? How do you fix this without routing all reads to primary?"
+- "Your system uses sticky sessions for read-your-writes. A sticky session server crashes. How do you handle users whose session was on that server?"
+
+**HLC and Ordering:**
+- "Two events happen 1ms apart on different nodes. Your HLC says event A happened before event B, but physical clocks say B happened first. Is your system correct? What guarantee does HLC actually provide?"
+- "You need to generate globally unique, roughly time-ordered IDs for database rows. Compare: UUID v4, ULID, Snowflake ID, and HLC-based ID. Which do you choose and why?"
+
+**CRDTs:**
+- "You're building a collaborative spreadsheet. Cells can be numbers, strings, or formulas. Which CRDT (or combination) would you use for: (a) a counter cell, (b) a text cell with free-form editing, (c) a formula cell that references other cells?"
+- "An OR-Set has 10,000 items added and removed over 1 year. What's the size of the metadata the OR-Set must track? Is there a garbage collection strategy?"
+
+**Chaos Engineering:**
+- "Your chaos experiment accidentally takes down production for 10 minutes. How do you run a blameless postmortem? What process changes do you make before the next experiment?"
+- "You want to introduce chaos engineering to a risk-averse organization. What's your pitch to leadership? How do you start with zero blast radius?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Causal Consistency Violation**
+A social media system uses causal consistency. Alice posts "I just got promoted!" (event A). Bob sees Alice's post and replies "Congratulations!" (event B, causally depends on A). Carol loads the thread and sees Bob's reply but not Alice's original post.
+
+- Is this a causal consistency violation? Why or why not?
+- What mechanism failed in the causal ordering guarantee?
+- How do vector clocks or causal tokens prevent this?
+- What's the user experience during recovery?
+
+**Scenario 2: Split-Brain Under HLC**
+A 3-node cluster using HLC experiences a network partition. Nodes N1+N2 form one partition; N3 is isolated. N3 continues accepting writes with monotonically increasing HLC timestamps.
+
+- When the partition heals, N3's timestamps are 2 minutes ahead of N1+N2. What does the merge look like?
+- HLC rule: `HLC = max(own_HLC, message_HLC) + epsilon`. When N3 sends its first message post-merge, what does N1 do with its HLC?
+- If your system uses HLC timestamps for conflict resolution (higher timestamp wins), which writes from N3 survive? Are they causally correct?
+
+**Scenario 3: CRDT Metadata Explosion**
+Your collaborative editor uses an OR-Set (Observed-Remove Set) to track active collaborators. Over 2 years, 50,000 users have joined and left. Each add/remove generates a unique tag.
+
+- What's the cumulative size of the OR-Set metadata after 2 years?
+- Design a garbage collection strategy that removes tombstones for elements that are definitively gone (not just in a removed state locally).
+- What coordination is required to safely garbage-collect a tombstone in a distributed system?

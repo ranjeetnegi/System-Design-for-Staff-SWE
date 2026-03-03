@@ -199,6 +199,58 @@ A **collision** occurs when two different inputs produce the same hash. Good has
 
 **Consistent hashing**: Only K/N keys move when you add or remove a node (K = total keys, N = nodes). Adding one node: ~1/N of keys move to it. Removing one: its keys go to the next node. This is why distributed caches (Memcached, Redis Cluster) and storage systems (Dynamo, Cassandra) use it. Staff Engineers understand both and choose based on resize frequency and tolerance for movement.
 
+### Jump Hashing: O(1) Space, No Ring Required
+
+**Problem with consistent hashing**: The ring requires memory proportional to virtual nodes—O(V) where V = 100–200 × N. Lookup is O(log V) binary search. For very large node counts, this adds up.
+
+**Jump hashing** (Google, 2014): A hash function that maps a key deterministically to one of N buckets. No ring, no sorted array, O(1) space. When N increases by one, only K/N keys move (same guarantee as consistent hashing).
+
+```
+// Jump hash — pseudocode (Lamping & Veach, 2014)
+def jump_hash(key: uint64, num_buckets: int) -> int:
+    b, j = -1, 0
+    while j < num_buckets:
+        b = j
+        key = (key * 2862933555777941757 + 1) % 2**64
+        j = int((b + 1) * (2**31 / ((key >> 33) + 1)))
+    return b
+```
+
+**Tradeoffs**:
+- O(log N) time (loop iterates O(log N) times), O(1) memory — no ring to maintain
+- Works only for contiguous buckets 0..N-1 — adding a bucket is fine, but removing bucket K (not the last) reshuffles everything
+- **Not suitable** for systems where arbitrary nodes leave (e.g., a server crashes). **Best for** static or append-only node sets: fixed shard counts, immutable storage tiers.
+
+### Rendezvous Hashing (Highest Random Weight)
+
+**Problem**: Need consistent assignment like consistent hashing, but with arbitrary adds/removes and no ring structure. N is small (< 50 nodes).
+
+**Rendezvous hashing**: For each key K, compute a score `hash(K, node_i)` for every candidate node. Assign K to the node with the **highest score**. When a node leaves, each of its keys independently picks the next-highest node — no coordination, no ring.
+
+```
+// Rendezvous hash — pseudocode
+def rendezvous_assign(key: str, nodes: list[Node]) -> Node:
+    return max(nodes, key=lambda n: hash(key + n.id))
+```
+
+**Tradeoffs**:
+- O(N) per lookup (must score all nodes). Fine when N is small (e.g., 5 replicas). Unusable when N = 10,000.
+- Any node can join or leave; only ~1/N of all keys remap
+- Used in: Nginx upstream selection, CDN origin selection, replica selection in distributed databases
+
+### Hashing Algorithm Comparison
+
+| Algorithm | Lookup | Memory | Handles Node Removal | Best For |
+|-----------|--------|--------|----------------------|----------|
+| **Modulo (`% N`)** | O(1) | O(1) | No (full remap) | Fixed-size hash tables |
+| **Consistent hashing** | O(log V) | O(V) vnodes | Any node, minimal move | Caches, distributed KV stores |
+| **Jump hashing** | O(log N) | O(1) | Last node only | Fixed/growing shard counts |
+| **Rendezvous hashing** | O(N) | O(N) | Any node, minimal move | Small N, CDN, replica selection |
+
+**L6 framing**: "Consistent hashing is not the only option. If we only add shards (never remove mid-range ones), jump hashing gives the same distribution guarantee with zero memory overhead. If N is small—say 5 replicas—rendezvous hashing is simpler and produces the same minimal-movement property without a ring."
+
+---
+
 ### Hash Collisions in Distributed Systems
 
 For partitioning, collisions (two keys to same hash) aren't a problem—you want many keys per partition. For content-addressable storage (hash of content = ID), collisions are catastrophic: two different contents with same hash would be indistinguishable. SHA-256's 2^256 space makes this negligible. For password hashing, collisions would let an attacker find another password that hashes the same—use bcrypt/Argon2, which are designed to be collision-resistant and slow.
@@ -299,14 +351,23 @@ The most common pattern: the application manages the cache. The cache doesn't kn
     WRITE-AROUND:
     App ──► DB only. Cache populated on next read (miss first time)
 
-    ┌───────────────┬─────────────┬──────────────┬───────────────┐
-    │    Pattern    │ Consistency │ Performance  │  Best For     │
-    ├───────────────┼─────────────┼──────────────┼───────────────┤
-    │ Cache-aside   │  Eventual   │  Good reads  │ Most web apps │
-    │ Write-through │  Strong     │  Slower write│ Sessions      │
-    │ Write-behind  │  Risky      │  Fast write  │ View counts   │
-    │ Write-around  │  Eventual   │  Miss on new │ Write-heavy   │
-    └───────────────┴─────────────┴──────────────┴───────────────┘
+    READ-THROUGH:
+    App ──► Cache? ──HIT──► Return
+              │
+             MISS
+              │
+              ▼
+           CACHE itself loads from DB ──► Return  (app never talks to DB)
+
+    ┌────────────────┬─────────────┬──────────────┬────────────────────────┐
+    │    Pattern     │ Consistency │ Performance  │  Best For              │
+    ├────────────────┼─────────────┼──────────────┼────────────────────────┤
+    │ Cache-aside    │  Eventual   │  Good reads  │ Most web apps          │
+    │ Write-through  │  Strong     │  Slower write│ Sessions               │
+    │ Write-behind   │  Risky      │  Fast write  │ View counts            │
+    │ Write-around   │  Eventual   │  Miss on new │ Write-heavy            │
+    │ Read-through   │  Eventual   │  Miss on new │ Caching proxy layers   │
+    └────────────────┴─────────────┴──────────────┴────────────────────────┘
     ═══════════════════════════════════════════════════════════════════
 ```
 
@@ -635,6 +696,9 @@ If the operation **is** idempotent, the retry is safe. "Charge $100 with idempot
 | **Write-through** | Strong | High (every write hits cache + DB) | Session data, config that must be fresh | User session, feature flags |
 | **Write-back** | Eventual, loss risk | Lowest | Analytics events, click tracking | Metrics, view counts |
 | **Write-around** | Eventual | Low | Write-heavy, read miss OK | Log aggregation, audit trail |
+| **Read-through** | Eventual | Low (cache handles DB load) | Read-heavy, caching proxy (Redis + Envoy), CDN | Product catalog via caching proxy, CDN edge cache |
+
+**Read-through vs cache-aside**: In cache-aside, the *application* checks the cache, then fetches from DB on miss. In read-through, the *cache layer itself* fetches from DB on miss—the app only ever talks to the cache. Read-through is simpler application code but requires a smart cache proxy (Redis with a loader plugin, DAX for DynamoDB). Cache-aside gives more control and works with any cache.
 
 **Impact on consistency**: Write-through guarantees cache and DB match. Cache-aside can serve stale until TTL or invalidation. Write-back can lose recent writes if cache fails. Choose based on domain: payments → strong. Product description → eventual.
 
@@ -1151,3 +1215,149 @@ The L6 answer includes *how* and *why* and *what happens when it fails*. That's 
     ║   Stateful server dies → Session lost (use external store!)           ║
     ╚═══════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: Consistent Hashing — Add a Node
+
+You have a consistent hashing ring with 4 nodes (A, B, C, D) and 200 virtual nodes each. You add node E.
+
+1. Roughly what percentage of keys move to E?
+2. Which nodes are affected — do all 4 lose keys or just some?
+3. During the rebalance window, some reads will miss the cache. What mitigation strategies prevent a thundering herd on the DB?
+4. Compare with modulo hashing (`hash(key) % 4 → % 5`): what percentage of keys would have to move?
+
+*Target answer: ~20% of keys move to E; all nodes can potentially donate keys (from their arcs where E's vnodes land); mitigation = dual-read during migration or pre-warming; modulo = ~80% of keys remap.*
+
+---
+
+## Exercise 2: Cache Strategy — Hot Key Problem (Celebrity Post)
+
+A celebrity with 10 million followers posts a photo. All 10M followers' feeds try to load the photo simultaneously within 2 seconds.
+
+1. Which cache pattern do you use for the photo content itself? Why?
+2. What breaks with a standard cache-aside implementation at this scale?
+3. Describe a stampede-prevention strategy (probabilistic early expiration or request coalescing) in concrete terms.
+4. Would write-through or read-through help here? Why or why not?
+5. The photo is 500 KB. At 10M requests in 2 seconds, what's the egress if even 1% miss the cache? Is a CDN sufficient, or do you need multi-tier caching?
+
+---
+
+## Exercise 3: Idempotency Across 3 Services
+
+A payment flow calls: (1) Payment Service, (2) Inventory Service, (3) Order Service — in sequence. The client retries the entire flow on timeout.
+
+1. Where do you place idempotency keys? One key for the whole flow, or per-service? Justify.
+2. Payment has already charged the card when Inventory fails. What happens on retry?
+3. Design the deduplication store: what key do you use, what's the TTL, what do you store as the value?
+4. If two concurrent requests with the same idempotency key arrive simultaneously at the Payment Service, what race condition exists? How do you prevent a double charge?
+5. Should idempotency keys be client-generated or server-generated? What are the tradeoffs?
+
+---
+
+## Exercise 4: Write-Through vs Cache-Aside — Decision
+
+For each of the following data types in an e-commerce system, choose a caching strategy (cache-aside, write-through, write-behind, read-through) and justify your choice in one sentence:
+
+| Data | Your Choice | One-Line Justification |
+|------|-------------|------------------------|
+| User session (JWT + cart) | ? | |
+| Product price (changes hourly) | ? | |
+| Product description (changes rarely) | ? | |
+| Inventory count (must not oversell) | ? | |
+| Order history (immutable after creation) | ? | |
+| Homepage featured products (updated by marketing) | ? | |
+
+*Discuss: Where strong consistency is required, is caching the right choice at all, or should you bypass the cache for reads?*
+
+---
+
+## Exercise 5: Sync vs Async — Design a Checkout Flow
+
+Design the checkout endpoint for an e-commerce system. The operations are:
+
+- Validate cart (inventory check)
+- Charge payment
+- Create order record
+- Send confirmation email
+- Update analytics
+- Notify fulfillment service
+- Reserve shipping slot
+
+1. Which operations must be synchronous (in the request-response cycle)? Why?
+2. Which can be asynchronous (queued)?
+3. What happens if the async queue goes down? Does the user experience degrade?
+4. What's your idempotency strategy for each synchronous step?
+5. Draw the happy-path sequence. Then draw the failure path where payment succeeds but order creation fails.
+
+---
+
+## "What If X Changes?" Brainstorming
+
+These are follow-up questions an interviewer might ask. Practice answering each in 60–90 seconds.
+
+**Hashing:**
+- "What if consistent hashing causes hotspots because a celebrity's content all maps to the same vnode range?"
+- "You're switching from 10 shards to 11 shards. Using modulo hashing, how would you migrate without downtime?"
+- "When would you use rendezvous hashing over consistent hashing?"
+
+**Caching:**
+- "Your Redis cache goes down at 3 AM. Walk me through exactly what happens to your system."
+- "A user updates their profile photo. How do you ensure all 500 CDN edge nodes see the new photo within 60 seconds?"
+- "Your cache hit rate drops from 95% to 70% overnight. What's your diagnosis checklist?"
+- "You have a hot key: one product is getting 100K reads/second but your Redis can only handle 80K. What are your options?"
+
+**Idempotency:**
+- "A user double-clicks the 'Place Order' button. Your frontend sends two identical requests 50ms apart. Walk through your idempotency design."
+- "Your idempotency key store (Redis) goes down. What happens to in-flight requests? What's your fallback?"
+
+**Queues:**
+- "Your Kafka consumer has been down for 6 hours. It comes back online. What's the backlog situation? What's your strategy?"
+- "A message keeps failing and going to the DLQ. How do you detect, alert, and recover?"
+- "You're asked to implement exactly-once delivery for a payment event. Is this possible? What guarantees does Kafka provide?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Cache Stampede**
+Your product catalog cache has a 5-minute TTL. At 9:00 AM, the TTL expires for a popular product page. In the next 200ms, 50,000 requests arrive and all miss the cache simultaneously.
+
+- What happens to your database?
+- How do you prevent this? Describe two different mitigations.
+- How would you detect this in your monitoring before it causes an outage?
+
+**Scenario 2: Queue Backlog Cascade**
+Your checkout service writes to a Kafka topic for async email/analytics/fulfillment. Traffic spikes 10× during a flash sale. Consumers can't keep up. The queue starts growing.
+
+- What happens when the queue reaches its retention limit?
+- How does backpressure propagate back to your checkout service?
+- What's the difference between dropping messages and applying backpressure? When is each acceptable?
+
+**Scenario 3: Idempotency Key Collision**
+Two different users happen to submit idempotency keys that are numerically close (e.g., sequential integers assigned by the client). Key 1001 collides with an existing request.
+
+- What does your system return to user B whose key matched user A's request?
+- How should idempotency keys be generated to make collision astronomically unlikely?
+- What's the risk of using `timestamp + user_id` as an idempotency key?
+
+---
+
+## Trade-off Debates
+
+**1. Consistent hashing vs database sharding with a routing table**
+- Consistent hashing: no central routing state, O(log N) lookup with vnodes, minimal movement on rebalance
+- Routing table (e.g., Vitess): central shard map, O(1) lookup, arbitrary shard movement, explicit control
+- *When do you prefer the routing table approach? What's the operational cost of each?*
+
+**2. Synchronous write-through vs asynchronous write-behind for a session store**
+- Write-through: strong consistency, every write hits both Redis and DB, higher write latency
+- Write-behind: fast writes, risk of data loss if Redis dies before DB sync
+- *A user logs in, then your Redis node crashes 100ms later before write-behind flushes. What's the user experience?*
+
+**3. Single large queue vs many small queues**
+- Single topic: simple, one consumer group, ordering across all events
+- Per-entity topic (e.g., per user_id): parallel processing, ordering per entity, N topics to manage
+- *For a payment processing system, which would you choose? What's the failure blast radius difference?*

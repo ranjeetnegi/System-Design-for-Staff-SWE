@@ -10,9 +10,9 @@ A comprehensive, structured guide for experienced backend engineers preparing fo
 |---|---|
 | **Target Role** | Google Staff Engineer (L6) / equivalent |
 | **Audience** | Senior Engineers (8+ years) preparing for Staff-level interviews |
-| **Chapters** | 57 across 6 sections |
-| **Coverage** | Mindset, Framework, Distributed Systems, Data Systems, Senior-level Problems, Staff-level Problems |
-| **Progress** | All 6 sections complete (57 chapters) |
+| **Chapters** | 72 across 7 sections |
+| **Coverage** | Fundamentals, Mindset, Framework, Distributed Systems, Data Systems, Senior-level Problems, Staff-level Problems |
+| **Progress** | All 7 sections complete (72 chapters) |
 
 ---
 
@@ -46,6 +46,9 @@ You are not learning system design from scratch. You are learning how to **demon
 ```
 System-Design/
 ├── README.md                  ← You are here
+├── Section0/                  ← Fundamentals — Building Blocks of System Design (Ch. 1–6)
+│   ├── README.md
+│   └── Chapter_1_* … Chapter_6_* (chapter names)
 ├── Section1/                  ← Staff Engineer Mindset & Evaluation (Ch. 7–12)
 │   ├── README.md
 │   └── Chapter_7_* … Chapter_12_* (chapter names)
@@ -72,18 +75,33 @@ Each section has its own `README.md` with an overview, learning objectives, and 
 
 ## Table of Contents
 
+### Section 0 — Fundamentals: Building Blocks of System Design
+
+Covers the foundational concepts all system design builds upon — systems, APIs, OS fundamentals, networking, estimation, and core building blocks.
+
+| # | Chapter | Link |
+|---|---------|------|
+| 1 | Systems, Servers, and Clients | [Chapter 1](Section0/Chapter_1_Systems_Servers_Clients.md) |
+| 2 | APIs, Frontend, Backend, and Databases | [Chapter 2](Section0/Chapter_2_APIs_Frontend_Backend_DB.md) |
+| 3 | OS Fundamentals | [Chapter 3](Section0/Chapter_3_OS_Fundamentals.md) |
+| 4 | Networking Foundations | [Chapter 4](Section0/Chapter_4_Networking_Foundations.md) |
+| 5 | Numbers and Estimation | [Chapter 5](Section0/Chapter_5_Numbers_Estimation.md) |
+| 6 | Core Building Blocks | [Chapter 6](Section0/Chapter_6_Core_Building_Blocks.md) |
+
+---
+
 ### Section 1 — Staff Engineer Mindset & Evaluation
 
 Establishes the foundational mindset: how Google evaluates Staff Engineers and what distinguishes L6 thinking from L5.
 
 | # | Chapter | Link |
 |---|---------|------|
-| 7 | How Google Evaluates Staff Engineers in System Design Interviews | [Chapter 7 (Section1/Chapter_7_How_Google_Evaluates_Staff_Engineers.md) |
-| 8 | Scope, Impact, and Ownership at Google Staff Engineer Level | [Chapter 8 (Section1/Chapter_8_Scope_Impact_and_Ownership.md) |
-| 9 | Designing Systems That Scale Across Teams (Staff Perspective) | [Chapter 9 (Section1/Chapter_9_Designing_Systems_That_Scale_Across_Teams.md) |
-| 10 | Staff Engineer Mindset — Designing Under Ambiguity | [Chapter 10 (Section1/Chapter_10_Staff_Engineer_Mindset_Designing_Under_Ambiguity.md) |
-| 11 | Trade-offs, Constraints, and Decision-Making at Staff Level | [Chapter 11 (Section1/Chapter_11_Trade_offs_Constraints_and_Decision_Making.md) |
-| 12 | Communication and Interview Leadership for Google Staff Engineers | [Chapter 12 (Section1/Chapter_12_Communication_and_Interview_Leadership.md) |
+| 7 | How Google Evaluates Staff Engineers in System Design Interviews | [Chapter 7](Section1/Chapter_7_How_Google_Evaluates_Staff_Engineers.md) |
+| 8 | Scope, Impact, and Ownership at Google Staff Engineer Level | [Chapter 8](Section1/Chapter_8_Scope_Impact_and_Ownership.md) |
+| 9 | Designing Systems That Scale Across Teams (Staff Perspective) | [Chapter 9](Section1/Chapter_9_Designing_Systems_That_Scale_Across_Teams.md) |
+| 10 | Staff Engineer Mindset — Designing Under Ambiguity | [Chapter 10](Section1/Chapter_10_Staff_Engineer_Mindset_Designing_Under_Ambiguity.md) |
+| 11 | Trade-offs, Constraints, and Decision-Making at Staff Level | [Chapter 11](Section1/Chapter_11_Trade_offs_Constraints_and_Decision_Making.md) |
+| 12 | Communication and Interview Leadership for Google Staff Engineers | [Chapter 12](Section1/Chapter_12_Communication_and_Interview_Leadership.md) |
 
 ---
 
@@ -93,13 +111,13 @@ A repeatable methodology for approaching any system design problem — from vagu
 
 | # | Chapter | Link |
 |---|---------|------|
-| 13 | System Design Framework | [Chapter 13 (Section2/Chapter_13_System_Design_Framework.md) |
-| 14 | Phase 1 — Users & Use Cases | [Chapter 14 (Section2/Chapter_14_Phase_1_Users_and_Use_Cases.md) |
-| 15 | Phase 2 — Functional Requirements | [Chapter 15 (Section2/Chapter_15_Phase_2_Functional_Requirements.md) |
-| 16 | Phase 3 — Scale: Capacity Planning and Growth | [Chapter 16 (Section2/Chapter_16_Phase_3_Scale_Capacity_Planning_and_Growth.md) |
-| 17 | Cost, Efficiency, and Sustainable Design | [Chapter 17 (Section2/Chapter_17_Cost_Efficiency_and_Sustainable_System_Design.md) |
-| 18 | Phase 4 & Phase 5 — NFRs, Assumptions, Constraints | [Chapter 18 (Section2/Chapter_18_Phase_4_and_5_Non_Functional_Requirements.md) |
-| 19 | End-to-End System Design Using the 5-Phase Framework | [Chapter 19 (Section2/Chapter_19_End_to_End_System_Design_5_Phase_Framework.md) |
+| 13 | System Design Framework | [Chapter 13](Section2/Chapter_13_System_Design_Framework.md) |
+| 14 | Phase 1 — Users & Use Cases | [Chapter 14](Section2/Chapter_14_Phase_1_Users_and_Use_Cases.md) |
+| 15 | Phase 2 — Functional Requirements | [Chapter 15](Section2/Chapter_15_Phase_2_Functional_Requirements.md) |
+| 16 | Phase 3 — Scale: Capacity Planning and Growth | [Chapter 16](Section2/Chapter_16_Phase_3_Scale_Capacity_Planning_and_Growth.md) |
+| 17 | Cost, Efficiency, and Sustainable Design | [Chapter 17](Section2/Chapter_17_Cost_Efficiency_and_Sustainable_System_Design.md) |
+| 18 | Phase 4 & Phase 5 — NFRs, Assumptions, Constraints | [Chapter 18](Section2/Chapter_18_Phase_4_and_5_Non_Functional_Requirements.md) |
+| 19 | End-to-End System Design Using the 5-Phase Framework | [Chapter 19](Section2/Chapter_19_End_to_End_System_Design_5_Phase_Framework.md) |
 
 ---
 
@@ -109,12 +127,12 @@ The technical bedrock — deep vocabulary for designing systems that actually wo
 
 | # | Chapter | Link |
 |---|---------|------|
-| 20 | Consistency Models — Guarantees, Trade-offs, and Failure Behavior | [Chapter 20 (Section3/Chapter_20_Consistency_Models.md) |
-| 21 | Replication and Sharding — Scaling Without Losing Control | [Chapter 21 (Section3/Chapter_21_Replication_and_Sharding.md) |
-| 22 | Leader Election, Coordination, and Distributed Locks | [Chapter 22 (Section3/Chapter_22_Leader_Election_Coordination_and_Distributed_Locks.md) |
-| 23 | Backpressure, Retries, and Idempotency | [Chapter 23 (Section3/Chapter_23_Backpressure_Retries_and_Idempotency.md) |
-| 24 | Queues, Logs, and Streams — Choosing the Right Asynchronous Model | [Chapter 24 (Section3/Chapter_24_Queues_Logs_and_Streams.md) |
-| 25 | Failure Models and Partial Failures — Designing for Reality at Staff Level | [Chapter 25 (Section3/Chapter_25_Failure_Models_and_Partial_Failures.md) |
+| 20 | Consistency Models — Guarantees, Trade-offs, and Failure Behavior | [Chapter 20](Section3/Chapter_20_Consistency_Models.md) |
+| 21 | Replication and Sharding — Scaling Without Losing Control | [Chapter 21](Section3/Chapter_21_Replication_and_Sharding.md) |
+| 22 | Leader Election, Coordination, and Distributed Locks | [Chapter 22](Section3/Chapter_22_Leader_Election_Coordination_and_Distributed_Locks.md) |
+| 23 | Backpressure, Retries, and Idempotency | [Chapter 23](Section3/Chapter_23_Backpressure_Retries_and_Idempotency.md) |
+| 24 | Queues, Logs, and Streams — Choosing the Right Asynchronous Model | [Chapter 24](Section3/Chapter_24_Queues_Logs_and_Streams.md) |
+| 25 | Failure Models and Partial Failures — Designing for Reality at Staff Level | [Chapter 25](Section3/Chapter_25_Failure_Models_and_Partial_Failures.md) |
 | 26 | CAP Theorem — Behavior Under Partition (Applied Case Studies) | [Chapter 26](Section3/Chapter_26_CAP_Theorem_Applied_Case_Studies.md) |
 | 27 | Advanced Distributed Systems | [Chapter 27](Section3/Chapter_27_Advanced_Distributed_Systems.md) |
 
@@ -200,12 +218,13 @@ This is designed to be read in order, but you can adapt the path to your needs.
 
 **Recommended reading order:**
 
-1. **Section 1** — Internalize the Staff mindset before touching architecture
-2. **Section 2** — Learn the 5-Phase Framework you will use in every design
-3. **Section 3** — Build the distributed systems vocabulary for trade-off reasoning
-4. **Section 4** — Connect theory to concrete data systems and global-scale concerns
-5. **Section 5** — Practice Senior-level problems to build fluency with the framework
-6. **Section 6** — Tackle Staff-level problems that add multi-region scale, cross-team impact, and migration strategy
+1. **Section 0** — Ground yourself in the fundamentals: systems, APIs, networking, estimation, and core building blocks
+2. **Section 1** — Internalize the Staff mindset before touching architecture
+3. **Section 2** — Learn the 5-Phase Framework you will use in every design
+4. **Section 3** — Build the distributed systems vocabulary for trade-off reasoning
+5. **Section 4** — Connect theory to concrete data systems and global-scale concerns
+6. **Section 5** — Practice Senior-level problems to build fluency with the framework
+7. **Section 6** — Tackle Staff-level problems that add multi-region scale, cross-team impact, and migration strategy
 
 **If you are short on time:**
 

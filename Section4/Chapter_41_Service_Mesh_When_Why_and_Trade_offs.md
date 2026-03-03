@@ -1129,3 +1129,91 @@ Kiali provides a real-time service graph showing:
 ---
 
 *This supplement supports Chapter 39 (System Evolution), Chapter 23 (Backpressure, Retries), and Chapter 52 (API Gateway). Read alongside Ch 39 Supplement (Deployment & Ops) for deployment strategies that leverage mesh traffic splitting, and Ch 25 (Failure Models) for circuit breaking and cascading failure theory.*
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: Should You Adopt a Service Mesh?
+
+Your organization has 20 microservices, a team of 3 backend engineers (no dedicated platform/SRE team), and the following stated problems:
+- Service A and Service B don't have mTLS between them; a recent audit flagged this
+- Retry logic is duplicated across 8 services, inconsistently implemented
+- There's no distributed tracing — debugging cross-service latency requires log correlation by hand
+
+1. Which of these problems does a service mesh directly solve? Which does it only partially solve?
+2. For a 3-engineer team, estimate the operational burden of running Istio (control plane upgrades, sidecar version management, debugging mTLS cert issues). Is the benefit worth the cost at 20 services?
+3. Present an alternative for each problem that does *not* require a service mesh: mTLS without a mesh, shared retry library, OpenTelemetry without Envoy sidecar.
+4. At what team size and service count does the trade-off shift in favor of a mesh? What's your heuristic?
+5. Your CISO mandates mTLS within 90 days. Service mesh is now required. Which mesh do you recommend for a team of 3? (Istio vs Linkerd vs Cilium) Justify based on operational simplicity.
+
+---
+
+## Exercise 2: Migration — Library-Based mTLS to Istio
+
+Your current setup: each service handles mTLS by embedding a shared TLS library (in-process certificate management, manual rotation). You're migrating to Istio sidecar-based mTLS.
+
+Design a zero-downtime migration plan:
+
+1. **Phase 1: Sidecar injection in PERMISSIVE mode.** Why start permissive? What traffic does permissive mode allow that STRICT would reject?
+2. **Phase 2: Dual mTLS period.** During migration, Service A (old, library mTLS) calls Service B (new, Istio sidecar). Both have valid certificates. How do you prevent a double-TLS situation?
+3. **Phase 3: Switch to STRICT mode.** Before switching, how do you verify that all service-to-service traffic is already going through Istio mTLS? What command/metric tells you?
+4. **Phase 4: Remove library TLS.** After strict mode is on, you remove the TLS library from each service. One service missed the Istio sidecar injection (it's in a non-labeled namespace). What happens when you remove its library TLS?
+5. **Rollback plan**: If Phase 3 (strict mTLS) breaks a service, what's your rollback? Can you roll back without a service deployment?
+
+---
+
+## Exercise 3: Sidecar Overhead — When Is 5ms Unacceptable?
+
+Your Istio sidecar adds 5ms latency (measured: 2ms inbound + 3ms outbound) to every service-to-service call.
+
+1. Your checkout flow calls 6 services in sequence (no parallelism). What's the total latency overhead from sidecars? What percentage of your p99 budget (500ms) does this consume?
+2. You redesign the checkout flow to call 4 services in parallel (fan-out). Now what's the sidecar overhead?
+3. A real-time bidding service requires p99 < 10ms for internal calls. Each internal call currently takes 3ms. After Istio, it takes 8ms. Is this acceptable? What are your options?
+4. Memory: each sidecar is ~50 MB. You have 200 pods. What's the total memory overhead across your cluster?
+5. You're evaluating Cilium eBPF-based mesh as an alternative (claimed <0.5ms overhead, no sidecar per pod). What's the operational trade-off vs Istio? Is the latency saving worth the change?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**Adoption decisions:**
+- "Your service mesh is running well on 30 services. Leadership wants to expand it to 300 services (including legacy Java monoliths). What new challenges emerge at 10× the service count?"
+- "Istio releases a version with a breaking change to VirtualService. You have 200 VirtualService resources. How do you manage this upgrade without downtime?"
+- "Your Istio control plane (istiod) crashes. What happens to in-flight traffic? What happens to new connection establishments? Why does the data plane continue working even when the control plane is down?"
+
+**Traffic management:**
+- "You're using Istio traffic splitting to canary a new version (5% → 100%). The canary has higher error rates. Can Istio automatically roll back, or does rollback require human intervention? What's the gap between Istio and a CD system like Argo Rollouts?"
+- "You need to test how Service A behaves when Service B is slow (500ms added latency). How do you inject this fault into only Service A's calls to B without affecting other services?"
+- "Your service is returning 200 OK for errors (a bug). Istio retries on 5xx. Does Istio help or hurt here? What's the risk of retrying non-idempotent operations?"
+
+**mTLS and security:**
+- "A service is misconfigured and its Istio sidecar isn't injected. In STRICT mode, can it receive traffic? Can it make outbound calls? What error does it see?"
+- "You need to allow an external partner's service (outside your mesh) to call an internal service. How do you configure Istio to allow this without opening the service to all external traffic?"
+- "Your mTLS certificates are issued by an internal CA with a 24-hour TTL. A certificate rotation fails silently. 24 hours later, all service-to-service calls start failing. How do you detect this before it becomes an outage?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Retry Storm**
+Your service mesh (Istio) is configured with 3 retries on 5xx errors with a 100ms retry delay. Service B starts returning 503s at 50% rate.
+
+- Service A gets a 503, retries 3 times (4 total attempts). What's the effective QPS multiplication factor on Service B? (If A was sending 1,000 QPS to B...)
+- Service B is overloaded and returning 503s *because* it's overloaded. The retries make it worse. What is this failure mode called?
+- How do you configure Istio retries to avoid this? (Hint: retry on 503 vs retry on connection refused, retryOn conditions, per-try timeout)
+- Circuit breaking configuration: what Istio `outlierDetection` settings do you apply to Service B's DestinationRule to stop retries when B is consistently failing?
+
+**Scenario 2: Certificate Rotation During Peak Traffic**
+Istio cert-manager rotates service certificates every 24 hours. Rotation happens at 2 PM — your peak traffic hour. During rotation, there's a 500ms window where the new certificate has been issued but hasn't propagated to all sidecars.
+
+- What happens to in-flight mTLS connections during this 500ms window? Do they fail? Why or why not?
+- A sidecar on a slow node takes 30 seconds to receive the new certificate (XDS update delay). During those 30 seconds, can this sidecar still communicate? What's the Envoy behavior with an expired cert?
+- How do you shift certificate rotation to happen during low-traffic hours? What Istio configuration controls rotation timing?
+
+**Scenario 3: Control Plane Partitioned from Data Plane**
+A network partition isolates the Istio control plane (istiod) from all data plane sidecars for 15 minutes.
+
+- What happens to existing connections between services during the 15 minutes? (Existing mTLS sessions, existing circuit breaker state)
+- A new service pod starts during the 15-minute partition. Its sidecar can't reach istiod to get certificates and initial config. Can it receive traffic?
+- After the partition heals, istiod pushes updates to 200 sidecars simultaneously. What's the risk of a "thundering herd" during reconnect? How does Istio's incremental xDS (delta xDS) mitigate this?

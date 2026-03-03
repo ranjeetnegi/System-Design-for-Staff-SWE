@@ -873,3 +873,136 @@ Before trusting the ID token:
 ```
 
 **Sync mechanisms**: App events (100ms–1s lag), CDC/Debezium (1–5s), Polling (seconds–minutes).
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: OIDC Provider Outage — Graceful Degradation
+
+Your application uses Auth0 as its OIDC provider. Auth0 experiences a 30-minute outage.
+
+1. Which users are affected — new logins only, or also existing authenticated users? Why?
+2. Your access tokens have a 15-minute TTL. Describe the timeline: minute 0 (outage starts), minute 15, minute 30, minute 45 (outage resolved).
+3. Design a fallback strategy for each scenario: (a) user tries to log in fresh, (b) user's access token expires mid-session, (c) user's refresh token expires.
+4. Emergency mode: your team pre-distributes "break-glass" static tokens to internal services so they can communicate during auth outages. What are the security risks of this approach, and what controls do you put around it?
+5. How do you distinguish "Auth0 is down" from "Auth0 is slow" from "our own network can't reach Auth0"? What monitoring do you add?
+
+---
+
+## Exercise 2: gRPC vs REST for an Unreliable Mobile Client
+
+You're building an API for a mobile app that operates in regions with poor connectivity: 2G networks, frequent packet loss (5–15%), and latency up to 2 seconds.
+
+1. Compare gRPC (HTTP/2, Protocol Buffers) vs REST (HTTP/1.1 or HTTP/2, JSON) on: payload size, connection establishment cost, retry behavior, and streaming capability.
+2. gRPC uses HTTP/2 multiplexing. How does this help — and hurt — on a high-latency mobile connection?
+3. gRPC streaming: your app needs a real-time feed of location updates. Compare: server-streaming RPC vs client polling with REST. What's the battery/bandwidth trade-off?
+4. gRPC-Web: native gRPC doesn't work in browsers without a proxy. What is gRPC-Web, what does the proxy add, and when would you use it vs just REST?
+5. Your client is an iOS app with a weak network. A gRPC call fails with `DEADLINE_EXCEEDED`. Is this retryable? What retry policy do you configure? How does gRPC's built-in retry differ from application-level retry?
+
+---
+
+## Exercise 3: GraphQL N+1 and Schema Design at Scale
+
+You're building a GraphQL API for a social feed. A single query fetches:
+
+```graphql
+query {
+  feed(userId: "123", limit: 20) {
+    posts {
+      id
+      content
+      author {
+        id
+        name
+        avatarUrl
+      }
+      comments(limit: 3) {
+        id
+        text
+        author { id name }
+      }
+    }
+  }
+}
+```
+
+1. Without DataLoader, how many DB queries does this generate for 20 posts, each with 3 comments, and unique authors? Show the math.
+2. Describe how DataLoader batches and caches these. After DataLoader, how many queries are made?
+3. A malicious client sends a deeply nested query: `{ users { friends { friends { friends { friends { posts { ... } } } } } } }`. What's your defense strategy? Name three techniques (depth limiting, complexity scoring, query allowlisting) and describe how each works.
+4. Your feed has 20 unique authors. The `avatarUrl` field calls an external CDN. Without DataLoader caching, this is 20 HTTP calls per feed request. How do you cache at the resolver level? What's the TTL?
+5. Schema stitching vs federation: you have 3 teams (Feed, User, Commerce) each owning a GraphQL schema. How do Apollo Federation subgraphs differ from gateway-level schema stitching? Which is better for independent team deployment?
+
+---
+
+## Exercise 4: CQRS Read-After-Write Consistency
+
+Your e-commerce system uses CQRS with a separate read model (Elasticsearch) synced from PostgreSQL via CDC (Debezium). Typical CDC lag: 500ms–2s.
+
+A user updates their shipping address on the checkout page. The write goes to PostgreSQL (source of truth). The user is immediately redirected to their profile page, which reads from Elasticsearch.
+
+1. What does the user see on their profile page 300ms after the write? 3 seconds after?
+2. Design a read-after-write strategy that doesn't require synchronous Elasticsearch updates (which would break the CQRS separation). Consider: version tokens, direct read fallback for the writing user, optimistic UI.
+3. Your CDC pipeline has a spike and lag jumps to 30 seconds. How do you detect this operationally? What alert threshold do you set? Do you degrade the user experience or maintain it?
+4. A write to PostgreSQL succeeds but the CDC event is dropped (Debezium bug). The read model is now stale permanently for that record. How do you detect and recover from this?
+5. "CQRS adds complexity. Just use a read replica." — When is this critique correct? What specifically does CQRS give you that a read replica doesn't?
+
+---
+
+## Exercise 5: Warm Pool Sizing and ROI
+
+Your API service runs on EC2 Auto Scaling. Cold start time is 90 seconds (AMI launch + bootstrap + JVM warm-up). During a traffic spike, new instances take 90 seconds to serve requests, causing elevated error rates.
+
+1. You're considering a warm pool (pre-launched, stopped instances ready to start in ~30 seconds). Calculate the cost of maintaining a warm pool of 10 instances (m5.xlarge, $0.192/hour) vs the cost of a 90-second cold start causing p99 errors.
+2. Your SLO is 99.9% availability. One cold-start event (90 seconds of degraded capacity) consumes how much of your monthly error budget?
+3. Alternative: reduce cold start time by optimizing JVM startup (GraalVM native image: 5-second cold start). Compare: warm pool of 10 vs 5-second native cold start. What's the ROI calculation?
+4. Your traffic pattern is highly predictable (business hours spike: 9 AM). How does scheduled scaling differ from warm pools? When does each make sense?
+5. A warm pool instance has been sitting stopped for 4 days. When it starts, it's running an old application version. How do you handle version drift in warm pools? What's your update strategy?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**OIDC / Auth:**
+- "Your OIDC provider announces they're deprecating the RS256 signing algorithm and moving to ES256. How do you migrate your token validation across 50 microservices with zero downtime?"
+- "A user logs out but their access token (15-min TTL) is still valid. A malicious actor captured that token. What's the worst-case exposure window? How do you shorten it without adding latency to every request?"
+- "You're using JWTs with user roles embedded. A user is promoted from viewer to editor. How soon does this change take effect? How do you minimize the propagation delay?"
+
+**gRPC:**
+- "Your gRPC service needs to support both gRPC clients and REST clients (for legacy partners). How do you do this without maintaining two code paths? (Hint: grpc-gateway)"
+- "A gRPC server-streaming RPC is sending 1,000 events/second to a mobile client. The client's network drops to 1 Mbps. What happens? How does HTTP/2 flow control handle this?"
+- "You need to add request tracing to 20 gRPC services. How do you propagate trace context without modifying every service's application code?"
+
+**GraphQL:**
+- "Your GraphQL API is public. A developer figures out they can introspect your entire schema and find internal fields. How do you disable introspection in production while keeping it available in staging?"
+- "Two teams both want to own the `User` type in your federated GraphQL schema. How does Apollo Federation handle this with `@extends` and `@key` directives?"
+
+**CQRS:**
+- "You want to add a new read model (a leaderboard) to your CQRS system. The event history goes back 3 years. How do you populate the new read model without replaying 3 years of events in real-time?"
+- "Your CQRS system uses event sourcing. An event schema has a breaking change (a field is renamed). How do you handle old events in the event store that use the old schema?"
+
+---
+
+## Trade-off Debates
+
+**1. Webhooks vs polling vs SSE vs WebSockets**
+A partner needs to know when an order is fulfilled (typically within 5 minutes of fulfillment).
+
+| Mechanism | Latency | Partner Complexity | Your Infra Cost | Reliability |
+|-----------|---------|-------------------|-----------------|-------------|
+| **Polling** (every 30s) | 30s avg | Low | High (many requests) | High |
+| **Webhooks** | ~1s | Medium (endpoint needed) | Low | Medium (retry needed) |
+| **SSE** | <1s | Low (EventSource API) | Medium | Medium |
+| **WebSocket** | <100ms | High | High | High |
+
+- *For a B2B order fulfillment notification, which do you choose? What's your retry/delivery guarantee strategy for webhooks?*
+
+**2. gRPC vs REST for internal microservices**
+- gRPC: strongly typed contract, binary serialization (10x smaller payloads), streaming, but requires code generation and isn't human-readable
+- REST: ubiquitous, debuggable with curl, any language, but text payloads, no streaming, no schema enforcement
+- *For a new internal service called by 10 other internal services, which do you choose? What if the calling services are in 5 different languages?*
+
+**3. CQRS complexity vs simplicity**
+- Simple CRUD: one model, one DB, easy to reason about, read replicas for scale
+- CQRS: separate read/write models, eventual consistency, complex sync, but independent scaling and rich read models
+- *Your team is building a financial reporting system (1M records, 50 complex report types, data updated once/hour). Does CQRS add enough value to justify the complexity? At what scale does the answer change?*

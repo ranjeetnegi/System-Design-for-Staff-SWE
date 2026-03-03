@@ -5799,6 +5799,57 @@ Current setup:
 
 ---
 
+## Exercise 13: Migration from SQS to Kafka
+
+**Scenario**:
+
+Your notification service uses Amazon SQS: 15 queues, ~2 million messages/day, simple point-to-point delivery, at-least-once semantics, 14-day retention. Business requirements have evolved:
+- 3 new consumers need the same events (fan-out)
+- Compliance requires 90-day event replay capability
+- Data team wants to stream events into their analytics pipeline
+- Peak throughput is growing: projecting 50 million messages/day in 6 months
+
+Product has approved a migration to Kafka. You own the design.
+
+**Your Task**:
+
+1. **Gap analysis — what SQS gives you that Kafka doesn't (out of the box)**:
+   - SQS visibility timeout and message locking: Kafka has no direct equivalent. How do you prevent two consumers from processing the same message in a consumer group?
+   - SQS FIFO queues guarantee per-group ordering. Kafka guarantees ordering per partition. What changes when you move from SQS FIFO to Kafka partitions for your notification ordering requirements?
+   - SQS dead-letter queues (DLQ): Kafka has no built-in DLQ. How do you implement equivalent behavior?
+
+2. **Topic design**:
+   - You had 15 SQS queues. How many Kafka topics do you create? What's your naming convention?
+   - For the notification service, choose a partition key. What are the trade-offs of `user_id` vs `notification_type` vs `random`? How does partition key choice affect per-user ordering guarantees?
+   - How many partitions per topic for 50 million messages/day peak?
+
+3. **Consumer migration**:
+   - Your existing SQS consumers use short-polling (no long-poll). Rewrite the consumer loop for Kafka. What does `poll()` do, and how does it differ from SQS `ReceiveMessage`?
+   - SQS messages are deleted on successful processing (explicit delete call). Kafka uses consumer group offsets. How do you achieve the same "don't reprocess" guarantee?
+   - Three services now consume the same topic (fan-out). Each must have independent progress. How do you configure consumer groups to achieve this?
+
+4. **Zero-downtime migration strategy**:
+
+   Design a phased migration with rollback at each phase:
+
+   | Phase | Description | Rollback Trigger |
+   |-------|-------------|-----------------|
+   | 1: Shadow write | Producers write to both SQS and Kafka; only SQS consumers active | Kafka write failures > 0.1% |
+   | 2: Shadow consume | New Kafka consumers run in shadow (no side effects); verify message parity | Parity check fails for > 1% of messages |
+   | 3: Canary cutover | 5% of producers write to Kafka only; Kafka consumers process those messages | Error rate > baseline × 2 |
+   | 4: Full cutover | All producers → Kafka; decommission SQS | Any correctness anomaly |
+
+   For each phase: what specific metrics do you monitor? What does "rollback" mean operationally?
+
+5. **Operational differences post-migration**:
+   - SQS: AWS manages brokers, auto-scales, zero ops. Kafka (self-hosted): you manage brokers. Estimate the ops burden for a 6-broker Kafka cluster. How does MSK (managed Kafka) change this calculation?
+   - SQS cost: $0.40/million requests. Kafka MSK: ~$0.21/broker-hour. At 50 million messages/day, which is cheaper? Show the math.
+   - Your team has never operated Kafka. What are the top 3 operational risks in the first 3 months?
+
+**Deliverable**: Migration plan document with phased rollout, topic design decisions, and a go/no-go checklist for each phase cutover.
+
+---
+
 *"The first rule of distributed systems is: don't distribute. The second rule is: if you must distribute, don't use events. The third rule is: if you must use events, make everything idempotent and invest heavily in observability."*
 
 — Wisdom from too many 3am debugging sessions

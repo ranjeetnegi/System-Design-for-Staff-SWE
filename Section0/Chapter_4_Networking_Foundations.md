@@ -864,3 +864,101 @@ When you design a system, ask: What's the request path? Where are the connection
     ║      502=Upstream broke  503=Overloaded  504=Upstream too slow        ║
     ╚═══════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+# Exercises and Brainstorming
+
+## Exercise 1: Debug P99 Latency Spikes Every 30 Seconds
+
+Your service's p99 latency spikes from 20ms to 800ms exactly every 30 seconds. The spikes last ~2 seconds. CPU is healthy. DB latency is normal. The pattern is too regular to be traffic-based.
+
+1. What is your first hypothesis? List three possible root causes for a regular 30-second pattern.
+2. You check `netstat -s` and see `TCPTimeouts` incrementing. What does this mean? How does TCP timeout relate to the 30-second spike?
+3. You discover `tcp_keepalive_time` is set to 30 seconds. Load balancer is silently dropping idle connections after 30s. Walk through what happens: idle connection → load balancer drops → next request → TCP RST or timeout.
+4. Fix: connection keep-alive configuration. Where do you set it — the application, the load balancer, or both? What values?
+5. After fixing keep-alive, spikes still appear but every 90 seconds now. What new hypothesis do you form?
+
+---
+
+## Exercise 2: Connection Pool for 500 Upstream Instances
+
+Your service makes HTTP calls to a microservices cluster with 500 instances behind a load balancer. Your service handles 10,000 QPS. Each upstream call takes ~5ms.
+
+1. Without connection pooling, every request opens a new TCP connection. At 10,000 QPS and 5ms latency, how many simultaneous open connections do you need? What's the overhead of each new connection (DNS + TCP + TLS handshake time)?
+2. With a connection pool of 100 connections, what's the maximum throughput you can handle without queuing? (Apply Little's Law: L = λW)
+3. Your load balancer distributes connections evenly across 500 backends. With 100 pooled connections, how many connections go to each backend on average? Is this sufficient for each backend?
+4. A backend instance is removed from the pool (rolling deploy). Your connection pool has 5 open connections to it. What happens to in-flight requests on those connections? How does your HTTP client detect this?
+5. Design the connection pool configuration: max pool size, min idle connections, connection TTL, validation on borrow. Justify each value.
+
+---
+
+## Exercise 3: 10,000 Connections to a Database — What Breaks First?
+
+Your service has 200 instances, each with a connection pool of 50 connections to a single PostgreSQL database. That's 10,000 simultaneous database connections.
+
+1. PostgreSQL default `max_connections` is 100. What happens when your 101st connection tries to connect? What error do you see?
+2. With `max_connections = 10000`, what's the memory overhead per connection in PostgreSQL? (Hint: ~5–10 MB per connection for shared buffers, WAL, etc.) What's the total?
+3. PgBouncer (connection pooler) sits between your services and PostgreSQL. It multiplexes 10,000 client connections into 100 database connections. How does this work in "transaction pooling" mode? What can't you do in transaction pooling mode that you can do with a direct connection?
+4. One of your 200 service instances has a connection leak — connections are opened but never returned to the pool. The pool is exhausted in 10 minutes. What are the symptoms? How do you detect which instance has the leak?
+5. PostgreSQL is CPU-bound at 10,000 concurrent queries. Your connection pool is not the bottleneck. What is? How do you reduce query parallelism without changing application code?
+
+---
+
+## Exercise 4: Latency Budget and Network Design
+
+You're designing a ride-hailing API. The end-to-end p99 latency budget for a "request a ride" call is 500ms. The user is in São Paulo, your API servers are in US-East-1, and your database is in US-East-1.
+
+1. Network round-trip from São Paulo to US-East-1: ~180ms (speed of light + routing overhead). The request and response each cross the Atlantic. How much of your 500ms budget is consumed by pure network latency before any processing?
+2. You have 500ms total. São Paulo → US-East-1 → DB query → US-East-1 → São Paulo. What's left for processing after round trips?
+3. Design a latency reduction strategy using CDN, regional API servers, or edge computing. How much latency do you recover?
+4. Your DB is in US-East-1. You deploy a read replica in São Paulo. Replication lag: 200–500ms. For a read-your-writes guarantee on ride status, can you use the regional replica? Design a strategy.
+5. Back-of-envelope: at 1 million rides/day in São Paulo, each generating 5 API calls, what's the QPS? Can a single regional server handle this? What's your scaling trigger?
+
+---
+
+## "What If X Changes?" Brainstorming
+
+**TCP and connections:**
+- "Your service is behind an AWS ALB. The ALB has a 60-second idle connection timeout. Your service's keep-alive is set to 90 seconds. What race condition does this create? Who should set the shorter keep-alive?"
+- "You're seeing `CLOSE_WAIT` connections accumulating on your server. The count grows over time and never decreases. What is a `CLOSE_WAIT` state, and what bug does this indicate?"
+- "Your service makes 100 outbound connections per second to an external API. The external API has a rate limit of 60 connections per minute per IP. How do you architect around this?"
+
+**HTTP and protocols:**
+- "You're migrating from HTTP/1.1 to HTTP/2 for your mobile API. HTTP/2 uses multiplexing. A single large response blocks all requests on the same connection (head-of-line blocking). Is this still a problem in HTTP/2? How does HTTP/3/QUIC solve this?"
+- "A client sends a POST request to create an order. The request succeeds (order is created), but the response is lost in the network. The client retries. What HTTP method and response code design makes this safe?"
+- "Your API returns 200 OK with `{"error": "user not found"}` in the body. A junior engineer did this. What's wrong with it? What are the three concrete consequences of not using correct HTTP status codes?"
+
+**DNS and routing:**
+- "Your service does a DNS lookup for every request to a downstream service. DNS TTL is 5 minutes but DNS resolution takes 50ms. How do you optimize this? What happens if you cache DNS forever and the downstream service's IP changes?"
+- "You're using Geo-DNS to route users to the nearest region. A region fails. Your Geo-DNS TTL is 5 minutes. How long do affected users experience downtime? How do you reduce this?"
+
+**TLS:**
+- "TLS 1.2 requires 2 round-trips for handshake. TLS 1.3 requires 1. Your users are in high-latency regions (200ms RTT). What's the latency savings from TLS 1.3 for new connections? What does TLS session resumption (`0-RTT`) give you, and what security risk does it introduce?"
+
+---
+
+## Failure Injection Scenarios
+
+**Scenario 1: Cascading Connection Exhaustion**
+Your service A calls service B. Service B starts responding slowly (p99 = 2 seconds, baseline = 20ms). Service A has a connection pool of 200 connections to B, each with no timeout configured.
+
+- With no timeout, in-flight requests to B accumulate. At 1,000 QPS hitting service A with 2-second B latency, how many connections to B are in-use simultaneously after 10 seconds?
+- The pool of 200 is exhausted. What does service A return to its callers?
+- Service C and D also call service A. Describe the cascade failure as A becomes unavailable.
+- Fix: configure a timeout of 100ms on calls to B. What's the trade-off? Some requests now fail-fast instead of waiting. What HTTP status code should A return, and should the client retry?
+
+**Scenario 2: Split DNS Resolution**
+Your service is deployed in two regions (US-East, EU-West). Both regions use the same hostname `api.internal.company.com`. DNS resolves differently per region.
+
+- An engineer manually sets `/etc/hosts` on an EU-West pod to point to the US-East IP for debugging. The service now makes cross-region calls for that pod only. What's the latency impact (+200ms per call)? How would you detect this?
+- During a failover, you update DNS to point `api.internal.company.com` to a new IP. Some clients see the new IP immediately; others see the old IP for up to 5 minutes (TTL). What's your strategy to handle requests going to both old and new IPs simultaneously?
+- A service caches a DNS resolution result forever (no TTL respect). The IP changes. What is the symptom? How do you detect "service is connecting to a stale IP" in your monitoring?
+
+**Scenario 3: TLS Certificate Expiry**
+A TLS certificate for `payments.api.company.com` expires at midnight tonight. Your certificate rotation automation failed silently 30 days ago.
+
+- At 00:01 AM, what exactly fails? Which clients fail immediately, and are there any that continue working for a while due to session resumption?
+- You have 6 hours of historical p99 data showing latency rising by 10ms over the past 24 hours. Could this be related to an expiring certificate? (Hint: TLS session resumption fallback)
+- Emergency fix at 2 AM: walk through the steps to rotate the certificate and deploy it across your load balancers with zero downtime.
+- Prevention: design a monitoring alert that fires 30 days before certificate expiry. What command checks certificate expiry from the command line?
