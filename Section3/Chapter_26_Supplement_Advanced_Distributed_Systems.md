@@ -10,6 +10,39 @@ Chapter 20 covers the core distributed systems landscape—consensus, transactio
 
 ---
 
+## Visual 1: Chapter at a Glance
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CHAPTER AT A GLANCE: Advanced Distributed Systems                         ║
+║   Core Concept: Theory meets reality — Staff-level fluency in distributed  ║
+║   consensus, consistency, ordering, conflict-free merge, and chaos         ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   TOPIC FLOW DIAGRAM:                                                      ║
+║   ┌─────┐   ┌─────────────┐   ┌─────┐   ┌──────────┐   ┌───────┐          ║
+║   │ 3PC │ → │ Read Consist │ → │ HLC │ → │  CRDTs   │ → │ Chaos │          ║
+║   └──┬──┘   └──────┬──────┘   └──┬──┘   └────┬─────┘   └───┬───┘          ║
+║      │             │             │            │              │              ║
+║      ▼             ▼             ▼            ▼              ▼              ║
+║   "Why not?"   "Your write"   "Order +    "Merge both"  "Break it        ║
+║   Partitions   must be       real time"   no conflict"  on purpose"       ║
+║   break it     visible                     Figma-style                      ║
+║                                                                            ║
+║   KEY TAKEAWAYS:                                                           ║
+║   1. 3PC stays in textbooks — partitions violate failure-detection         ║
+║      assumption; 2PC+recovery or Raft wins in production                   ║
+║   2. Read-your-writes: route (user_id, last_write_ts) to primary           ║
+║      within lag threshold — critical for UX and correctness                ║
+║   3. HLC = (physical, logical, node_id) — CockroachDB, YugabyteDB use it   ║
+║   4. CRDTs merge without coordination — OR-Set for lists, no LWW data loss ║
+║   5. Chaos is culture: define steady state → hypothesize → inject → fix    ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Quick Visual: Advanced Distributed Systems at a Glance
 
 ```
@@ -96,6 +129,37 @@ Two-Phase Commit (2PC) is the workhorse of distributed transactions. The coordin
        STUCK. Indefinitely.
 ```
 
+### Visual: 2PC — The Wedding Ceremony Analogy
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   2PC: THE WEDDING CEREMONY — Why Everyone Gets Stuck                       ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   COORDINATOR = Minister    PARTICIPANTS = Bride & Groom                    ║
+║                                                                            ║
+║   PHASE 1 (PREPARE):                                                       ║
+║   Minister: "Do you take this person...?"  ──►  Both: "I do" (VOTE YES)      ║
+║                                                                            ║
+║   PHASE 2 (COMMIT):                                                        ║
+║   Minister: "I now pronounce you..."      ──►  Wedding complete!           ║
+║                                                                            ║
+║   ─── IF EITHER SAYS "NO" ───                                             ║
+║   Minister: "Ceremony cancelled." (ABORT) ✓                                 ║
+║                                                                            ║
+║   ─── THE BLOCKING PROBLEM ───                                              ║
+║   Minister gets votes "I do" ... then FAINTS before saying "pronounce"!    ║
+║                                                                            ║
+║   Bride & Groom: "Now what? We said yes, but no one pronounced us..."       ║
+║   • Can't marry (no go-ahead from minister)                                 ║
+║   • Can't leave (maybe minister will wake up and commit?)                   ║
+║   • EVERYONE STUCK. Waiting. Forever.                                       ║
+║                                                                            ║
+║   That's 2PC blocking: coordinator dies after PREPARE → participants stuck. ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 Locks block other transactions. Users see timeouts. Recovery requires reading coordinator logs, querying participants, and manually deciding commit or abort. Painful.
 
 ## The 3PC Solution: Add a Pre-Commit Phase
@@ -147,6 +211,39 @@ The insight: after PreCommit, participants **know the intent**. Everyone voted y
     (They know intent was to commit.)
 ```
 
+### Visual: 3PC — Adding a Safety Net (Backup Minister)
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   3PC: SAME WEDDING, BUT WITH A BACKUP MINISTER                            ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   PHASE 1: CanCommit?  ──►  "Do you take...?"  Both: "I do"                ║
+║                                                                            ║
+║   PHASE 2: PreCommit   ──►  "We're about to marry. Hold tight." (NEW!)     ║
+║            ▲                                                              ║
+║            │  KEY INSIGHT: After this, everyone KNOWS the intent.           ║
+║            │  Bride, Groom, AND backup minister all heard "we're doing it" ║
+║                                                                            ║
+║   PHASE 3: DoCommit    ──►  "I now pronounce..."  Done!                   ║
+║                                                                            ║
+║   ─── IF MAIN MINISTER FAINTS AFTER PreCommit ───                          ║
+║                                                                            ║
+║   Backup minister: "I saw what happened. Everyone pre-committed.            ║
+║                    I'll complete the ceremony."  → COMMIT ✓                ║
+║                                                                            ║
+║   No more stuck! Backup can decide based on what already happened.         ║
+║                                                                            ║
+║   ─── THE CATCH: PARTITIONS ───                                             ║
+║   What if backup is in another room (network partition)?                   ║
+║   North room thinks: "Backup knows, we'll commit."                         ║
+║   South room thinks: "Backup is gone, maybe we aborted." → ABORT           ║
+║   RESULT: North commits, South aborts. ATOMICITY VIOLATED.                  ║
+║   Partitions break 3PC's "reliable failure detection" assumption.         ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ## Why 3PC Is Rarely Used
 
 ### 1. Network Partitions Break It
@@ -193,6 +290,43 @@ Each phase is a network round-trip. 3PC has three phases; 2PC has two. 50% more 
 | **Partition tolerance** | Blocks; recovery possible | **Fails**—can violate atomicity | Handles partitions (quorum) |
 | **Complexity** | Medium | Higher | High (but well-understood) |
 | **Production use** | Common (XA, JTA, distributed DBs) | Rare (textbooks) | Common (Kubernetes, CockroachDB, etcd) |
+
+## Visual 3: 2PC vs 3PC — Decision and Comparison
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   2PC vs 3PC: WHAT EACH DOES, WHEN EACH FAILS, WHEN TO USE                 ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   WHAT EACH DOES:                                                          ║
+║   ┌─────────────────────────────────────────────────────────────────────┐  ║
+║   │ 2PC: Prepare → Commit. All say yes? Everyone commits.              │  ║
+║   │ 3PC: CanCommit → PreCommit → DoCommit. Extra "hold tight" phase.    │  ║
+║   └─────────────────────────────────────────────────────────────────────┘  ║
+║                                                                            ║
+║   WHEN EACH FAILS:                                                         ║
+║   ┌──────────────────────┬──────────────────────┬──────────────────────┐   ║
+║   │ 2PC                  │ 3PC                  │ Raft/Paxos           │   ║
+║   ├──────────────────────┼──────────────────────┼──────────────────────┤   ║
+║   │ Coordinator dies     │ Coordinator dies     │ (N/A — no single      │   ║
+║   │ after Prepare→BLOCK   │ after PreCommit→     │  coordinator)        │   ║
+║   │ Participants STUCK   │ can timeout & commit  │                      │   ║
+║   │ Locks held forever   │                      │ Partition: minority  │   ║
+║   │                      │ NETWORK PARTITION→   │ can't elect; safe    │   ║
+║   │                      │ SPLIT COMMIT/ABORT   │ Majority continues   │   ║
+║   │                      │ North commits,       │                      │   ║
+║   │                      │ South aborts→VIOLATION                      │   ║
+║   └──────────────────────┴──────────────────────┴──────────────────────┘   ║
+║                                                                            ║
+║   WHEN TO USE:                                                             ║
+║   ┌─────────────────────────────────────────────────────────────────────┐  ║
+║   │ 2PC: XA/JTA, distributed DBs, single-admin systems. Recovery logs.  │  ║
+║   │ 3PC: NEVER in production. Partitions break failure detection.       │  ║
+║   │ Raft/Paxos: etcd, Consul, CockroachDB, Kubernetes. Consensus.      │  ║
+║   └─────────────────────────────────────────────────────────────────────┘  ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ### 3PC vs Paxos/Raft Detailed Comparison
 
@@ -271,6 +405,29 @@ You have a leader-follower database. Writes go to the leader. Reads can go to fo
 
 **Read-your-writes**: After YOU write something, YOUR subsequent reads must always see that write. Others may see a delay. But YOU must see YOUR changes.
 
+### Visual: Read-Your-Writes — Two Scenarios Side by Side
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   READ-YOUR-WRITES: Stale Replica vs Primary Routing                       ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   SCENARIO A: WITHOUT Read-Your-Writes (broken UX)                         ║
+║   User posts photo ──► Write goes to LEADER (saved!)                        ║
+║   User refreshes    ──► Read goes to STALE REPLICA (hasn't synced yet)      ║
+║   User sees: "Photo not there."  ← "Did it save?!"                          ║
+║                                                                            ║
+║   SCENARIO B: WITH Read-Your-Writes (correct UX)                           ║
+║   User posts photo ──► Write goes to LEADER                                 ║
+║   User refreshes    ──► Read ROUTED to LEADER (has the latest write)        ║
+║   User sees: "Photo is there."  ← ✓                                         ║
+║                                                                            ║
+║   IMPLEMENTATION: Track (user_id, last_write_ts). If within lag window,    ║
+║   route reads to primary. Else, read from replica.                          ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ## Solutions
 
 ### 1. Route Recent Writers to Leader
@@ -343,6 +500,29 @@ For critical flows (payments, balance checks, profile updates), never read from 
     Read 1 ──▶ Replica A ──▶ "250/3"
     Read 2 ──▶ Replica A ──▶ "255/3" (same replica, moved forward)
     Read 3 ──▶ Replica A ──▶ "260/4" (monotonic ✓)
+```
+
+### Visual: Monotonic Reads — No Time Travel
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   MONOTONIC READS: Your View Must Only Move Forward                        ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   WITHOUT Monotonic Reads (violation):                                     ║
+║   Timeline:  Read1 ──► v5 ──► Read2 ──► v3 ──► Read3 ──► v6                 ║
+║                    ✓              ✗                                         ║
+║              "You saw v5, then v3?"  TIME TRAVEL! User confused.            ║
+║                                                                            ║
+║   WITH Monotonic Reads (correct):                                          ║
+║   Timeline:  Read1 ──► v5 ──► Read2 ──► v5 or higher ──► Read3 ──► v6       ║
+║                    ✓              ✓                          ✓              ║
+║              Once you see v5, you'll NEVER see anything older.               ║
+║              No backward jumps. View only moves forward.                    ║
+║                                                                            ║
+║   FIX: Sticky routing (same user → same replica) OR version-aware reads.    ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 ```
 
 **Fixes**: (1) Sticky routing—always use same replica for a user. (2) Version-aware reads—client tracks highest version seen; server rejects or delays staler responses.
@@ -428,6 +608,33 @@ Sticky routing requires tracking "user U → replica R." In a cluster of 100 API
 
 **HLC**: Combine both. Timestamp = (physical_time, logical_counter, node_id). You get ordering AND approximate real time.
 
+### Visual: Hybrid Logical Clocks Explained
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   HLC: Physical Clock + Logical Counter — Like a Wall Clock + Step Counter  ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   NODE A:  Event 1 at 10:00:00  →  HLC = (10:00, 0, A)                     ║
+║            Event 2 at 10:00:00  →  HLC = (10:00, 1, A)  ← same tick, +1    ║
+║            Sends to B at (10:00, 1)                                         ║
+║                                                                            ║
+║   NODE B:  Receives msg. B's wall clock says 10:01:00  →  HLC = (10:01, 0, B) ║
+║            (Physical advanced, reset logical counter)                     ║
+║                                                                            ║
+║   RULE: HLC always moves forward. Never goes backward.                      ║
+║   • Same physical time? Increment logical counter.                        ║
+║   • Physical advanced? Reset counter.                                      ║
+║   • Result: Causal order + approximate real time for retention policies.  ║
+║                                                                            ║
+║   ┌─────────────┐     ┌─────────────┐                                     ║
+║   │ Wall Clock  │  +  │ Step Counter│  =  (10:00, 3, A)                    ║
+║   │  "When?"    │     │  "Order?"   │     Order + real time                ║
+║   └─────────────┘     └─────────────┘                                     ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ## HLC Algorithm
 
 - On event: set `physical_time = max(local_clock, last_event_physical_time)`.
@@ -504,6 +711,33 @@ Multiple nodes update the same data concurrently. Offline. No coordination. When
 
 **CRDTs**: Data structures mathematically designed so that **all concurrent operations merge without conflict**. Guaranteed convergence. No coordination. No "choose A or B" dialog.
 
+### Visual: CRDT — The Shopping List (G-Set)
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CRDT: THE SHOPPING LIST — Two People, Both Offline, No Conflict          ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   ALICE (offline)              BOB (offline)                               ║
+║   Shared list: []              Shared list: []                              ║
+║                                                                            ║
+║   Alice adds "milk"            Bob adds "eggs"                              ║
+║   Alice's list: [milk]         Bob's list: [eggs]                           ║
+║                                                                            ║
+║   ─────────── RECONNECT / SYNC ───────────                                  ║
+║                                                                            ║
+║   G-Set merge = UNION of both sets                                         ║
+║   Result: [milk, eggs]  ← BOTH survive! No conflict!                       ║
+║                                                                            ║
+║   LWW would do: One overwrites. "milk" OR "eggs" — one loses.              ║
+║   CRDT does: MERGE. Milk + eggs. Both keep their additions.                ║
+║                                                                            ║
+║   That's a G-Set (Grow-only Set) — add-only, merge = union.               ║
+║   OR-Set extends this for add+remove with unique tags.                     ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ## Types of CRDTs
 
 | CRDT | Semantics | Merge |
@@ -539,6 +773,41 @@ Multiple nodes update the same data concurrently. Offline. No coordination. When
     Result: 8  ← A's 5 + B's 3. Both survive!
 
     No "which increment wins?" — all increments are kept.
+```
+
+## Visual 2: CRDT Merge Without Conflict — Two Concurrent Edits Resolve Automatically
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CRDT: MERGE WITHOUT CONFLICT — OR-Set Example                            ║
+║   Problem: User A and User B both edit a shared list OFFLINE. Then sync.   ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   NODE A (offline)                    NODE B (offline)                     ║
+║   ───────────────                     ───────────────                      ║
+║   Initial: [apple, banana]             Initial: [apple, banana]            ║
+║                                                                             ║
+║   A adds "cherry" (tag: A1)            B adds "date" (tag: B1)              ║
+║   A removes "banana" (tag: A2)        B adds "elderberry" (tag: B2)        ║
+║                                                                             ║
+║   A's state:                           B's state:                          ║
+║   add_set: {(apple,A0),(cherry,A1)}    add_set: {(apple,A0),(date,B1),     ║
+║   remove_set: {(banana,A2)}                     (elderberry,B2)}           ║
+║                                                                             ║
+║                        SYNC / MERGE                                         ║
+║                              │                                              ║
+║   Merge = UNION(add_set) − UNION(remove_set)                                ║
+║   Each (element, tag) uniquely identifies — no collision                   ║
+║                              │                                              ║
+║                              ▼                                              ║
+║   MERGED RESULT: {apple, cherry, date, elderberry}                           ║
+║   ✓ Both A's cherry AND B's date/elderberry survive                        ║
+║   ✓ banana removed (A2 in remove_set)                                       ║
+║   ✓ NO "last write wins" — NO data loss — MATH GUARANTEES convergence       ║
+║                                                                            ║
+║   LWW would do: One add "wins", other loses. CRDT: BOTH survive.           ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ## Real-World Use
@@ -801,6 +1070,41 @@ What to measure during chaos: (1) **Recovery time**—how long until error rate 
 
 ---
 
+## Visual 5: Chapter 26 Supplement in One Picture
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   VISUAL SUMMARY: ADVANCED DISTRIBUTED SYSTEMS — ALL KEY TAKEAWAYS          ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   ┌───────────────────────────────────────────────────────────────────┐   ║
+║   │ 3PC       │ Non-blocking theory. Partitions break it. Use 2PC+    │   ║
+║   │           │ recovery or Raft. Never in production.                │   ║
+║   ├───────────┼───────────────────────────────────────────────────────┤   ║
+║   │ RYW       │ Route (user_id, last_write_ts) to primary. Critical   │   ║
+║   │           │ for payments, profile edits. Redis + TTL typical.     │   ║
+║   ├───────────┼───────────────────────────────────────────────────────┤   ║
+║   │ Monotonic │ Sticky routing or version-aware reads. No backward     │   ║
+║   │ Reads     │ jumps (score 250→230→260). Same replica per user.     │   ║
+║   ├───────────┼───────────────────────────────────────────────────────┤   ║
+║   │ HLC       │ (physical, logical, node_id). Order + real time.      │   ║
+║   │           │ CockroachDB, YugabyteDB. Retention + ordering.        │   ║
+║   ├───────────┼───────────────────────────────────────────────────────┤   ║
+║   │ CRDTs     │ Merge = commutative, associative. G-Counter, OR-Set.  │   ║
+║   │           │ Figma, Riak. No LWW data loss. Both edits survive.    │   ║
+║   ├───────────┼───────────────────────────────────────────────────────┤   ║
+║   │ Chaos     │ Define steady state → hypothesize → inject → fix.      │   ║
+║   │           │ Culture > tool. Game days first. Blast radius control. │   ║
+║   └───────────┴───────────────────────────────────────────────────────┘   ║
+║                                                                            ║
+║   CONSISTENCY HIERARCHY: Linearizable > Sequential > Causal > RYW >       ║
+║   Monotonic > Eventual. Choose weakest that satisfies requirements.        ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Appendix: Interview One-Liners
 
 - **"Why not 3PC?"** — Partitions break it. Can't distinguish coordinator dead from network split. 2PC + recovery or Raft/Paxos in practice.
@@ -846,6 +1150,43 @@ A: Chaos engineering. Game day: schedule failover test. Kill primary (or simulat
 5. **Scale**: CRDT state grows with concurrent edits. Tombstones for removes. Garbage collect when all nodes have seen add+remove. For large docs, consider block-level CRDTs (each paragraph/block is a CRDT).
 
 **Key Staff Signal**: Candidate compares options (OT vs CRDT), chooses based on constraints (offline, server availability), and addresses consistency (monotonic reads, merge semantics). They don't just say "use CRDT"—they explain why and what the trade-offs are.
+
+---
+
+## Visual 4: Real-World Application — CockroachDB, Figma, Netflix
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   HOW COCKROACHDB, FIGMA, NETFLIX APPLY THESE ADVANCED CONCEPTS            ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   ┌─────────────────────────────────────────────────────────────────────┐  ║
+║   │ COCKROACHDB                                                         │  ║
+║   │ • HLC: (physical, logical, node_id) for serializable transactions  │  ║
+║   │ • Global ordering without single timestamp oracle                    │  ║
+║   │ • Avoids 3PC: uses Raft for consensus, not 2PC/3PC                  │  ║
+║   │ • Read-your-writes: consistency levels including RYW               │  ║
+║   │ • Chaos: tested with partition injection, node failures             │  ║
+║   └─────────────────────────────────────────────────────────────────────┘  ║
+║                                                                            ║
+║   ┌─────────────────────────────────────────────────────────────────────┐  ║
+║   │ FIGMA                                                               │  ║
+║   │ • CRDT-like structures for vector graphics, collaborative editing  │  ║
+║   │ • Merge without conflict: multiple users edit same canvas offline   │  ║
+║   │ • No "last write wins" — both additions survive (OR-Set style)     │  ║
+║   │ • Real-time sync with eventual consistency                         │  ║
+║   └─────────────────────────────────────────────────────────────────────┘  ║
+║                                                                            ║
+║   ┌─────────────────────────────────────────────────────────────────────┐  ║
+║   │ NETFLIX                                                             │  ║
+║   │ • Chaos Monkey: random instance termination (chaos engineering)     │  ║
+║   │ • Chaos Kong: whole AZ failure simulation                           │  ║
+║   │ • Define steady state → hypothesize → inject → observe → fix         │  ║
+║   │ • Culture: "if it hasn't been chaos-tested, it's not resilient"     │  ║
+║   └─────────────────────────────────────────────────────────────────────┘  ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

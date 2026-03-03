@@ -94,6 +94,33 @@ You want a distributed lock so only one worker processes a job? Get ready for th
 
 **Coordination is the dark matter of distributed systems.** It's invisible when it works and catastrophic when it fails. This section is about understanding when you need it, when you don't, and how to survive when it breaks.
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    THE COORDINATION TAX — LATENCY COST                  │
+│                                                                         │
+│   Every coordination mechanism adds latency. More coordination = slower │
+│                                                                         │
+│   Mechanism           Latency      Use Case                             │
+│   ─────────────────────────────────────────────────────────────         │
+│   No coordination     ~1 ms       Best! Partition, idempotency          │
+│   Partition-based     ~2 ms       Each node owns its subset             │
+│   Leader election     ~10 ms      Single coordinator failover           │
+│   Distributed lock   ~50 ms      Per-operation mutual exclusion        │
+│   Consensus (Raft)    ~100 ms+    Strong agreement, replicated log      │
+│                                                                         │
+│   Latency ▲                                                             │
+│     │                                                                   │
+│ 100│                              ████████ Consensus                    │
+│  50│                    ████████ Lock                                   │
+│  10│          ████████ Leader                                           │
+│   2│    ████ Partition                                                 │
+│   1│ ██ None                                                           │
+│   0└─────────────────────────────────────────────────────►            │
+│                                                                         │
+│   RULE: Coordination is expensive. Minimize it.                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### The Fundamental Problem
 
 In a distributed system, there is no global clock, no shared memory, and no guaranteed message delivery. Yet we often need exactly these things:
@@ -107,6 +134,40 @@ In a distributed system, there is no global clock, no shared memory, and no guar
 | Atomic operations | Partial failures leave inconsistent state |
 
 Every coordination mechanism is a bet against the universe—a bet that the network will behave, that clocks won't drift too far, that processes will fail cleanly. Sometimes you win. Sometimes at 3 AM, you don't.
+
+### Visual 1: Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    CHAPTER 22: COORDINATION AT A GLANCE                       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Coordination is expensive and fragile. Minimize it.             ║
+║  When you must coordinate, use the right tool and plan for failure.           ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                    COORDINATION DECISION FLOW                          │  ║
+║  │                                                                         │  ║
+║  │   Can I avoid it?  ──YES──► Idempotency / CRDTs / Partition ──► DONE    │  ║
+║  │         │                                                                 │  ║
+║  │        NO                                                                 │  ║
+║  │         ▼                                                                 │  ║
+║  │   Need 1 coordinator? ──YES──► Leader Election (Raft, etcd)              │  ║
+║  │         │                                                                 │  ║
+║  │        NO                                                                 │  ║
+║  │         ▼                                                                 │  ║
+║  │   Need short-term exclusion? ──► Distributed Locks + FENCING TOKENS      │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Avoid coordination first: partition, idempotency, CRDTs                    ║
+║  • Leader election > locks: one coordinator vs. many lock points              ║
+║  • ALWAYS use fencing tokens with distributed locks                            ║
+║  • Leader election time: 10-30 sec; Lock TTL: 10-30 sec; NTP skew: 10-100ms  ║
+║  • Design graceful degradation: what happens when coordination fails?        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -401,6 +462,38 @@ Without leader election, you have two unpalatable options:
 
 Leader election gives you **dynamic, automatic failover** with **exactly one leader** at any time.
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              WHY DO WE NEED A LEADER? — THE TRAFFIC COP ANALOGY         │
+│                                                                         │
+│   WITHOUT LEADER (Chaos):                                                │
+│   ┌─────┐    ┌─────┐    ┌─────┐                                        │
+│   │ S1  │    │ S2  │    │ S3  │   All 3 try to write to same data       │
+│   │write│    │write│    │write│   → CONFLICT! → CORRUPTION!             │
+│   └──┬──┘    └──┬──┘    └──┬──┘                                        │
+│      │          │          │                                            │
+│      └──────────┼──────────┘                                            │
+│                 ▼                                                        │
+│           ┌──────────┐                                                   │
+│           │ Storage  │   Three writes at once = inconsistent state       │
+│           │  ???     │                                                   │
+│           └──────────┘                                                   │
+│                                                                         │
+│   WITH LEADER (Order):                                                  │
+│   ┌─────┐    ┌─────┐    ┌─────┐                                        │
+│   │ S1  │    │ S2  │    │ S3  │   One decides, others follow            │
+│   │FOLL │    │LEAD │    │FOLL │   → Single source of truth              │
+│   └──┬──┘    └──┬──┘    └──┬──┘                                        │
+│      │          │          │                                            │
+│      └──────────┼──────────┘                                            │
+│                 ▼                                                        │
+│           ┌──────────┐     Like a traffic cop: one direction at a time   │
+│           │ Storage  │     No conflicts, no corruption                  │
+│           │  ✓       │                                                   │
+│           └──────────┘                                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 3.2 How Leader Election Works (Conceptually)
 
 ```
@@ -651,6 +744,41 @@ PROTECTED RESOURCE:
 ```
 
 **Critical Insight:** Fencing tokens only work if the downstream resource checks them. If you're writing to a legacy database that doesn't understand fencing tokens, you're not protected.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              FENCING TOKENS: WHY THEY MATTER — STEP BY STEP             │
+│                                                                         │
+│   T1: Old Leader (token=33) still thinks it's leader (GC pause)           │
+│       ┌────────────┐                                                    │
+│       │ Old Leader │  "I have token 33, I'll write!"                     │
+│       │ token=33   │                                                    │
+│       └─────┬──────┘                                                    │
+│             │                                                            │
+│   T2: New Leader (token=34) elected                                     │
+│       ┌────────────┐                                                    │
+│       │ New Leader │  "I have token 34"                                 │
+│       │ token=34   │  Write ACCEPTED ✓                                  │
+│       └─────┬──────┘                                                    │
+│             │                                                            │
+│   T3: Storage has seen token 34                                         │
+│       ┌─────────────────────────────────────────────┐                   │
+│       │  Storage: highest_token_seen = 34           │                   │
+│       └─────────────────────────────────────────────┘                   │
+│             ▲                                                            │
+│             │                                                            │
+│   T4: Old Leader tries to write with token=33                           │
+│       ┌────────────┐   write(data, token=33)                             │
+│       │ Old Leader │ ────────────────────────────────►                   │
+│       │ token=33   │                                                    │
+│       └────────────┘                                                    │
+│                                                                         │
+│   T5: Storage REJECTS: "33 < 34, you're stale!"                         │
+│       ┌─────────────────────────────────────────────┐                   │
+│       │  Storage: REJECT — Safety preserved! ✓      │                   │
+│       └─────────────────────────────────────────────┘                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### 4.4 Implementing Distributed Locks Correctly
 
@@ -983,7 +1111,70 @@ Understanding Raft is essential for Staff-level engineers. It's the consensus al
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.5.2 Raft State Machine
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    RAFT LOG REPLICATION — FOLLOWER CATCH-UP              │
+│                                                                         │
+│   Leader                    Followers                                    │
+│   ┌────┬────┬────┬────┐    ┌────┬────┬────┐    ┌────┬────┐               │
+│   │ 1  │ 2  │ 3  │ 4  │    │ 1  │ 2  │ 3  │    │ 1  │ 2  │  F2 behind!   │
+│   └────┴────┴────┴────┘    └────┴────┴────┘    └────┴────┘               │
+│        ▲  ▲  ▲  ▲                 ▲  ▲               ▲  ▲                 │
+│        │  │  │  │                 │  │               │  │                 │
+│   AppendEntries(4) ──────────────►│  │               │  │                 │
+│   F1: ACK, committed             │  │               │  │                 │
+│                                  │  │  F2: reject (missing 3,4)          │
+│   Leader: decrement next_index[F2], retry with entry 3                   │
+│   AppendEntries(3) ─────────────────────────────────►│  │                 │
+│   F2: ACK                                                               │
+│   AppendEntries(4) ─────────────────────────────────►│  │                 │
+│   F2: ACK — NOW CAUGHT UP! ✓                                             │
+│                                                                         │
+│   COMMITTED when majority has entry. Follower behind? Catches up.        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.5.2 Raft Election Step-by-Step
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    RAFT ELECTION: STEP-BY-STEP TIMELINE                  │
+│                                                                         │
+│   Step (1)  Leader heartbeat stops                                     │
+│             ─────────────────────────                                   │
+│             Leader L (term 3) crashes or network partitions             │
+│             Followers no longer receive heartbeats                      │
+│                                                                         │
+│   Step (2)  Follower becomes candidate                                  │
+│             ─────────────────────────────                               │
+│             Follower F1's election timer expires                        │
+│             F1: term++ (now term 4), state = CANDIDATE                   │
+│                                                                         │
+│   Step (3)  Requests votes from peers                                   │
+│             ────────────────────────────                                │
+│             F1 → F2: "RequestVote(term=4, log_info)"                     │
+│             F1 → F3: "RequestVote(term=4, log_info)"                     │
+│                                                                         │
+│   Step (4)  Gets majority                                               │
+│             ─────────────────                                            │
+│             F2 grants (F1's log is up-to-date)                          │
+│             F3 grants                                                   │
+│             F1 has 2/3 votes → MAJORITY!                                │
+│                                                                         │
+│   Step (5)  Becomes new leader                                         │
+│             ────────────────────                                        │
+│             F1: state = LEADER, term = 4                                │
+│                                                                         │
+│   Step (6)  Sends heartbeats                                            │
+│             ──────────────────                                           │
+│             F1 → F2, F3: AppendEntries (heartbeat, no entries)           │
+│             Resets followers' election timers                           │
+│                                                                         │
+│   TERM NUMBERS: Each election increments term. Higher term wins.       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.5.3 Raft State Machine
 
 ```
 RAFT CORE (Pseudo-code)
@@ -1056,7 +1247,7 @@ COMMIT:
   only commit entries from current term
 ```
 
-#### 5.5.3 Raft Safety Properties
+#### 5.5.4 Raft Safety Properties
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -1099,7 +1290,7 @@ COMMIT:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.5.4 Raft Optimizations for Production
+#### 5.5.5 Raft Optimizations for Production
 
 ```
 RAFT PRODUCTION OPTIMIZATIONS
@@ -1129,7 +1320,7 @@ RAFT PRODUCTION OPTIMIZATIONS
    If expired: confirm leadership with quorum first.
 ```
 
-#### 5.5.5 Raft vs Paxos Comparison
+#### 5.5.6 Raft vs Paxos Comparison
 
 | Aspect | Raft | Multi-Paxos |
 |--------|------|-------------|
@@ -1429,6 +1620,44 @@ The most dangerous failure mode in distributed coordination.
 │   TWO LEADERS! Both accepting writes! DATA DIVERGENCE!                  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual 4: Split-Brain — What Goes WRONG Without Proper Design
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           SPLIT-BRAIN FAILURE: CONFLICTING WRITES → DATA CORRUPTION            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   WITHOUT proper quorum check + fencing tokens:                                 ║
+║                                                                               ║
+║   PARTITION 1 (A,B)              ║     PARTITION 2 (C,D,E)                     ║
+║   ┌─────────────────────────┐   ║     ┌─────────────────────────────────┐    ║
+║   │ Leader A (stale)         │   ║     │ Leader C (new)                  │    ║
+║   │ "I'm still leader!"      │   ║     │ "I have quorum"                  │    ║
+║   │                         │   ║     │                                 │    ║
+║   │ Write: account_1 += $50  │   ║     │ Write: account_1 += $30         │    ║
+║   │ (token=33)               │   ║     │ (token=34)                      │    ║
+║   └────────────┬──────────────┘   ║     └────────────┬────────────────────┘    ║
+║                │                  ║                  │                        ║
+║                ▼                  ║                  ▼                        ║
+║   ┌─────────────────────────────────────────────────────────────────────┐    ║
+║   │                    SHARED STORAGE / DATABASE                         │    ║
+║   │                                                                      │    ║
+║   │   Partition heals → MERGE CONFLICT                                    │    ║
+║   │   Without fencing: Both writes applied → CORRUPTED BALANCE            │    ║
+║   │   With fencing: Reject token=33; only token=34 wins → CORRECT         │    ║
+║   │                                                                      │    ║
+║   │   TIMELINE OF DISASTER:                                               │    ║
+║   │   T+0:  Account balance = $100                                       │    ║
+║   │   T+1:  A writes +$50 (sees $150)  │  C writes +$30 (sees $100)       │    ║
+║   │   T+2:  Merge without ordering → $180? $150? $130? UNDEFINED!         │    ║
+║   │   T+3:  Customer dispute, audit failure, $$$ lost                     │    ║
+║   └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║   PREVENTION: Quorum check (step down if < majority) + Fencing tokens          ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 **Why This Happens:**
@@ -2241,6 +2470,28 @@ Understanding the internals of coordination services helps you choose the right 
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              ZooKeeper vs etcd vs Redis Locks — QUICK COMPARISON         │
+│                                                                         │
+│   ┌─────────────────┬─────────────────┬─────────────────┐               │
+│   │   ZooKeeper     │     etcd        │  Redis/Redlock   │               │
+│   ├─────────────────┼─────────────────┼─────────────────┤               │
+│   │ CP (strong)     │ CP (strong)     │ AP-ish          │               │
+│   │ Strong guarantees│ Raft-based    │ Fast, weaker    │               │
+│   │ Complex ops     │ K8s native      │ Simple setup    │               │
+│   │ Hierarchical    │ Flat KV        │ Key-value       │               │
+│   │ Java            │ Go              │ Any             │               │
+│   │ Use: Hadoop,    │ Use: K8s,       │ Use: Caching,   │               │
+│   │      Kafka      │      Consul     │      Coarse     │               │
+│   └─────────────────┴─────────────────┴─────────────────┘               │
+│                                                                         │
+│   When to pick:                                                          │
+│   • Need strong correctness? → ZooKeeper or etcd                         │
+│   • Need speed over rigor? → Redis (with fencing token!)                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 9.5.2 ZooKeeper Internals
 
 ```
@@ -2949,6 +3200,38 @@ OPTIMISTIC (CAS - no lock):
 | Track page views | ❌ No | Eventual consistency |
 | Leader election | ✅ Yes | Built-in consensus |
 | Distributed cache invalidation | ❌ No | TTL + eventual |
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              WHEN NOT TO USE A LOCK — DECISION VISUAL                    │
+│                                                                         │
+│   Need mutual exclusion?                                                 │
+│              │                                                           │
+│              ▼                                                           │
+│   ┌──────────────────────────┐                                          │
+│   │ Can you PARTITION        │──YES──► Use partition (no lock!) ✓        │
+│   │ the problem?             │         Each worker owns its slice        │
+│   └──────────────────────────┘                                          │
+│              │ NO                                                        │
+│              ▼                                                           │
+│   ┌──────────────────────────┐                                          │
+│   │ Can you make it          │──YES──► Idempotent retry ✓                │
+│   │ IDEMPOTENT?              │         Same key = same result            │
+│   └──────────────────────────┘                                          │
+│              │ NO                                                        │
+│              ▼                                                           │
+│   ┌──────────────────────────┐                                          │
+│   │ Can you use CRDTs?       │──YES──► Conflict-free data ✓              │
+│   │ (merge without lock)     │         Add-wins, LWW, etc.               │
+│   └──────────────────────────┘                                          │
+│              │ NO                                                        │
+│              ▼                                                           │
+│   ┌──────────────────────────┐                                          │
+│   │ Still need exactly-one?   │──YES──► OK, use lock WITH FENCING ✓       │
+│   │ (money, critical job)     │         Never skip fencing tokens!         │
+│   └──────────────────────────┘                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -4590,6 +4873,36 @@ Coordination is one of the hardest problems in distributed systems. The key insi
 5. **Graceful degradation matters.** What happens when coordination is unavailable? Design for this.
 
 6. **Operational complexity is high.** Coordination infrastructure (ZooKeeper, etcd) requires expertise to run well.
+
+### Visual 5: Chapter 22 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              VISUAL SUMMARY: CHAPTER 22 — COORDINATION IN ONE PICTURE          ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  HIERARCHY:  No coord → Partition → Leader Election → Locks (last resort)     ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │ TWO GENERALS / FLP     CLOCKS UNRELIABLE      SPLIT-BRAIN DANGER        │  ║
+║  │ Agreement is hard      NTP skew 10-100ms      Two leaders → corruption   │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                               ║
+║  KEY NUMBERS:                                                                 ║
+║  • Leader election: 10-30 sec  • Lock TTL: 10-30 sec  • Raft heartbeat: 50-150ms║
+║  • NTP skew: 10-100ms          • TrueTime: ~7ms       • Quorum: (n/2)+1       ║
+║                                                                               ║
+║  LEADER ELECTION: Raft/etcd, lease vs quorum, heartbeat, step down on quorum   ║
+║  DISTRIBUTED LOCKS: TTL race (GC pause→expire→B acquires→A still writes)       ║
+║  FENCING TOKENS: Monotonic token; storage rejects stale → integrity           ║
+║                                                                               ║
+║  CASE STUDIES: Job scheduler (leader) | Rate limiter (partition) | Metadata    ║
+║  ANTI-PATTERNS: No fencing, Kafka for coordination, manual lock release       ║
+║                                                                               ║
+║  STAFF SIGNAL: "What happens when coordination fails?" — Design degradation    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 In interviews, demonstrate that you think about coordination critically. Don't reach for it by default—question whether it's necessary. When it is, address failure modes proactively. That's Staff-level thinking.
 

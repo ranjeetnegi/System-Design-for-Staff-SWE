@@ -65,6 +65,35 @@ This is not a reference architecture to memorize. It's a demonstration of *how t
 
 Let's begin.
 
+### Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║     CHAPTER 19: END-TO-END SYSTEM DESIGN — 5-PHASE FRAMEWORK (NEWS FEED)      ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Architecture EMERGES from requirements—each phase informs     ║
+║  the next. Don't jump to design; methodically build the foundation first.     ║
+║                                                                               ║
+║  THE 5-PHASE FLOW (45 min):                                                  ║
+║                                                                               ║
+║    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────────────┐   ║
+║    │ P1  │───▶│ P2  │───▶│ P3  │───▶│ P4  │───▶│ P5  │───▶│ ARCHITECTURE│   ║
+║    │Users│    │Func │    │Scale│    │NFRs │    │Asmp │    │ & DEEP DIVE │   ║
+║    │5-7m │    │5-7m │    │5m   │    │5m   │    │3m   │    │ 15-20 min   │   ║
+║    └─────┘    └─────┘    └─────┘    └─────┘    └─────┘    └─────────────┘   ║
+║                                                                               ║
+║  TAKEAWAYS:                                                                   ║
+║  • Phase 1: Users (consumer, creator, system services, ops) + scope            ║
+║  • Phase 2: Core vs supporting flows; read/write/control; edge cases           ║
+║  • Phase 3: QPS, storage, bottlenecks—derive numbers                         ║
+║  • Phase 4: Availability, latency, consistency—quantify & trade off          ║
+║  • Phase 5: State assumptions; invite correction                               ║
+║  • L6: Explicit scope control, celebrity edge case, system users              ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # The Prompt
@@ -206,6 +235,30 @@ Let's begin.
 - Explicit scope control (what we're NOT designing)
 
 *A Staff engineer explicitly surfaces all of these, demonstrating awareness of the full ecosystem.*
+
+### Visual: L5 vs L6 — Phase 1 (Users & Use Cases) in the News Feed
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         L5 vs L6: WHERE STAFF GOES FURTHER IN PHASE 1 (NEWS FEED)             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   L5 STOPPING POINT              │  L6 ADDITIONS                              ║
+║   ──────────────────────────────┼────────────────────────────────────────── ║
+║   "Users viewing feed"           │  + System users: Content Service, Social   ║
+║   "Users posting content"        │    Graph Service, Ranking/ML, Analytics   ║
+║   Basic use case list            │  + Operational users: SRE/Ops for monitoring║
+║   Happy path                     │  + Celebrity edge case → drives push vs   ║
+║                                  │    PULL architectural decision           ║
+║                                  │  + Explicit scope: "In scope: X. Out of    ║
+║                                  │    scope: Y. Is this appropriate?"        ║
+║                                                                               ║
+║   WHY IT MATTERS: The celebrity edge case (10M+ followers) forces a PULL     ║
+║   model—content stored once, pulled at read time. Push would fan-out 10M    ║
+║   writes per post. Missing this = L5 signal.                                 ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -1732,6 +1785,36 @@ Record yourself. Watch for:
 - Did you explain trade-offs?
 - Did you check in with the "interviewer"?
 - Was your pacing appropriate?
+
+---
+
+### Visual Summary: Chapter 19 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║    VISUAL SUMMARY: CHAPTER 19 — END-TO-END 5-PHASE FRAMEWORK IN ONE PICTURE   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  PROMPT → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → ARCHITECTURE     ║
+║           Users     Func      Scale     NFRs      Asmp/Const                  ║
+║                                                                               ║
+║  45-MIN BREAKDOWN:  0-2 open | 2-9 P1 | 9-16 P2 | 16-21 P3 | 21-26 P4 |       ║
+║                     26-29 P5 | 29-42 architecture | 42-45 wrap-up            ║
+║                                                                               ║
+║  NEWS FEED EXAMPLE — KEY DECISIONS FROM EACH PHASE:                           ║
+║  • P1: Consumer primary; celebrity → PULL model; scope to core feed           ║
+║  • P2: F1–F8 flows; edge cases (cold start, 50K follows) explicit             ║
+║  • P3: 500M users, 100 QPS/user → 50K QPS; fan-out bottleneck                 ║
+║  • P4: 99.9% avail, P99 <300ms feed, eventual consistency for interactions   ║
+║  • P5: "Assume Content + Social Graph services exist; single region initially"║
+║                                                                               ║
+║  L6 SIGNALS: Scope control | Edge cases that drive architecture |            ║
+║  Quantified NFRs | Explicit assumptions | Trace decisions to phases           ║
+║                                                                               ║
+║  NARRATION: "Let me work through this systematically..." — YOU drive.        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

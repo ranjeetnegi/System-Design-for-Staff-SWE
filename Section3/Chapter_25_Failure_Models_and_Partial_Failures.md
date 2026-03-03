@@ -14,6 +14,34 @@ This section teaches you how to reason about failure the way Staff Engineers do:
 
 ---
 
+## Visual 1: Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        CHAPTER 25: FAILURE MODELS & PARTIAL FAILURES — AT A GLANCE           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Design for the middle, not the edges                           ║
+║  ─────────────────────────────────────────────────────────────────────────   ║
+║  Systems are ALWAYS partially failing. The question is: how partial?        ║
+║                                                                               ║
+║  100% ◄───── DEGRADATION CONTINUUM ─────► 0%                                 ║
+║  Full    Slow   Some    Many    Most    Few   Down                           ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Slow is worse than dead — holds resources, passes health checks            ║
+║  • Retries amplify — use circuit breakers, retry budgets                      ║
+║  • Bulkheads isolate — thread pool per dependency                            ║
+║  • Design degradation modes — know what 60% looks like                       ║
+║  • Recovery can kill — thundering herd, cold cache stampede                   ║
+║                                                                               ║
+║  DEFENSE STACK: Timeout → Circuit Breaker → Fallback → Degrade → Shed load   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Quick Visual: The Partial Failure Reality
 
 ```
@@ -54,6 +82,36 @@ This section teaches you how to reason about failure the way Staff Engineers do:
 | **Service restart** | "It'll come back" | "What state was lost? Are there in-flight requests? Will the thundering herd kill it again?" |
 
 **Key Difference**: L6 engineers think about *propagation*. Every failure question leads to "and then what happens?"
+
+---
+
+## Visual 2: The Degradation Continuum — Fully Working → Total Failure
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              THE DEGRADATION CONTINUUM — VISUAL SPECTRUM                      ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   FULLY WORKING ──► DEGRADED ──► PARTIAL FAILURE ──► TOTAL FAILURE            ║
+║                                                                               ║
+║   ┌────────┬────────┬────────┬────────┬────────┬────────┬────────┐             ║
+║   │  100%  │   80%  │   60%  │   40%  │   20%  │   5%   │   0%   │             ║
+║   │ FULL   │ SLIGHT │VISIBLE │ MAJOR  │MINIMAL │STATUS  │  DOWN  │             ║
+║   │        │ degrade│degrade │degrade │ viable │ page   │        │             ║
+║   └────────┴────────┴────────┴────────┴────────┴────────┴────────┘             ║
+║        │        │        │        │        │        │        │                 ║
+║   All healthy  Slow     Some    Many     Few    Barely   Complete              ║
+║   deps fast    deps     errors  errors   work   works   outage                 ║
+║                                                                               ║
+║   EXAMPLE: E-commerce during Payment Service outage                           ║
+║   • 100%: Full checkout    • 60%: Saved cards only                            ║
+║   • 80%:  PayPal down      • 40%: Browse works, checkout "try later"            ║
+║   • 20%: Cart disabled    • 0%:  Complete outage                               ║
+║                                                                               ║
+║   STAFF PRINCIPLE: Design EACH layer. Know what 60% looks like before need.   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -106,6 +164,27 @@ Partial failures are insidious because:
 - **Debugging is hard**: Everything *mostly* works
 
 **Staff-level insight**: The most dangerous incidents aren't the ones where everything breaks. They're the ones where *almost* everything works, so nobody notices until the damage is widespread.
+
+### The Swiss Cheese Model: Multiple Defense Layers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SWISS CHEESE MODEL — DEFENSE IN DEPTH                    │
+│                                                                             │
+│   Failure happens when HOLES ALIGN across layers.                           │
+│                                                                             │
+│   LAYER 1: TIMEOUT         [████ ░ ████]  ← Hole: too long                 │
+│   LAYER 2: CIRCUIT BREAKER [███ ░░ ████]  ← Hole: slow to trip              │
+│   LAYER 3: FALLBACK        [████ ░ ████]  ← Hole: no fallback designed      │
+│   LAYER 4: MONITORING      [██ ░░░ ████]  ← Hole: alert threshold high      │
+│                   │                                                         │
+│                   └── When holes ALIGN ◄──► Failure slips through           │
+│                                                                             │
+│   Each layer has weaknesses (holes). Multiple layers reduce risk.           │
+│   Staff principle: Strengthen layers. Don't rely on one.                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -197,6 +276,30 @@ Staff Engineers recognize failure patterns instantly because they've seen each t
 - Load balancer needs multiple failed checks before removing node
 - Other instances absorb traffic, masking the problem
 - If crash rate < health check interval, you might not even notice
+
+### Health Check: The Doctor's Visit — Shallow vs Deep
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HEALTH CHECK — SHALLOW vs DEEP                            │
+│                                                                             │
+│   SHALLOW CHECK (Liveness)              DEEP CHECK (Readiness)              │
+│   "Are you alive?"                      "Can you do your job?"               │
+│   ─────────────────                    ─────────────────────                │
+│   Returns 200 OK                        Queries DB, cache, downstream       │
+│   Process responding                    Full dependency chain tested        │
+│   Fast (1-10ms)                         Slow (100-500ms)                    │
+│                                                                             │
+│   CATCHES:        Process dead           CATCHES:     DB unreachable         │
+│   MISSES:         DB down, OOM soon     MISSES:      Nothing (if done right)│
+│                   Thread pool exhausted  TRADEOFF:   Slower, more load      │
+│                   Cache cold                                                            │
+│                                                                             │
+│   Liveness  = "Remove from LB if dead"   Readiness = "Send traffic if ready"│
+│   Use BOTH. Shallow for LB. Deep for orchestration/rolling deploy.          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Secondary Failures It Triggers
 
@@ -442,6 +545,31 @@ Your service is only as reliable as its least reliable dependency.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### The Gray Failure: Not Up, Not Down — The Hardest to Detect
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GRAY FAILURE — THE DANGEROUS MIDDLE                      │
+│                                                                             │
+│   BINARY FAILURE (easy):              GRAY FAILURE (hard):                 │
+│   ─────────────────────               ───────────────────                 │
+│   Service returns 500                  Service returns 200                 │
+│   Health check fails                  Health check passes ✓                │
+│   Clear: something is wrong           But: wrong data, or 5s latency      │
+│   Alert fires, engineer pages         Users suffer, dashboards "green"     │
+│                                                                             │
+│   GRAY FAILURE EXAMPLES:                                                   │
+│   • Returns 200 but stale/wrong data  • Responds in 5s instead of 50ms    │
+│   • 10% of requests corrupt            • Intermittent timeouts              │
+│   • Health check says "green" but     • Cache poisoning                     │
+│     real traffic fails                 • Split-brain serving bad state      │
+│                                                                             │
+│   WHY DANGEROUS: Hard to detect. Metrics look OK. Users complain first.   │
+│   MITIGATION: Semantic health checks. Client-side metrics. Canary deploys. │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Dependency Failure Propagation
 
 ```
@@ -581,6 +709,33 @@ With retry budget (10% max):
 - Service D still under pressure, but not crushed
 ```
 
+### Retry vs Fail-Fast Decision Guide
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    RETRY vs FAIL-FAST — WHEN TO DO WHAT                     │
+│                                                                             │
+│   RETRY (transient, might fix itself):                                      │
+│   ───────────────────────────────────                                      │
+│   • 503 Service Unavailable   • Network timeout   • Connection reset        │
+│   • 429 Too Many Requests (with Retry-After header)                          │
+│   → Use exponential backoff, retry budget                                   │
+│                                                                             │
+│   FAIL-FAST (permanent, retry won't help):                                  │
+│   ────────────────────────────────────────                                  │
+│   • 404 Not Found   • 400 Bad Request   • 401 Unauthorized                   │
+│   • 403 Forbidden   • Validation errors                                      │
+│   → Return error to caller immediately. Don't retry.                         │
+│                                                                             │
+│   DEGRADE (dependency slow but not critical):                               │
+│   ──────────────────────────────────────────                                │
+│   • Recommendations service slow → Serve cached/default                     │
+│   • Non-critical path → Skip or use fallback                                │
+│   → Circuit breaker + fallback. Protect critical path.                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Fan-Out Amplification
 
 ```
@@ -660,6 +815,34 @@ A shared dependency is a shared blast radius.
 # Part 4: Real Cascading Failure Walkthrough
 
 This is a detailed walkthrough of a realistic production incident, showing how partial failure escalates to system-wide outage.
+
+### Cascading Failure: The Domino Effect
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CASCADING FAILURE — THE DOMINO EFFECT                      │
+│                                                                             │
+│   [1] DB SLOW           [2] APP THREADS      [3] APP UNRESPONSIVE          │
+│        │                      │                       │                     │
+│        ▼                      ▼                       ▼                     │
+│   GC pause 12s    ──►  Connection pool    ──►  No threads available         │
+│   Queries blocked       exhausted (50)         Returns 503                  │
+│        │                      │                       │                     │
+│        │                      │                       ▼                     │
+│        │                      │                [4] GATEWAY TIMEOUTS          │
+│        │                      │                       │                     │
+│        │                      │                       ▼                     │
+│        │                      │                [5] OTHER SERVICES FAIL     │
+│        │                      │                 (depend on gateway)         │
+│        │                      │                       │                     │
+│        │                      │                       ▼                     │
+│        │                      │                [6] USER SEES ERROR          │
+│                                                                             │
+│   One domino (DB) knocks the next (app) which knocks the next (gateway)...  │
+│   Contain with: Timeout → Circuit breaker → Bulkhead. Stop the chain.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## The Incident: "The Thursday Afternoon Checkout Outage"
 
@@ -1266,7 +1449,109 @@ STAFF REASONING:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## Visual 4: Bulkhead Pattern — Isolated Failure Compartments
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           BULKHEAD PATTERN — ISOLATED FAILURE COMPARTMENTS                    ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   WITHOUT BULKHEADS: One failure sinks the ship                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐    ║
+║   │  SHARED POOL — User Svc slow blocks Checkout, Browse, Search        │    ║
+║   │  ████████████████████████████████████████████████████ (all blocked) │    ║
+║   └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║   WITH BULKHEADS: Failure contained to one compartment                        ║
+║   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐                 ║
+║   │ User Service    │ │ Payment Service │ │ Search Service   │                 ║
+║   │ Pool (30)      │ │ Pool (30)       │ │ Pool (30)        │                 ║
+║   │ ████ BLOCKED   │ │ ░░░░ HEALTHY    │ │ ░░░░ HEALTHY     │                 ║
+║   └─────────────────┘ └─────────────────┘ └─────────────────┘                 ║
+║         │                     │                     │                         ║
+║         └─────────────────────┴─────────────────────┘                         ║
+║   Checkout + Browse still work. Only User Service path affected.               ║
+║                                                                               ║
+║   BULKHEAD TYPES:                                                             ║
+║   • Thread pool per dependency    • Connection pool per downstream            ║
+║   • Process/container per service • Region (geo isolation)                    ║
+║   • Cell (customer segment)                                                   ║
+║                                                                               ║
+║   BLAST RADIUS: 33% (one compartment) vs 100% (shared pool)                    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Blast Radius Containment: Ship Compartments
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BLAST RADIUS — SHIP COMPARTMENT ANALOGY                    │
+│                                                                             │
+│   WITHOUT CONTAINMENT:              WITH BULKHEADS:                         │
+│   ─────────────────────             ─────────────────                       │
+│   [Service A] [Service B] [Service C]     [A] │ [B] │ [C]                    │
+│        ╳           ╳           ╳              ╳    │     │                  │
+│   One failure → EVERYTHING fails        One failure → Only A affected        │
+│   Blast radius: 100%                    Blast radius: 33%                    │
+│                                                                             │
+│   Ship: Hull breach floods entire ship   Ship: Bulkheads limit flooding     │
+│   System: One slow dep kills all          System: Isolated thread pools      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Timeouts, Circuit Breakers, and Fallbacks
+
+### Timeout: Too Short vs Too Long — The Goldilocks Zone
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TIMEOUT TUNING — GOLDILOCKS ZONE                         │
+│                                                                             │
+│   TOO SHORT (500ms)              JUST RIGHT (2s)           TOO LONG (30s)   │
+│   ─────────────────             ───────────────          ───────────────   │
+│   • False failures              • Catches real failures   • Threads blocked │
+│   • Unnecessary retries         • No unnecessary retries  • Pool exhausted │
+│   • Retry amplification         • Bounded wait            • Cascading fail  │
+│   • "Service works but                                         │
+│     we think it's down"         ✓ P99 × 2 typical         • Slow death      │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐  │
+│   │  RECOMMENDATION: Timeout = 2× P99 latency for the dependency         │  │
+│   │  Normal P99 = 500ms → Timeout = 1s. Normal P99 = 2s → Timeout = 4s   │  │
+│   └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Circuit Breaker as a Light Switch
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CIRCUIT BREAKER = HOUSE ELECTRICAL BREAKER                 │
+│                                                                             │
+│   HOUSE ELECTRICAL:                         MICROSERVICE:                     │
+│   ─────────────────                        ─────────────                       │
+│   Too much current (fault)     ──────►     Too many failures (dependency)    │
+│   Breaker TRIPS                           Circuit OPENS                      │
+│   Power stops to that circuit             Stop calling dependency            │
+│   Protects house from fire                Protects YOUR service             │
+│   Reset after cooling down                 HALF-OPEN: test with 1 request    │
+│   Power restored if OK                     CLOSED: resume normal if success   │
+│                                                                             │
+│   ┌─────┐     Failures > threshold     ┌─────┐     Test request    ┌─────┐ │
+│   │CLOSED│ ───────────────────────────► │OPEN │ ──────────────────► │HALF │ │
+│   │Call │                               │Fail │   After cool-down   │OPEN │ │
+│   │normally│ ◄────────────────────────  │fast │ ◄────────────────── │Test │ │
+│   └─────┘     Success                   └─────┘     Success          └─────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### The Defense Stack
 
@@ -1306,6 +1591,44 @@ STAFF REASONING:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## Visual 3: Decision Tree — My Dependency Is Failing, What Do I Do?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         MY DEPENDENCY IS FAILING — WHAT DO I DO? (DECISION TREE)              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   DEPENDENCY SLOW/FAILING?                                                    ║
+║          │                                                                    ║
+║          ├─► 1. TIMEOUT (first line of defense)                                ║
+║          │       Set timeout = 2× P99, not 30s. Bound how long you wait.      ║
+║          │       Slow deps hold resources — cut them off.                     ║
+║          │                                                                    ║
+║          ├─► 2. CIRCUIT BREAKER (fail fast)                                    ║
+║          │       If error rate > threshold → OPEN circuit.                     ║
+║          │       Stop calling. Don't redirect traffic to dead dependency.     ║
+║          │                                                                    ║
+║          ├─► 3. FALLBACK (serve something)                                     ║
+║          │       Cached response | Default | Partial | Graceful error         ║
+║          │       Never fallback across trust boundaries (auth, PII).           ║
+║          │                                                                    ║
+║          ├─► 4. DEGRADE (reduce functionality)                                ║
+║          │       Design explicit degradation modes. What does 60% look like?  ║
+║          │       Browse works, checkout shows "try later."                     ║
+║          │                                                                    ║
+║          └─► 5. SHED LOAD (last resort)                                        ║
+║                  Reject non-critical traffic. Protect core path.               ║
+║                  Rate limit at gateway. Queue and backpressure.                 ║
+║                                                                               ║
+║   ORDER: Apply in layers. Timeout → Breaker → Fallback → Degrade → Shed       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Degraded Modes vs Full Shutdown
 
 ```
@@ -1335,6 +1658,32 @@ STAFF REASONING:
 │   Know what 60% looks like before you need it.                          │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Graceful Degradation Menu: Like a Restaurant Running Low
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GRACEFUL DEGRADATION — RESTAURANT MENU                     │
+│                                                                             │
+│   FULL MENU (100%)          All features. Everything works.                 │
+│   ─────────────────                                                         │
+│                                                                             │
+│   LIMITED MENU (60%)        Core features only. Some options off.            │
+│   ─────────────────────                                                      │
+│   "Recommendations unavailable. Browse and checkout still work."            │
+│                                                                             │
+│   EMERGENCY MENU (20%)      Read-only, cached data. No writes.             │
+│   ────────────────────                                                       │
+│   "View products from cache. Checkout disabled. Try again later."           │
+│                                                                             │
+│   CLOSED (0%)               Maintenance page. Nothing available.           │
+│   ───────────                                                                 │
+│   "We're fixing things. Back in 15 minutes."                                │
+│                                                                             │
+│   Design EACH level. Know what to disable. Never surprise users.           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Choosing Between Degradation and Shutdown
@@ -1735,6 +2084,29 @@ During partial failures, the systems you rely on to understand the failure may t
 │   if that 10% is your highest-value segment."                           │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Failure Budget Tracker — Monthly Consumption
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FAILURE BUDGET TRACKER — 99.9% SLO                        │
+│                                                                             │
+│   Monthly budget: 43.2 minutes (99.9% = 43 min downtime allowed)           │
+│                                                                             │
+│   JANUARY CONSUMPTION:                                                       │
+│   ████████████████████████████░░░░░░░░░░░░░░░░░░  65% consumed             │
+│   │← Incident 1: 12 min │← Incident 2: 16 min │                              │
+│                                                                             │
+│   ACTIONS BY BUDGET LEVEL:                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │ < 50%: Normal. Ship features.                                        │   │
+│   │ 50-80%: Caution. Slow risky deploys. Focus on reliability.           │   │
+│   │ 80%+: Freeze. No non-critical changes. Reliability sprint.           │   │
+│   │ 100%: Stop. Feature freeze until next month. Fix before building.    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Multi-Signal Correlation
@@ -3902,6 +4274,36 @@ For each experiment:
 ## This chapter meets Google Staff Engineer (L6) expectations.
 
 All Master Review Prompt Check items are satisfied. The L6 dimension coverage table (A–J) confirms Staff-level depth across judgment, failure thinking, scale, cost, real-world engineering, learnability, data correctness, security, observability, and cross-team impact. No unavoidable remaining gaps.
+
+---
+
+## Visual 5: Visual Summary — Chapter 25 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║       CHAPTER 25: FAILURE MODELS & PARTIAL FAILURES — COMPLETE SUMMARY       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  DEGRADATION CONTINUUM: 100% (full) → 80% → 60% → 40% → 20% → 5% → 0% (down) ║
+║  Design for the middle. Know what 60% looks like.                             ║
+║                                                                               ║
+║  DEPENDENCY FAILING? → Timeout → Circuit Breaker → Fallback → Degrade → Shed  ║
+║                                                                               ║
+║  CONTAINMENT:                                                                  ║
+║  • Bulkheads: Thread pool per dependency. 33% blast radius vs 100%.           ║
+║  • Circuit breakers: Fail fast. Don't hammer dead deps.                       ║
+║  • Retry budget: Limit amplification (10% max).                               ║
+║                                                                               ║
+║  KEY INSIGHTS:                                                                 ║
+║  • Slow is worse than dead — holds resources, passes health checks            ║
+║  • Retries amplify — bounded retries + breaker before retry storm             ║
+║  • Recovery can kill — thundering herd, cold cache stampede                   ║
+║  • Shared deps share blast radius — 5 services, 1 DB = fail together          ║
+║                                                                               ║
+║  STAFF MINDSET: Think propagation. "And then what happens?"                     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

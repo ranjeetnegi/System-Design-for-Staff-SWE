@@ -52,6 +52,36 @@ This section teaches you how to define functional requirements with Staff-level 
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         CHAPTER 15: PHASE 2 — FUNCTIONAL REQUIREMENTS AT A GLANCE              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Describe WHAT the system does, not HOW. Observable, testable,  ║
+║  behavior-focused. Core vs Supporting drives design priority.                  ║
+║                                                                               ║
+║  THE REQUIREMENTS FLOW:                                                        ║
+║  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐             ║
+║  │ READ FLOWS      │   │ WRITE FLOWS     │   │ CONTROL FLOWS   │             ║
+║  │ (retrieve)      │   │ (create/modify) │   │ (config/behavior)│             ║
+║  │ Highest freq    │   │ Medium freq     │   │ Lowest freq     │             ║
+║  │ Often cacheable │   │ Not cacheable   │   │ Often overlooked│             ║
+║  └─────────────────┘   └─────────────────┘   └─────────────────┘             ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                                ║
+║  • Core = useless without it. Supporting = works in diminished way              ║
+║  • Format: "[Actor] can [action] [object] [constraints]"                       ║
+║  • Don't confuse functional (what) with non-functional (how well)              ║
+║  • Edge cases: handle fully, graceful degradation, or exclude—be explicit     ║
+║  • Goldilocks: specific enough to drive design, abstract enough to avoid impl  ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: What Functional Requirements Really Mean
 
 ## The Definition
@@ -468,6 +498,33 @@ A common mistake is locking in details too early:
 
 **Better approach:**
 "The notification needs to be stored durably and delivered in real-time. Let me first establish all the requirements, then I'll design the architecture to meet them. The choice of specific technologies will come from the requirements."
+
+### Key Concept Visual: The Goldilocks Zone — Requirements Precision Level
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              FUNCTIONAL REQUIREMENTS: THE GOLDILOCKS ZONE                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   TOO VAGUE              JUST RIGHT (SWEET SPOT)           TOO DETAILED      ║
+║   ┌──────────────┐       ┌────────────────────────┐        ┌──────────────┐   ║
+║   │ "System      │       │ "[Actor] can [action]  │        │ "Store in    │   ║
+║   │  handles     │  ──▶   │  [object] [constraints]"│  ◀──   │  Cassandra   │   ║
+║   │  messages"   │       │                         │        │  with user_id │   ║
+║   └──────────────┘       │ Example: "Services can │        │  partition"   │   ║
+║         │                │ send notifications to  │        └──────────────┘   ║
+║   No design              │ users; system delivers  │              │          ║
+║   guidance               │ in near-real-time       │        Implementation,   ║
+║                          │ respecting preferences" │        not requirements ║
+║                          └────────────────────────┘                           ║
+║                                   │                                           ║
+║                          Drives design | Testable | Tech-agnostic               ║
+║                                                                               ║
+║   SPECIFY: Triggers, outcomes, who's affected, rules     LEAVE OPEN: How,     ║
+║   technologies, internal representations, optimizations                        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -2260,6 +2317,37 @@ For each use case you identified in Phase 1 (users and use cases), trace:
 - Are any requirements not linked to use cases?
 
 This checks that your requirements and use cases are aligned.
+
+---
+
+# Visual Summary: Chapter 15 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        VISUAL SUMMARY: CHAPTER 15 — PHASE 2 FUNCTIONAL REQUIREMENTS            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WHAT vs HOW: Functional = what system DOES. Non-functional = how WELL.       ║
+║                                                                               ║
+║  CORE vs SUPPORTING              THREE FLOW TYPES                            ║
+║  ┌─────────────────────┐          ┌─────────────────────────────────────┐      ║
+║  │ Core: Useless       │          │ READ: Retrieve, high freq, cache   │      ║
+║  │   without it        │    +     │ WRITE: Create/modify, consistency  │      ║
+║  │ Supporting: Works   │          │ CONTROL: Config, often forgotten  │      ║
+║  │   in diminished way │          └─────────────────────────────────────┘      ║
+║  └─────────────────────┘                                                      ║
+║                                                                               ║
+║  GOLDILOCKS ZONE:                                                            ║
+║  • Specific enough → drives design  |  Abstract enough → no implementation   ║
+║  • Format: "[Actor] can [action] [object] [constraints]"                       ║
+║                                                                               ║
+║  EDGE CASES: Handle fully | Graceful degradation | Exclude (explicit)         ║
+║  SCOPE: "Does this capture what you had in mind?" — always confirm            ║
+║                                                                               ║
+║  REMEMBER: Requirements = contract for design. Every decision traces back.    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

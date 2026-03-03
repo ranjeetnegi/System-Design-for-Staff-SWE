@@ -80,6 +80,29 @@ These are not academic topics. At Staff level, you're asked to explain *why* a c
 
 **Key Difference**: L6 engineers connect internal mechanisms to observable symptoms. They know which knob to turn—and which knob turning will cause a new problem elsewhere.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS SINGLE THREAD: HOW IT'S STILL FAST                                 │
+│                                                                                             │
+│   "Single-threaded? How can it handle 100K+ ops/sec?"                                     │
+│                                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  EVENT LOOP (epoll / kqueue)                                                        │   │
+│   │  Non-blocking I/O: never waits on network or disk                                    │   │
+│   │                                                                                     │   │
+│   │  Request 1 ──► Process (μs) ──► Response 1                                          │   │
+│   │  Request 2 ──► Process (μs) ──► Response 2     (sequential, but each op is FAST)    │   │
+│   │  Request 3 ──► Process (μs) ──► Response 3                                          │   │
+│   │                                                                                     │   │
+│   │  Why fast: (1) In-memory ops = microseconds  (2) No locks  (3) No context switching   │   │
+│   │  Bottleneck: CPU per command, not concurrency. Scale by adding NODES (cluster).       │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                             │
+│   Single thread + non-blocking I/O + microsecond ops = 100K+ ops/sec on one core           │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 1: Cache Key Design — What to Include (Topic 261)
@@ -228,6 +251,26 @@ With namespacing:
 │   feed:user:123:v:456:page:2      ← Versioned: bump v to invalidate all     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS DATA STRUCTURES: VISUAL REFERENCE                                 │
+│                                                                                             │
+│   STRING          key → "value"              Use: Simple KV, sessions, counters            │
+│   LIST            key → [A, B, C]            Use: Queues, recent items (LPUSH, RPOP)       │
+│   SET             key → {A, B, C}            Use: Unique members, "who liked this"        │
+│   SORTED SET      key → {(A,5),(B,3),(C,7)}  Use: Leaderboards, rankings by score         │
+│   HASH            key → {f1:v1, f2:v2}      Use: Object with fields (user profile)       │
+│   STREAM          key → append-only log      Use: Event log, consumer groups (like Kafka)  │
+│                                                                                             │
+│   Example use cases:                                                                        │
+│   • Leaderboard: ZADD leaderboard 100 "alice"  (sorted set by score)                       │
+│   • Rate limit: INCR ratelimit:user:123:60 + EXPIRE  (string + TTL)                        │
+│   • Recent views: LPUSH user:123:views post_id  (list, trim to last 10)                    │
+│   • Unique visitors: SADD page:456:visitors user_id  (set)                                 │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Operational Guidance: Key Design Checklist
@@ -533,6 +576,34 @@ On restart:
 
 **Result**: Fast recovery (RDB) + minimal data loss (AOF delta). Best of both.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS PERSISTENCE: RDB vs AOF vs HYBRID                                  │
+│                                                                                             │
+│   RDB (Snapshot)                     AOF (Append-Only File)                                 │
+│   ─────────────                     ──────────────────────                                 │
+│   Periodic snapshot                  Every write logged                                    │
+│   dump.rdb (binary)                 appendonly.aof (commands)                              │
+│   Fast recovery ✓                    Durable ✓                                              │
+│   Data loss between snapshots ✗     Slower recovery ✗                                      │
+│   Compact ✓                          Bigger file ✗                                          │
+│                                                                                             │
+│   HYBRID (Best of both):                                                                     │
+│   RDB snapshot + AOF of changes SINCE snapshot                                              │
+│   On restart: Load RDB (fast) → Replay small AOF tail (minimal loss)                        │
+│                                                                                             │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐                                          │
+│   │   RDB    │     │   AOF    │     │  HYBRID  │                                          │
+│   │  only    │     │  only    │     │  (RDB +  │                                          │
+│   │  Fast    │     │  Durable │     │  AOF Δ)  │  ◄── Recommended for production            │
+│   │  Loss=N  │     │  Slow    │     │  Fast +  │                                          │
+│   │  min     │     │  recover │     │  minimal │                                          │
+│   └──────────┘     └──────────┘     │  loss    │                                          │
+│                                     └──────────┘                                          │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Configuration
 
 ```
@@ -564,6 +635,29 @@ With `aof-use-rdb-preamble`, the AOF file starts with an RDB snapshot when a rew
 | **Large instance (50GB+)** | Monitor fork time; consider smaller shards |
 
 **Key takeaway**: Use **hybrid persistence** in production when data durability matters. Use `appendfsync everysec` unless you have a compelling reason for `always`. Monitor fork time on large instances.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS EVICTION POLICIES: WHEN MEMORY IS FULL                              │
+│                                                                                             │
+│   Bookshelf analogy: Shelf is full. Which book do you remove to make room?                  │
+│                                                                                             │
+│   LRU (Least Recently Used)    Evict the one not touched lately.                            │
+│   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓     "Haven't read that in weeks" → remove it.                    │
+│   Good for: Most workloads. Redis default: allkeys-lru                                       │
+│                                                                                             │
+│   LFU (Least Frequently Used)  Evict the one rarely accessed overall.                       │
+│   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓     "Only read twice in a month" → remove it.                    │
+│   Good for: Some items always hot (e.g. top 10 products)                                    │
+│                                                                                             │
+│   RANDOM                   Evict random key. Simple, no metadata.                            │
+│   TTL (volatile-ttl)       Evict key with shortest TTL (expiring soonest first).            │
+│   NOEVICTION               Don't evict. Return error on full. Use for critical data.      │
+│                                                                                             │
+│   When memory hits maxmemory → policy decides WHO gets evicted. Monitor eviction_rate!      │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Redis Persistence: Configuration Quick Reference
 
@@ -614,6 +708,27 @@ Redis Cluster divides the key space into **16,384 hash slots**. Each key maps to
 
 ```
 slot = CRC16(key) mod 16384
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS CLUSTER: HASH SLOTS VISUAL                                         │
+│                                                                                             │
+│   Key "user:123" ──► CRC16 ──► 12345 mod 16384 ──► Slot 12345 ──► Node owning that slot      │
+│                                                                                             │
+│   3 NODES:                         4 NODES (adding node):                                   │
+│   ┌─────────┬─────────┬─────────┐  ┌─────────┬─────────┬─────────┬─────────┐              │
+│   │ Node A  │ Node B  │ Node C  │  │ Node A  │ Node B  │ Node C  │ Node D  │              │
+│   │ 0-5460  │5461-10922│10923-  │  │ 0-4095  │4096-8191 │8192-    │ NEW:    │              │
+│   │         │         │ 16383   │  │         │         │ 12287   │12288-   │              │
+│   └─────────┴─────────┴─────────┘  └─────────┴─────────┴─────────┴ 16383  ┘              │
+│                                          ▲                                                  │
+│                                          │ Slots move from A,B,C to D during rebalance    │
+│                                                                                             │
+│   Adding a node: Slots REDISTRIBUTE. Key→Slot is fixed; Slot→Node changes. Migration moves  │
+│   data. During migration: ASK redirect for keys in transit.                                │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **CRC16** is a deterministic hash. Each node is assigned a subset of slots. Example: 3 nodes might have:
@@ -763,6 +878,63 @@ Both keys are on the same slot. You can `MGET {user:123}:profile {user:123}:sett
 │   {user:123}:profile  and  {user:123}:settings  → same slot → MGET works    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS PUB/SUB: THE RADIO STATION ANALOGY                                 │
+│                                                                                             │
+│   Publisher = Radio station. Subscribers = Listeners tuned to a channel.                     │
+│                                                                                             │
+│                    ┌─────────────────────┐                                                  │
+│                    │  PUBLISHER           │                                                  │
+│                    │  PUBLISH "news" msg  │                                                  │
+│                    └──────────┬──────────┘                                                  │
+│                               │                                                             │
+│           ┌───────────────────┼───────────────────┐                                         │
+│           │                   │                   │                                         │
+│           ▼                   ▼                   ▼                                         │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                                    │
+│   │ SUBSCRIBER 1│    │ SUBSCRIBER 2│    │ SUBSCRIBER 3│   All receive message              │
+│   │ SUB "news"  │    │ SUB "news"  │    │ SUB "news"  │                                    │
+│   └─────────────┘    └─────────────┘    └─────────────┘                                    │
+│                                                                                             │
+│   FIRE-AND-FORGET: If subscriber is offline, message is LOST. No persistence.              │
+│   Compare with STREAMS: Durable, consumer groups, replay. Use Streams when delivery matters.│
+│                                                                                             │
+│   Use Pub/Sub for: Cache invalidation broadcasts, real-time notifications (loss OK).        │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    PIPELINE: BATCH YOUR COMMANDS — LATENCY SAVINGS                          │
+│                                                                                             │
+│   WITHOUT PIPELINE (100 GETs = 100 round trips):                                           │
+│   ─────────────────────────────────────────────                                            │
+│   Client                    Redis                                                           │
+│     │  GET k1  ────────────► │                                                              │
+│     │  ◄──────── "v1" ──────│                                                              │
+│     │  GET k2  ────────────► │     Each round trip: ~1ms network                             │
+│     │  ◄──────── "v2" ──────│     100 commands = 100ms latency                             │
+│     │  ...                  │                                                              │
+│     │  GET k100 ──────────► │                                                              │
+│     │  ◄──────── "v100" ────│                                                              │
+│                                                                                             │
+│   WITH PIPELINE (batch = 1 round trip):                                                     │
+│   ─────────────────────────────────────                                                    │
+│   Client                    Redis                                                           │
+│     │  GET k1, k2, ... k100  │                                                              │
+│     │  ───────────────────► │     Send all commands at once                                 │
+│     │                        │     Redis processes sequentially                             │
+│     │  ◄─────────────────── │     One response with all 100 values                         │
+│     │  v1, v2, ... v100      │                                                              │
+│                                                                                             │
+│   Result: 100ms → ~1ms. 100× latency reduction for burst of commands.                      │
+│   Pipeline does NOT help cross-slot (Redis Cluster)—use hash tags for that.                │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---

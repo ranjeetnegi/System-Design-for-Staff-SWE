@@ -64,6 +64,35 @@ In this section, you'll learn how to think about scale at Staff level. We'll cov
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         CHAPTER 16: PHASE 3 — SCALE & CAPACITY PLANNING AT A GLANCE            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Scale determines architecture. Derive, don't guess. Show work.  ║
+║  Systems fail at PEAK, not average. 1K posts × 1K followers = 1M operations. ║
+║                                                                               ║
+║  THE SCALE PIPELINE:                                                           ║
+║  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐       ║
+║  │ 1. ANCHOR   │──▶│ 2. DERIVE   │──▶│ 3. RATES    │──▶│ 4. PEAK     │       ║
+║  │    USERS    │   │   ACTIVITY  │   │   ÷86,400   │   │   2-10x avg │       ║
+║  │ 200M DAU    │   │ 20 actions  │   │ 46K QPS     │   │ 140K peak   │       ║
+║  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘       ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                                ║
+║  • QPS = (DAU × actions/user) / 86,400  |  Peak = 2-5x normal, 10-50x events   ║
+║  • Fan-out: 1K posts × 1K followers = 1M updates. Celebrity = pull model     ║
+║  • Hot keys: Top 1% = 50% traffic. Cache, replicate, split, or isolate         ║
+║  • Read/write ratio → caching (100:1) vs write optimization (1:100)            ║
+║  • Design for 10x growth; schema supports sharding from day one                ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: Why Scale Is a First-Class Concern at Staff Level
 
 ## Scale Determines Architecture
@@ -485,6 +514,34 @@ Actual system ratio: Very read-heavy on the database, but write fan-out means a 
 - Rarely they post—maybe once per day if active
 
 This is heavily read-biased—probably 100:1 or more for feed reads. So caching is essential, read replicas make sense, and eventual consistency is fine for the feed. The write path is less frequent but has fan-out—when someone posts, it affects many feeds."
+
+### Key Concept Visual: Read/Write Ratio → Architecture Implications
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║            READ/WRITE RATIO DRIVES ARCHITECTURE — STAFF DECISION TREE          ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   RATIO          TYPICAL SYSTEMS              STAFF ARCHITECTURE CHOICES      ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   100:1+         Social feed, e-commerce      • Caching ESSENTIAL             ║
+║   (read-heavy)   catalog, URL shortener       • Read replicas, CDN            ║
+║                  News sites                   • Eventual consistency OK       ║
+║                  User profiles                • Precomputation               ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   1:1 to 10:1    Messaging, collaborative     • Balance BOTH paths            ║
+║   (balanced)     docs                         • Careful cache invalidation     ║
+║                                               • Can't ignore either           ║
+║   ─────────────────────────────────────────────────────────────────────      ║
+║   1:10 to 1:100  Metrics, logging, IoT       • Write optimization critical   ║
+║   (write-heavy)  data ingestion               • Append-only, batching         ║
+║                                               • Sharding, async processing   ║
+║                                                                               ║
+║   ONE FORMULA: (DAU × reads/user) vs (DAU × writes/user) → ratio → strategy  ║
+║   STAFF PHRASE: "100:1 read-heavy → caching essential. Write path has fan-out"║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -2089,6 +2146,34 @@ Produce a complete scale analysis document including:
 - Architecture implications
 
 Present this as you would in an interview (5-10 minutes).
+
+---
+
+# Visual Summary: Chapter 16 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║          VISUAL SUMMARY: CHAPTER 16 — PHASE 3 SCALE & CAPACITY                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  SCALE PIPELINE: Users → Activity → Rates → Peak                              ║
+║  QPS = (DAU × actions/user) ÷ 86,400  |  Peak = 2-5x avg, 10-50x events       ║
+║                                                                               ║
+║  READ/WRITE RATIO:         FAN-OUT:                HOT KEYS:                 ║
+║  • 100:1 → Cache heavily   • 1K posts × 1K       • Top 1% = 50% traffic      ║
+║  • 1:1 → Balance both       followers = 1M      • Celebrity = separate      ║
+║  • 1:100 → Optimize writes • Push regular users  • Cache, replicate, split    ║
+║                             Pull celebrities                                  ║
+║                                                                               ║
+║  GROWTH: Design for 10x. Schema supports sharding. Know migration path.        ║
+║  FAILURE: At scale, partial failures normal. Design for containment.           ║
+║  COST: 10% inefficiency = negligible at 1K, existential at 100M users         ║
+║                                                                               ║
+║  STAFF PHRASE: "Let me derive. 200M DAU × 20 actions ÷ 86,400 = 46K QPS"      ║
+║  REMEMBER: Show your work. Derive, don't guess. Systems fail at peak.         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

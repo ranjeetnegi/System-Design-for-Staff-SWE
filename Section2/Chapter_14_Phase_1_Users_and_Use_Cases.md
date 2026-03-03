@@ -63,6 +63,37 @@ By the end, you'll approach the opening minutes of any system design interview w
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              CHAPTER 14: PHASE 1 — USERS & USE CASES AT A GLANCE              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Staff engineers think beyond the obvious user. Who operates?    ║
+║  Who debugs? Who integrates? Intent ≠ Implementation.                         ║
+║                                                                               ║
+║  THE USER → USE CASE → SCOPE PIPELINE:                                        ║
+║  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                     ║
+║  │ 4 USER TYPES │ ──▶ │ CORE vs EDGE │ ──▶ │ EXPLICIT    │                     ║
+║  │ Human        │     │ USE CASES    │     │ SCOPE        │                     ║
+║  │ System       │     │ Primary vs   │     │ In / Out     │                     ║
+║  │ Service      │     │ Secondary    │     │ Confirmation │                     ║
+║  │ Operational  │     │              │     │              │                     ║
+║  └──────────────┘     └──────────────┘     └──────────────┘                     ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                                ║
+║  • Most candidates think only "human user" — Staff thinks ALL 4 types          ║
+║  • "What problem are we really solving?" > Taking prompt literally              ║
+║  • Core: design meticulously. Edge: handle appropriately                       ║
+║  • "In scope: X. Out of scope: Y. Does that work?" — always confirm           ║
+║  • Phase 1 decisions ripple to API design, data model, quality requirements     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: What "User" Means at Staff Level
 
 ## Beyond the Human User
@@ -1920,6 +1951,38 @@ The goal is to see how different Phase 1 decisions lead to genuinely different s
 
 ---
 
+# Visual Summary: Chapter 14 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║          VISUAL SUMMARY: CHAPTER 14 — PHASE 1 USERS & USE CASES                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  4 USER TYPES (think beyond human):        PRIMARY vs SECONDARY                ║
+║  ┌─────────────────────────────────┐       ┌───────────────────────────────┐   ║
+║  │ 1. Human    → Latency, UX       │       │ Primary: Drives core design   │   ║
+║  │ 2. System   → API, throughput   │       │ Secondary: Accommodate, not  │   ║
+║  │ 3. Service  → Reliability, retry │  +   │ optimize at their expense    │   ║
+║  │ 4. Ops      → Observability     │       │ Trade-offs: Primary wins      │   ║
+║  └─────────────────────────────────┘       └───────────────────────────────┘   ║
+║                                                                               ║
+║  INTENT vs IMPLEMENTATION              CORE vs EDGE                            ║
+║  • "What problem are we solving?"      • Core: High freq, high value,        ║
+║  • Don't take prompt literally           design meticulously                  ║
+║  • Users ask for buttons; want outcomes • Edge: Graceful degradation OK       ║
+║                                                                               ║
+║  SCOPE & RIPPLE EFFECTS:                                                       ║
+║  • "In scope: X. Out of scope: Y. Does that work?"                            ║
+║  • User types → API design (REST/gRPC/Admin)                                  ║
+║  • Core use cases → Data model | Primary users → Quality requirements         ║
+║                                                                               ║
+║  STAFF PHRASE: "Who operates it? Who debugs it? What are we really solving?"    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Conclusion
 
 Phase 1—Users & Use Cases—is where Staff engineers distinguish themselves.
@@ -1942,5 +2005,37 @@ In interviews, this shows up as a calm, structured opening. You don't panic. You
 The techniques in this section are simple. The challenge is discipline—resisting the urge to start solving before you've finished understanding.
 
 Practice this discipline. It's a Staff-level habit.
+
+---
+
+# Visual Summary: Chapter 14 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║          VISUAL SUMMARY: CHAPTER 14 — PHASE 1 USERS & USE CASES                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  4 USER TYPES (think beyond human):        PRIMARY vs SECONDARY                ║
+║  ┌─────────────────────────────────┐       ┌───────────────────────────────┐   ║
+║  │ 1. Human    → Latency, UX       │       │ Primary: Drives core design   │   ║
+║  │ 2. System   → API, throughput   │       │ Secondary: Accommodate, not  │   ║
+║  │ 3. Service  → Reliability, retry │  +   │ optimize at their expense    │   ║
+║  │ 4. Ops      → Observability     │       │ Trade-offs: Primary wins      │   ║
+║  └─────────────────────────────────┘       └───────────────────────────────┘   ║
+║                                                                               ║
+║  INTENT vs IMPLEMENTATION              CORE vs EDGE                            ║
+║  • "What problem are we solving?"      • Core: High freq, high value,        ║
+║  • Don't take prompt literally           design meticulously                  ║
+║  • Users ask for buttons; want outcomes • Edge: Graceful degradation OK       ║
+║                                                                               ║
+║  SCOPE & RIPPLE EFFECTS:                                                       ║
+║  • "In scope: X. Out of scope: Y. Does that work?"                            ║
+║  • User types → API design (REST/gRPC/Admin)                                  ║
+║  • Core use cases → Data model | Primary users → Quality requirements         ║
+║                                                                               ║
+║  STAFF PHRASE: "Who operates it? Who debugs it? What are we really solving?"    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---

@@ -16,6 +16,40 @@ By the end of this section, you'll understand why organizational scaling matters
 
 ---
 
+## Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        CHAPTER 9: DESIGNING SYSTEMS THAT SCALE ACROSS TEAMS                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT:                                                                ║
+║  Systems fail more often from human/organizational reasons than technical    ║
+║  ones. Staff Engineers design for BOTH technical AND organizational scale.     ║
+║                                                                               ║
+║  THE SCALE DIMENSIONS:                                                        ║
+║                                                                               ║
+║   TECHNICAL SCALE              ORGANIZATIONAL SCALE                           ║
+║   (Most engineers focus)       (Staff Engineers also consider)                ║
+║         │                                │                                    ║
+║         ▼                                ▼                                    ║
+║   More requests/sec      ←→    More teams depending on system                 ║
+║   More data stored      ←→    More people modifying it                       ║
+║   More regions          ←→    More use cases to serve                          ║
+║   More fault tolerance ←→    More years it must survive                       ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Clear ownership boundaries: One team, one service, no "shared" ambiguity   ║
+║  • APIs = long-term contracts: Versioning, backwards compatibility           ║
+║  • Limit blast radius: Failures shouldn't cascade across all teams          ║
+║  • Technical decisions have organizational consequences—ask at design time   ║
+║  • Design for 5-year trajectory, not 6-month launch                           ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Quick Visual: The Two Dimensions of Scale
 
 ```
@@ -2334,6 +2368,37 @@ Before finalizing any design for a multi-team system, verify:
 - [ ] **Documentation exists:** New teams can onboard without hand-holding
 - [ ] **Migration paths are planned:** Breaking changes have a strategy
 - [ ] **Evolution is possible:** The design can adapt as the org changes
+
+---
+
+## Visual Summary: Chapter 9 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              VISUAL SUMMARY: CHAPTER 9 IN ONE PICTURE                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  L6 vs L5 SCALE THINKING:                                                     ║
+║  L5: "This architecture handles our load"                                     ║
+║  L6: "Who owns it? How will teams request changes? What about on-call?"       ║
+║                                                                               ║
+║  7 CORE PRINCIPLES:                                                           ║
+║  ① Clear ownership boundaries  ② Weak vs strong coupling                     ║
+║  ③ APIs as long-term contracts  ④ Independent evolution                       ║
+║  ⑤ Limit blast radius (tech + human)  ⑥ Data ownership boundaries              ║
+║  ⑦ Trust boundaries when serving multiple teams                               ║
+║                                                                               ║
+║  TECHNICAL DECISION → ORGANIZATIONAL CONSEQUENCE:                             ║
+║  Shared DB → All coupled to schema  │  Sync APIs → Must scale together        ║
+║  Centralized config → Single gatekeeper  │  Monolith → Coordination for changes║
+║                                                                               ║
+║  EVOLUTION: Single team → Multi-team → Platform (ownership, contracts,        ║
+║  governance change at each stage)                                              ║
+║                                                                               ║
+║  DESIGN FOR: 5-year trajectory. Ask "Who pages when X breaks?" at design time. ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

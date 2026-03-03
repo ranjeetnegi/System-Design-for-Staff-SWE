@@ -10,6 +10,38 @@ I've led migrations that took years and touched every service in a product area.
 
 This chapter teaches system evolution and migration as Staff Engineers practice it: as a first-class design concern that shapes architecture from day one. We'll cover why migrations fail, how to design for change, how to identify and contain risk, and how to lead complex multi-team evolutions safely.
 
+### Chapter at a Glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    CHAPTER 33: SYSTEM EVOLUTION AT A GLANCE                     │
+│                                                                                 │
+│   EVERY SYSTEM EVOLVES                                                           │
+│   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐            │
+│   │  Scale grows     │───▶│  Requirements   │───▶│  Migration      │            │
+│   │  Tech changes    │    │  change         │    │  becomes        │            │
+│   │  Cost pressure   │    │  Compliance      │    │  inevitable     │            │
+│   └─────────────────┘    └─────────────────┘    └────────┬────────┘            │
+│                                                         │                      │
+│   MIGRATION PATTERNS                    RISK MANAGEMENT                         │
+│   ┌─────────────────────────────────┐  ┌─────────────────────────────────┐     │
+│   │ • Strangler Fig (gradual)        │  │ • Blast radius containment      │     │
+│   │ • Dual-write (validate)         │  │ • Canary, feature flags         │     │
+│   │ • Shadow traffic (rehearse)      │  │ • Rollback plans                │     │
+│   │ • Expand-Contract (API safe)     │  │ • Reversibility > Speed         │     │
+│   └─────────────────────────────────┘  └─────────────────────────────────┘     │
+│                                                                                 │
+│   REVERSIBLE (walk through freely)     IRREVERSIBLE (think carefully)           │
+│   ┌─────────────────────────────────┐  ┌─────────────────────────────────┐     │
+│   │ • Feature flag OFF              │  │ • DB schema DROP column          │     │
+│   │ • A/B test end                 │  │ • Data deletion                 │     │
+│   │ • Add cache (can remove)        │  │ • API removal                    │     │
+│   │ • Type 2 decisions (Bezos)      │  │ • Type 1 decisions (Bezos)       │     │
+│   └─────────────────────────────────┘  └─────────────────────────────────┘     │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 **The Staff Engineer's First Law of Evolution**: A system that cannot change safely is already failing. Evolution is not technical debt—it is the natural state of successful systems.
 
 ---
@@ -168,6 +200,30 @@ MIGRATION:
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Migrations Fail: Top 5 + The Fix
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    WHY MIGRATIONS FAIL: TOP 5 + FIX                             │
+│                                                                                 │
+│   (1) NO ROLLBACK PLAN          → SAD: Stuck when things break                  │
+│       FIX: Document rollback before starting. Test it.                          │
+│                                                                                 │
+│   (2) BIG BANG (all at once)    → SAD: 100% of users hit the bug                │
+│       FIX: Canary, shadow traffic, gradual rollout.                              │
+│                                                                                 │
+│   (3) UNTESTED WITH REAL TRAFFIC → SAD: Benchmarks pass, prod fails            │
+│       FIX: Shadow traffic first. Validate with production patterns.              │
+│                                                                                 │
+│   (4) DATA MIGRATION BUGS       → SAD: Edge cases, nulls, encoding corrupt     │
+│       FIX: Reconcile old vs new. Run comparison jobs. Handle edge cases.       │
+│                                                                                 │
+│   (5) CROSS-TEAM COORDINATION   → SAD: Team B not ready, migration blocked     │
+│       FIX: Explicit checkpoints. Run both systems in parallel until all migrate. │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Designing for Correctness vs. Designing for Change
@@ -838,6 +894,33 @@ This framing, popularized at Amazon, is critical for Staff-level decision making
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Reversible vs One-Way-Door Decisions (Bezos Type 1 vs Type 2)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    REVERSIBLE vs ONE-WAY DOOR (Jeff Bezos)                       │
+│                                                                                 │
+│   TWO-WAY DOOR (Type 2)              ONE-WAY DOOR (Type 1)                      │
+│   ┌─────────────────────────────┐   ┌─────────────────────────────┐            │
+│   │                             │   │                             │            │
+│   │     ┌─────────┐             │   │     ┌─────────┐             │            │
+│   │     │  WALK   │             │   │     │  STOP   │             │            │
+│   │     │  THROUGH│             │   │     │  THINK  │             │            │
+│   │     └────┬────┘             │   │     └────┬────┘             │            │
+│   │          │                  │   │          │                  │            │
+│   │   Can UNDO easily           │   │   Can't easily reverse       │            │
+│   │   • Feature flag OFF        │   │   • DB schema DROP          │            │
+│   │   • A/B test end            │   │   • Data deletion            │            │
+│   │   • Add cache (remove)      │   │   • API removal             │            │
+│   │   • New API v2 (deprecate)  │   │   • Multi-year contract     │            │
+│   │                             │   │                             │            │
+│   │   BIAS: Move fast           │   │   BIAS: Slow down, align     │            │
+│   └─────────────────────────────┘   └─────────────────────────────┘            │
+│                                                                                 │
+│   CONVERT ONE-WAY → TWO-WAY when possible: Add new before removing old.        │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Migration Strategies (Conceptual)
 
 ### 1. Incremental Migration
@@ -895,6 +978,29 @@ EXAMPLE: Adding field to data model
 ├── After verification, remove V1 handling
 ```
 
+### Expand-Contract (Parallel Change) — API Migration Without Breaking Consumers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    EXPAND-CONTRACT: SAFE API MIGRATION                           │
+│                                                                                 │
+│   (1) EXPAND: Add new field v2 alongside old v1                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │  API Response: { "user_id": 1, "email": "a@b.com", "email_v2": null }    │   │
+│   │  Both v1 and v2 exist. Consumers unchanged. Backward compatible.        │   │
+│   └─────────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                          │
+│                                      ▼                                          │
+│   (2) MIGRATE: Consumers adopt v2    (3) CONTRACT: Remove v1                    │
+│   ┌─────────────────────────────┐   ┌─────────────────────────────┐            │
+│   │  All consumers read v2      │──▶│  API: { "email_v2": "a@b.com" }│            │
+│   │  No one uses v1 anymore     │   │  v1 removed. Never broke anyone.          │   │
+│   └─────────────────────────────┘   └─────────────────────────────┘            │
+│                                                                                 │
+│   RULE: Never remove v1 until ALL consumers use v2. Never break consumers.       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 3. Dual-Read / Dual-Write (Conceptual)
 
 ```
@@ -927,6 +1033,29 @@ RISKS:
 └── Increased operational complexity during migration
 ```
 
+### Dual-Write: The Transition Bridge
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    DUAL-WRITE: THE TRANSITION BRIDGE                             │
+│                                                                                 │
+│   PHASE 1: VALIDATION                    PHASE 2: CUTOVER                         │
+│   ┌─────────────┐                        ┌─────────────┐                         │
+│   │   WRITE     │───┬──▶ OLD (trusted)  │   WRITE     │───┬──▶ OLD (backup)    │
+│   └─────────────┘   │                   └─────────────┘   │                    │
+│         │           └──▶ NEW (shadow)           │         └──▶ NEW (primary)    │
+│         │                   │                   │                              │
+│         ▼                   ▼                   ▼                              │
+│   READ from OLD       COMPARE results    READ from NEW                          │
+│   (source of truth)   Match? → confident  (switch when confident)               │
+│                                                                                 │
+│   PHASE 3: DECOMMISSION                                                         │
+│   Stop writing to OLD. Keep OLD read-only for rollback. Eventually delete.      │
+│                                                                                 │
+│   CRITICAL: Monitor dual-write failure rate. Partial write = data divergence.  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### 4. Shadow Traffic
 
 ```
@@ -950,6 +1079,32 @@ RISKS:
 ├── Shadow traffic doubles load
 ├── Comparison logic must handle acceptable differences
 └── False positives in comparison can delay migration
+```
+
+### Shadow Traffic Pattern: Dress Rehearsal Before Opening Night
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    SHADOW TRAFFIC: COPY, COMPARE, DON'T SERVE                   │
+│                                                                                 │
+│   PRODUCTION TRAFFIC (users)              SHADOW TRAFFIC (validation)            │
+│   ┌────────────┐                           ┌────────────┐                         │
+│   │  Client    │──────┬───────────────────▶│  OLD      │──▶ Response to user     │
+│   │  Request   │      │                    │  System   │    (REAL)               │
+│   └────────────┘      │                    └────────────┘                        │
+│                       │                           │                              │
+│                       │   COPY (async/fork)        │                              │
+│                       │                    ┌───────┴───────┐                     │
+│                       └──────────────────▶│  NEW System   │──▶ DISCARD          │
+│                                            │  (shadow)     │    (no user impact) │
+│                                            └───────┬───────┘                     │
+│                                                    │                              │
+│                                            COMPARE: old vs new response           │
+│                                            Match? → confidence grows              │
+│                                            Mismatch? → fix before cutover         │
+│                                                                                 │
+│   Like a dress rehearsal: new system gets real traffic but doesn't serve users.  │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 5. Feature-Flag-Driven Rollout
@@ -977,6 +1132,51 @@ RISKS:
 ├── Long-lived flags become technical debt
 ├── Must test both paths
 └── Monitoring must be flag-aware
+```
+
+### The Migration Timeline (Realistic: 2–3 Months, Not 2 Weeks)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    REALISTIC MIGRATION TIMELINE                                  │
+│                                                                                 │
+│   Week 1-2       Week 3-4        Week 5-6       Week 7-8       Week 9-10        │
+│   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   │
+│   │ Plan +   │──▶│ Shadow   │──▶│ Canary   │──▶│ Progressive│──▶│ Decomm    │   │
+│   │ Dual-    │   │ traffic +│   │ (1%)     │   │ rollout   │   │ old       │   │
+│   │ write    │   │ validate │   │          │   │ 50%→100%  │   │ system    │   │
+│   └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘   │
+│        │              │              │              │              │            │
+│   Build bridge   Prove new     Catch bugs    Full cutover    Cleanup         │
+│   to new system  matches old   early         with monitoring                 │
+│                                                                                 │
+│   TOTAL: 2–3 months typical. Rushing = incidents. Each phase has rollback.     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Feature Flags: The Safety Switch
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    FEATURE FLAGS: THE SAFETY SWITCH                              │
+│                                                                                 │
+│   Code:  IF (flag ON)  → new behavior    ELSE  → old behavior                    │
+│                                                                                 │
+│   FLAG OFF                          FLAG ON                                     │
+│   ┌─────────────────────────┐       ┌─────────────────────────┐                 │
+│   │  All users: OLD path    │       │  Control:               │                 │
+│   │  Safe, proven           │       │  • Per user %           │                 │
+│   └─────────────────────────┘       │  • Per region           │                 │
+│            ▲                        │  • Per percentage       │                 │
+│            │ ROLLBACK               └────────────┬────────────┘                 │
+│            │ = toggle OFF                       │                              │
+│   ┌────────┴─────────┐                   Instant change                        │
+│   │  No deployment   │                   NO code deploy needed                 │
+│   │  No redeploy     │                   for rollback                          │
+│   └──────────────────┘                                                         │
+│                                                                                 │
+│   Instant rollback without deployment. The safety switch for risky changes.      │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -1086,6 +1286,32 @@ Blast radius is the scope of impact if something goes wrong. Staff Engineers alw
 │   Any Critical = require incident response readiness before proceeding      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Blast Radius Containment for Migrations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    BLAST RADIUS CONTAINMENT: REDUCING RISK                      │
+│                                                                                 │
+│   FULL DEPLOYMENT (100%)          CANARY (1%)           RING DEPLOYMENT         │
+│   ┌─────────────────────┐        ┌─────────────────┐   ┌─────────────────────┐ │
+│   │  ████████████████    │        │  ░░░░░░░░░░░░█   │   │  1% → 10% → 50% →100%│ │
+│   │  Risk: 100%          │        │  Risk: 1%        │   │  Progressive risk   │ │
+│   │  No containment      │        │  Detect early    │   │  Stop if bad         │ │
+│   └─────────────────────┘        └─────────────────┘   └─────────────────────┘ │
+│                                                                                 │
+│   FEATURE FLAG                  RISK CURVE                                      │
+│   ┌─────────────────────┐       ┌──────────────────────────────────────────┐   │
+│   │  OFF → ON            │       │  Risk                                    │   │
+│   │  Instant rollback    │       │   ▲                                      │   │
+│   │  No deployment       │       │   │     Full deploy (danger zone)          │   │
+│   └─────────────────────┘       │   │    ╱                                  │   │
+│                                  │   │   ╱  Canary (safe zone)              │   │
+│   Choose strategy by risk:       │   │  ╱                                   │   │
+│   High risk → Canary, Flag       │   └──┴──────────────────▶ % of traffic   │   │
+│   Low risk → Rolling             │   Feature flag = instant rollback        │   │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Control Plane vs. Data Plane Risk
@@ -1953,6 +2179,36 @@ PHASE 1: Add New Columns (Week 1)
 ├── No application changes yet
 ├── Rollback: Drop columns
 └── Risk: LOW (additive change, no data modification)
+
+### Schema Migration: The Three-Step Dance
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    SCHEMA MIGRATION: THREE-STEP DANCE                             │
+│                                                                                 │
+│   STEP 1: ADD new column (backward compatible)                                  │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │  ALTER TABLE users ADD COLUMN email_v2 VARCHAR(255) NULL;                │   │
+│   │  Old code: ignores new column. New code: doesn't use it yet. BOTH work.  │   │
+│   └─────────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                          │
+│                                      ▼                                          │
+│   STEP 2: BACKFILL + write to both                                              │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │  App writes to OLD and NEW column. Backfill job populates NEW for history.│   │
+│   │  App reads from OLD (or NEW with fallback). Never break running apps.   │   │
+│   └─────────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                          │
+│                                      ▼                                          │
+│   STEP 3: REMOVE old column (only when no code reads it)                        │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │  ALTER TABLE users DROP COLUMN email;                                    │   │
+│   │  Only after: (a) all code reads email_v2, (b) backfill complete.        │   │
+│   └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│   NEVER: Drop column in same deploy as code change. Rollback would break.       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
 
 PHASE 2: Dual-Write (Week 2)
 ├── Application writes to JSON blob AND new columns
@@ -4966,6 +5222,32 @@ The migration requires all teams to update their client code to use a new API.
 │      └── Not on avoiding change, but on making change safe                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual Summary: Chapter 33 in One Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    CHAPTER 33: SYSTEM EVOLUTION — ONE PICTURE                    │
+│                                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │  CORE IDEA: Evolution is default. Design for change. Reversibility > Speed│   │
+│   └─────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                 │
+│   MIGRATION PATTERNS              RISK CONTAINMENT            DECISION TYPES    │
+│   ┌─────────────────────┐        ┌─────────────────────┐    ┌────────────────┐ │
+│   │ Strangler: gradual  │        │ Canary (1%)          │    │ 2-way: Move fast│ │
+│   │ Dual-write: validate│        │ Feature flag: instant│    │ 1-way: Slow down│ │
+│   │ Shadow: rehearse    │        │ Ring: progressive   │    │ Convert when poss│
+│   │ Expand-Contract: API│        │ Rollback plan       │    └────────────────┘ │
+│   └─────────────────────┘        └─────────────────────┘                      │
+│                                                                                 │
+│   TIMELINE: Plan → Dual-write → Shadow → Canary → Ramp → Decommission          │
+│   SCHEMA: Add column → Backfill → Write both → Remove old (separate deploy)     │
+│   WHY FAIL: No rollback, big bang, untested, data bugs, coordination gaps        │
+│                                                                                 │
+│   Staff Engineer = designs the migration before committing to the destination.  │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---

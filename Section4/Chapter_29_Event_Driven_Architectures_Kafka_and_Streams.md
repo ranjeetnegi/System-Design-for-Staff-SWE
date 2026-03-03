@@ -14,6 +14,43 @@ This section teaches event-driven architecture as Staff Engineers practice it: w
 
 ---
 
+## Chapter at a Glance: Sync vs Async — The Big Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          CHAPTER 29 AT A GLANCE: SYNC vs ASYNC — WHEN EACH FITS             │
+│                                                                             │
+│   ┌─────────────────────────────┐    ┌─────────────────────────────┐        │
+│   │   SYNCHRONOUS               │    │   ASYNCHRONOUS               │        │
+│   │   (Request-Response)       │    │   (Event-Driven)            │        │
+│   │                             │    │                             │        │
+│   │   A ──────▶ B ──────▶ C     │    │   A ──▶ [Event Bus] ──▶ B   │        │
+│   │        wait     wait        │    │         fire & forget        │        │
+│   │   ◀──────────────────────   │    │              │              │        │
+│   │        response back        │    │              ▼              │        │
+│   │                             │    │             C              │        │
+│   └─────────────────────────────┘    └─────────────────────────────┘        │
+│                                                                             │
+│   WHEN SYNC FITS:                    WHEN ASYNC FITS:                       │
+│   • Need immediate response          • Fan-out to many consumers             │
+│   • Simple CRUD, 1:1 flow            • Traffic spikes to absorb               │
+│   • Transaction across services      • Failure isolation critical            │
+│   • Real-time UX (typing, gaming)    • Replay and reprocessing needed       │
+│                                                                             │
+│   THE TRADE-OFF:                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  DECOUPLING (async wins)     vs     DEBUGGABILITY (sync wins)       │   │
+│   │  • Producer independent            • Stack trace shows full path    │   │
+│   │  • Scale independently             • Request ID traces flow          │   │
+│   │  • Add consumers freely           • Failures are immediate           │   │
+│   │  • Buffer for spikes               • No "where did it break?" mystery   │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Quick Visual: Event-Driven Architecture at a Glance
 
 ```
@@ -95,6 +132,39 @@ Event-driven architecture exists to solve a specific problem: **temporal couplin
 ```
 
 Events break temporal coupling. Service A publishes an event and moves on. Whether B processes it immediately, in 10 seconds, or after a restart doesn't affect A.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          REQUEST-RESPONSE vs EVENT-DRIVEN: RESTAURANT ORDERING               │
+│                                                                             │
+│   SYNC (Request-Response) — Waiter Model:                                   │
+│                                                                             │
+│   Customer ──order──▶ Waiter ──takes to kitchen──▶ Chef                      │
+│       │                     │                          │                    │
+│       │                     │   WAITER WAITS HERE       │                    │
+│       │                     │   (blocked, can't serve   │                    │
+│       │                     │    other tables)          │                    │
+│       │                     │◀──── food ready ──────────│                    │
+│       │                     │                          │                    │
+│       │◀───── delivers ─────│                          │                    │
+│                                                                             │
+│   Simple. Traceable. But: Waiter is blocked; one slow kitchen = all wait.   │
+│                                                                             │
+│   ASYNC (Event-Driven) — Ticket Belt Model:                                 │
+│                                                                             │
+│   Customer ──order──▶ Waiter ──drops ticket on belt──▶ (moves on!)           │
+│       │                     │                                                │
+│       │                     │  [Ticket] ──▶ Kitchen picks when ready         │
+│       │                     │                    │                          │
+│       │                     │                    ▼                          │
+│       │                     │              DING! Food ready                  │
+│       │                     │              (waiter checks when free)        │
+│                                                                             │
+│   Decoupled. Scalable. But: Lost ticket? Hard to trace. Who dropped it?   │
+│   Which ticket? Kitchen backed up? No stack trace! Need correlation IDs.   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 **But here's the catch**: temporal decoupling creates other forms of coupling:
 
@@ -315,6 +385,33 @@ This is the hidden cost that teams consistently underestimate.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          THE DEBUGGING NIGHTMARE: SYNC vs ASYNC TRACE                        │
+│                                                                             │
+│   SYNC: Request → A → B → C → Error                                         │
+│                                                                             │
+│   User ──▶ [A] ──▶ [B] ──▶ [C] ──▶ 💥 Exception                           │
+│              │        │        │                                              │
+│              └────────┴────────┴── Stack trace: A called B called C            │
+│                           ↓                                                  │
+│                    Root cause in 5 minutes                                   │
+│                                                                             │
+│   ASYNC: Event → A publishes → B consumes → C consumes → ???                │
+│                                                                             │
+│   [A] ──publish──▶ [Event Bus] ──▶ [B] ──▶ [C] ──▶ Where's the bug?       │
+│    │                      │           │       │                              │
+│    │                      │           │       └── No stack trace!            │
+│    │                      │           └── Different process, different time  │
+│    │                      └── Event might be in partition 7, offset 50234   │
+│    └── "We published successfully" — So the bug is... where?                  │
+│                                                                             │
+│   SOLUTION: Correlation IDs, distributed tracing (OpenTelemetry).           │
+│   Without them: 2 hours to find a bug that sync would reveal in 5 minutes.  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 **Staff Insight**: Every event hop you add multiplies debugging time by 2-5x. If you have 4 hops, debugging is 16-625x harder than synchronous. This is not an exaggeration. I've spent entire weeks tracking down bugs that would have been 10-minute fixes in synchronous systems.
 
 ---
@@ -377,6 +474,54 @@ This is the hidden cost that teams consistently underestimate.
 
 ---
 
+## Three Patterns of Events: How Much Data in the Event?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          THREE PATTERNS OF EVENTS: DATA SIZE vs COUPLING                     │
+│                                                                             │
+│   (1) EVENT NOTIFICATION — "Something happened, go fetch details"            │
+│                                                                             │
+│   Event: { "type": "OrderPlaced", "order_id": "123" }   ← TINY payload       │
+│           Consumer must call Order API to get full order details             │
+│                                                                             │
+│   Data size: SMALL          Coupling: HIGH (consumer depends on API)         │
+│   Use when: Event is a trigger; consumer fetches fresh data                   │
+│                                                                             │
+│   ─────────────────────────────────────────────────────────────────────    │
+│                                                                             │
+│   (2) EVENT-CARRIED STATE TRANSFER — "Event has everything you need"         │
+│                                                                             │
+│   Event: { "order_id": "123", "user_id": "u1", "items": [...], ... }         │
+│           ← LARGER payload, self-contained                                   │
+│                                                                             │
+│   Data size: LARGE          Coupling: MEDIUM (schema, not API)              │
+│   Use when: Consumer should not need to call back; snapshot at event time   │
+│                                                                             │
+│   ─────────────────────────────────────────────────────────────────────    │
+│                                                                             │
+│   (3) EVENT SOURCING — "Events ARE the source of truth"                      │
+│                                                                             │
+│   Events: OrderCreated → OrderPaid → OrderShipped → OrderDelivered           │
+│           State = replay of events. No separate "current state" DB.           │
+│                                                                             │
+│   Data size: FULL HISTORY   Coupling: LOW (consumer replays, owns state)    │
+│   Use when: Audit trail, time travel, rebuild state from scratch             │
+│                                                                             │
+│   QUICK REFERENCE:                                                           │
+│   ┌──────────────────┬─────────────┬────────────────────────────────────┐  │
+│   │ Pattern           │ Payload     │ Consumer Must                       │  │
+│   ├──────────────────┼─────────────┼────────────────────────────────────┤  │
+│   │ Notification      │ Minimal     │ Fetch details from source           │  │
+│   │ State Transfer    │ Complete    │ Nothing (has it all)                 │  │
+│   │ Event Sourcing    │ Cumulative  │ Replay to get state                  │  │
+│   └──────────────────┴─────────────┴────────────────────────────────────┘  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 # Part 2: Kafka and Log-Based Systems
 
 ## Why Kafka Exists
@@ -409,6 +554,30 @@ Kafka is fundamentally different. It's a **distributed log**: an append-only, or
 │   - Multiple consumer groups, each with own offset                          │
 │   - Replay by resetting offset                                              │
 │   - More powerful, more complex                                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          KAFKA ARCHITECTURE: THE BIG PICTURE                                │
+│                                                                             │
+│   PRODUCERS                    TOPIC (partitioned)       CONSUMER GROUPS   │
+│                                                                             │
+│   ┌─────────┐                 ┌─────────────────────┐   ┌───────────────┐  │
+│   │ Order   │──┐               │ order-events        │   │ Group:        │  │
+│   │ Service │  │               │                     │   │ payment-      │  │
+│   └─────────┘  │               │  P0  P1  P2  P3    │──▶│ processor     │  │
+│   ┌─────────┐  ├──────────────▶│ [•][•][•][•]       │   │ C1: P0,P1     │  │
+│   │ Payment │  │               │ [•][•][•][•]       │   │ C2: P2,P3     │  │
+│   │ Service │  │               │ [•][•][•][•]...    │   └───────────────┘  │
+│   └─────────┘  │               │                     │   ┌───────────────┐  │
+│   ┌─────────┐  │               │  4 partitions       │   │ Group:        │  │
+│   │Inventory │──┘               │  (ordered lanes)    │──▶│ analytics-    │  │
+│   └─────────┘                  └─────────────────────┘   │ pipeline      │  │
+│                                                                             │
+│   Multiple producers → Same topic → Each consumer group reads               │
+│   independently with its own offset. Same event, different processors.      │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -459,6 +628,29 @@ A **partition** is an ordered, immutable sequence of records. Each topic has one
 │   - Events ACROSS partitions have no ordering guarantee                     │
 │   - Each partition can be on a different broker (parallelism)               │
 │   - Events are assigned to partitions by key hash                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          PARTITION = ORDERED LANE (Highway Analogy)                           │
+│                                                                             │
+│   🛣️ HIGHWAY = Topic "order-events" (4 lanes = 4 partitions)                 │
+│                                                                             │
+│   Lane 0:  [🚗][🚗][🚗][🚗]...     ← Cars stay in order within lane          │
+│   Lane 1:  [🚗][🚗][🚗]...       ← Lane 1's car 2 might arrive               │
+│   Lane 2:  [🚗][🚗][🚗][🚗][🚗]...  BEFORE or AFTER Lane 0's car 3!          │
+│   Lane 3:  [🚗][🚗]...                                                     │
+│                                                                             │
+│   ORDERING IS PER-PARTITION ONLY:                                            │
+│   • Same partition (lane) → strict order: Car A before Car B                 │
+│   • Different partitions (lanes) → NO order guarantee                        │
+│   • Partition 0 offset 100 vs Partition 1 offset 50: either could "win"     │
+│                                                                             │
+│   SAME KEY → SAME PARTITION (same lane):                                     │
+│   order_id=123 → Partition 2 → All order-123 events in order                │
+│   order_id=456 → Partition 0 → All order-456 events in order                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -543,6 +735,37 @@ A **consumer group** is a set of consumers that cooperate to consume a topic. Ea
 │   - Rebalance triggers                                                      │
 │   - New assignment: A(P0), B(P2), C(P1, P3) or similar                      │
 │   - Load is distributed                                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          CONSUMER GROUP REBALANCING: BEFORE AND AFTER                         │
+│                                                                             │
+│   BEFORE: 3 consumers, 6 partitions (2 each)                                │
+│                                                                             │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                      │
+│   │ Consumer 1   │  │ Consumer 2   │  │ Consumer 3   │                      │
+│   │ P0, P1       │  │ P2, P3       │  │ P4, P5       │                      │
+│   └──────────────┘  └──────────────┘  └──────────────┘                      │
+│         │                  │                  │                              │
+│         │                  💀 DIES            │                              │
+│         │                  │                  │                              │
+│         ▼                  ▼                  ▼                              │
+│   Kafka detects heartbeat timeout → REBALANCE TRIGGERED                     │
+│                                                                             │
+│   DURING: Processing pauses. Partitions reassigned.                         │
+│                                                                             │
+│   AFTER: 2 consumers, 6 partitions (3 each)                                 │
+│                                                                             │
+│   ┌──────────────┐              ┌──────────────┐                            │
+│   │ Consumer 1   │              │ Consumer 3   │                            │
+│   │ P0, P1, P2   │              │ P3, P4, P5   │                            │
+│   │ (3 partitions)│             │ (3 partitions)│                            │
+│   └──────────────┘              └──────────────┘                            │
+│                                                                             │
+│   Consumer 1 now handles 50% more load. Add Consumer 4 to rebalance.        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -703,6 +926,32 @@ Staff Engineers explicitly document invariants—properties that must hold for t
 ### What is Consumer Lag?
 
 Consumer lag is the difference between the latest message in a partition and the consumer's current position.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          OFFSET MANAGEMENT: YOUR BOOKMARK                                    │
+│                                                                             │
+│   Think of a Kafka partition as a BOOK. Offsets are your BOOKMARKS.          │
+│                                                                             │
+│   📖 Log (Partition):  [p.0][p.1][p.2][p.3][p.4][p.5][p.6][p.7][p.8]...     │
+│                              ▲                    ▲                          │
+│                              │                    │                          │
+│                         YOUR BOOKMARK         END OF BOOK                     │
+│                         (offset 3)            (LEO = 9)                       │
+│                                                                             │
+│   COMMITTED OFFSET = Permanent bookmark saved in Kafka                       │
+│   • Crash? Restart? Resume from bookmark. No re-read.                        │
+│                                                                             │
+│   UNCOMMITTED PROCESSING = At-least-once risk:                              │
+│   • Process page 4, 5, 6 → Crash before committing                          │
+│   • Restart: Resume from last committed (page 3)                             │
+│   • Re-read pages 4, 5, 6 (duplicate processing!)                           │
+│                                                                             │
+│   RULE: Commit AFTER processing for durability.                             │
+│         Commit BEFORE processing = at-most-once (can lose messages).         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2352,20 +2601,54 @@ FUNCTION process_email(message):
 │   - Continue processing remaining messages                                  │
 │   - Alert on DLQ growth, investigate manually                               │
 │                                                                             │
-│   FUNCTION process_with_dlq(message):                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          DEAD LETTER QUEUE: THE QUARANTINE WARD                              │
+│                                                                             │
+│   Main Topic          Consumer         Retry Count    DLQ (Quarantine)     │
+│                                                                             │
+│   [Msg1][Msg2][Msg3]──▶ Process ──▶ Msg3 fails (1) ──▶ retry                │
+│        │                     │                                               │
+│        │                     └── Msg3 fails (2) ──▶ retry                   │
+│        │                               │                                     │
+│        │                               └── Msg3 fails (3) ──▶ DLQ! 🏥       │
+│        │                                       │                            │
+│        │                                       ▼                            │
+│        │                              ┌─────────────────┐                    │
+│        │                              │ DLQ Topic       │                    │
+│        │                              │ [Msg3 + meta]   │──▶ Alert! 🔔       │
+│        │                              └────────┬────────┘                    │
+│        │                                      │                             │
+│        │                                      ▼                             │
+│        │                              Engineer investigates                 │
+│        │                              Fixes bug / fixes data                 │
+│        │                              Replays from DLQ when ready            │
+│        │                                                                   │
+│   Consumer commits offset past Msg3 → continues with Msg4, Msg5...          │
+│   Partition unblocked! No more infinite retry loop.                         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   FUNCTION process_with_dlq(message):                                        │
 │       retry_count = get_retry_count(message.id)                             │
 │       IF retry_count > MAX_RETRIES:                                         │
-│           publish_to_dlq(message)                                           │
+│           publish_to_dlq(message)                                            │
 │           RETURN SUCCESS  // Move past this message                         │
 │                                                                             │
 │       TRY:                                                                  │
-│           process(message)                                                  │
+│           process(message)                                                 │
 │           clear_retry_count(message.id)                                     │
 │       CATCH Exception:                                                      │
 │           increment_retry_count(message.id)                                 │
-│           THROW  // Don't commit, will retry                                │
+│           THROW  // Don't commit, will retry                               │
 │                                                                             │
-│   2. SLOW DOWNSTREAM DEPENDENCY                                             │
+│   2. SLOW DOWNSTREAM DEPENDENCY                                              │
 │                                                                             │
 │   Consumer calls database/API that's slow                                   │
 │   Processing slows down, lag increases                                      │
@@ -3144,6 +3427,41 @@ Command Query Responsibility Segregation (CQRS) often accompanies event sourcing
 ---
 
 ## Saga Pattern: Distributed Transactions via Events
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          SAGA: CHOREOGRAPHY vs ORCHESTRATION (Simple View)                    │
+│                                                                             │
+│   CHOREOGRAPHY — Like dominoes. Each service listens and reacts.             │
+│                                                                             │
+│   Order ──OrderPlaced──▶ Payment ──PaymentCharged──▶ Inventory              │
+│     │           │              │            │                  │              │
+│     │           │              │            └──InventoryReserved──▶Shipping │
+│     │           │              │                                          │
+│     │           │              └── On fail: Publish RefundNeeded           │
+│     │           └── On fail: Publish OrderCancelled (others listen)        │
+│     │                                                                       │
+│   No central coordinator. Each service knows its role. Hard to trace.       │
+│                                                                             │
+│   ORCHESTRATION — Like a conductor. Central coordinator tells each what do.  │
+│                                                                             │
+│                    ┌─────────────────────────┐                              │
+│                    │   SAGA ORCHESTRATOR     │                              │
+│                    │   (Central Coordinator) │                              │
+│                    └───────────┬─────────────┘                              │
+│              ┌────────────────┼────────────────┐                            │
+│              ▼                ▼                ▼                            │
+│        ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐      │
+│        │  Order   │     │ Payment │     │Inventory │     │ Shipping │      │
+│        │  Service │     │ Service │     │ Service  │     │ Service  │      │
+│        └──────────┘     └──────────┘     └──────────┘     └──────────┘      │
+│                                                                             │
+│   Orchestrator: "CreateOrder" → "ChargePayment" → "ReserveInventory" →      │
+│                 "ShipOrder". If Payment fails, sends "ReleaseInventory",      │
+│                 "CancelOrder". Single place to see full flow.               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 When you need transaction-like behavior across services, you use Sagas.
 

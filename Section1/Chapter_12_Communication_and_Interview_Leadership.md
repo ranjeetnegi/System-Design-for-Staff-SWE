@@ -72,6 +72,37 @@ This section will teach you how to communicate like a Staff engineer in system d
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║     CHAPTER 12: COMMUNICATION & INTERVIEW LEADERSHIP — AT A GLANCE             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: B+ design + A+ communication > A+ design + B+ communication.  ║
+║  Staff engineers LEAD the interview—structuring, managing time, driving depth. ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+║  │                    THE 45-MIN INTERVIEW FLOW (YOU DRIVE)                │ ║
+║  │                                                                         │ ║
+║  │   Phase 1 (5-8 min)     Phase 2 (10-12)     Phase 3 (15-20)  Phase 4    │ ║
+║  │   UNDERSTAND     →      HIGH-LEVEL     →     DEEP DIVES   →   WRAP-UP   │ ║
+║  │   Clarify, scope        Architecture        2-3 areas        Summarize  │ ║
+║  │   Get alignment         Components           Trade-offs       Limitations│ ║
+║  └─────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Tell them what you're going to tell them (preview → detail → recap)        ║
+║  • 5 patterns: Top-down, Bottom-up, Chronological, Comparative, Problem-Sol   ║
+║  • Weave L6 dimensions: cost, failure, blast radius, security, cross-team      ║
+║  • Handle interruptions: acknowledge, address, return to flow                 ║
+║  • Passive (L5) waits for direction; Active (L6) sets agenda                  ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: How Staff Engineers Drive System Design Interviews
 
 ## The Ownership Mindset
@@ -260,6 +291,35 @@ The preview gives the interviewer a mental framework to organize what they hear.
 │      → Use when: Design driven by requirements/pain points                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: Which Explanation Pattern to Use?
+
+Choose your structure based on what you're explaining:
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              EXPLANATION PATTERN — DECISION FLOWCHART                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  What are you explaining?                                                     ║
+║           │                                                                   ║
+║  ┌────────┼────────┬────────────┬──────────────┬─────────────────┐            ║
+║  │        │        │            │              │                 │            ║
+║  ▼        ▼        ▼            ▼              ▼                 ▼            ║
+║ New     Answer   Data flow,   Tech choice,   Design driven   Building up       ║
+║ design  specific latency     A vs B         by challenges   from components   ║
+║         question analysis    comparison     (pain points)                      ║
+║  │        │        │            │              │                 │            ║
+║  ▼        ▼        ▼            ▼              ▼                 ▼            ║
+║ TOP-    DEPENDS  CHRONO-     COMPARATIVE   PROBLEM-         BOTTOM-UP         ║
+║ DOWN    on Q     LOGICAL     "Kafka vs     SOLUTION         "DB → Cache →     ║
+║ "3      asked    "Request    RabbitMQ"     "Challenge 1:    How they          ║
+║ layers"         flows..."                  Solution:..."    interact"         ║
+║                                                                               ║
+║  Golden rule: PREVIEW first. "Let me walk through X in 3 stages..."           ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ### Pattern 1: Top-Down (Forest to Trees)
@@ -2104,6 +2164,35 @@ The chapter covers interview structure, explanation patterns, and handling inter
 │   If you check 8+, you're demonstrating Staff-level communication.          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Visual Summary: Chapter 12 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        VISUAL SUMMARY: CHAPTER 12 — COMMUNICATION & INTERVIEW LEADERSHIP       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  INTERVIEW PHASES                EXPLANATION STRUCTURE                         ║
+║  ───────────────                ──────────────────────                        ║
+║  1. Understand (5-8 min)         • Preview → Detail → Recap                     ║
+║  2. High-level (10-12 min)      • Top-down, Bottom-up, Chronological          ║
+║  3. Deep dives (15-20 min)       • Comparative, Problem-Solution               ║
+║  4. Wrap-up (3-5 min)            • Signpost: "Now let me move to..."            ║
+║                                                                               ║
+║  DRIVER RESPONSIBILITIES         L6 DIMENSIONS TO WEAVE                        ║
+║  ──────────────────────         ────────────────────────                       ║
+║  • Set agenda at start           • Cost: "Main cost driver here is..."          ║
+║  • Manage time proactively      • Failure: "When this fails, blast radius..."   ║
+║  • Signal transitions           • Security: "Trust boundary is..."              ║
+║  • Offer depth choices          • Cross-team: "Affects downstream team..."     ║
+║  • Summarize periodically       • Scale: "At 10x, first bottleneck..."         ║
+║                                                                               ║
+║  PASSIVE (L5) vs ACTIVE (L6): Wait for questions vs. Set the agenda.          ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---

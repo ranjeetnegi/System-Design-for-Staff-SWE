@@ -8,6 +8,39 @@ Every distributed system is built from a small set of fundamental building block
 
 Staff Engineers don't just use these blocks; they understand the trade-offs. When to cache and when to invalidate. When to be stateless and where to put state. When to make an operation idempotent and how. When to use a queue instead of a direct call. When sync is appropriate and when async changes the game. This chapter gives you that depth—the intuition, the mechanics, and the Staff-level judgment that turns building blocks into robust architectures.
 
+# Chapter at a Glance
+
+```
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║           CHAPTER 6: YOUR SYSTEM DESIGN TOOLKIT                      ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║   6 BUILDING BLOCKS — every system uses some combination:            ║
+    ║                                                                      ║
+    ║   ┌──────────┐  ┌──────────┐  ┌──────────┐                         ║
+    ║   │  HASH    │  │  CACHE   │  │  STATE   │                         ║
+    ║   │ Distribute│  │ Speed up │  │ Where    │                         ║
+    ║   │ data     │  │ reads    │  │ does it  │                         ║
+    ║   │ evenly   │  │ 20-100x │  │ live?    │                         ║
+    ║   └──────────┘  └──────────┘  └──────────┘                         ║
+    ║   ┌──────────┐  ┌──────────┐  ┌──────────┐                         ║
+    ║   │IDEMPOTENT│  │  QUEUE   │  │SYNC/ASYNC│                         ║
+    ║   │ Safe     │  │ Buffer   │  │ Wait or  │                         ║
+    ║   │ retries  │  │ & decouple│  │ don't?   │                         ║
+    ║   └──────────┘  └──────────┘  └──────────┘                         ║
+    ║                                                                      ║
+    ║   DESIGN CHECKLIST (run for every system):                           ║
+    ║   [ ] How is data distributed?         → Hash                       ║
+    ║   [ ] What's cached? TTL? Invalidation?→ Cache                      ║
+    ║   [ ] Are services stateless?          → State                      ║
+    ║   [ ] Which writes need retry safety?  → Idempotency                ║
+    ║   [ ] What's async vs sync?            → Queue + Sync/Async         ║
+    ║                                                                      ║
+    ║   GOLDEN RULE: Sync for user-facing results.                         ║
+    ║                Async for side effects (email, analytics).            ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## Part 1: Hash Functions
@@ -240,6 +273,41 @@ The most common pattern: the application manages the cache. The cache doesn't kn
     │   └─────────┘                         └─────────┘                   │
     │                                                                     │
     └─────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: All Cache Patterns at a Glance
+
+```
+    ═══════════════════════════════════════════════════════════════════
+            CACHE PATTERNS — PICK THE RIGHT ONE
+    ═══════════════════════════════════════════════════════════════════
+
+    CACHE-ASIDE (most common):
+    App ──► Cache? ──HIT──► Return
+              │
+             MISS
+              │
+              ▼
+            DB ──► Put in cache ──► Return
+
+    WRITE-THROUGH:
+    App ──► Cache ──► DB (both updated together, always fresh)
+
+    WRITE-BEHIND:
+    App ──► Cache (immediate!) ──later──► DB (risky if cache dies)
+
+    WRITE-AROUND:
+    App ──► DB only. Cache populated on next read (miss first time)
+
+    ┌───────────────┬─────────────┬──────────────┬───────────────┐
+    │    Pattern    │ Consistency │ Performance  │  Best For     │
+    ├───────────────┼─────────────┼──────────────┼───────────────┤
+    │ Cache-aside   │  Eventual   │  Good reads  │ Most web apps │
+    │ Write-through │  Strong     │  Slower write│ Sessions      │
+    │ Write-behind  │  Risky      │  Fast write  │ View counts   │
+    │ Write-around  │  Eventual   │  Miss on new │ Write-heavy   │
+    └───────────────┴─────────────┴──────────────┴───────────────┘
+    ═══════════════════════════════════════════════════════════════════
 ```
 
 **Write path**: On write (create/update/delete), the app typically invalidates the cache (delete the key) or updates it. This keeps the cache consistent with the DB, at the cost of a possible cache miss on the next read.
@@ -506,6 +574,34 @@ If the operation **is** idempotent, the retry is safe. "Charge $100 with idempot
 
     Client: Retry charge $100, idempotency_key=req-555
     Server: Sees req-555 already processed. Returns cached success. No second charge.
+```
+
+### Visual: Idempotency — The Safety Net
+
+```
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║            IDEMPOTENCY: WHY IT'S NON-NEGOTIABLE              ║
+    ╠═══════════════════════════════════════════════════════════════╣
+    ║                                                               ║
+    ║   WITHOUT idempotency key:                                    ║
+    ║                                                               ║
+    ║   "Charge $100" ──► Network timeout ──► Retry "Charge $100"  ║
+    ║        $100              ???                   $100            ║
+    ║   ─────────────────────────────────────────────────────────   ║
+    ║   Result: Customer charged $200. Support ticket. Refund.     ║
+    ║                                                               ║
+    ║   ═══════════════════════════════════════════════════════════ ║
+    ║                                                               ║
+    ║   WITH idempotency key:                                       ║
+    ║                                                               ║
+    ║   "Charge $100, key=abc" ──► timeout ──► Retry "key=abc"     ║
+    ║        $100                                  $0 (cached!)     ║
+    ║   ─────────────────────────────────────────────────────────   ║
+    ║   Result: Customer charged $100 exactly once. Happy user.    ║
+    ║                                                               ║
+    ║   RULE: Every POST that creates/charges/sends must have      ║
+    ║         an idempotency key. No exceptions for money.         ║
+    ╚═══════════════════════════════════════════════════════════════╝
 ```
 
 ### Caching Strategy Decision Framework
@@ -1018,3 +1114,40 @@ Every block has failure modes. Design for them.
 | **Sync/Async** | "We use async for slow stuff" | "Checkout is sync—user needs confirmation. Email and analytics are async—we use a queue" |
 
 The L6 answer includes *how* and *why* and *what happens when it fails*. That's the bar.
+
+---
+
+# Visual Summary: Chapter 6 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 6 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   YOUR DESIGN TOOLKIT (ask these for EVERY system):                    ║
+    ║                                                                       ║
+    ║   ┌─ HASH ───────── How is data distributed? Consistent hashing?     ║
+    ║   ├─ CACHE ──────── What's hot? TTL? Invalidation? Stampede plan?    ║
+    ║   ├─ STATE ──────── Stateless servers + external store (Redis/DB)    ║
+    ║   ├─ IDEMPOTENCY ── Every critical write needs a retry-safe key     ║
+    ║   ├─ QUEUE ──────── Decouple slow work. Buffer spikes. DLQ for fails║
+    ║   └─ SYNC/ASYNC ── User waits? → Sync. Side effect? → Async        ║
+    ║                                                                       ║
+    ║   CHECKOUT FLOW (putting it all together):                            ║
+    ║   ┌─────────────────────────────────────────────────────────────┐    ║
+    ║   │  User clicks "Pay"                                          │    ║
+    ║   │     │                                                       │    ║
+    ║   │     ▼ SYNC (user waits)                                     │    ║
+    ║   │  [Idempotency check] → [Charge card] → [Create order]      │    ║
+    ║   │     │                                                       │    ║
+    ║   │     ▼ ASYNC (user doesn't wait)                             │    ║
+    ║   │  [Queue] → [Send email] [Update analytics] [Reserve ship]  │    ║
+    ║   └─────────────────────────────────────────────────────────────┘    ║
+    ║                                                                       ║
+    ║   FAILURE MODES:                                                      ║
+    ║   Cache down → DB gets hammered (thundering herd)                     ║
+    ║   Queue full → Backpressure or drop (have a DLQ!)                     ║
+    ║   No idempotency → Double charge on retry                             ║
+    ║   Stateful server dies → Session lost (use external store!)           ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```

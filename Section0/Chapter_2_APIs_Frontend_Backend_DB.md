@@ -8,6 +8,34 @@ APIs, frontend, backend, and databases are the core pieces of almost every softw
 
 This chapter walks you from the basics to Staff-level thinking. We'll look at APIs as contracts and team boundaries, the frontend/backend split and when it matters, and why databases are the hardest thing to scale—and why Staff engineers care so much about data modeling and query patterns.
 
+# Chapter at a Glance
+
+```
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║                CHAPTER 2: THE FOUR BUILDING BLOCKS                   ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║   ┌──────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐     ║
+    ║   │   API    │───►│ FRONTEND  │    │ BACKEND  │───►│ DATABASE │     ║
+    ║   │ Contract │    │ What user │    │ The real │    │ Source   │     ║
+    ║   │ "Menu"   │    │ sees      │    │ work     │    │ of truth │     ║
+    ║   └──────────┘    └───────────┘    └──────────┘    └──────────┘     ║
+    ║                                                                      ║
+    ║   API = Restaurant menu (what you CAN order, how to order it)        ║
+    ║   Frontend = Dining room (what customers experience)                 ║
+    ║   Backend = Kitchen (where food is actually made)                    ║
+    ║   Database = Pantry/Fridge (where ingredients are stored)            ║
+    ║                                                                      ║
+    ║   ┌────────────────────────────────────────────────────────────┐     ║
+    ║   │  KEY INSIGHTS:                                             │     ║
+    ║   │  • API contract = most important deliverable (hard to fix) │     ║
+    ║   │  • DB is the HARDEST thing to scale (state = sticky)       │     ║
+    ║   │  • Read/Write ratio drives EVERYTHING                      │     ║
+    ║   │  • API boundaries = Team boundaries (Conway's Law)         │     ║
+    ║   └────────────────────────────────────────────────────────────┘     ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # Part 1: What is an API? (From Simple to Staff-Level)
@@ -34,6 +62,34 @@ Think of it like a restaurant menu. The menu says what you can order and how to 
 | DELETE | Delete | `DELETE /users/123` → delete user |
 
 Resources are nouns (`/users`, `/orders`). The HTTP method tells you the action. This lines up with **CRUD** (Create, Read, Update, Delete).
+
+### Visual: REST at a Glance
+
+```
+    ┌─────────────────────────────────────────────────────────────────┐
+    │              REST = Resources + HTTP Methods                     │
+    │                                                                 │
+    │   Think of it as:  NOUN  +  VERB                                │
+    │                                                                 │
+    │   /users/123  +  GET     =  "Read user 123"                     │
+    │   /users      +  POST    =  "Create a new user"                 │
+    │   /users/123  +  PUT     =  "Replace user 123"                  │
+    │   /users/123  +  PATCH   =  "Update parts of user 123"          │
+    │   /users/123  +  DELETE  =  "Delete user 123"                   │
+    │                                                                 │
+    │   ┌──────────┬────────────┬──────────────┐                      │
+    │   │  Method  │ Idempotent │ Creates new? │                      │
+    │   ├──────────┼────────────┼──────────────┤                      │
+    │   │  GET     │    YES     │     NO       │                      │
+    │   │  POST    │    NO      │     YES      │  ◄─ Dangerous retry! │
+    │   │  PUT     │    YES     │     NO       │                      │
+    │   │  DELETE  │    YES     │     NO       │                      │
+    │   └──────────┴────────────┴──────────────┘                      │
+    │                                                                 │
+    │   Golden rule: POST can create duplicates on retry.             │
+    │   Fix: Use IDEMPOTENCY KEYS for critical POSTs (payments!)     │
+    └─────────────────────────────────────────────────────────────────┘
+```
 
 **REST design patterns**:
 - **Nested resources**: `GET /users/123/orders` for a user's orders
@@ -251,6 +307,37 @@ A "breaking change" isn't just a technical event—it's a breach of trust with c
 **Staff-level**: "We'll just update the API" is a Junior move. "We'll add a new optional field, deprecate the old one in 6 months, and migrate our known consumers before we remove it" is Staff-level.
 
 **Real-world example**: A major e-commerce company renamed a field in their checkout API (`price` → `unit_price`). They didn't deprecate—they made a breaking change. Several partner integrations broke. Support tickets surged. They had to revert and run both fields in parallel for a year. The cost of "we'll just change it" was far higher than a disciplined deprecation would have been. Staff engineers learn from such incidents and build process to prevent them.
+
+### Visual: Safe API Evolution (Expand-Contract)
+
+```
+    ═══════════════════════════════════════════════════════════════
+              HOW TO CHANGE AN API WITHOUT BREAKING THINGS
+    ═══════════════════════════════════════════════════════════════
+
+    WRONG (Big Bang):                    RIGHT (Expand-Contract):
+
+    v1: { "price": 10 }                 v1: { "price": 10 }
+           │                                    │
+           │ BREAKING!                          │ Step 1: ADD new field
+           ▼                                    ▼
+    v2: { "unit_price": 10 }             v1+: { "price": 10,
+                                                "unit_price": 10 }  ◄ BOTH
+           Clients break                        │
+           Support tickets                      │ Step 2: Migrate consumers
+           Emergency revert                     │ (6 months)
+                                                ▼
+                                         v2: { "unit_price": 10 }    ◄ SAFE
+                                               "price" deprecated
+
+    Timeline:
+    ───────────────────────────────────────────────────────────────
+    │ Add new  │ Both exist │ Consumers  │ Remove old │
+    │ field    │ in parallel│ migrate    │ field      │
+    ───────────────────────────────────────────────────────────────
+      Month 1    Month 2-5    Month 4-6    Month 7+
+    ═══════════════════════════════════════════════════════════════
+```
 
 ## When APIs Become the Bottleneck
 
@@ -780,6 +867,35 @@ Every scaling stage solves a problem—and introduces new ones. Understanding th
 
 At each stage: **What problem does it solve? What new problems does it introduce?** Staff engineers anticipate the next stage and design schema and access patterns so the migration is possible—e.g., leading with user_id in keys so sharding by user is feasible later.
 
+### Visual: The Database Scaling Staircase
+
+```
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║       DATABASE SCALING: Each step solves a problem            ║
+    ║       but introduces a NEW one                                ║
+    ╠═══════════════════════════════════════════════════════════════╣
+    ║                                                               ║
+    ║                                           ┌─────────────────┐ ║
+    ║                                           │ 5. SHARDING     │ ║
+    ║                                    ┌──────┤ Cross-shard = ☠ │ ║
+    ║                                    │ 4. CACHE              │ ║
+    ║                             ┌──────┤ Invalidation = hard   │ ║
+    ║                             │ 3. CONNECTION POOL          │ ║
+    ║                      ┌──────┤ Pool sizing = tricky        │ ║
+    ║                      │ 2. READ REPLICAS                   │ ║
+    ║               ┌──────┤ Replication lag = stale reads      │ ║
+    ║               │ 1. SINGLE DB                              │ ║
+    ║               │ Simple but limited                        │ ║
+    ║               └──────────────────────────────────────────-┘ ║
+    ║                                                               ║
+    ║    Users:    100   10K    100K     1M      10M     100M+     ║
+    ║    QPS:      100   1K     10K      100K    1M      10M+      ║
+    ║                                                               ║
+    ║    GOLDEN RULE: Don't jump steps. Each step buys you 10x.    ║
+    ║    Design schema NOW so step 5 is possible LATER.            ║
+    ╚═══════════════════════════════════════════════════════════════╝
+```
+
 ## Data Modeling Basics
 
 - **Tables**: Collections of related data (e.g., `users`, `orders`)
@@ -1123,3 +1239,41 @@ The interviewer is listening for: Do you make intentional trade-offs? Do you con
 **Cross-cutting checklist for Staff interviews**: Before diving into implementation, cover: (1) API: versioning strategy, error format, pagination, backward compatibility. (2) Frontend/backend: BFF need, rendering strategy, caching layers. (3) Database: choice justified by access pattern and read/write ratio; scaling path documented; schema designed for evolution. (4) Operations: connection pooling, monitoring, backup and recovery. Addressing each of these explicitly shows breadth and depth. The interviewer has limited time—prioritize the decisions that are hardest to change later: API contracts, database choice, and system boundaries.
 
 **Real-world integration**: In production systems, API and database decisions often ripple across teams. A poorly designed API creates friction for every consumer—internal teams file tickets, external partners complain, and mobile app releases get blocked. A database choice that doesn't match access patterns leads to slow queries, emergency indexing, and ultimately migration. Staff engineers treat these as cross-team concerns: they consult consumers before locking in API contracts, they model access patterns before choosing a database, and they document the rationale so future maintainers understand the trade-offs. This collaborative, evidence-based approach to API and database design is what separates Staff-level ownership from merely implementing a spec. When you leave an interview, the interviewer should remember not just your technical choices but your reasoning: why this API shape, why this database, why this boundary. That reasoning is the Staff-level signal. Master the building blocks, justify your choices, and connect them to the larger system. That is what Staff-level API and database thinking looks like in practice. Demonstrate it clearly, and you will stand out in the interview.
+
+---
+
+# Visual Summary: Chapter 2 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 2 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   1. API = CONTRACT (hardest to change later)                         ║
+    ║      • Version from day 1: /v1/users                                  ║
+    ║      • Never break: add fields, don't remove                          ║
+    ║      • API boundary = Team boundary (Conway's Law)                    ║
+    ║                                                                       ║
+    ║   2. FRONTEND ←→ BACKEND split matters                                ║
+    ║      ┌─────────┐      ┌──────────┐      ┌──────────┐                 ║
+    ║      │  Web    │─────►│ Web BFF  │─────►│ Services │                 ║
+    ║      │  Mobile │─────►│Mobile BFF│──────┘          │                 ║
+    ║      └─────────┘      └──────────┘      └──────────┘                 ║
+    ║      BFF when clients need DIFFERENT data shapes                      ║
+    ║                                                                       ║
+    ║   3. DATABASE = hardest to scale                                      ║
+    ║      Read/Write ratio drives everything:                              ║
+    ║      99:1 reads  → Cache + Replicas                                   ║
+    ║      1:99 writes → Append logs + Column stores                        ║
+    ║                                                                       ║
+    ║   4. SCALING STAIRCASE: Don't skip steps                              ║
+    ║      Single DB → Replicas → Pool → Cache → Shard                     ║
+    ║      Each buys 10x. Design schema for the last step NOW.             ║
+    ║                                                                       ║
+    ║   5. CHOOSE DB FROM ACCESS PATTERN (not brand loyalty)                ║
+    ║      Key lookup → Redis/DynamoDB                                      ║
+    ║      Joins + ACID → PostgreSQL                                        ║
+    ║      Graph traversals → Neo4j                                         ║
+    ║      Write-heavy → Cassandra/Kafka                                    ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```

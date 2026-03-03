@@ -14,6 +14,34 @@ More importantly, we'll explore how database choices evolve. The database that's
 
 By the end of this section, you'll have a principled framework for database selection, the vocabulary to discuss trade-offs in interviews, and the judgment to reject fashionable choices that don't fit your context.
 
+### Chapter at a Glance: The Full Decision Flow
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              CHAPTER 27: DATABASE SELECTION — ONE PICTURE                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         ║
+║   │ ACCESS PATTERNS  │───►│  DB SELECTION   │───►│ SCALING STRATEGY│         ║
+║   │                 │    │                 │    │                 │         ║
+║   │ • Read vs Write  │    │ • Relational?   │    │ • Vertical first │         ║
+║   │ • Point vs Range │    │ • Document?     │    │ • Replicas       │         ║
+║   │ • Joins needed?  │    │ • KV? Graph?    │    │ • Cache          │         ║
+║   │ • Consistency?  │    │ • Wide-column?   │    │ • Shard          │         ║
+║   └─────────────────┘    └─────────────────┘    │ • Polyglot       │         ║
+║           │                       │              └────────┬────────┘         ║
+║           │                       │                       │                  ║
+║           ▼                       ▼                       ▼                  ║
+║   ┌─────────────────────────────────────────────────────────────────┐       ║
+║   │                    MIGRATION PATH                                │       ║
+║   │   Strangler Fig: Dual write → Shadow read → Switch → Decommission│       ║
+║   └─────────────────────────────────────────────────────────────────┘       ║
+║                                                                               ║
+║   Golden Rule: Access patterns FIRST. Technology SECOND.                      ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## Quick Visual: The Database Decision at a Glance
@@ -82,6 +110,34 @@ Before comparing databases, understand what they do. At their core, databases so
 
 **4. Data Integrity**: Constraints ensure data remains valid (types, relationships, business rules).
 
+### Index: The Library Card Catalog — Why It Matters
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    WITHOUT INDEX (Full Table Scan)                            ║
+║                                                                               ║
+║   "Find book by author Smith"                                                  ║
+║                                                                               ║
+║   📚 Shelf 1 → scan... → Shelf 2 → scan... → Shelf 3 → ... → Shelf N           ║
+║   Must check EVERY book. Time = O(n). At 1B rows = SLOW.                      ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                    WITH INDEX (B-Tree Lookup)                                 ║
+║                                                                               ║
+║   "Find book by author Smith"                                                  ║
+║                                                                               ║
+║   📇 Card catalog: Smith → "Shelf 47, Row 3"                                   ║
+║         │                                                                     ║
+║         ▼                                                                     ║
+║   Go directly to Shelf 47. Time = O(log n). At 1B rows = 4-5 lookups.         ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Scale: 1B rows  │  Full scan: 1B ops  │  Index: ~30 ops (log₂ 1B)    │ ║
+║   │  The difference: 33 MILLION times fewer operations                      │ ║
+║   └─────────────────────────────────────────────────────────────────────────┘ ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 Different databases solve these problems with different trade-offs:
 
 ```
@@ -139,6 +195,39 @@ Most production systems use multiple databases. A typical Google-scale system mi
 
 The question isn't "SQL or NoSQL"—it's "which database for which data?"
 
+### Polyglot Persistence: The Right Tool for Each Job
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║              ONE SYSTEM, MANY DATABASES — AND THE SYNC CHALLENGE                     ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐         ║
+║   │   Users      │   │  Sessions    │   │   Search     │   │  Analytics   │         ║
+║   │ PostgreSQL   │   │   Redis      │   │ Elasticsearch│   │  ClickHouse  │         ║
+║   │ (ACID, joins)│   │ (fast, TTL)  │   │ (full-text)  │   │ (aggregate)  │         ║
+║   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘         ║
+║          │                   │                   │                   │                 ║
+║          │    ┌──────────────┴───────────────────┴──────────────┐   │                 ║
+║          │    │              SYNC / CONSISTENCY CHALLENGES       │   │                 ║
+║          │    │  • User update → must invalidate sessions?      │   │                 ║
+║          │    │  • User create → must index in Elasticsearch?   │   │                 ║
+║          │    │  • Order event → must flow to ClickHouse?      │   │                 ║
+║          │    │  • Source of truth? Dual-write? CDC pipeline?   │   │                 ║
+║          │    └───────────────────────────────────────────────┘   │                 ║
+║          │                                                       │                 ║
+║   ┌──────┴───────┐                                        ┌──────┴───────┐         ║
+║   │    Files     │                                        │   Events     │         ║
+║   │     S3       │                                        │   Kafka      │         ║
+║   │ (blobs)      │                                        │ (streaming)  │         ║
+║   └──────────────┘                                        └──────────────┘         ║
+║                                                                                       ║
+║   Staff insight: Each DB is best-in-class. But orchestration and consistency          ║
+║   between them is YOUR problem. Design sync pipelines before adding databases.        ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
 **3. It overweights schema flexibility**
 
 NoSQL advocates often emphasize "schema-less" flexibility. But:
@@ -176,6 +265,70 @@ PostgreSQL has 25+ years of production hardening. It has solved problems you don
 │      MIXED/NEW TEAM   → Managed services reduce operational burden          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### SQL vs NoSQL: The WRONG Question — Two Paths, Different Outcomes
+
+```
+╔════════════════════════════════════════════════════════════╗  ╔════════════════════════════════════════════════════════════╗
+║  INTERN MISTAKE: Start with technology                    ║  ║  STAFF ENGINEER: Start with problem                         ║
+╠════════════════════════════════════════════════════════════╣  ╠════════════════════════════════════════════════════════════╣
+║                                                            ║  ║                                                            ║
+║   "SQL or NoSQL?"                                           ║  ║   "What are my access patterns?"                            ║
+║           │                                                 ║  ║           │                                                 ║
+║           ▼                                                 ║  ║           ▼                                                 ║
+║   Pick familiar DB (MongoDB? PostgreSQL?)                   ║  ║   Understand: point lookup? joins? range scan?              ║
+║           │                                                 ║  ║           │                                                 ║
+║           ▼                                                 ║  ║           ▼                                                 ║
+║   Justify choice afterward                                  ║  ║   Identify constraints: ACID? latency? scale?               ║
+║           │                                                 ║  ║           │                                                 ║
+║           ▼                                                 ║  ║           ▼                                                 ║
+║   ❌ Wrong fit → migration pain later                       ║  ║   THEN pick DB that matches                                ║
+║   ❌ Over- or under-engineered                               ║  ║           │                                                 ║
+║                                                            ║  ║           ▼                                                 ║
+║                                                            ║  ║   ✓ Right tool for the job                                  ║
+║                                                            ║  ║   ✓ Informed trade-offs                                     ║
+╚════════════════════════════════════════════════════════════╝  ╚════════════════════════════════════════════════════════════╝
+```
+
+### The Database Zoo: Every Type and When to Use It
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                           THE DATABASE ZOO — SWEET SPOTS AT A GLANCE                                 ║
+╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                                       ║
+║  ┌─────────────────┐  RELATIONAL (PostgreSQL, MySQL)                                                 ║
+║  │ Structured data  │  Use when: Joins, ACID, constraints, stable schema                             ║
+║  │ Joins, ACID      │  Examples: Users, orders, billing, permissions                                 ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+║  ┌─────────────────┐  DOCUMENT (MongoDB, Firestore)                                                  ║
+║  │ Flexible schema  │  Use when: Nested data, varying attributes, prototyping                           ║
+║  │ Nested JSON      │  Examples: Product catalogs, user preferences, content                            ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+║  ┌─────────────────┐  KEY-VALUE (Redis, DynamoDB)                                                    ║
+║  │ Simple lookup    │  Use when: Point lookup by key, cache, sessions, rate limits                      ║
+║  │ Fast, cache-like │  Examples: Sessions, cache, feature flags, counters                               ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+║  ┌─────────────────┐  WIDE-COLUMN (Cassandra, Bigtable)                                               ║
+║  │ Time-series,IoT  │  Use when: High writes, range scans by key, sparse columns                       ║
+║  │ Append-heavy     │  Examples: Events, logs, feeds, sensor data                                       ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+║  ┌─────────────────┐  GRAPH (Neo4j, Neptune)                                                         ║
+║  │ Relationships    │  Use when: "Friends of friends," traversal, connections matter                   ║
+║  │ Social, network  │  Examples: Social graphs, recommendations, fraud detection                        ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+║  ┌─────────────────┐  SEARCH (Elasticsearch)                                                        ║
+║  │ Full-text, fuzzy │  Use when: Search, autocomplete, analytics on text                                ║
+║  │ Analytics        │  Examples: Product search, log search, dashboards                                 ║
+║  └─────────────────┘                                                                                  ║
+║                                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -239,6 +392,49 @@ This is where most database decisions should start:
 │   Random writes to large records Document              Wide-column          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Database Decision Flowchart: Follow the Path
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    WHAT'S YOUR ACCESS PATTERN?                                ║
+║                              │                                                ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ CRUD with joins across tables?     ──YES──► RELATIONAL (PostgreSQL)  │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+║                              │                                                ║
+║                              NO                                               ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ Simple key lookups, cache, sessions?  ──YES──► KEY-VALUE (Redis)   │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+║                              │                                                ║
+║                              NO                                               ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ Full-text search, analytics?       ──YES──► SEARCH (Elasticsearch)   │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+║                              │                                                ║
+║                              NO                                               ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ Relationships matter (friends of friends)? ──YES──► GRAPH DB       │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+║                              │                                                ║
+║                              NO                                               ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ Time-series, IoT, append-heavy?    ──YES──► TimescaleDB/InfluxDB    │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+║                              │                                                ║
+║                              NO                                               ║
+║                              ▼                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────┐     ║
+║   │ Need schema flexibility, nested docs?  ──YES──► DOCUMENT STORE      │     ║
+║   └─────────────────────────────────────────────────────────────────────┘     ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 **Staff Insight**: Access patterns change. Design for known patterns today, but leave room for evolution. The most dangerous patterns are those that seem simple but become expensive at scale—like "query all items for a user" when users can have millions of items.
@@ -449,6 +645,29 @@ Optimization strategies:
 - Delay index updates
 - Partition aggressively
 
+### B-Tree vs LSM-Tree: The Filing Cabinet vs The Inbox
+
+```
+╔══════════════════════════════════════════════════════════╗  ╔══════════════════════════════════════════════════════════╗
+║  B-TREE: The Organized Filing Cabinet                   ║  ║  LSM-TREE: The Inbox Pile                               ║
+╠══════════════════════════════════════════════════════════╣  ╠══════════════════════════════════════════════════════════╣
+║                                                          ║  ║                                                          ║
+║   📁 Cabinet with labeled folders                        ║  ║   📥 Inbox: new items land here (in-memory memtable)     ║
+║   • Everything has a place                               ║  ║   • Fast to add (just pile it on)                        ║
+║   • Fast to FIND: go directly to drawer                  ║  ║   • Slow to find: search through pile                   ║
+║   • Slow to ADD: must file in correct spot               ║  ║                                                          ║
+║                                                          ║  ║   Periodically: batch sort (flush to SSTable)            ║
+║   Characteristics:                                       ║  ║   • Merge sorts = compaction                            ║
+║   • Fast READS  (O(log n) to any record)                 ║  ║   • Organized on disk, but multiple segments            ║
+║   • Slower WRITES (must update tree structure)           ║  ║                                                          ║
+║   • Used by: PostgreSQL, MySQL                           ║  ║   Characteristics:                                       ║
+║                                                          ║  ║   • Fast WRITES  (append, batch flush)                   ║
+║                                                          ║  ║   • Slower READS (may check many segments)               ║
+║                                                          ║  ║   • Used by: Cassandra, RocksDB, LevelDB                 ║
+║                                                          ║  ║                                                          ║
+╚══════════════════════════════════════════════════════════╝  ╚══════════════════════════════════════════════════════════╝
+```
+
 Database guidance:
 - Wide-column stores (Cassandra, Bigtable) are optimized for writes
 - Time-series databases for temporal data
@@ -474,6 +693,40 @@ Database guidance:
 │         Make sure you actually need it before paying that cost.             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Read-Heavy vs Write-Heavy: How Architecture Shapes Differ
+
+```
+╔════════════════════════════════════════════════════════════╗  ╔════════════════════════════════════════════════════════════╗
+║  READ-HEAVY ARCHITECTURE                                   ║  ║  WRITE-HEAVY ARCHITECTURE                                 ║
+╠════════════════════════════════════════════════════════════╣  ╠════════════════════════════════════════════════════════════╣
+║                                                            ║  ║                                                            ║
+║         Clients                                            ║  ║         Clients                                            ║
+║            │                                               ║  ║            │                                               ║
+║            ▼                                               ║  ║            ▼                                               ║
+║   ┌─────────────────┐                                     ║  ║   ┌─────────────────┐                                     ║
+║   │   CDN / Edge     │  (cache static/hot content)          ║  ║   │  Write-optimized │  (LSM, append)                     ║
+║   └────────┬────────┘                                     ║  ║   │      Database     │                                     ║
+║            │                                               ║  ║   └────────┬────────┘                                     ║
+║            ▼                                               ║  ║            │                                               ║
+║   ┌─────────────────┐                                     ║  ║            │ Async processing, queues                      ║
+║   │  Redis Cache    │  (cache layer)                       ║  ║            ▼                                               ║
+║   └────────┬────────┘                                     ║  ║   ┌─────────────────┐                                     ║
+║            │ miss                                          ║  ║   │ Eventual reads   │  (replicas, async)                ║
+║            ▼                                               ║  ║   │ Replicas / views │                                     ║
+║   ┌─────────────────┐                                     ║  ║   └─────────────────┘                                     ║
+║   │ Read Replicas   │  (spread read load)                   ║  ║                                                            ║
+║   └────────┬────────┘                                     ║  ║   Key: Optimize WRITE path first.                          ║
+║            │                                               ║  ║   Reads can be eventual, batched, or cached.               ║
+║            ▼                                               ║  ║                                                            ║
+║   ┌─────────────────┐                                     ║  ║                                                            ║
+║   │    Primary DB   │  (writes only)                        ║  ║                                                            ║
+║   └─────────────────┘                                     ║  ║                                                            ║
+║                                                            ║  ║                                                            ║
+║   Key: Layers of READ optimization. One write, many reads. ║  ║                                                            ║
+║                                                            ║  ║                                                            ║
+╚════════════════════════════════════════════════════════════╝  ╚════════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -502,6 +755,39 @@ This either happens completely or not at all. No other system provides this guar
 **Isolation**: Concurrent transactions don't interfere with each other (configurable levels).
 
 **Durability**: Committed transactions survive crashes, power failures, and disk failures.
+
+### ACID: The ATM Guarantee — Visual for Each Letter
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                         ACID = THE ATM TRANSFER GUARANTEE                            ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   A — ATOMIC: All or nothing                                                          ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Transfer $100: Debit Alice + Credit Bob                                        │ ║
+║   │  BOTH happen, or NEITHER. Never "$100 vanished" or "duplicate $100."            │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+║   C — CONSISTENT: Rules always hold                                                   ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Balance >= 0. No negative balances. Constraints never violated.                 │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+║   I — ISOLATED: Parallel transactions don't interfere                                 ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Alice and Bob both transfer at same time. Each sees consistent view.            │ ║
+║   │  No dirty reads. No "phantom" balance changes mid-transaction.                   │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+║   D — DURABLE: Committed = permanent                                                   ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  After "Transfer complete" → crash, power failure, disk fail?                     │ ║
+║   │  Transaction is STILL committed when system recovers.                            │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
 
 ### Declarative Queries
 
@@ -2655,6 +2941,36 @@ When evolving databases, you need a migration strategy:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Migration: The Strangler Fig Pattern — Step by Step
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    STRANGLER FIG: GRADUAL TRANSITION (Like a Vine Wrapping a Tree)   ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   Step 1        [App] ──────────────────────► [Old DB]  100% traffic                 ║
+║                 New DB exists but handles 0%                                            ║
+║                                                                                       ║
+║   Step 2        [App] ──┬──► [Old DB]  (primary writes)                              ║
+║                         └──► [New DB]  (dual writes begin)                             ║
+║                 Both DBs receive writes. Sync in place.                                ║
+║                                                                                       ║
+║   Step 3        [App] ──┬──► [Old DB]  (writes)                                       ║
+║                         └──► [New DB]  (shadow reads + validation)                     ║
+║                 Read from New DB in background. Compare with Old. Fix drift.           ║
+║                                                                                       ║
+║   Step 4        [App] ──┬──► [New DB]  (primary reads)                                ║
+║                         └──► [Old DB]  (writes only, or deprecated)                  ║
+║                 Switch reads to New DB. Validate.                                       ║
+║                                                                                       ║
+║   Step 5        [App] ──────────────────────► [New DB]  100% traffic                 ║
+║                 [Old DB] decommissioned.                                               ║
+║                                                                                       ║
+║   Key: Zero downtime. Reversible at each step. Gradual risk reduction.                  ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
 ### Real Evolution Example: Feed System
 
 ```
@@ -2977,6 +3293,42 @@ Staff Engineers model *when* bottlenecks appear, not just *what* they are. Growt
 │        Solve today's problem, not tomorrow's hypothetical.                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Database Scaling Staircase: When to Climb Each Step
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    THE SCALING STAIRCASE — CLIMB ONE STEP AT A TIME                   ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   Step 5  ┌─────────────────────────────────────────┐  POLYGLOT                        ║
+║           │ Different DBs for different workloads   │  When: Separate domains need       ║
+║           │ Users→PG, Search→ES, Cache→Redis       │  different access patterns        ║
+║           │ What breaks: Sync, consistency          │  What breaks: Cross-DB sync       ║
+║           └─────────────────────────────────────────┘                                 ║
+║                                    │                                                    ║
+║   Step 4  ┌─────────────────────────────────────────┐  SHARDING                        ║
+║           │ Partition data across multiple DBs        │  When: Single DB can't fit     ║
+║           │ Shard by user_id, tenant_id, etc.         │  What breaks: Cross-shard       ║
+║           └─────────────────────────────────────────┘                                 ║
+║                                    │                                                    ║
+║   Step 3  ┌─────────────────────────────────────────┐  CACHING LAYER                    ║
+║           │ Redis/Memcached in front of DB            │  When: Read load > DB capacity  ║
+║           │ Hot data cached, TTL for freshness         │  What breaks: Stale cache       ║
+║           └─────────────────────────────────────────┘                                 ║
+║                                    │                                                    ║
+║   Step 2  ┌─────────────────────────────────────────┐  READ REPLICAS                    ║
+║           │ Primary for writes, replicas for reads   │  When: Read-heavy workload       ║
+║           │ Eventual consistency on reads             │  What breaks: Replication lag    ║
+║           └─────────────────────────────────────────┘                                 ║
+║                                    │                                                    ║
+║   Step 1  ┌─────────────────────────────────────────┐  VERTICAL (Bigger Machine)        ║
+║           │ More CPU, RAM, faster disk                │  When: First. Always try first.   ║
+║           │ No app changes needed                     │  What breaks: Cost, single point ║
+║           └─────────────────────────────────────────┘                                 ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -6015,6 +6367,32 @@ Before considering this chapter complete, verify:
 │       DBA time, on-call burden, incident recovery—count them all.           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual Summary: Chapter 27 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                         CHAPTER 27: DATABASES — COMPREHENSIVE VISUAL SUMMARY                          ║
+╠═══════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                                       ║
+║   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                    ║
+║   │ 1. ACCESS    │────►│ 2. PICK DB   │────►│ 3. SCALE     │────►│ 4. MIGRATE   │                    ║
+║   │   PATTERNS   │     │   TO FIT     │     │   (STAIR)   │     │   (FIG)      │                    ║
+║   │ Read/Write   │     │ Rel/KV/Doc/  │     │ Vert→Rep→   │     │ Dual→Shadow  │                    ║
+║   │ Joins? Range?│     │ Graph/TS     │     │ Cache→Shard  │     │ →Switch→Done │                    ║
+║   └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘                    ║
+║                                                                                                       ║
+║   KEY CONCEPTS:                                                                                       ║
+║   • B-Tree (filing cabinet) = fast reads    LSM (inbox) = fast writes                                   ║
+║   • Index = card catalog → O(log n) not O(n)                                                          ║
+║   • ACID = ATM: Atomic, Consistent, Isolated, Durable                                                  ║
+║   • Polyglot = right DB per job, but sync is YOUR problem                                             ║
+║   • PostgreSQL first. Add complexity only when needed.                                               ║
+║                                                                                                       ║
+║   DB ZOO: Relational | Document | Key-Value | Wide-Column | Graph | Search                            ║
+║                                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ### Remaining Considerations

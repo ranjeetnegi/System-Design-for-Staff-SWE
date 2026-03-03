@@ -10,6 +10,31 @@ I've spent years building systems at Google scale where data locality was a firs
 
 This chapter teaches data locality and compliance as Staff Engineers practice it: as architectural constraints that shape system design from the beginning, not as afterthoughts to be bolted on later. We'll cover what data locality actually means in practice, why it affects far more than just databases, and how to design systems that can evolve safely as regulations, products, and organizational requirements change.
 
+### Chapter at a Glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           CHAPTER 31: DATA LOCALITY & COMPLIANCE — THE BIG PICTURE           │
+│                                                                             │
+│   WHERE does data live?          WHO regulates it?                           │
+│   ┌─────────────────────┐       ┌─────────────────────┐                     │
+│   │ • Primary DB        │       │ • GDPR (EU)         │                     │
+│   │ • Replicas, caches  │  ───▶ │ • CCPA (California)  │                     │
+│   │ • Logs, analytics    │       │ • Country-specific  │                     │
+│   └─────────────────────┘       └─────────────────────┘                     │
+│                                                                             │
+│   WHAT copies exist?            HOW do you track it?                         │
+│   ┌─────────────────────┐       ┌─────────────────────┐                     │
+│   │ • CDN, Redis        │       │ • Data lineage      │                     │
+│   │ • Backups, ML models│  ───▶ │ • Deletion manifest  │                     │
+│   │ • Partner exports   │       │ • Audit trail       │                     │
+│   └─────────────────────┘       └─────────────────────┘                     │
+│                                                                             │
+│   HOW do you delete it?  →  Every. Single. Copy. Manifest = proof.          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 **The Staff Engineer's First Law of Data Locality**: If you can't explain where every piece of user data is at any moment—including copies, caches, logs, and derived data—you cannot claim compliance.
 
 **The Staff Engineer's Second Law**: "I deleted it from the database" is not the same as "I deleted it." Deletion is eventual across stores; the manifest is the proof.
@@ -127,6 +152,58 @@ Data location isn't just about latency. It matters for:
 
 **Incident Scope**: When a breach occurs, data location determines which regulations apply, which users must be notified, and which authorities have jurisdiction.
 
+### Data Residency: The National Borders
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DATA RESIDENCY: BORDERS MATTER                            │
+│                                                                             │
+│        EU                    CHINA                   US (Healthcare)         │
+│   ┌───────────┐          ┌───────────┐             ┌───────────┐             │
+│   │ EU data   │          │ China data│             │ HIPAA     │             │
+│   │ must stay │          │ must stay │             │ state-    │             │
+│   │ in EU     │          │ in China  │             │ level     │             │
+│   └─────┬─────┘          └─────┬─────┘             └─────┬─────┘             │
+│         │                      │                        │                    │
+│         │    ═══════════════════════════════════════════│                    │
+│         │              DATA FLOW BLOCKED AT BORDERS      │                    │
+│         │    ═══════════════════════════════════════════│                    │
+│         │                      │                        │                    │
+│   Cross-border = legal mechanism required (SCCs, BCRs, consent)             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cross-Border Data Transfer Mechanisms
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EU DATA → US: HOW TO LEGALLY MOVE IT                     │
+│                                                                             │
+│   Need to transfer EU user data to US processing?                           │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  STANDARD CONTRACTUAL CLAUSES (SCCs)                                │   │
+│   │  EU-approved contract templates. Common for cloud providers.         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  BINDING CORPORATE RULES (BCRs)                                      │   │
+│   │  Company-wide policy approved by regulators. High effort.          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  CONSENT                                                             │   │
+│   │  User explicitly agrees. Limited use cases.                          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  ADEQUACY DECISION                                                   │   │
+│   │  EU says country has equivalent protection (e.g., UK, Japan).         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   No mechanism = illegal transfer = fines. Choose before moving data.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Common Misconceptions
 
 ### Misconception 1: "Compliance Can Be Added Later"
@@ -190,11 +267,53 @@ FUNCTION audit_user_data_locations(user_id):
     RETURN locations
 ```
 
+### The Hidden Copies Problem
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE HIDDEN COPIES: 5 PLACES YOU FORGOT                    │
+│                                                                             │
+│   Primary DB (EU) ✓ Compliant                                               │
+│        │                                                                     │
+│        ├──► CDN cache (US edge) ✗ Non-compliant!                            │
+│        ├──► Log aggregator (US) ✗ Non-compliant!                            │
+│        ├──► Analytics pipeline (US) ✗ Non-compliant!                         │
+│        ├──► Backup (US) ✗ Non-compliant!                                     │
+│        └──► Search index (US) ✗ Non-compliant!                              │
+│                                                                             │
+│   "Primary DB is in EU" ≠ "All copies are compliant"                        │
+│   Most compliance failures are in the copies nobody tracked.                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Misconception 3: "Encrypted Data Doesn't Count"
 
 **Why it's wrong**: Most data residency regulations care about where data is located, not just whether it's encrypted. Encrypted EU user data stored in the US is still EU user data stored in the US.
 
 Encryption protects against unauthorized access but doesn't change the legal jurisdiction where the data resides.
+
+### Encryption at Rest vs In Transit
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ENCRYPTION: WHERE YOU'RE COVERED                         │
+│                                                                             │
+│   AT REST (on disk)              IN TRANSIT (on the wire)                    │
+│   ┌─────────────────────┐        ┌─────────────────────┐                    │
+│   │  AES-256 encrypted  │        │  TLS encrypted      │                    │
+│   │  Data on disk ✓     │        │  Data in flight ✓    │                    │
+│   └─────────────────────┘        └─────────────────────┘                    │
+│                                                                             │
+│   IN MEMORY (the gap!)                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Data in RAM is often NOT encrypted. Process can read plaintext.    │   │
+│   │  Important for: memory dumps, debugging, cold boot attacks.         │   │
+│   │  Compliance: "Encrypted" may not mean "encrypted everywhere."      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Simple Example: Where Naive Designs Fail
 
@@ -330,6 +449,28 @@ Data locality compliance is not an engineering-only concern. Staff Engineers mus
 │   REAL-WORLD PATTERN:                                                       │
 │   "We'll add compliance later" → 18 months later → "We need to rewrite      │
 │   the entire data layer to support the EU market"                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Compliance-Aware vs Retrofit: The Cost Difference
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    COMPLIANCE: BUILD IN vs RETROFIT                         │
+│                                                                             │
+│   COMPLIANCE FROM DAY 1                          RETROFIT LATER             │
+│   ┌─────────────────────────────┐               ┌─────────────────────────┐ │
+│   │  • Clean architecture       │               │  • Messy migrations     │ │
+│   │  • Data tags at ingestion   │               │  • Forensic analysis   │ │
+│   │  • Clear regional boundaries│               │  • Unknown copy count   │ │
+│   │  • Deletion paths designed  │               │  • Historical data ?    │ │
+│   │                              │               │                         │ │
+│   │  Cost: $X (15-20% dev time)  │               │  Cost: $10X (5-10x)      │ │
+│   │  Risk: Low                   │               │  Risk: May need rewrite │ │
+│   └─────────────────────────────┘               └─────────────────────────┘ │
+│                                                                             │
+│   Build compliance in early. Retrofitting is 10× more expensive and risky.   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -610,6 +751,29 @@ CLASS DataClassifier:
 
 **When a Staff Engineer chooses this**: When a system handles multiple data types with different sensitivity levels.
 
+### Data Classification Pyramid
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DATA CLASSIFICATION PYRAMID                              │
+│                                                                             │
+│                          RESTRICTED (financial, health)                     │
+│                         ╱ Encrypt, audit, minimal access ╲                  │
+│                        ╱                                    ╲                │
+│                   CONFIDENTIAL (user PII)                                    │
+│                  ╱ Regional storage, access control ╲                        │
+│                 ╱                                    ╲                       │
+│            INTERNAL (employee directory)                                     │
+│           ╱ Company boundaries only ╲                                       │
+│          ╱                              ╲                                    │
+│     PUBLIC (blog posts, marketing)                                          │
+│    ╱ Cache anywhere, no restrictions ╲                                      │
+│                                                                             │
+│   Each level: different storage, access, encryption, retention rules.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 4: Compliance Constraints as Design Inputs
@@ -643,6 +807,26 @@ Regulations like GDPR, CCPA, and similar frameworks impose requirements that tra
 - Backups (daily, weekly, monthly)
 - Third-party services
 - Search indexes
+
+### GDPR Right to Deletion: Where's the Data?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GDPR DELETION: ALL THE PLACES TO DELETE                   │
+│                                                                             │
+│   User requests deletion. You delete from primary DB. Done? NO.             │
+│                                                                             │
+│   Primary DB ✓         Cache (2hr TTL) ✓      Search index ✓               │
+│   Replicas ✓           Analytics warehouse ✓  ML training set ✓             │
+│   Backups (30 days) ✓  Partner API exports ✓  Log aggregator ✓             │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  EACH store has different: retention, deletion mechanism, owner    │   │
+│   │  Deletion manifest tracks ALL. Verification proves ALL gone.        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 **Staff-level approach**:
 
@@ -830,6 +1014,26 @@ FUNCTION example_partial_deletion_failure():
 - Some data must be kept for legal/audit purposes even after user deletion
 - Retention clock may reset on activity
 
+### Data Retention: The Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DATA RETENTION: THE LIFECYCLE                             │
+│                                                                             │
+│   ACTIVE (hot)          ARCHIVE (warm)           DELETE (cold)               │
+│   ┌─────────────┐       ┌─────────────┐         ┌─────────────┐              │
+│   │ Frequent    │       │ Rare access │         │ Legal hold  │              │
+│   │ access      │  ───▶ │ Cheaper     │  ───▶   │ expired     │              │
+│   │ $/GB: High  │       │ storage     │         │ Purge       │              │
+│   └─────────────┘       │ $/GB: Medium│         └─────────────┘              │
+│                         └─────────────┘                                      │
+│                                                                             │
+│   Timeline: Days/weeks    Weeks/months         Years (policy-defined)       │
+│   Cost drops at each stage. Retention policy defines when to move/delete.    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 **Staff-level approach**:
 
 ```
@@ -940,6 +1144,52 @@ CLASS DataLineageTracker:
             source_ip: get_request_context().ip,
             authorized_by: get_authorization_record()
         })
+```
+
+### Data Lineage: Follow the Byte
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DATA LINEAGE: TRACK ONE BYTE THROUGH THE SYSTEM           │
+│                                                                             │
+│   User data enters                                                          │
+│        │                                                                     │
+│        ▼                                                                     │
+│   Primary DB ──► Read replica ──► Cache ──► Log                             │
+│        │              │              │         │                             │
+│        │              │              │         ▼                             │
+│        │              │              │    Analytics pipeline ──► ML model    │
+│        │              │              │         │                    │         │
+│        │              │              │         ▼                    ▼         │
+│        │              │              │    Dashboard            Backup       │
+│        │              │              │                           │          │
+│        └──────────────┴──────────────┴───────────────────────────┴──► Archive│
+│                                                                             │
+│   ONE piece of user data. TEN+ locations. Track every hop for compliance.   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Audit Trail
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE AUDIT TRAIL: WHO ACCESSED WHAT, WHEN, WHY             │
+│                                                                             │
+│   Admin views user record (support ticket #456)                             │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  WHO:    admin_id: 789                                              │   │
+│   │  WHAT:   user_record_123                                             │   │
+│   │  WHEN:   2024-03-15T14:32:00Z                                       │   │
+│   │  WHY:    support ticket #456 (authorized)                            │   │
+│   │  WHERE:  source_ip, request_id                                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   Essential for compliance. Required by GDPR, HIPAA, SOC2.                   │
+│   "Who accessed what data and for what purpose?" — answerable anytime.      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Balancing Correctness, Performance, and Simplicity
@@ -3477,6 +3727,31 @@ Before considering this chapter complete, verify:
 | H. Security & compliance | ✅ | Trust boundaries, cross-team coordination |
 | I. Observability & debuggability | ✅ | Compliance observability metrics |
 | J. Cross-team & org impact | ✅ | Legal, security, product, engineering coordination |
+
+---
+
+### Visual Summary: Chapter 31 in One Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              CHAPTER 31: DATA LOCALITY & COMPLIANCE IN ONE PICTURE           │
+│                                                                             │
+│   WHERE:  Primary DB, replicas, cache, logs, analytics, backups, ML, exports│
+│   BORDERS: EU stays EU. China stays China. Cross-border needs SCCs/BCRs.    │
+│                                                                             │
+│   DELETION: Not "delete from DB" — delete from EVERY copy. Manifest = proof.│
+│   LINEAGE:  Trace one byte: Primary → Replica → Cache → Log → Analytics.    │
+│                                                                             │
+│   CLASSIFICATION: Public → Internal → Confidential → Restricted (pyramid)  │
+│   ENCRYPTION: At rest ✓ | In transit ✓ | In memory ⚠️ (often not)           │
+│                                                                             │
+│   RETENTION: Active (hot) → Archive (warm) → Delete (cold)                  │
+│   AUDIT: Who, what, when, why — for every access to personal data.         │
+│                                                                             │
+│   STAFF RULE: Build compliance in ($X). Retrofitting costs $10X.           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

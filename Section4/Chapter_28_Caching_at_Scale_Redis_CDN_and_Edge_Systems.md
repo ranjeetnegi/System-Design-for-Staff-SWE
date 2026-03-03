@@ -20,6 +20,33 @@ When designed poorly, caching:
 
 This section teaches caching as Staff Engineers practice it: as a system-wide architecture decision with profound implications for reliability, consistency, and operational complexity. We'll cover when to cache, what to cache, and perhaps most importantly, when NOT to cache.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                         CHAPTER 28 AT A GLANCE: THE CACHING DECISION FLOW                  │
+│                                                                                             │
+│   ┌─────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐  │
+│   │ WHY CACHE?  │────►│ WHERE TO CACHE? │────►│ CACHE PATTERNS  │────►│ FAILURE MODES   │  │
+│   │             │     │                 │     │                 │     │                 │  │
+│   │ • Protection│     │ • CPU (ns)      │     │ • Cache-Aside   │     │ • Stampede      │  │
+│   │ • Cost      │     │ • App memory(μs)│     │ • Write-Through │     │ • Thundering    │  │
+│   │ • Latency   │     │ • Redis (ms)    │     │ • Write-Behind  │     │   Herd          │  │
+│   │             │     │ • CDN (regional)│     │ • Event-driven  │     │ • Cold Start    │  │
+│   └─────────────┘     │ • Browser       │     └────────┬────────┘     │ • Hot Key       │  │
+│                       └─────────────────┘              │             └────────┬────────┘  │
+│                                                         │                      │           │
+│                                                         ▼                      ▼           │
+│                                               ┌─────────────────┐     ┌─────────────────┐  │
+│                                               │ INVALIDATION    │◄────│ Solutions:      │  │
+│                                               │                 │     │ Lock, Circuit   │  │
+│                                               │ • TTL           │     │ Breaker, Warm   │  │
+│                                               │ • Explicit DEL  │     │ Gradual Ramp    │  │
+│                                               │ • Event-driven  │     └─────────────────┘  │
+│                                               └─────────────────┘                        │
+│                                                                                             │
+│   Golden path: Start simple (cache-aside + TTL) → Add complexity only when needed          │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Quick Visual: Caching Strategy at a Glance
@@ -156,6 +183,39 @@ Staff Engineers define invariants—conditions that must hold regardless of cach
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    THE CACHING LAYERS: FROM CPU TO CDN (The Latency Pyramid)                 │
+│                                                                                             │
+│                              ▲ FASTER / CLOSER TO USER                                      │
+│                                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  L1/L2 CPU CACHE          Latency: ~1 ns      When: Hot data in CPU                  │   │
+│   │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓       Smallest, fastest  Compiler/CPU manages automatically      │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  APPLICATION MEMORY       Latency: ~100 μs    When: In-process cache (HashMap, etc.)  │   │
+│   │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   Microseconds       No network; same JVM/process             │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  REDIS / MEMCACHED        Latency: ~1 ms      When: Shared cache, sessions, K-V     │   │
+│   │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  Milliseconds        Network hop; multiple app servers      │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  CDN (Edge)               Latency: ~10-30 ms  When: Static assets, public content   │   │
+│   │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ Regional PoPs      Geographically distributed              │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  BROWSER CACHE            Latency: ~0 ms      When: Client-side; no round trip       │   │
+│   │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ (local)           Images, JS, CSS; user controls TTL      │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                             │
+│                              ▼ SLOWER / FURTHER (Origin DB: 5-200 ms)                       │
+│                                                                                             │
+│   Rule: Cache at the right layer. Don't use Redis for data that fits in app memory.         │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -338,6 +398,31 @@ Both are in-memory key-value stores, but they serve different needs:
 
 **Staff recommendation**: Default to Redis unless you have a specific reason for Memcached. Redis's additional features rarely hurt and often help. Memcached's simplicity advantage is marginal.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    MEMCACHED vs REDIS: COMPARISON CARD                                     │
+│                                                                                             │
+│   ┌─────────────────────────────────┐  ┌─────────────────────────────────┐                 │
+│   │  MEMCACHED                      │  │  REDIS                          │                 │
+│   │  ─────────────                  │  │  ─────                           │                 │
+│   │  • Simple KV only               │  │  • Rich data structures          │                 │
+│   │  • Multi-threaded               │  │  • Single-threaded (but fast)    │                 │
+│   │  • No persistence (volatile)    │  │  • RDB + AOF persistence        │                 │
+│   │  • Slab allocator (predictable) │  │  • Lua scripting, Pub/Sub       │                 │
+│   │  • Lower memory per key        │  │  • Cluster mode, replication    │                 │
+│   │                                 │  │                                 │                 │
+│   │  PICK WHEN:                     │  │  PICK WHEN:                     │                 │
+│   │  • Only need simple KV          │  │  • Need lists, sets, sorted sets│                 │
+│   │  • Max throughput, simple ops   │  │  • Need persistence (sessions)  │                 │
+│   │  • Don't need persistence       │  │  • Need pub/sub for invalidation│                 │
+│   │                                 │  │  • Building queues, leaderboards │                 │
+│   └─────────────────────────────────┘  └─────────────────────────────────┘                 │
+│                                                                                             │
+│   Default: Redis. Memcached only when you have a specific reason (e.g. existing cluster).   │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## What to Cache (And What NOT to Cache)
@@ -438,6 +523,33 @@ FUNCTION get_user_permissions(user_id):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CACHE HIT RATIO CURVE: SIZE vs HIT RATE                                   │
+│                                                                                             │
+│   Hit Ratio (%)                                                                             │
+│   ▲                                                                                         │
+│   │                                                      ________  Diminishing returns     │
+│   │                                                 ____/                                  │
+│   │                                            ____/     (huge cache, marginal gain)        │
+│   │                                       ____/                                             │
+│   │                                  ____/     ★ SWEET SPOT (80-95% hit rate)              │
+│   │                             ____/          Cost/benefit optimal                        │
+│   │                        ____/                                                             │
+│   │                   ____/                                                                  │
+│   │              ____/   (medium cache: high value)                                         │
+│   │         ____/                                                                            │
+│   │    ____/   (small cache: low hits, DB hammered)                                         │
+│   │___/                                                                                      │
+│   └──────────────────────────────────────────────────────────────────────► Cache Size      │
+│      Small                    Medium                         Huge                           │
+│                                                                                             │
+│   Rule: Size cache for working set. Below 70% hit rate → question if cache is worth it.    │
+│   Above 95% → good value. Beyond working set → waste (memory cost, no extra benefit).      │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## TTL Trade-offs
@@ -523,11 +635,63 @@ FUNCTION choose_ttl(data_type):
 | Weather data | 15 minutes | External API, not real-time anyway |
 | Feature flags | 1 minute | Changes rarely, want fast propagation |
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    TTL: TOO SHORT vs TOO LONG — THE GOLDILOCKS ZONE                         │
+│                                                                                             │
+│   TOO SHORT (e.g. 1 second)                      TOO LONG (e.g. 1 hour)                     │
+│   ─────────────────────────                     ─────────────────────────                   │
+│   • Constant cache misses                        • Stale data persists                       │
+│   • DB hammered, no benefit                     • User sees old prices, wrong inventory     │
+│   • Cache adds complexity, no protection        • Invalidation bugs = long-lived bad data    │
+│                                                                                             │
+│   Hit Rate                                          Staleness                              │
+│   ▲                                                    ▲                                     │
+│   │     ╲                                          Too fresh (no cache benefit)             │
+│   │      ╲   Sweet spot                            │                                        │
+│   │       ╲_____                                   │    ★ Just right                        │
+│   │             ╲___                               │    (depends on data type)              │
+│   │                  (diminishing returns)         │                                        │
+│   └──────────────► TTL length                      └──────────► TTL length                  │
+│                                                                                             │
+│   GOLDILOCKS: Depends on staleness tolerance. Product page: 5 min. User profile: 1 hr.         │
+│   Config: 1 min. Financial balance: Don't cache (or immediate invalidation).                 │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Cache Invalidation Strategies
 
 "There are only two hard things in Computer Science: cache invalidation and naming things." — Phil Karlton
+
+*(And off-by-one errors.)*
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CACHE INVALIDATION: WHY IT'S HARD                                         │
+│                                                                                             │
+│   THE PROBLEM:                                                                              │
+│   DB updated ──► Cache still has OLD value ──► User sees STALE data                        │
+│                                                                                             │
+│   ┌─────────┐  write   ┌─────────┐     ┌─────────┐  read   ┌─────────┐                      │
+│   │   DB    │ ◄─────── │  App    │     │  User   │ ──────► │  Cache  │ ──► Stale response!   │
+│   │ (fresh) │          │         │     │         │         │ (stale) │                       │
+│   └─────────┘          └────┬────┘     └─────────┘         └─────────┘                      │
+│                             │                    ▲                                           │
+│                             └── invalidate? ────┘                                           │
+│                             Who invalidates? When? Which keys?                               │
+│                                                                                             │
+│   THREE APPROACHES:                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  TTL:              Set expiry. Self-healing. Simple. Data stale until TTL.           │   │
+│   │  Explicit DEL:     On write, delete cache key. Fresh but complex (who, when, where). │   │
+│   │  Event-driven:     Publish "user X updated" → subscribers invalidate. Decoupled.      │   │
+│   └─────────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Strategy 1: Time-Based Expiration (TTL)
 
@@ -584,6 +748,30 @@ FUNCTION update_user(user_id, data):
 
 **Use when**: Write latency is critical, can tolerate some data loss risk
 
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    WRITE-THROUGH vs WRITE-BEHIND: SIDE-BY-SIDE                              │
+│                                                                                             │
+│   WRITE-THROUGH (Synchronous, Consistent, Slower)                                          │
+│   ─────────────────────────────────────────────────────────────────────────                 │
+│                                                                                             │
+│   App ────► Cache ────► DB     (both updated before return)                                 │
+│              │    sync    │                                                                  │
+│              └───────────┘                                                                  │
+│   User waits for BOTH writes. Cache always matches DB.                                      │
+│                                                                                             │
+│   WRITE-BEHIND (Asynchronous, Faster, Risk of Data Loss)                                    │
+│   ─────────────────────────────────────────────────────────────────────────                 │
+│                                                                                             │
+│   App ────► Cache ────► return to user immediately                                          │
+│              │                                                                              │
+│              └───► Queue ────► DB (async, batched)                                          │
+│                                                                                             │
+│   User gets fast response. DB updated later. If cache dies before queue drains → data loss.  │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Strategy 4: Cache-Aside (Lazy Loading)
 
 Application manages cache explicitly.
@@ -614,6 +802,30 @@ FUNCTION update_user(user_id, data):
 **Cons**: Cache miss on first read after write, potential race conditions
 
 **Use when**: Default choice for most scenarios
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CACHE-ASIDE (LAZY LOADING) STEP-BY-STEP                                  │
+│                                                                                             │
+│   FIRST REQUEST (Cache Miss):                                                               │
+│   ─────────────────────────────────────────────────────────────────────────                 │
+│   (1) App checks cache ──► MISS!                                                            │
+│   (2) App queries DB                                                                       │
+│   (3) App writes result to cache                                                            │
+│   (4) Returns to user                                                                       │
+│                                                                                             │
+│         User ──► App ──► Cache? ──X──► DB ──► Cache.SET() ──► User                            │
+│                                                                                             │
+│   SUBSEQUENT REQUEST (Cache Hit):                                                           │
+│   ─────────────────────────────────────────────────────────────────────────                 │
+│   (1) App checks cache ──► HIT!                                                            │
+│   (2) Returns immediately (no DB touch)                                                    │
+│                                                                                             │
+│         User ──► App ──► Cache? ──✓──► User   (fast!)                                       │
+│                                                                                             │
+│   ON WRITE: App updates DB, then cache.DELETE(key). Next read repopulates.                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Strategy 5: Event-Driven Invalidation
 
@@ -731,6 +943,33 @@ Edge caching places content physically close to users. Instead of every request 
 - User to nearest edge (CDN): ~10-30ms
 
 For a web page making 50 requests, the difference between 200ms and 20ms per request is 9 seconds of total load time reduction.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CDN: THE PIZZA CHAIN STRATEGY                                             │
+│                                                                                             │
+│   You don't fly pizza from NYC to LA. You open LOCAL STORES (PoPs).                        │
+│                                                                                             │
+│                    🗽 NYC (Central Kitchen)                                                  │
+│                         │                                                                   │
+│         ┌───────────────┼───────────────┐                                                   │
+│         │               │               │                                                   │
+│         ▼               ▼               ▼                                                   │
+│   ┌──────────┐   ┌──────────┐   ┌──────────┐                                               │
+│   │ Store:   │   │ Store:   │   │ Store:   │     ◄── Edge locations (PoPs)                  │
+│   │ Boston   │   │ Philly   │   │ DC       │        User gets "pizza" from NEAREST store   │
+│   └──────────┘   └──────────┘   └──────────┘                                               │
+│         │               │               │                                                    │
+│         ▼               ▼               ▼                                                    │
+│   👤 User          👤 User          👤 User       ◄── Low latency (local delivery)          │
+│                                                                                             │
+│   If store doesn't have it (cache miss) → fetches from central kitchen (ORIGIN)             │
+│   Caches it for next customer.                                                               │
+│                                                                                             │
+│   CDN = Cache at the edge. Content from nearest PoP, not from origin across the globe.     │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### CDN Architecture
 
@@ -1008,6 +1247,36 @@ Staff Engineers must understand how caches fail, not just how they work.
 │                                                    [OUTAGE]                 │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CACHE STAMPEDE: THE THUNDERING HERD — WHAT HAPPENS                        │
+│                                                                                             │
+│   Popular key expires at T=0                                                               │
+│                                                                                             │
+│         ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐     ... 1000 concurrent requests                    │
+│         │Req 1│ │Req 2│ │Req 3│ │Req 4│                                                      │
+│         └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                                     │
+│            │       │       │       │                                                         │
+│            ▼       ▼       ▼       ▼                                                         │
+│         ┌─────────────────────────────────┐                                                  │
+│         │  CACHE: Key expired → ALL MISS!  │                                                  │
+│         └─────────────────────────────────┘                                                  │
+│            │       │       │       │                                                         │
+│            ▼       ▼       ▼       ▼                                                         │
+│         ┌─────────────────────────────────┐                                                  │
+│         │  DATABASE: 1000 simultaneous     │  ◄── OVERWHELMED!                                │
+│         │  queries for same key            │      DB capacity: 100 req/s                      │
+│         └─────────────────────────────────┘      Result: Timeouts, cascade failure          │
+│                                                                                             │
+│   SOLUTION: Lock + Single-Flight Pattern                                                     │
+│   ───────────────────────────────────────                                                   │
+│   Only ONE request acquires lock, fetches from DB, fills cache.                             │
+│   Others wait (or sleep/retry) → get HIT when first request completes.                       │
+│   1000 requests → 1 DB query instead of 1000.                                                 │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Prevention: Lock and Single-Fetch
@@ -1329,6 +1598,29 @@ T+5m:   Cascading slowness; app threads block on DB
 ## Cold Start
 
 **What it is**: Cache is empty (after restart, new deploy, or new cache cluster), and every request is a miss.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    COLD START: THE EMPTY CACHE PROBLEM                                        │
+│                                                                                             │
+│   Service restarts ──► Cache is EMPTY ──► ALL requests go to DB                              │
+│                                                                                             │
+│   Normal:     [100K req/s] ──► Cache (95% hit) ──► DB (5K req/s)  ✓                          │
+│   Cold start: [100K req/s] ──► Cache (0% hit)  ──► DB (100K req/s) ✗ OVERWHELMED!            │
+│                                                                                             │
+│   Timeline:                                                                                  │
+│   T+0:   Restart complete, traffic hits cold cache                                          │
+│   T+1s:  DB CPU spikes, connection pool saturated                                            │
+│   T+5s:  Latency spikes, timeouts, errors                                                    │
+│   T+30s: Cascading failure if DB can't keep up                                               │
+│                                                                                             │
+│   SOLUTIONS:                                                                                 │
+│   • Cache warming: Pre-populate hot keys before accepting traffic                             │
+│   • Gradual traffic ramp: 10% → 30% → 50% → 100% with delays between steps                   │
+│   • Stale-while-revalidate: Serve from backup/stale cache if available                        │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 **Why it's dangerous**:
 - Normal: 5% cache miss rate → 5K requests/second to database
@@ -6680,6 +6972,32 @@ After completing exercises, evaluate yourself:
 | **Security** | Knows to use auth | Designs data classification for cache | Creates security standards for cache |
 | **Operations** | Can debug cache issues | Writes runbooks, defines SLOs | Establishes monitoring standards |
 | **Cross-team impact** | Works within standards | Creates standards for team | Drives org-wide cache strategy |
+
+---
+
+## Visual Summary: Chapter 28 in One Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                    CHAPTER 28: CACHING AT SCALE — ONE-PAGE SUMMARY                         │
+│                                                                                             │
+│   WHY CACHE?          WHERE?              PATTERNS              FAILURES        FIXES       │
+│   Protection          CPU → App → Redis   Cache-Aside (default)  Stampede       Lock        │
+│   Cost 10-100x less    CDN → Browser      Write-Through         Thundering     Circuit      │
+│   Latency (least)      Pyramid of speed   Write-Behind          Herd           Breaker      │
+│                                                                 Cold Start     Warming      │
+│   KEY DECISIONS:                                               Hot Key        Key split    │
+│   • Hit rate < 80%? Question if worth it.                      Eviction       Right-size   │
+│   • Key design: resource:id:variant (no timestamp!)             Poisoning      Validate     │
+│   • TTL: Goldilocks zone. Invalidation: TTL / DEL / Events.                                │
+│                                                                                             │
+│   LAYERS: [User] → Browser → CDN → App → Redis → DB                                         │
+│                                                                                             │
+│   STAFF MINDSET: Cache = reliability + cost strategy. Fix first bottleneck before caching.  │
+│   Design for failure: cold start, stampede, cache down. Invariants: never leak user data.   │
+│                                                                                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

@@ -12,6 +12,32 @@ This chapter teaches cost and efficiency as Staff Engineers practice it: as part
 
 **The Staff Engineer's First Law of Cost**: A system that works but cannot be afforded is not a working system. Economic sustainability is part of correctness.
 
+### Chapter at a Glance: Cost Efficiency in One Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              CHAPTER 32 AT A GLANCE: COST EFFICIENCY & SUSTAINABILITY                │
+│                                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
+│  │ COST AS      │───▶│ COST         │───▶│ COST CLIFFS  │───▶│ OPTIMIZATION │      │
+│  │ DESIGN       │    │ DRIVERS      │    │ (super-      │    │ STRATEGIES   │      │
+│  │ CONSTRAINT   │    │ (visible +   │    │  linear      │    │ (right-size, │      │
+│  │ (from day 1) │    │  hidden)     │    │  jumps)      │    │  reserve,    │      │
+│  └──────────────┘    └──────────────┘    └──────────────┘    │  shed load)  │      │
+│         │                    │                    │            └──────┬───────┘      │
+│         │                    │                    │                   │              │
+│         ▼                    ▼                    ▼                   ▼              │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐    │
+│  │                    WHEN TO STOP OPTIMIZING?                                 │    │
+│  │  • Payback > 18 months? → Defer                                              │    │
+│  │  • Not the biggest driver? → Find bigger targets                              │    │
+│  │  • Diminishing returns? → You're done                                        │    │
+│  └──────────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                     │
+│  KEY INSIGHT: Cost is correctness. A system that can't be afforded doesn't work.     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Quick Visual: Cost Thinking at a Glance
@@ -134,6 +160,66 @@ When engineers think about cost, they often think about compute hours and storag
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### The Cost Iceberg: What You See vs What You Don't
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    THE COST ICEBERG: VISIBLE vs HIDDEN COSTS                        │
+│                                                                                     │
+│                           ═══════════════════                                        │
+│                      ══════  VISIBLE (Above Water)  ══════                           │
+│                   ═══  Compute  •  Storage  •  Database  ═══                         │
+│                 ═══  "What shows on the cloud bill"  ═══                             │
+│               ═══════════════════════════════════════════════                        │
+│            ═══════════════════════════════════════════════════════                   │
+│         ═══════════════════════════════════════════════════════════════               │
+│      ═══════════════════════════════════════════════════════════════════════          │
+│   ═══════════════════════════════════════════════════════════════════════════════   │
+│  ═══════════════════════════════════════════════════ HIDDEN (Below Water) ═══════    │
+│  ═════════════════  • Data transfer (egress)     • Cross-region replication  ═══   │
+│  ═══════════════  • Logging & monitoring    • On-call & incident response  ═══   │
+│  ═════════════  • Engineering time to maintain  • Over-provisioning waste  ═══   │
+│  ═══════════  "Often 3-5x the visible costs"  ═══                                 │
+│  ═══════════════════════════════════════════════════════════════════════════════   │
+│                                                                                     │
+│  RATIO:   Visible $1  :  Hidden $3 to $5   (typical at scale)                        │
+│                                                                                     │
+│  STAFF INSIGHT: Budget for the iceberg, not just the tip.                          │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cost per Request: The Math That Adds Up
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    COST PER REQUEST: BREAK IT DOWN, MULTIPLY UP                     │
+│                                                                                     │
+│  ONE API CALL =                                                                     │
+│  ┌─────────────────────┬──────────────┬────────────────────────────────────────┐  │
+│  │ Component           │ Cost/request │ Notes                                   │  │
+│  ├─────────────────────┼──────────────┼────────────────────────────────────────┤  │
+│  │ Compute             │ 0.001¢       │ CPU time                                 │  │
+│  │ DB query            │ 0.002¢       │ Read/write                               │  │
+│  │ Cache lookup        │ 0.0001¢      │ Redis/memcache                           │  │
+│  │ Data transfer       │ 0.001¢       │ In/out bandwidth                         │  │
+│  │ Logging             │ 0.0005¢     │ Observability                           │  │
+│  ├─────────────────────┼──────────────┼────────────────────────────────────────┤  │
+│  │ TOTAL per request   │ ~0.005¢      │                                          │  │
+│  └─────────────────────┴──────────────┴────────────────────────────────────────┘  │
+│                                                                                     │
+│  AT SCALE:                                                                          │
+│  ┌─────────────────────┬─────────────────┬─────────────────────────────────────┐  │
+│  │ 1M requests/day     │ $150/month      │  $$                                  │  │
+│  │ 10M requests/day    │ $1,500/month    │  $$$                                 │  │
+│  │ 100M requests/day    │ $15,000/month   │  $$$$$   ← Small per-request costs   │  │
+│  │ 1B requests/day      │ $150,000/month  │  $$$$$$$   add up FAST               │  │
+│  └─────────────────────┴─────────────────┴─────────────────────────────────────┘  │
+│                                                                                     │
+│  STAFF INSIGHT: Profile costs per request. A 2x reduction in one component          │
+│  = 2x savings at ALL scales. Optimize the hot path.                                 │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### The Cost of Security and Compliance
 
 Staff Engineers treat security and compliance as cost drivers, not afterthoughts. Data sensitivity and trust boundaries directly influence architecture and ongoing expense:
@@ -226,6 +312,31 @@ A system can be technically correct—handling all requests properly, maintainin
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### The Sustainability Equation
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              THE SUSTAINABILITY EQUATION: ALL FOUR REQUIRED                         │
+│                                                                                     │
+│         CORRECT  +  SCALABLE  +  AFFORDABLE  +  OPERABLE  =  SUSTAINABLE             │
+│                                                                                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
+│  │  CORRECT    │  │  SCALABLE   │  │ AFFORDABLE  │  │  OPERABLE   │                 │
+│  │  Works      │  │  Grows      │  │ Fits budget │  │  Team can   │                 │
+│  │  as designed│  │  with load   │  │ at scale    │  │  run it     │                 │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘                 │
+│                                                                                     │
+│  MISSING ANY ONE → SYSTEM FAILS:                                                    │
+│  • Affordable but not operable = Team burnout, 3am pages, attrition                  │
+│  • Scalable but not affordable = Growth kills the business                          │
+│  • Correct but not scalable = Works at 1x, breaks at 10x                            │
+│  • Operable but not correct = "Stable" system producing wrong results               │
+│                                                                                     │
+│  STAFF INSIGHT: Sustainability = all four. Optimize for one at the expense of        │
+│  another, and the system will eventually fail.                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### The Sustainability Test
 
 Before finalizing any design, Staff Engineers ask:
@@ -261,6 +372,37 @@ FUNCTION validate_sustainability(design, growth_projections):
         previous_total_cost = total_cost
     
     RETURN SUSTAINABLE
+```
+
+### The Cost Cliff: When Scale Becomes Prohibitively Expensive
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    THE COST CLIFF: SUPER-LINEAR SCALING                               │
+│                                                                                     │
+│  Cost ($)                                                                            │
+│     ▲                                                                               │
+│     │                                                    ╱ CLIFF!                   │
+│     │                                               ╱   • DB sharding (+50% eng)     │
+│     │                                          ╱      • Cross-region (+3x infra)    │
+│     │                                     ╱         • Compliance (+$$$)              │
+│     │                                ╱                                                │
+│     │                           ╱   ← Next increment = disproportionately expensive  │
+│     │                      ╱                                                         │
+│     │                 ╱  Linear growth OK                                           │
+│     │            ╱                                                                   │
+│     │       ╱                                                                        │
+│     │  ╱                                                                             │
+│     └──────────────────────────────────────────────────────────────────► Scale (X)   │
+│         1x      10x     50x     100x    200x    500x                                │
+│                                                                                     │
+│  WARNING SIGNS OF AN APPROACHING CLIFF:                                              │
+│  • "We need to shard" = +months of engineering                                       │
+│  • "We need another region" = 2-3x infra multiplication                              │
+│  • "We need SOC2/compliance" = one-time + ongoing $$$                                │
+│                                                                                     │
+│  STAFF INSIGHT: Model cost at 1x, 10x, 100x. Find the cliff BEFORE you hit it.       │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### What Fails First When Cost Is Cut?
@@ -519,6 +661,34 @@ Every "nine" of availability has a cost:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Cost of Each Additional Nine: The Exponential Curve
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              COST OF EACH ADDITIONAL NINE: EXPONENTIAL GROWTH                        │
+│                                                                                     │
+│  Availability    Downtime/Year    Relative Cost     $ (example)                     │
+│  ────────────    ─────────────    ─────────────     ───────────                      │
+│  99%             87 hours         $X (1x)           $10K/month                       │
+│  99.9%           8.7 hours        $10X              $100K/month                      │
+│  99.99%          52 minutes       $100X             $1M/month                        │
+│  99.999%         5 minutes        $1000X            $10M/month                       │
+│                                                                                     │
+│  Cost ($)                                                                           │
+│     ▲                                                                               │
+│     │                                            * 99.999%                         │
+│     │                                       * 99.99%                                │
+│     │                                  * 99.9%                                      │
+│     │                             * 99%                                             │
+│     │                        ________________                                        │
+│     └────────────────────────────────────────────────────► Availability %          │
+│              99%    99.9%   99.99%  99.999%                                          │
+│                                                                                     │
+│  STAFF INSIGHT: Most systems don't need 99.99%. Each nine costs ~10x the previous.  │
+│  Match availability to actual business impact—not to "what sounds good."            │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Why "The Perfect System" Is Wrong
 
 Perfection is the enemy of sustainability. Staff Engineers recognize that:
@@ -576,6 +746,35 @@ Perfection is the enemy of sustainability. Staff Engineers recognize that:
 │     notice inefficiencies until they become 10x problems)                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Over-Provisioning vs Right-Sizing: The Simple View
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              OVER-PROVISIONING vs RIGHT-SIZING (Intern-Friendly View)               │
+│                                                                                     │
+│  OVER-PROVISIONED (The Waste):                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│  │  [████░░░░] [████░░░░] [████░░░░] [████░░░░] [████░░░░] [████░░░░]         │   │
+│  │  Server 1   Server 2   Server 3   Server 4   Server 5   Server 6   ...       │   │
+│  │   10% CPU    10% CPU    10% CPU    10% CPU    10% CPU    10% CPU             │   │
+│  │                                                                             │   │
+│  │  8 servers × 10% utilization = Paying for 80% IDLE capacity                │   │
+│  │  Cost: $80,000/month  |  Waste: $64,000/month (80% idle)                    │   │
+│  └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│  RIGHT-SIZED (The Smart Way):                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│  │  [██████████████░░] [██████████████░░] [██████████████░░]   [+ auto-scale]   │   │
+│  │  Server 1 (60%)      Server 2 (60%)    Server 3 (60%)                      │   │
+│  │                                                                             │   │
+│  │  3 servers × 60% utilization + autoscaling for peaks                         │   │
+│  │  Cost: $28,000/month  |  Savings: $52,000/month (65% reduction)              │   │
+│  └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│  RULE OF THUMB: Target 60-70% utilization. Below 30% = over-provisioned.           │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Principle 2: Elasticity vs Fixed Capacity
@@ -1250,6 +1449,38 @@ FUNCTION evaluate_latency_investment():
 5. Are there architectural changes that improve latency without doubling cost?
 
 Before we commit to 2x spend, let's run experiments on targeted optimizations. If we can get to 160ms with a 20% cost increase, that might be the right trade-off."
+
+### The Four Questions Before Scaling Up
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              BEFORE ADDING MORE RESOURCES: ASK THESE FOUR QUESTIONS                  │
+│                                                                                     │
+│  Often you don't need more hardware. Check these first:                             │
+│                                                                                     │
+│  ┌─── 1. IS THE CODE EFFICIENT? ─────────────────────────────────────────────────┐  │
+│  │    O(n²) → O(n log n) can eliminate the need for 10x more servers              │  │
+│  │    Example: N+1 query → batch fetch = 100x fewer DB calls                       │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  ┌─── 2. IS CACHING EFFECTIVE? ──────────────────────────────────────────────────┐  │
+│  │    Cache hit ratio < 80%? → Fix cache strategy before adding capacity           │  │
+│  │    Example: Cache hot keys only, not everything                                 │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  ┌─── 3. CAN YOU SHED LOAD? ─────────────────────────────────────────────────────┐  │
+│  │    Do you need ALL features for ALL users?                                      │  │
+│  │    Example: Degrade non-essential features during peak instead of scaling       │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  ┌─── 4. IS THE ARCHITECTURE RIGHT? ──────────────────────────────────────────────┐  │
+│  │    Sync when async would do? Batch when streaming?                             │  │
+│  │    Example: Batch processing vs real-time = 10x cost difference               │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  STAFF INSIGHT: "We need more servers" is often the wrong answer.                   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -2619,6 +2850,34 @@ For a component (cache, queue, database), compare build vs buy:
 
 **Deliverable:** TCO comparison with recommendation.
 
+### Build vs Buy Decision Framework
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              BUILD vs BUY: WHEN TO CUSTOM, WHEN TO SAAS                              │
+│                                                                                     │
+│  BUILD (Custom / Self-Hosted)              BUY (SaaS / Managed)                      │
+│  ┌─────────────────────────────────┐      ┌─────────────────────────────────┐       │
+│  │ ✓ Core differentiator           │      │ ✓ Commoditized (cache, queue)   │       │
+│  │ ✓ Unique requirements           │      │ ✓ Not your expertise             │       │
+│  │ ✓ Scale demands it               │      │ ✓ Faster to market               │       │
+│  │ ✓ Competitors can't copy easily  │      │ ✓ Ops burden too high to own    │       │
+│  └─────────────────────────────────┘      └─────────────────────────────────┘       │
+│                                                                                     │
+│  TOTAL COST OF OWNERSHIP COMPARISON:                                                │
+│  ┌────────────────────┬──────────────────┬──────────────────┐                     │
+│  │                    │ BUILD            │ BUY               │                     │
+│  ├────────────────────┼──────────────────┼──────────────────┤                     │
+│  │ Upfront            │ High (eng time)  │ Low (integration)  │                     │
+│  │ Ongoing            │ Variable         │ Predictable       │                     │
+│  │ Flexibility        │ Full control     │ Vendor limits      │                     │
+│  │ Exit cost          │ N/A              │ Migration effort   │                     │
+│  └────────────────────┴──────────────────┴──────────────────┘                     │
+│                                                                                     │
+│  STAFF INSIGHT: Build what differentiates. Buy what doesn't.                       │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Exercise 8: Observability Cost Optimization
@@ -2927,6 +3186,30 @@ Understanding cloud cost models is essential for Staff-level cost reasoning. Whi
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Reserved vs Spot vs On-Demand: When to Use Each
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              RESERVED vs SPOT vs ON-DEMAND: PRICING MODELS DECODED                   │
+│                                                                                     │
+│  ┌─────────────────┬─────────────────┬─────────────────┬─────────────────────────┐   │
+│  │                 │ ON-DEMAND       │ RESERVED        │ SPOT                   │   │
+│  ├─────────────────┼─────────────────┼─────────────────┼─────────────────────────┤   │
+│  │ PRICE           │ 100% (full)     │ ~40% (60% off)  │ ~10% (90% off)        │   │
+│  │ COMMITMENT      │ None            │ 1-3 years       │ None (can be terminated)│   │
+│  │ FLEXIBILITY     │ Anytime         │ Locked in       │ Can vanish anytime     │   │
+│  └─────────────────┴─────────────────┴─────────────────┴─────────────────────────┘   │
+│                                                                                     │
+│  WHEN TO USE EACH:                                                                  │
+│  • STEADY WORKLOAD?        → RESERVED   (predictable baseline, commit & save)        │
+│  • BURSTY/UNPREDICTABLE?   → ON-DEMAND  (pay for peaks only when they happen)       │
+│  • FAULT-TOLERANT BATCH?   → SPOT       (can restart if terminated, max savings)  │
+│                                                                                     │
+│  TYPICAL MIX: Baseline (70%) = Reserved | Burst (20%) = On-Demand | Batch = Spot   │
+│  STAFF INSIGHT: Don't reserve 100%. Requirements change. 70-80% reserved is safer.   │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Compute Cost Optimization
@@ -3266,6 +3549,31 @@ FUNCTION optimize_dynamodb_capacity(table, traffic_patterns):
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Transfer Costs: The Silent Killer
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              DATA TRANSFER: THE ASYMMETRY (Cloud Loves Data IN, Charges for OUT)    │
+│                                                                                     │
+│  FREE (or cheap):                         EXPENSIVE:                               │
+│  ┌─────────────────────────────┐          ┌─────────────────────────────┐          │
+│  │  Data IN to cloud:  $0/GB   │          │  Data OUT:      $0.09/GB    │          │
+│  │  (Ingress is free)          │    !=     │  Cross-region:  $0.02/GB    │          │
+│  │                             │          │  Cross-AZ:      $0.01/GB    │          │
+│  └─────────────────────────────┘          └─────────────────────────────┘          │
+│                                                                                     │
+│  AT 10TB/MONTH:                                                                     │
+│  Cross-region transfer:  10TB x $0.02/GB  =  $200/month                             │
+│  Egress to internet:     10TB x $0.09/GB  =  $900/month  (Often the shocker)       │
+│  Cross-AZ (both ways):   10TB x $0.01x2   =  $200/month                             │
+│                                                                                     │
+│  THE TRAP: You design for correctness, add regions for latency, then get            │
+│  surprised by the data transfer bill. Replication = 2x-3x the data transfer.       │
+│                                                                                     │
+│  STAFF INSIGHT: Model egress and cross-region BEFORE adding multi-region.           │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### VPC Endpoint Cost Reduction
@@ -4121,6 +4429,39 @@ Staff Engineers anticipate how cost management fails in practice:
 | No cost monitoring | Blind to problems |
 | "We might need it" | YAGNI violation |
 | All data stored forever | Unbounded growth |
+
+---
+
+### Visual Summary: Chapter 32 in One Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│              CHAPTER 32: COST EFFICIENCY & SUSTAINABLE SYSTEM DESIGN                │
+│                         COMPREHENSIVE VISUAL SUMMARY                                 │
+│                                                                                     │
+│  FOUNDATION: Cost is correctness. A system that can't be afforded fails.            │
+│                                                                                     │
+│  THE COST ICEBERG              COST CLIFF              FOUR QUESTIONS              │
+│  Visible: Compute, DB          Scale -> Super-linear    Before scaling up:          │
+│  Hidden: 3-5x more             Sharding, Multi-region   1. Code efficient?          │
+│  (transfer, logs, ops)         Compliance              2. Cache effective?          │
+│                                                        3. Shed load?                │
+│                                                        4. Architecture right?       │
+│  ---------------------------------------------------------------------------------  │
+│                                                                                     │
+│  RIGHT-SIZE                PRICING MODELS             SUSTAINABILITY               │
+│  60-70% utilization        Reserved (steady)          CORRECT + SCALABLE +          │
+│  Not 10% (waste)          On-Demand (bursty)         AFFORDABLE + OPERABLE         │
+│  Auto-scale for peaks      Spot (batch)               = Sustainable                │
+│                                                                                     │
+│  DATA TRANSFER             COST OF NINES              BUILD vs BUY                  │
+│  IN = Free                 Each nine ~10x cost         Build = differentiator       │
+│  OUT = $0.09/GB            99.9% often enough         Buy = commoditized           │
+│  Cross-region = $0.02/GB                                                           │
+│                                                                                     │
+│  WHEN TO STOP: Payback > 18mo? Defer. Not biggest driver? Find it.                 │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

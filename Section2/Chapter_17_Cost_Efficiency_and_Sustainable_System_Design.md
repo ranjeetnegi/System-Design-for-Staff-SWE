@@ -60,6 +60,44 @@ This chapter teaches you how to think about cost the way Staff engineers do: not
 
 By the end, you'll approach cost as a dimension of engineering judgment, not a constraint imposed after the design is complete.
 
+### Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           CHAPTER 17: COST, EFFICIENCY & SUSTAINABLE SYSTEM DESIGN           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Cost is a first-class design constraint—not a post-launch     ║
+║  finance problem. Systems fail when they're unsustainable, not just wrong.  ║
+║                                                                               ║
+║  KEY RELATIONSHIPS:                                                           ║
+║                                                                               ║
+║    ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                    ║
+║    │  COMPUTE    │     │  STORAGE    │     │  NETWORK    │                    ║
+║    │  (visible)  │     │  (grows)    │     │  (hidden)   │                    ║
+║    └──────┬──────┘     └──────┬──────┘     └──────┬──────┘                    ║
+║           │                   │                   │                          ║
+║           └───────────────────┼───────────────────┘                          ║
+║                               ▼                                               ║
+║                    ┌─────────────────────┐                                    ║
+║                    │  OPERATIONAL COST   │  ← Often DOMINATES at scale        ║
+║                    │  (eng time, on-call)│                                    ║
+║                    └─────────────────────┘                                    ║
+║                               │                                               ║
+║                               ▼                                               ║
+║    Sustainable System = Correct + Scalable + Affordable + Operable            ║
+║                                                                               ║
+║  TAKEAWAYS:                                                                   ║
+║  • Four dimensions of cost: Compute, Storage, Network, Operational            ║
+║  • 99.99% costs 5-10x more than 99.9%—right-size for the use case            ║
+║  • Design for 5-year sustainability, not just launch-day correctness         ║
+║  • Over-engineering is a Staff-level failure mode—ask "what problem does       ║
+║    this complexity solve?"                                                     ║
+║  • Make cost visible before optimizing; trade off explicitly                  ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # Part 1: Foundations — What Cost Means in System Design

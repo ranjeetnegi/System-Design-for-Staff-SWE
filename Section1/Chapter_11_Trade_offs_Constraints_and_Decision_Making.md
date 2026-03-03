@@ -51,6 +51,38 @@ By the end, you'll have practical tools for navigating the complex decision land
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        CHAPTER 11: TRADE-OFFS, CONSTRAINTS & DECISION-MAKING — AT A GLANCE    ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: There is no perfect system. Staff engineers make trade-offs   ║
+║  EXPLICIT so the org can decide consciously—not accidentally.                ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+║  │                    KEY TRADE-OFF DIMENSIONS (Spectrum)                   │ ║
+║  │                                                                         │ ║
+║  │   Latency ←──────→ Consistency    Throughput ←────→ Latency              │ ║
+║  │   Simplicity ←──→ Flexibility     Cost ←─────────→ Performance           │ ║
+║  │   Speed ←──────→ Quality         Consistency ←──→ Availability (CAP)    │ ║
+║  │                                                                         │ ║
+║  │   L5: Requirements imply trade-offs. L6: YOU define which matter.        │ ║
+║  └─────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • 6-Step Communication: State tension → Explain both → Options → Trade-offs  ║
+║  • → Recommendation → Reversibility                                           ║
+║  • Implicit trade-offs cost: "optimized for now" → rewrite 6 months later     ║
+║  • Failure-aware: Project blast radius, rate limiter degrades gracefully      ║
+║  • Trade-offs evolve: Right at 1K users may be wrong at 1M                    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: Why Trade-offs Are Central to Staff-Level Design
 
 ## The Fundamental Truth of System Design
@@ -168,6 +200,37 @@ Let's explore the most common trade-off dimensions you'll encounter in system de
 ### How to Communicate
 
 "There's a fundamental tension between response time and data freshness. We can serve cached data in 5ms, or fetch from the database in 50ms. For [this use case], I recommend [choice] because [reasoning]. If [different context], we'd want to reconsider."
+
+### Visual: Latency vs. Consistency — Which Side to Favor?
+
+When choosing between latency and consistency, use this decision flow:
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           LATENCY vs. CONSISTENCY — STAFF ENGINEER DECISION FLOW              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║                    "Is incorrect/stale data costly?"                           ║
+║                                │                                              ║
+║              ┌──────────────────┴──────────────────┐                          ║
+║              │ YES                                  │ NO                       ║
+║              ▼                                      ▼                          ║
+║  ┌─────────────────────────┐          ┌─────────────────────────┐            ║
+║  │ FAVOR CONSISTENCY       │          │ FAVOR LATENCY            │            ║
+║  │ (CP in CAP terms)       │          │ (AP in CAP terms)        │            ║
+║  │                         │          │                         │            ║
+║  │ • Financial/checkout     │          │ • Homepage recommendations          │ ║
+║  │ • Auth, inventory       │          │ • User feed, read-heavy   │            ║
+║  │ • Multi-step workflows   │          │ • Slightly stale = OK     │            ║
+║  │ • System of record      │          │ • 5ms cache vs 50ms DB    │            ║
+║  └─────────────────────────┘          └─────────────────────────┘            ║
+║                                                                               ║
+║  Example: Checkout → consistency. Homepage feed → latency.                    ║
+║  State the trade-off: "We can serve in 5ms cached or 50ms DB. For [use case],  ║
+║  I recommend [choice] because [cost of wrong choice]."                         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ## Throughput vs. Latency
 
@@ -2097,6 +2160,36 @@ These are appropriately deferred; this chapter focuses on trade-off fundamentals
 │   If you check 8+, you're demonstrating Staff-level trade-off thinking.     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# Visual Summary: Chapter 11 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         VISUAL SUMMARY: CHAPTER 11 — TRADE-OFFS & DECISION-MAKING              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  COMMON DIMENSIONS              6-STEP COMMUNICATION                           ║
+║  ─────────────────             ──────────────────────                         ║
+║  • Latency ↔ Consistency       1. State the tension                           ║
+║  • Throughput ↔ Latency         2. Explain why both matter                     ║
+║  • Consistency ↔ Avail (CAP)   3. Describe options                            ║
+║  • Simplicity ↔ Flexibility    4. Articulate trade-offs for each              ║
+║  • Cost ↔ Performance          5. Recommend with reasoning                    ║
+║  • Speed ↔ Quality             6. Identify reversibility                      ║
+║                                                                               ║
+║  L5 vs L6                       FAILURE-AWARE (L6)                            ║
+║  ────────                       ────────────────                              ║
+║  L5: "What are requirements?"   • Project consequences of each choice          ║
+║  L6: "What are we giving up?"   • Assess blast radius before committing       ║
+║  L5: Implicit in requirements   • Rate limiter: degrade vs reject?             ║
+║  L6: YOU make them explicit     • One-way vs two-way doors                     ║
+║                                                                               ║
+║  KEY INSIGHT: Trade-offs evolve. Right at 1K users ≠ right at 1M. Revisit.    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---

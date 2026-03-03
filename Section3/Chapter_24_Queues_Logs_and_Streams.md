@@ -16,6 +16,39 @@ By the end, you'll have clear decision frameworks for async model selection and 
 
 ---
 
+## Visual 1: Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    CHAPTER 24: QUEUES, LOGS, STREAMS — AT A GLANCE          ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Three async models for different needs                         ║
+║  ─────────────────────────────────────────────────────────────────────────   ║
+║                                                                               ║
+║      QUEUE                  LOG                     STREAM                    ║
+║   ┌─────────┐          ┌─────────┐              ┌─────────┐                    ║
+║   │ Work    │          │ Event   │              │ Real-   │                    ║
+║   │ distro  │          │ history │              │ time    │                    ║
+║   │ SQS     │          │ Kafka   │              │ Flink   │                    ║
+║   └────┬────┘          └────┬────┘              └────┬────┘                    ║
+║        │                    │                        │                        ║
+║        └────────────────────┴────────────────────────┘                        ║
+║                              │                                                ║
+║                    "Replay need" is the FIRST question                        ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Queue: Consume = delete. One consumer per message. No replay. → SQS        ║
+║  • Log: Append-only. Multiple consumers. Replay from any offset. → Kafka      ║
+║  • Stream: Time-window aggregations. Built on logs. → Flink, Kafka Streams    ║
+║  • Match model to requirements — wrong choice = expensive tech debt          ║
+║  • Hybrid common: Kafka for events + SQS for work distribution (fan-out)    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Quick Visual: The Three Async Models at a Glance
 
 ```
@@ -174,6 +207,30 @@ These three terms are often conflated. Let's define them precisely.
 
 A queue is a *work distribution system*. Think of a call center: calls arrive, wait in a queue, and the next available agent takes the next call. Once handled, the call is "consumed"—it's gone.
 
+### Analogy: Queue = Post Office
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    QUEUE = POST OFFICE ANALOGY                              │
+│                                                                             │
+│   You (Producer)     POST OFFICE (Queue)      Mail Carrier (Consumer)       │
+│        │                     │                          │                   │
+│        │  Drop letter  ────► │  [A][B][C][D][E]         │                   │
+│        │  (message)          │      ↑                    │                   │
+│        │                      │   Letters wait           │  Pick up letter   │
+│        │                      │   in mailbox             │  Deliver once    │
+│        │                      │                          │  Letter GONE     │
+│        │                      │  After delivery:         │  from post office │
+│        │                      │  [B][C][D][E]  ← A gone!  │                   │
+│        │                      │                          │                   │
+│   ONE LETTER → ONE DELIVERY → ONE CONSUMER → GONE FOREVER                   │
+│                                                                             │
+│   Key insight: Once the mail carrier picks it up and delivers,              │
+│   that letter is removed from the post office. No replay. No re-read.        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Key Characteristics
 
 ```
@@ -229,6 +286,31 @@ A queue is a *work distribution system*. Think of a call center: calls arrive, w
 
 A log is an *append-only sequence of records*. Think of a transaction ledger: every event is written to the end, nothing is ever deleted (until configured retention expires), and anyone can read from any point in history.
 
+### Analogy: Log = Library Book
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LOG = LIBRARY ANALOGY (Kafka-style)                      │
+│                                                                             │
+│   LIBRARY SHELF (Log)              BOOKS (Messages) stay on shelf forever    │
+│   ┌────┬────┬────┬────┬────┬────┐                                           │
+│   │ 0  │ 1  │ 2  │ 3  │ 4  │ 5  │  ← Offset = "shelf position"             │
+│   └────┴────┴────┴────┴────┴────┘                                           │
+│        │     │     │     │                                                   │
+│        │     │     │     └──► Reader B: "I'm at book 3" (bookmark)           │
+│        │     │     └────────► Reader A: "I'm at book 2" (bookmark)           │
+│        │     └──────────────► Both can read same book — it stays on shelf    │
+│        │                                                                     │
+│   MULTIPLE READERS:  Person A, B, C can all read book 2 independently       │
+│   OFFSET:           "Where did I leave off?" — each reader tracks own pos   │
+│   NO REMOVAL:       Books NOT removed after reading — replay possible       │
+│                                                                             │
+│   Contrast with Queue (Post Office): Letter delivered = GONE                 │
+│   Here: Book read = STILL ON SHELF. Can re-read from any offset.            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Key Characteristics
 
 ```
@@ -276,11 +358,42 @@ A log is an *append-only sequence of records*. Think of a transaction ledger: ev
 
 ### Best Use Cases for Logs
 
-- **Event sourcing**: Complete history of state changes
+- **Event sourcing**: Complete history of state changes (see visual below)
 - **Data integration**: Multiple consumers reading same data
 - **Replay scenarios**: Rebuilding state, backfilling systems
 - **Audit trails**: Immutable record of what happened
 - **Stream processing**: Foundation for real-time analytics
+
+### Event Sourcing Visual: Events Over State
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EVENT SOURCING — EVENTS INSTEAD OF STATE                 │
+│                                                                             │
+│   TRADITIONAL: Store current state only                                      │
+│   ──────────────────────────────────                                         │
+│   balance = $150  ← Just the number. How did we get here? Lost.              │
+│                                                                             │
+│   EVENT SOURCING: Store the event log                                        │
+│   ───────────────────────────────────                                        │
+│   EVENT LOG (append-only):                                                   │
+│   [0] +$200 (deposit)   [1] -$50 (withdraw)   [2] +$100   [3] -$100         │
+│                                                                             │
+│   CURRENT STATE = Replay all events:  0 + 200 - 50 + 100 - 100 = $150        │
+│                                                                             │
+│   BENEFITS:                                                                  │
+│   • Rebuild ANY point in time: "What was balance after event 2?" → $250      │
+│   • Full audit trail: every change recorded                                  │
+│   • Debug: replay events to reproduce bug                                    │
+│   • Built on log (Kafka) — events persist, replayable                        │
+│                                                                             │
+│   ┌─────────────┐         ┌─────────────┐                                   │
+│   │  Event Log  │ ──────► │ Derived     │  Current state = f(events)         │
+│   │  (Kafka)   │  replay │ State (DB)  │                                   │
+│   └─────────────┘         └─────────────┘                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -392,6 +505,37 @@ A stream is a *continuous, unbounded flow of events* with *time-aware processing
 
 ---
 
+## Visual 2: Queue vs Log vs Stream — The Critical Comparison
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         QUEUE vs LOG vs STREAM — SIDE-BY-SIDE COMPARISON                      ║
+╠════════════════╦════════════════════╦════════════════════╦═══════════════════╣
+║   DIMENSION    ║      QUEUE         ║       LOG          ║     STREAM       ║
+╠════════════════╬════════════════════╬════════════════════╬═══════════════════╣
+║ SEMANTICS      ║ Competing consumers║ Independent read   ║ Continuous flow  ║
+║                ║ One gets it        ║ Each tracks offset  ║ Unbounded data    ║
+║                ║ Consume = delete   ║ Consume ≠ delete    ║ Time-window ops   ║
+╠════════════════╬════════════════════╬════════════════════╬═══════════════════╣
+║ RETENTION      ║ Until consumed     ║ Hours to forever   ║ Depends on source ║
+║                ║ (visibility TTL)   ║ (7 days typical)   ║ log retention     ║
+╠════════════════╬════════════════════╬════════════════════╬═══════════════════╣
+║ REPLAY         ║ NO — gone forever  ║ YES — any offset    ║ From source offset║
+║                ║ after ack          ║ Consumer re-reads   ║ (if log-backed)   ║
+╠════════════════╬════════════════════╬════════════════════╬═══════════════════╣
+║ EXAMPLES       ║ • Email send       ║ • Metrics pipeline  ║ • Click count     ║
+║                ║ • Image resize    ║ • Audit trail       ║   per 5 min       ║
+║                ║ • Report gen       ║ • Feed fan-out      ║ • Fraud detection ║
+║                ║ SQS, RabbitMQ      ║ Kafka, Kinesis      ║ Flink, Spark Str.║
+╚════════════════╩════════════════════╩════════════════════╩═══════════════════╝
+
+  FIRST QUESTION: "Do I need replay?" → YES: Log. NO: Continue...
+  SECOND QUESTION: "One consumer per message?" → YES: Queue. NO: Log.
+  THIRD QUESTION: "Time-window aggregations?" → YES: Stream processing.
+```
+
+---
+
 # Part 3: Ordering Guarantees — What They Mean in Practice
 
 Ordering is subtle. "FIFO" means different things in different contexts.
@@ -475,6 +619,31 @@ Ordering is subtle. "FIFO" means different things in different contexts.
 │   User 123's events: partition 2 → always in order                          │
 │   User 456's events: partition 7 → always in order                          │
 │   User 123 vs 456: no ordering guarantee                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Kafka Partition Ordering: Within vs Across
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    KAFKA PARTITION ORDERING — WITHIN vs ACROSS               │
+│                                                                             │
+│   ORDERING WITHIN PARTITION: Guaranteed ✓                                   │
+│   ────────────────────────────────                                          │
+│   Partition 0: [A1] → [A2] → [A3]  ← Always consumed in this order          │
+│   Partition 1: [B1] → [B2]        ← Always consumed in this order          │
+│                                                                             │
+│   ORDERING ACROSS PARTITIONS: NOT guaranteed ✗                               │
+│   ────────────────────────────────────────                                   │
+│   Consumer might receive: A1, B1, A2, B2, A3   (interleaved!)               │
+│   Or: B1, B2, A1, A2, A3   (B's all first!)                                 │
+│   Or: A1, A2, B1, A3, B2   (A1 could arrive AFTER B2 to different consumer) │
+│                                                                             │
+│   Why? Partitions are processed in parallel by different consumers.         │
+│   Timeline: B2 processed at T=5, A1 processed at T=7 — no global order.     │
+│                                                                             │
+│   RULE: Need ordering for user X? Partition by user_id. Same partition = order │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -656,6 +825,34 @@ Understanding consumer group behavior is essential for Staff Engineers operating
 | Consumer crashes | Heartbeat timeout | Longer pause (session timeout) |
 | Partition change | Topic partition added | All consumers pause |
 
+### Consumer Group Visual: How Groups Read Independently
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    KAFKA CONSUMER GROUPS — INDEPENDENT COPIES               │
+│                                                                             │
+│   TOPIC "orders" (4 partitions)                                             │
+│   ┌─────────┬─────────┬─────────┬─────────┐                                │
+│   │ P0      │ P1      │ P2      │ P3      │                                │
+│   │[A1][A2] │[B1][B2] │[C1][C2] │[D1][D2] │                                │
+│   └────┬────┴────┬────┴────┬────┴────┬────┘                                │
+│        │         │         │         │                                      │
+│   ┌────┴─────────┴─────────┴─────────┴────┐                               │
+│   │     CONSUMER GROUP A (4 consumers)       │  ← Each gets 1 partition     │
+│   │  A1→P0  A2→P1  A3→P2  A4→P3             │  All 4 read ALL messages     │
+│   └─────────────────────────────────────────┘                               │
+│        │         │         │         │                                      │
+│   ┌────┴─────────┴─────────┴─────────┴────┐                               │
+│   │     CONSUMER GROUP B (2 consumers)      │  ← Each gets 2 partitions     │
+│   │  B1→P0,P1    B2→P2,P3                   │  All 2 read ALL messages      │
+│   └─────────────────────────────────────────┘                               │
+│                                                                             │
+│   KEY: Group A and Group B BOTH get the FULL stream independently.          │
+│   Group A (analytics) doesn't affect Group B (alerts). Different offsets.  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Minimizing Rebalance Impact
 
 ```python
@@ -720,9 +917,68 @@ consumer = KafkaConsumer(
 
 ---
 
+## Visual 3: Decision Tree — Which Async Model Should I Use?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║            WHICH ASYNC MODEL SHOULD I USE? — DECISION TREE                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   START: "What's my primary need?"                                            ║
+║          │                                                                    ║
+║          ├──► SIMPLE TASK QUEUE (one consumer per message, no replay)        ║
+║          │    Examples: Email send, image resize, report gen                   ║
+║          │    → USE SQS / RabbitMQ                                            ║
+║          │    → Competing consumers, auto-delete on ack                        ║
+║          │                                                                    ║
+║          ├──► EVENT REPLAY NEEDED (multiple consumers, backfill, audit)        ║
+║          │    Examples: Metrics pipeline, audit trail, feed source             ║
+║          │    → USE KAFKA / Kinesis (Log)                                      ║
+║          │    → Each consumer tracks offset, replay from any point             ║
+║          │                                                                    ║
+║          └──► REAL-TIME CONTINUOUS (time-window aggregations, streaming)      ║
+║               Examples: "Count per 5 min", fraud detection, CEP               ║
+║               → USE FLINK / Kafka Streams (Stream processing)                 ║
+║               → Built ON Kafka log, adds time-window semantics                 ║
+║                                                                               ║
+║   HYBRID? Often: Kafka for event storage + SQS for work distribution         ║
+║   (Feed: Kafka → posts; SQS → fan-out tasks for 1000s of workers)            ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 5: Delivery Semantics — At-Least-Once and Exactly-Once
 
 This is where most confusion happens. Let's be precise.
+
+### Delivery Semantics: The Pizza Analogy
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          AT-MOST-ONCE vs AT-LEAST-ONCE vs EXACTLY-ONCE — PIZZA DELIVERY     │
+│                                                                             │
+│   AT-MOST-ONCE (Fire and forget)                                            │
+│   ───────────────────────────────                                          │
+│   Order pizza → Hope it arrives → Maybe it gets lost                        │
+│   Result: 0 or 1 pizza. Might not arrive at all! 🍕❓                        │
+│   Risk: DATA LOSS                                                           │
+│                                                                             │
+│   AT-LEAST-ONCE (Retry until ack)                                            │
+│   ────────────────────────────────                                          │
+│   Order pizza → Driver delivers → No confirmation → Retry → 2nd pizza!       │
+│   Result: 1 or more pizzas. Might get duplicate! 🍕🍕                       │
+│   Risk: DUPLICATES (need idempotency)                                        │
+│                                                                             │
+│   EXACTLY-ONCE (The holy grail — hard to guarantee!)                        │
+│   ─────────────────────────────────────────────────────                     │
+│   Order pizza → Exactly 1 pizza arrives. No loss, no duplicates. 🍕          │
+│   Reality: Usually = at-least-once + idempotent handling                    │
+│   Risk: Complex to implement across systems                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## At-Most-Once: Fire and Forget
 
@@ -973,6 +1229,68 @@ Let's apply this understanding to three systems: notification service, metrics p
 │   Dedup: idempotency key in notification_id                                 │
 │   Retry: SQS visibility timeout, max 3 retries                              │
 │   Failure: Move to DLQ after max retries                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Notification Pipeline: End-to-End Async Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    NOTIFICATION PIPELINE — FULL ASYNC FLOW                    │
+│                                                                             │
+│   USER ACTION (e.g., order placed)                                          │
+│        │                                                                     │
+│        ▼                                                                     │
+│   [Event Published] ──► [SQS Queue: notifications]                           │
+│        │                        │                                            │
+│        │                        ▼                                            │
+│        │                 [Notification Workers] (competing consumers)         │
+│        │                        │                                            │
+│        │                        ▼                                            │
+│        │                 [Router] — "Which channel for this user?"          │
+│        │                  │   │   │                                          │
+│        │                  ▼   ▼   ▼                                          │
+│        │              ┌────┐ ┌────┐ ┌────┐                                   │
+│        │              │Email│ │Push│ │SMS │  (channel selection)             │
+│        │              └──┬─┘ └──┬─┘ └──┬─┘                                  │
+│        │                 │      │      │                                      │
+│        │                 ▼      ▼      ▼                                      │
+│        │              SendGrid  FCM   Twilio  (external providers)           │
+│        │                 │      │      │                                      │
+│        │                 └──────┴──────┘                                      │
+│        │                        │                                            │
+│        └────────────────────────┴──► [User Device] 📧📱                      │
+│                                                                             │
+│   KEY: User gets response immediately. Notification arrives asynchronously.  │
+│   Queue absorbs spikes. Workers scale independently. DLQ for failures.      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Dead Letter Queue: The Hospital for Sick Messages
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DEAD LETTER QUEUE — THE HOSPITAL ANALOGY                  │
+│                                                                             │
+│   [Queue] ──► [Worker] ──► Process message                                  │
+│                 │                                                           │
+│                 ├─ Success ──► Ack, message deleted ✓                       │
+│                 │                                                           │
+│                 └─ Fail ──► Retry 1... Retry 2... Retry 3...                │
+│                              │                                              │
+│                              └─ Still failing? ──► [DLQ] 🏥                 │
+│                                                       │                     │
+│   DLQ = HOSPITAL: "Sick" messages go here for inspection                     │
+│   │                                                                         │
+│   ├─ Engineer inspects: Why did it fail? (bad format? bad data?)             │
+│   ├─ Fix: Correct the message or fix the consumer                           │
+│   └─ Replay: Put message back in main queue when healthy                    │
+│                                                                             │
+│   FLOW: Queue → Worker → Fail 3x → DLQ → Engineer → Fix → Replay → Queue   │
+│                                                                             │
+│   ALERT on DLQ depth! Poison messages must not block the queue.             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1327,11 +1645,73 @@ CONCLUSION: Use the right tool for each job
 
 ---
 
+## Visual 4: Fan-Out Pattern — One Event, Many Consumers
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              FAN-OUT PATTERN: ONE EVENT → MANY CONSUMERS                       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   CONCRETE EXAMPLE: Order Placed Event (E-commerce)                           ║
+║                                                                               ║
+║                    ┌─────────────────────────┐                               ║
+║                    │   ORDER PLACED EVENT    │                               ║
+║   [Order Service] ─►│   order_id, items, ...  │                               ║
+║                    └────────────┬────────────┘                               ║
+║                                 │                                            ║
+║              ┌──────────────────┼──────────────────┐                         ║
+║              │                  │                  │                         ║
+║              ▼                  ▼                  ▼                         ║
+║   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐               ║
+║   │   INVENTORY     │ │  NOTIFICATION   │ │   ANALYTICS     │               ║
+║   │   Service       │ │  Service        │ │   Service       │               ║
+║   │   (deduct qty)  │ │  (email, push)  │ │   (dashboard)   │               ║
+║   └─────────────────┘ └─────────────────┘ └─────────────────┘               ║
+║                                                                               ║
+║   WHY LOG (Kafka), NOT QUEUE:                                                 ║
+║   • Same order event consumed by ALL three — queue would need 3 separate       ║
+║   • Replay: If analytics had a bug, replay from offset to backfill           ║
+║   • Ordering: All events for order_123 in same partition → ordered            ║
+║   • Each consumer group tracks own offset independently                       ║
+║                                                                               ║
+║   Real systems: notification (SQS), metrics (Kafka), feed (Kafka + SQS hybrid) ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 6B: Advanced Staff-Level Topics
 
 ## Backpressure Handling
 
 Backpressure occurs when producers generate data faster than consumers can process it. Staff Engineers must design systems that handle this gracefully.
+
+### Backpressure in Queues: When Producers Outpace Consumers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BACKPRESSURE — PRODUCER >> CONSUMER                        │
+│                                                                             │
+│   Producer (100 msg/s)  ──────►  [Queue]  ──────►  Consumer (50 msg/s)     │
+│        │                              │                    │                │
+│        │                              │                    │                │
+│        │                    Queue grows! ▲                  │                │
+│        │                    +50 msg/sec │                  │                │
+│        │                    (unsustainable)                 │                │
+│        │                                                   │                │
+│   PROBLEM: Queue depth → ∞, latency → ∞, eventually OOM or limits          │
+│                                                                             │
+│   SOLUTIONS:                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │ 1. Add more consumers (scale out) — drain faster                    │   │
+│   │ 2. Slow down producers — backpressure signal, rate limit            │   │
+│   │ 3. Shed load — drop/sample low-priority messages                    │   │
+│   │ 4. Circuit breaker — stop accepting when queue > threshold          │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Backpressure by System Type
 
@@ -2305,6 +2685,34 @@ This gives us reliable delivery without the complexity of a log-based system tha
 | **Durability** | High (AWS) | Configurable | Configurable |
 | **Latency** | 20-50ms | 1-5ms | Sub-1ms |
 | **Best for** | Serverless, AWS | Complex routing | Speed-critical |
+
+### SQS vs Kafka Cheat Sheet
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SQS vs KAFKA — QUICK DECISION CHEAT SHEET                 │
+│                                                                             │
+│   USE SQS WHEN:                          USE KAFKA WHEN:                   │
+│   ─────────────────                     ─────────────────                  │
+│   • Simple work distribution             • Need replay from any point        │
+│   • Message deleted after consume       • Multiple consumer groups          │
+│   • No replay needed                    • High throughput (100K+ msg/s)      │
+│   • Managed, zero ops                    • Ordering per partition            │
+│   • Competing consumers scale            • Event sourcing / audit trail      │
+│   • Task queues, notifications           • Stream processing foundation      │
+│                                                                             │
+│   SQS                              KAFKA                                    │
+│   ────                             ─────                                    │
+│   Simple                           Complex (partitions, offsets, groups)   │
+│   Consume = delete                 Consume ≠ delete (retained)             │
+│   No replay                        Full replay from any offset             │
+│   ~3K msg/s per queue              ~1M msg/s per broker                    │
+│   Managed (AWS)                    Self-managed or Confluent/MSK           │
+│                                                                             │
+│   FIRST QUESTION: "Do I need replay?" → YES: Kafka. NO: Consider SQS.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Staff-Level Insight
 
@@ -3417,6 +3825,34 @@ START: What async model do I need?
                 ▼   └→ [LOG with simple consumers]
         [STREAM PROCESSING]
         (Flink, Kafka Streams)
+```
+
+---
+
+## Visual 5: Visual Summary — Chapter 24 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              CHAPTER 24: QUEUES, LOGS, STREAMS — COMPLETE SUMMARY             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  THE THREE MODELS          WHEN TO USE              KEY NUMBERS               ║
+║  ───────────────          ───────────              ───────────              ║
+║  Queue: Work distro        • No replay → SQS         • SQS FIFO: 300 TPS     ║
+║  Log: Event history        • Replay → Kafka          • Kafka: 1 cons/part    ║
+║  Stream: Time windows      • Aggregations → Flink    • Lag > retention = loss ║
+║                                                                               ║
+║  DECISION FLOW: Replay? → Log. One-per-msg? → Queue. Time windows? → Stream  ║
+║                                                                               ║
+║  REAL SYSTEMS:                                                                 ║
+║  • Notification: SQS (competing consumers, no replay)                          ║
+║  • Metrics: Kafka (replay, multi-consumer, ordering)                            ║
+║  • Feed: Kafka + SQS hybrid (log for posts, queue for fan-out tasks)           ║
+║                                                                               ║
+║  FAILURE HANDLING: DLQ, idempotency, ack-after-process, alert on lag          ║
+║  STAFF MINDSET: Match model to requirements. Don't default to one tech.        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---

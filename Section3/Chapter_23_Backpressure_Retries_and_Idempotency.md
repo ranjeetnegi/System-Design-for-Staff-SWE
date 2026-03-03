@@ -51,6 +51,39 @@ At Google scale, we don't just build systems that work—we build systems that *
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### Visual 2: The Stability Triangle — Three Legs of System Resilience
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         THE STABILITY TRIANGLE: THREE LEGS OF SYSTEM STABILITY                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║                         IDEMPOTENCY                                           ║
+║                     "Safe to retry"                                            ║
+║                            /\                                                 ║
+║                           /  \                                                ║
+║                          /    \   • Same key = same result                    ║
+║                         /      \  • No duplicate side effects                 ║
+║                        /        \ • Idempotency-Key header                     ║
+║                       /          \• Store = correctness store (24h TTL)       ║
+║                      /            \                                           ║
+║                     /______________\                                          ║
+║                    /                \                                         ║
+║                   /                  \                                        ║
+║      BACKPRESSURE                     RETRY CONTROL                           ║
+║   "Slow down before overload"     "Don't make failure worse"                   ║
+║   • Push vs pull (prefer pull)   • Exponential backoff + jitter               ║
+║   • Signal before 429            • Retry budget: max 10%                       ║
+║   • Bounded queues               • Circuit breaker: fail fast                  ║
+║   • Load shedding                • Never retry 4xx (except 429)                ║
+║                                                                               ║
+║   LEG 1 missing → Duplicate charges on retry (no idempotency)                 ║
+║   LEG 2 missing → Overload propagates, no "slow down" signal (no backpressure)║
+║   LEG 3 missing → Retry storm amplifies load 27x (no retry control)           ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ### Why Staff Engineers Must Master This
 
 | Level | Expectation |
@@ -72,6 +105,37 @@ At Google scale, we don't just build systems that work—we build systems that *
 | **HTTP 429** | "HTTP 429 is an admission that backpressure failed. The producer already sent the request. Ideally, we signal 'slow down' before they send it." |
 | **Recovery** | "Recovery is dangerous. The most dangerous moment is when the trigger ends—buffered retries can prevent the system from recovering." |
 | **Cascading failure** | "The most expensive outages aren't caused by the initial failure—they're caused by the retry storm that follows." |
+
+### Visual 1: Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              CHAPTER 23: BACKPRESSURE, RETRIES, IDEMPOTENCY AT A GLANCE       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: The Stability Triangle — three legs, all required.             ║
+║  Missing one = cascading failure waiting to happen.                           ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                    THE STABILITY TRIANGLE                               │  ║
+║  │                         IDEMPOTENCY                                     │  ║
+║  │                            /\                                           │  ║
+║  │                           /  \    Safe retries                          │  ║
+║  │                          /    \   No duplicate effects                   │  ║
+║  │              BACKPRESSURE -------- RETRY CONTROL                         │  ║
+║  │              Slow down flow         Budget, backoff,                      │  ║
+║  │              before overload       circuit breaker                      │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Retries amplify: 3 tiers × 3 retries each = 27x load on DB!                ║
+║  • Retry budget: max 10% retries; circuit breaker stops retries when failing   ║
+║  • Idempotency keys enable safe retries; idempotency store = correctness store ║
+║  • Backpressure: signal "slow down" before 429; HTTP 429 = admission of fail   ║
+║  • Recovery is dangerous: thundering herd when system comes back              ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -224,6 +288,67 @@ FUNCTION execute_with_retry(operation):
     THROW last_error
 ```
 
+### Visual 3: "How Should I Handle Failure?" Decision Tree
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              HOW SHOULD I HANDLE FAILURE? — DECISION TREE                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║                    ┌─────────────────────────┐                                ║
+║                    │   Request failed or      │                                ║
+║                    │   timed out?             │                                ║
+║                    └───────────┬─────────────┘                                ║
+║                                │                                              ║
+║                                ▼                                              ║
+║                    ┌─────────────────────────┐                                ║
+║                    │  Is it retryable?       │                                ║
+║                    │  (5xx, timeout, 429)    │                                ║
+║                    └───────────┬─────────────┘                                ║
+║                    ┌───────────┴───────────┐                                  ║
+║                   NO                      YES                                 ║
+║                    │                        │                                 ║
+║                    ▼                        ▼                                 ║
+║           ┌──────────────┐         ┌─────────────────┐                        ║
+║           │ Fail fast    │         │ Within retry     │                        ║
+║           │ (4xx except  │         │ budget (<10%)?  │                        ║
+║           │  429)        │         └────────┬────────┘                        ║
+║           └──────────────┘          ┌───────┴───────┐                          ║
+║                                   NO              YES                          ║
+║                                    │               │                           ║
+║                                    ▼               ▼                           ║
+║                          ┌──────────────┐  ┌──────────────┐                    ║
+║                          │ CIRCUIT      │  │ RETRY with   │                    ║
+║                          │ BREAKER      │  │ exponential  │                    ║
+║                          │ OPEN -       │  │ backoff +    │                    ║
+║                          │ fail fast    │  │ jitter       │                    ║
+║                          └──────────────┘  └──────┬───────┘                    ║
+║                                                   │                            ║
+║                                                   ▼                            ║
+║                          ┌─────────────────────────────────────┐               ║
+║                          │ Is downstream overloaded?           │               ║
+║                          │ (latency spike, queue depth)        │               ║
+║                          └───────────────┬─────────────────────┘               ║
+║                                  YES    │    NO                                ║
+║                                         ▼     │                                ║
+║                          ┌─────────────────┐  │                                ║
+║                          │ BACKPRESSURE    │  │                                ║
+║                          │ Signal "slow    │  │                                ║
+║                          │ down" upstream  │  │                                ║
+║                          └────────┬────────┘  │                                ║
+║                                   ▼           │                                ║
+║                          ┌─────────────────┐  │                                ║
+║                          │ LOAD SHEDDING   │  │                                ║
+║                          │ Drop non-critical│  │                                ║
+║                          │ requests if >   │◀─┘                                ║
+║                          │ capacity        │                                    ║
+║                          └─────────────────┘                                    ║
+║                                                                               ║
+║  Order: Timeout → Retry (if budget) → Circuit break if failing → Backpressure  ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## 3. Retry Storms and Amplification <a name="3-retry-storms-and-amplification"></a>
@@ -231,6 +356,34 @@ FUNCTION execute_with_retry(operation):
 ### Understanding Retry Storms
 
 A **retry storm** occurs when many clients simultaneously retry failed requests, creating a thundering herd that overwhelms an already struggling system.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              RETRY STORM: THE AVALANCHE — STEP-BY-STEP                  │
+│                                                                         │
+│   T0: Service B slow (100ms → 2s latency)                              │
+│       ┌─────────┐     ┌─────────┐     ┌─────────┐                      │
+│       │ Client  │────►│ Service │────►│ Service │  ← B drowning        │
+│       │  (x1000)│     │    A    │     │    B    │                      │
+│       └─────────┘     └─────────┘     └─────────┘                      │
+│                                                                         │
+│   T1: Service A retries 3x (each failed request)                        │
+│       1 request × 3 retries = 3 requests to B                           │
+│                                                                         │
+│   T2: 1000 clients × 3 retries = 3000 requests to B!                  │
+│       Normal load: 1000/s  →  Storm: 3000/s                              │
+│       B capacity: 500/s   →  OVERWHELMED by 6x                          │
+│                                                                         │
+│   T3: Service B drowns — starts returning 503                          │
+│                                                                         │
+│   T4: Service C (calls B) also affected — snowball!                    │
+│       ┌─────┐    ┌─────┐    ┌─────┐                                     │
+│       │  A  │───►│  B  │───►│  C  │  Cascade spreads                     │
+│       └─────┘    └──┬──┘    └─────┘                                     │
+│                    │  💀                                                 │
+│              One slow service → full system collapse                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -301,6 +454,47 @@ One of the most dangerous aspects of retry storms is **metastable failure**:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### Visual 4: Retry Storm Cascade — What Goes WRONG Without Proper Design
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           RETRY STORM CASCADE: ONE FAILURE → AMPLIFICATION → COLLAPSE          ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   T+0s   TRIGGER: Database GC pause 300ms                                     ║
+║          ────────────────────────────────────────────────▶                    ║
+║                                                                               ║
+║   T+0.3s Service B: 1st request TIMES OUT                                    ║
+║          ┌──────────────────────────────────────────────────────────────┐    ║
+║          │  Client (1000 users) → Gateway → Service A → Service B → DB   │    ║
+║          │      3 retries         3 retries    3 retries                 │    ║
+║          └──────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║   T+1s   AMPLIFICATION: Each layer retries                                    ║
+║          ┌─────────────────────────────────────────────────────────────┐      ║
+║          │  1 failure  →  Service B: 3 attempts                         │      ║
+║          │  3 attempts →  Service A: 9 attempts (3×3)                     │      ║
+║          │  9 attempts →  Clients: 27 attempts (3×9)                      │      ║
+║          │                                                              │      ║
+║          │  1000 users × 27 = 27,000 DB connections!                      │      ║
+║          │  DB capacity: 500 → OVERWHELMED by 54x                        │      ║
+║          └─────────────────────────────────────────────────────────────┘      ║
+║                                    │                                         ║
+║                                    ▼                                         ║
+║   T+2s   DOWNSTREAM COLLAPSE                                                  ║
+║          ┌─────────────────────────────────────────────────────────────┐      ║
+║          │  • Connection pool exhausted                                 │      ║
+║          │  • All threads blocked waiting                               │      ║
+║          │  • Health checks fail                                        │      ║
+║          │  • Load balancer marks instances unhealthy                   │      ║
+║          │  • Metastable: retries prevent recovery even after GC ends   │      ║
+║          └─────────────────────────────────────────────────────────────┘      ║
+║                                                                               ║
+║   PREVENTION: Retry budget (10%), circuit breaker, exponential backoff+jitter ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ### Breaking the Retry Storm
 
 #### Strategy 1: Retry Budgets
@@ -349,6 +543,32 @@ FUNCTION cleanup_old_entries():
 │                             │                                       │
 │   System: OVERWHELMED       │  System: STABLE                       │
 └─────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              THE RETRY BUDGET — AMPLIFICATION CAP                      │
+│                                                                         │
+│   Service has retry budget: 10% of requests can be retries                │
+│                                                                         │
+│   At 1000 QPS:                                                          │
+│   ┌─────────────────────────────────────────────────────────┐          │
+│   │  Total requests in window: 10,000                        │          │
+│   │  Max retries allowed: 1,000 (10%)                        │          │
+│   │                                                          │          │
+│   │  If 500 retries needed → OK, allow them                   │          │
+│   │  If 2000 retries needed → FAIL FAST, only 1000 allowed   │          │
+│   │                                                          │          │
+│   │  Prevents: 1 failure → 27x amplification                 │          │
+│   │  With budget: Capped at 1.1x even during outage          │          │
+│   └─────────────────────────────────────────────────────────┘          │
+│                                                                         │
+│   Budget exceeded?                                                      │
+│   ┌─────────┐                                                           │
+│   │ Retry?  │──NO──► Fail fast, return error to client                  │
+│   │ Request │       Don't amplify load on struggling backend            │
+│   └─────────┘                                                           │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Strategy 2: Adaptive Retry with Circuit Breaker
@@ -421,6 +641,36 @@ FUNCTION record_failure():
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              CIRCUIT BREAKER STATES — TRANSITION TRIGGERS                │
+│                                                                         │
+│   ┌─────────────┐                                                       │
+│   │   CLOSED    │  Normal: requests pass through                        │
+│   │             │  Counting failures...                                 │
+│   └──────┬──────┘                                                       │
+│          │ failure_count >= 5 (threshold)                                │
+│          ▼                                                              │
+│   ┌─────────────┐                                                       │
+│   │    OPEN     │  All calls FAIL FAST (no backend calls)               │
+│   │  Timer: 30s │  Protects backend from retry storm                   │
+│   └──────┬──────┘                                                       │
+│          │ timeout expires (30 sec)                                     │
+│          ▼                                                              │
+│   ┌─────────────┐                                                       │
+│   │ HALF_OPEN   │  Allow ONE test request                               │
+│   │ (probing)   │  "Is backend recovered?"                              │
+│   └──────┬──────┘                                                       │
+│          │                                                              │
+│    success│                    │failure                                 │
+│          ▼                    ▼                                        │
+│   ┌─────────────┐      ┌─────────────┐                                 │
+│   │   CLOSED    │      │    OPEN     │  (reset timer, try again later)  │
+│   │  (recovered)│      │  (still bad)│                                   │
+│   └─────────────┘      └─────────────┘                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 #### Strategy 3: Jittered Exponential Backoff
 
 ```
@@ -445,6 +695,32 @@ FUNCTION record_failure():
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              EXPONENTIAL BACKOFF + JITTER — SYNCHRONIZED VS SPREAD      │
+│                                                                         │
+│   WITHOUT JITTER (Thundering Herd):                                    │
+│   All 1000 clients retry at SAME times:                                │
+│                                                                         │
+│   Client 1:  ▓       ▓▓      ▓▓▓▓                                     │
+│   Client 2:  ▓       ▓▓      ▓▓▓▓     ← All at 1s, 2s, 4s              │
+│   Client 3:  ▓       ▓▓      ▓▓▓▓     ← SYNCHRONIZED SPIKE!             │
+│   ...       │       │       │                                          │
+│   Time:      1s      2s      4s                                        │
+│                                                                         │
+│   WITH JITTER (Spread Out):                                            │
+│   Each client gets random delay: delay ± 30%                           │
+│                                                                         │
+│   Client 1:  ▓         ▓▓        ▓▓▓▓                                 │
+│   Client 2:    ▓     ▓▓      ▓▓▓▓     ← Staggered                     │
+│   Client 3:      ▓       ▓▓    ▓▓▓▓   ← Load spread over time         │
+│   ...         │   │   │   │   │   │                                    │
+│   Time:      0.7 1.1 1.8 2.3 3.5 4.2  (random within range)            │
+│                                                                         │
+│   Jitter = RANDOM(delay × 0.7, delay × 1.3) prevents herd!             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 4. Idempotent APIs and Why They Matter <a name="4-idempotent-apis"></a>
@@ -452,6 +728,29 @@ FUNCTION record_failure():
 ### Definition and Importance
 
 **Idempotency**: An operation that produces the same result regardless of how many times it's executed.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              WHAT HAPPENS WITHOUT IDEMPOTENCY — 3 DISASTER SCENARIOS   │
+│                                                                         │
+│   (a) DOUBLE CHARGE 💸                                                  │
+│       User pays $100 → Timeout → User retries → $200 charged!          │
+│       😢 User: "I was charged twice!"                                   │
+│       Fix: Idempotency-Key on payment                                   │
+│                                                                         │
+│   (b) DUPLICATE ORDER 📦                                                │
+│       User clicks "Place Order" → Timeout → Clicks again → 2 orders!    │
+│       😢 User: "I only wanted one!"                                      │
+│       Fix: Idempotency-Key on order creation                            │
+│                                                                         │
+│   (c) EMAIL SENT TWICE 📧                                               │
+│       "Reset password" → Timeout → User retries → 2 emails sent!         │
+│       😢 User: "Spam!" + confusion                                      │
+│       Fix: Idempotency-Key on email send                                │
+│                                                                         │
+│   Pattern: Timeout + Retry + No idempotency = Duplicate side effects   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -504,6 +803,36 @@ FUNCTION record_failure():
 ```
 
 ### Implementing Idempotency Keys
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              IDEMPOTENCY KEY FLOW — NUMBERED STEPS                      │
+│                                                                         │
+│   (1) Client generates UUID: "550e8400-e29b-41d4-a716-446655440000"       │
+│                                                                         │
+│   (2) Client sends POST with Idempotency-Key header                     │
+│       POST /payments                                                     │
+│       Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000              │
+│       { "amount": 100 }                                                  │
+│                                                                         │
+│   (3) Server checks: Have we seen this key before?                        │
+│       ┌─────────────────────────────────────┐                            │
+│       │  Idempotency Store (Redis/DB)       │                            │
+│       │  key → { status, response }         │                            │
+│       └─────────────────────────────────────┘                            │
+│                                                                         │
+│   (4a) YES, seen before → Return CACHED response                         │
+│        "200 OK" + original response body                                 │
+│        Header: X-Idempotent-Replayed: true                               │
+│                                                                         │
+│   (4b) NO, first time → Process request                                 │
+│        Execute payment                                                  │
+│        Store key + response in idempotency store (24h TTL)              │
+│        Return fresh response                                            │
+│                                                                         │
+│   Safe retries: Same key always returns same result!                     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 PSEUDOCODE: Idempotency Service
@@ -854,6 +1183,36 @@ missing, skip what's done. Email service has its own idempotency."
 ### What is Backpressure?
 
 **Backpressure** is a mechanism for slower downstream systems to signal faster upstream systems to slow down.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              THE WATER PIPE ANALOGY — WHY BACKPRESSURE MATTERS          │
+│                                                                         │
+│   WITHOUT BACKPRESSURE:                                                  │
+│                                                                         │
+│   Faucet (Producer)     Pipe (Buffer)      Sink (Consumer)              │
+│   ┌─────────┐          ┌──────────┐       ┌─────────┐                 │
+│   │  💧💧💧  │ ────────►│ ░░░░░░░░ │───────►│  Drain  │                 │
+│   │  POUR   │  fast     │  Buffer  │  slow  │  (slow) │                 │
+│   └─────────┘          └────┬─────┘       └─────────┘                 │
+│                              │                                          │
+│                              ▼                                          │
+│                         OVERFLOW! 💥                                     │
+│                   (Buffer fills, water spills)                           │
+│                                                                         │
+│   WITH BACKPRESSURE:                                                     │
+│                                                                         │
+│   Faucet                Pipe                  Sink                     │
+│   ┌─────────┐          ┌──────────┐          ┌─────────┐              │
+│   │  💧     │◄─────────│  "Slow   │◄─────────│  Drain  │              │
+│   │  TURN   │  signal   │   down!" │  flow    │  (slow) │              │
+│   │  DOWN   │           │          │          └─────────┘              │
+│   └─────────┘          └──────────┘                                    │
+│                                                                         │
+│   Backpressure = Turning down the faucet when the sink drains slowly    │
+│   Prevents overflow = Prevents overload                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -1289,6 +1648,38 @@ fall behind, the queue grows - but the gateway never slows down."
 > "It's better to serve 80% of requests successfully than 100% of requests poorly."
 
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              LOAD SHEDDING: WHO GETS DROPPED? — 3 OPTIONS              │
+│                                                                         │
+│   System at 120% capacity. Must drop 20% of requests. Who?               │
+│                                                                         │
+│   Option A: RANDOM DROP                                                 │
+│   ┌─────────────────────────────────────────────────────────┐          │
+│   │  🎲 Every request has 20% chance of being dropped        │          │
+│   │  ⚠️  Unfair: VIP and health checks can be dropped        │          │
+│   │  Use when: All requests equal priority                   │          │
+│   └─────────────────────────────────────────────────────────┘          │
+│                                                                         │
+│   Option B: PRIORITY-BASED (Best for most systems)                     │
+│   ┌─────────────────────────────────────────────────────────┐          │
+│   │  VIP/Premium     │████████████████│ Never shed            │          │
+│   │  Health checks  │████████████████│ Never shed            │          │
+│   │  Normal         │██████████░░░░░░│ Shed at 75%           │          │
+│   │  Free tier      │██████░░░░░░░░░░│ Shed at 50%           │          │
+│   │  Analytics      │██░░░░░░░░░░░░░░│ Shed at 25%           │          │
+│   │  ✅ Protects critical paths                              │          │
+│   └─────────────────────────────────────────────────────────┘          │
+│                                                                         │
+│   Option C: LIFO (Newest dropped)                                       │
+│   ┌─────────────────────────────────────────────────────────┐          │
+│   │  Drop newest requests; oldest wait in queue              │          │
+│   │  ✅ Dropped clients can retry immediately                │          │
+│   │  Use when: Requests are independent, retry is cheap       │          │
+│   └─────────────────────────────────────────────────────────┘          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                 LOAD SHEDDING VS NO SHEDDING                        │
 │                                                                     │
@@ -1474,6 +1865,34 @@ FUNCTION should_process(request):
 
 **Key Insight**: Under pressure, analytics (red) sheds first. Health checks (green) never shed. This keeps the system observable even during failures.
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              THE COMPLETE RESILIENCE STACK — DEFENSE IN DEPTH            │
+│                                                                         │
+│   Layer 6  ┌─────────────────────────────────────────────┐              │
+│            │ GRACEFUL DEGRADATION                        │              │
+│            │ Fallback to cached/minimal when failing     │              │
+│   Layer 5  ├─────────────────────────────────────────────┤              │
+│            │ LOAD SHEDDING                               │              │
+│            │ Drop non-critical when overloaded           │              │
+│   Layer 4  ├─────────────────────────────────────────────┤              │
+│            │ BULKHEAD                                    │              │
+│            │ Isolate failure to one pool/segment         │              │
+│   Layer 3  ├─────────────────────────────────────────────┤              │
+│            │ CIRCUIT BREAKER                             │              │
+│            │ Fail fast when downstream failing           │              │
+│   Layer 2  ├─────────────────────────────────────────────┤              │
+│            │ RETRIES with backoff + jitter               │              │
+│            │ Limited attempts, spread load              │              │
+│   Layer 1  ├─────────────────────────────────────────────┤              │
+│            │ TIMEOUTS                                   │              │
+│            │ Don't wait forever                          │              │
+│            └─────────────────────────────────────────────┘              │
+│                                                                         │
+│   Each layer protects the next. All together = resilient system.        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Graceful Degradation Patterns
 
 ```
@@ -1636,6 +2055,31 @@ FUNCTION search(query):
 ### Anatomy of a Cascading Failure
 
 Let's walk through a real-world cascading failure scenario step by step.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              CASCADING FAILURE: THE DOMINO EFFECT — FULL CASCADE         │
+│                                                                         │
+│   Each hop AMPLIFIES latency. User sees timeout.                         │
+│                                                                         │
+│   T+0s    Service D slow (DB GC)     Latency: 100ms → 5000ms            │
+│              │                                                          │
+│              ▼                                                          │
+│   T+5s    Service C retries D       C: 100ms → 3000ms (retry storm)    │
+│              │                                                          │
+│              ▼                                                          │
+│   T+10s   Service B retries C        B: 100ms → 8000ms (amplified)      │
+│              │                                                          │
+│              ▼                                                          │
+│   T+15s   Service A retries B        A: 100ms → 12000ms                  │
+│              │                                                          │
+│              ▼                                                          │
+│   T+20s   User sees TIMEOUT 💀                                         │
+│                                                                         │
+│   DOMINO:  D(5s) → C(3s) → B(8s) → A(12s) → User timeout               │
+│   Each layer adds retries; each retry adds load; cascade spreads.       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -4310,6 +4754,36 @@ Backpressure, retries, and idempotency are the three pillars of resilient distri
 5. **Recovery is as important as failure handling.** Thundering herd on recovery has caused many secondary outages.
 
 6. **Quantify everything.** Retry amplification factors, backpressure thresholds, and recovery ramp rates should all be explicit.
+
+### Visual 5: Chapter 23 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        VISUAL SUMMARY: CHAPTER 23 — STABILITY IN ONE PICTURE                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  THE STABILITY TRIANGLE: Idempotency + Backpressure + Retry Control           ║
+║                                                                               ║
+║  RETRIES:                                                                     ║
+║  • Amplification: 3 tiers × 3 retries = 27x; 5 tiers = 243x!                  ║
+║  • Budget: max 10% retries; Circuit breaker: fail fast when downstream fails   ║
+║  • Backoff: exponential + jitter (never fixed interval)                       ║
+║  • Never retry: 4xx (except 429), auth errors, validation                      ║
+║                                                                               ║
+║  IDEMPOTENCY:                                                                  ║
+║  • Idempotency-Key header; same key = same result                              ║
+║  • Store = correctness store (durability like financial ledgers)              ║
+║  • Does NOT guarantee: ordering, business constraints, partial failures       ║
+║                                                                               ║
+║  BACKPRESSURE: Push vs Pull; signal "slow down" before 429; bounded queues     ║
+║  LOAD SHEDDING: Drop non-critical when overloaded; priority classification     ║
+║  CASCADING FAILURE: Trigger → retries → amplification → metastable → collapse ║
+║  RECOVERY DANGER: Buffered retries can prevent system from recovering         ║
+║                                                                               ║
+║  STAFF SIGNAL: "Retries are a multiplier, not a fix" — design for amplification ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 In interviews, demonstrate that you understand how these patterns interact. Don't just mention circuit breakers—explain how they integrate with retries and recovery. That's Staff-level thinking.
 

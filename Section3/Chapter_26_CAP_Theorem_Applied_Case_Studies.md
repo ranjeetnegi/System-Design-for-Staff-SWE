@@ -24,6 +24,35 @@ This section teaches CAP the way Staff Engineers actually use it: through case s
 
 ---
 
+## Visual 1: Chapter at a Glance
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CHAPTER AT A GLANCE: CAP Theorem — Applied Case Studies                    ║
+║   Core Concept: CAP is a FAILURE POLICY, not a design-time "pick two"       ║
+║   — When the network splits, which bad outcome can users tolerate?          ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   DIAGRAM: CAP only matters during partition                               ║
+║   ┌─────────────────────────┐      ┌─────────────────────────┐             ║
+║   │ NORMAL (99.9% of time)  │      │ PARTITION (0.1% time)   │             ║
+║   │ C + A + P all three ✓   │ ───► │ CHOOSE: C or A          │             ║
+║   └─────────────────────────┘      │ CP = errors, timeouts   │             ║
+║                                    │ AP = stale, inconsistent │             ║
+║                                    └─────────────────────────┘             ║
+║                                                                            ║
+║   KEY TAKEAWAYS:                                                           ║
+║   1. CAP is about failure mode — not normal operation                      ║
+║   2. The choice: errors (CP) vs stale data (AP) — which can users tolerate?║
+║   3. Per-feature, not system-wide — feed=AP, block list=CP                 ║
+║   4. Design explicitly — if you don't, the system decides for you (wrong)  ║
+║   5. Rate limiter→AP, News feed→AP, Messaging→AP (with careful state)      ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Quick Visual: CAP as a Failure Decision
 
 ```
@@ -147,6 +176,31 @@ When engineers say "we chose AP," they often mean:
 - During partition, our system will serve requests using local state, accepting potential inconsistency
 
 The system isn't "less available" or "less consistent" in normal operation. The choice only manifests during failure.
+
+### Visual: CAP — The Restaurant During a Storm
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CAP: THE RESTAURANT DURING A STORM                                       ║
+║   (Kitchen can't talk to dining room — network partition!)                 ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   CP (Consistency):                                                        ║
+║   "I can't verify orders with the kitchen. Stop taking orders until        ║
+║    communication is restored."                                              ║
+║   Waiter: "Sorry, we're temporarily closed."  ← Consistent but unavailable   ║
+║                                                                            ║
+║   AP (Availability):                                                       ║
+║   "Keep taking orders. We'll figure out conflicts when the storm passes."   ║
+║   Waiter: Takes orders. Kitchen gets them later. Maybe duplicate orders,   ║
+║           wrong orders, but restaurant stays OPEN.                          ║
+║   ← Available but might mess up orders                                     ║
+║                                                                            ║
+║   Which is worse? DEPENDS. Hospital cafeteria? CP. Food truck at a fair?  ║
+║   AP (better to serve than to turn people away).                            ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -295,6 +349,26 @@ Here are phrases that signal Staff-level understanding:
 
 > "The team hasn't explicitly designed for partition. Right now, they'd get CP by default, but I'm not sure that's the right choice..."
 
+### Visual: Real Systems — Where They Fall on the CAP Map
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   REAL SYSTEMS: Where They Fall on CP vs AP                                ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   CP SIDE (Consistency during partition):                                  ║
+║   ZooKeeper, etcd → Coordination, config. Spanner, CockroachDB, HBase.     ║
+║                                                                            ║
+║   AP SIDE (Availability during partition):                                  ║
+║   Cassandra, DynamoDB, Riak, CouchDB → Feeds, sessions, carts.             ║
+║                                                                            ║
+║   MIDDLE / TUNABLE: Cosmos DB, YugabyteDB → Configurable per request.     ║
+║                                                                            ║
+║   STAFF INSIGHT: No "best" choice. Match the system to the use case.       ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # Part 2: CAP During Real Failures
@@ -361,6 +435,34 @@ If Server A can't reach Server B, there are multiple possibilities:
 - B is overloaded and not responding
 
 A can't distinguish these cases. It must make a decision anyway.
+
+### Visual: Partition Happens — Now What?
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   PARTITION HAPPENS: Network splits datacenter into 2 halves               ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   BEFORE:  DC-East  ═══════════  DC-West                                    ║
+║            2 nodes     sync      3 nodes                                    ║
+║                                                                            ║
+║   PARTITION:  DC-East  ╳╳╳╳╳╳╳╳  DC-West                                   ║
+║               N1, N2            N3, N4, N5   (can't communicate)            ║
+║                                                                            ║
+║   CP CHOICE:                                                               ║
+║   Only the MAJORITY side (West, 3 nodes) accepts writes.                    ║
+║   East (minority): "Sorry, can't reach quorum." → REJECT                    ║
+║   West: Serves requests. East users: errors.                               ║
+║                                                                            ║
+║   AP CHOICE:                                                               ║
+║   BOTH sides accept writes. Data diverges.                                  ║
+║   East: writes locally. West: writes locally.                              ║
+║   When partition heals: RECONCILE conflicts (LWW, merge, CRDT, etc.)      ║
+║                                                                            ║
+║   STAFF INSIGHT: Quorum = majority. 5 nodes, split 2-3 → only 3 can proceed. ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -473,6 +575,74 @@ A *partial* partition is when communication is unreliable, asymmetric, or affect
 
 **Staff-level insight**: Full partitions are dramatic but handleable. Partial partitions are subtle and dangerous. Design your failure detection and CAP policies assuming partial partitions.
 
+### Visual: The Partition Timeline — Step by Step
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   THE PARTITION TIMELINE: What Happens When                               ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   T0  All good. Regions sync. C + A both available.                         ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║   T1  Network split. Partition begins.                                     ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║   T2  Requests arrive at BOTH sides.                                       ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║   T3a CP: One side rejects (no quorum). Other side serves.                  ║
+║       Users in minority partition: "Service unavailable"                    ║
+║   T3b AP: BOTH sides serve. Data diverges. Users see stale/local data.     ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║   T4  Partition heals. Network restored.                                    ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║   T5a CP: Resume normal. No reconciliation needed.                         ║
+║   T5b AP: RECONCILE conflicts. LWW, merge, or app-level resolution.        ║
+║           Users may see corrections, merged state.                          ║
+║                                                                            ║
+║   Key: CP = errors during, clean after. AP = available during, fix after.   ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## Visual 4: Partition Scenario Walkthrough — Step-by-Step
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   PARTITION SCENARIO: Network splits. What happens? Step-by-step.          ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   T+0   NORMAL: Region A ←──── sync ────→ Region B                        ║
+║         Both see same data. Reads/writes work everywhere.                   ║
+║                                                                            ║
+║   T+1   PARTITION STARTS: Fiber cut. A ⇏ B.                                ║
+║         Regions cannot communicate. CAP choice activates.                  ║
+║                                                                            ║
+║   T+2   READS:                                                             ║
+║         • CP: If read needs quorum → ERROR (can't reach B)                  ║
+║         • AP: Serve from local copy → OK (may be stale)                    ║
+║         User in Region A: CP sees "try again"; AP sees data (possibly old) ║
+║                                                                            ║
+║   T+3   WRITES:                                                            ║
+║         • CP: Write needs consensus → REJECT (can't coordinate with B)      ║
+║         • AP: Accept locally, queue for sync later → OK                   ║
+║         User in Region A: CP gets timeout; AP gets "success" (local only)   ║
+║                                                                            ║
+║   T+4   DURING PARTITION (e.g., 15 min):                                    ║
+║         Region A and B both accept writes. Data DIVERGES.                  ║
+║         Same key: A has "v2", B has "v2'" — different values.               ║
+║                                                                            ║
+║   T+5   PARTITION HEALS: A ↔ B again.                                       ║
+║         • CP: No reconciliation (no divergent writes). Resume normal.       ║
+║         • AP: Must RECONCILE. Conflict resolution: LWW, merge, or custom.  ║
+║         Users may see corrections, merged state, or "eventually" updates.   ║
+║                                                                            ║
+║   STAFF INSIGHT: CP = honest errors during partition, clean after.         ║
+║                  AP = available during partition, reconciliation after.   ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## How CAP Decisions Surface as User-Visible Symptoms
@@ -538,6 +708,34 @@ Every CAP decision has a user experience implication. Staff Engineers trace the 
 | **Search** | "Search unavailable" | Returns slightly outdated results | AP |
 | **Auth/Login** | "Cannot log in, try later" | Might allow unauthorized access | CP |
 | **E-commerce cart** | "Cart unavailable" | Cart might lose recent additions | Hybrid |
+
+### Visual: CP vs AP — The Two Failure Modes
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CP vs AP: WHICH FAILURE MODE CAN USERS TOLERATE?                         ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   CP FAILURE MODE:                                                         ║
+║   "Sorry, system temporarily unavailable. Please try again later."         ║
+║   User can't do ANYTHING. Blocked. Frustrated.                             ║
+║   But: User never sees WRONG data.                                         ║
+║                                                                            ║
+║   AP FAILURE MODE:                                                         ║
+║   "Your balance shows $100"  (but it's actually $80)                       ║
+║   User sees WRONG data. Might overdraft. Might make bad decisions.          ║
+║   But: User can still USE the system.                                      ║
+║                                                                            ║
+║   WHICH IS WORSE? DEPENDS ON THE FEATURE.                                   ║
+║   • Bank balance → CP (wrong balance = overdraft, lawsuits)                 ║
+║   • Like count → AP (off by a few = harmless)                               ║
+║   • Block list → CP (show blocked user's content = safety issue)            ║
+║   • Profile photo → AP (stale photo = fine)                                ║
+║                                                                            ║
+║   STAFF INSIGHT: Design per-feature. Same system, different choices.       ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -1065,6 +1263,33 @@ Staff Engineers design feeds with **multiple consistency levels**:
 │   This is not complexity for its own sake—it's precision engineering.       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: Per-Feature CAP Choices — Same System, Different Needs
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   PER-FEATURE CAP: One System, Many Choices                                ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   SAME APP ─── DIFFERENT FEATURES ─── DIFFERENT CAP CHOICES                 ║
+║                                                                            ║
+║   ┌──────────────────┬────────────┬─────────────────────────────────────┐ ║
+║   │ Feature          │ Choice     │ Why                                  │ ║
+║   ├──────────────────┼────────────┼─────────────────────────────────────┤ ║
+║   │ User balance     │ CP         │ Can't have wrong balance. Overdraft. │ ║
+║   │ Like count       │ AP         │ Off by a few is OK. Nobody verifies. │ ║
+║   │ Block list       │ CP         │ Safety critical. Block must work NOW.│ ║
+║   │ Profile photo    │ AP         │ Stale is fine. Refresh will fix.     │ ║
+║   │ Feed posts       │ AP         │ Missing a post = annoying, not fatal │ ║
+║   │ Auth/login       │ CP         │ Wrong auth = security breach.        │ ║
+║   │ Rate limiter     │ AP (often) │ Over-allow vs block legitimate users │ ║
+║   └──────────────────┴────────────┴─────────────────────────────────────┘ ║
+║                                                                            ║
+║   STAFF INSIGHT: Don't pick "CP" or "AP" for the whole system.             ║
+║                  Pick per feature based on wrong-data vs no-access cost.   ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -1818,6 +2043,32 @@ function resolve_custom(order_a, order_b):
 ```
 
 **Staff Insight:** "The conflict resolution strategy you choose determines your AP system's correctness guarantees. LWW is cheap but lossy. Merge is safe for additive data but complex. Application-level is always correct but expensive to build and maintain. Choose based on the cost of a wrong resolution — for shopping carts, a reappearing item is annoying. For payments, a duplicate charge is a legal problem."
+
+### Visual: Conflict Resolution Strategies — When AP Systems Diverge
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   CONFLICT RESOLUTION: How to Reconcile When AP Systems Diverge             ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   STRATEGY          │ HOW IT WORKS              │ EXAMPLE                  ║
+║   ──────────────────┼───────────────────────────┼────────────────────────── ║
+║   LWW (Last Writer  │ Timestamp decides.        │ Profile: "John" vs "Jon" ║
+║   Wins)             │ Newer overwrites older.   │ → Later edit wins.       ║
+║   ──────────────────┼───────────────────────────┼────────────────────────── ║
+║   MERGE             │ Combine both versions.     │ Cart: A has milk, B has ║
+║                     │ Union for sets.            │ eggs → {milk, eggs}       ║
+║   ──────────────────┼───────────────────────────┼────────────────────────── ║
+║   APPLICATION-LEVEL │ Let user resolve.          │ Git merge conflict:     ║
+║                     │ Show both, human chooses. │ "Choose A or B"          ║
+║   ──────────────────┼───────────────────────────┼────────────────────────── ║
+║   CRDTs             │ Automatic, conflict-free. │ Counters, sets merge     ║
+║                     │ Math guarantees converge.  │ without coordination.    ║
+║                                                                            ║
+║   Choose based on: wrong resolution cost. Cart merge=OK. Payment LWW=BAD.  ║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -3041,6 +3292,41 @@ For a system of your choice (or use "Online Food Ordering Platform"), create a p
 │   It will probably be the wrong decision.                                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Visual 5: Chapter 26 CAP in One Picture
+
+```
+╔═════════════════════════════════════════════════════════════════════════════╗
+║   VISUAL SUMMARY: CAP THEOREM — ALL KEY TAKEAWAYS IN ONE PICTURE           ║
+╠═════════════════════════════════════════════════════════════════════════════╣
+║                                                                            ║
+║   CAP IS: Failure policy during partition │ CAP IS NOT: "Pick two"        ║
+║   ─────────────────────────────────────────────────────────────────────    ║
+║                                                                            ║
+║   DECISION: "Which bad outcome can users tolerate during partition?"        ║
+║   ┌─────────────────────────────┬─────────────────────────────┐           ║
+║   │ CP: Errors, timeouts         │ AP: Stale, inconsistent     │           ║
+║   │ "Try again later"             │ "Here's what I have"        │           ║
+║   └─────────────────────────────┴─────────────────────────────┘           ║
+║                                                                            ║
+║   PER-FEATURE EXAMPLES:                                                    ║
+║   ┌──────────────────┬─────┬──────────────────────────────────────────┐   ║
+║   │ Banking transfer │ CP  │ Wrong balance = overdraft                  │   ║
+║   │ Social feed      │ AP  │ Stale posts OK, errors kill engagement    │   ║
+║   │ Block list       │ CP  │ Blocked content must never appear        │   ║
+║   │ Rate limiter     │ AP  │ Over-allow during partition; audit after │   ║
+║   │ Messaging        │ AP  │ Show "sent"; delivery can delay            │   ║
+║   └──────────────────┴─────┴──────────────────────────────────────────┘   ║
+║                                                                            ║
+║   REAL SYSTEMS: Zookeeper/Spanner=CP │ Cassandra/DynamoDB=AP               ║
+║                                                                            ║
+║   STAFF ACTIONS: (1) Design partition behavior explicitly (2) Per-feature  ║
+║   (3) Test with chaos (4) Document for on-call (5) Re-evaluate post-incident║
+║                                                                            ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---

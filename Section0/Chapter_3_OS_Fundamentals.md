@@ -10,6 +10,42 @@ This chapter gives you a solid grounding in OS fundamentals from a **server and 
 
 ---
 
+# Chapter at a Glance
+
+```
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║           CHAPTER 3: OS FUNDAMENTALS — THE MENTAL MODEL              ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║   Think of a SERVER as a KITCHEN:                                    ║
+    ║                                                                      ║
+    ║   PROCESS = Kitchen (isolated space with its own stuff)              ║
+    ║   THREADS = Chefs in that kitchen (share the stove & fridge)         ║
+    ║   MEMORY  = Counter space (more = more work at once)                 ║
+    ║   CPU     = The stove (does the actual cooking)                      ║
+    ║   DISK    = The warehouse out back (huge but slow to fetch from)     ║
+    ║                                                                      ║
+    ║   ┌───────────── SPEED LADDER ──────────────────────────────────┐    ║
+    ║   │                                                             │    ║
+    ║   │   CPU Registers  ████                        0.3 ns         │    ║
+    ║   │   L1 Cache       ██████                      1 ns           │    ║
+    ║   │   L2 Cache       ████████                    3 ns           │    ║
+    ║   │   RAM            ████████████████             100 ns        │    ║
+    ║   │   SSD            ████████████████████████     100,000 ns    │    ║
+    ║   │   HDD            ████████████████████████████ 10,000,000 ns │    ║
+    ║   │                                                             │    ║
+    ║   │   RAM is 1000x faster than SSD                              │    ║
+    ║   │   SSD is 100x faster than HDD                               │    ║
+    ║   │   This is WHY we cache!                                     │    ║
+    ║   └─────────────────────────────────────────────────────────────┘    ║
+    ║                                                                      ║
+    ║   MOST SERVERS ARE I/O-BOUND (waiting), NOT CPU-BOUND (computing)    ║
+    ║   Before adding CPU: Check if CPU is actually busy!                  ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Quick Visual: The Four Pillars
 
 ```
@@ -218,6 +254,41 @@ Today we talk about **C100K** and **C1M** — same idea, bigger numbers. The sol
 **Rule of thumb for CPU-bound**: `threads ≈ number of CPU cores` (or slightly more with hyper-threading). More threads than cores just adds context switching.
 
 **Why This Matters at Scale**: Mis-sized thread pools cause either (a) requests queuing and timing out, or (b) excessive memory and context switching. Staff engineers tune based on measured latency and load, not guesses.
+
+### Visual: "Is My Server Sick?" Diagnostic Flowchart
+
+```
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║         SERVER IS SLOW — WHERE'S THE BOTTLENECK?             ║
+    ╠═══════════════════════════════════════════════════════════════╣
+    ║                                                               ║
+    ║                   Server is slow                              ║
+    ║                       │                                       ║
+    ║                       ▼                                       ║
+    ║               ┌───────────────┐                               ║
+    ║               │ CPU usage > 80%?│                              ║
+    ║               └───────┬───────┘                               ║
+    ║                  YES/ \NO                                     ║
+    ║                  /     \                                      ║
+    ║                 ▼       ▼                                     ║
+    ║          CPU-BOUND    ┌───────────────┐                       ║
+    ║          • Profile    │ Memory growing?│                      ║
+    ║          • Optimize   └───────┬───────┘                       ║
+    ║            hot path      YES/ \NO                             ║
+    ║          • Add cores     /     \                              ║
+    ║                         ▼       ▼                             ║
+    ║                   MEM ISSUE   ┌──────────────────┐            ║
+    ║                   • GC pause  │ Disk IOPS maxed? │            ║
+    ║                   • Leak?     └──────┬───────────┘            ║
+    ║                   • Heap dump    YES/ \NO                     ║
+    ║                                  /     \                      ║
+    ║                                 ▼       ▼                     ║
+    ║                           DISK-BOUND  I/O-BOUND (network)    ║
+    ║                           • Add SSD   • Connection pool      ║
+    ║                           • Index     • Cache                ║
+    ║                           • Cache     • Async I/O            ║
+    ╚═══════════════════════════════════════════════════════════════╝
+```
 
 ## L5 vs L6: Concurrency Model
 
@@ -728,3 +799,37 @@ Use this foundation when designing systems. When latency spikes, think: process 
 2. "Where does our p99 latency come from—GC, I/O, or CPU?"
 3. "What's our cache hit rate, and what happens on a miss?"
 4. "If we 10x traffic, what breaks first—threads, memory, DB, or disk?"
+
+---
+
+# Visual Summary: Chapter 3 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 3 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   THE FOUR PILLARS:                                                   ║
+    ║   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐               ║
+    ║   │PROCESS/ │  │ MEMORY  │  │   CPU   │  │ DISK I/O│               ║
+    ║   │ THREAD  │  │  (RAM)  │  │         │  │         │               ║
+    ║   ├─────────┤  ├─────────┤  ├─────────┤  ├─────────┤               ║
+    ║   │Concurr- │  │~100 ns  │  │Executes │  │~100us-  │               ║
+    ║   │ency     │  │access   │  │instruct-│  │10ms     │               ║
+    ║   │model    │  │         │  │ions     │  │access   │               ║
+    ║   └─────────┘  └─────────┘  └─────────┘  └─────────┘               ║
+    ║                                                                       ║
+    ║   CONCURRENCY MODELS (memory for 10K connections):                    ║
+    ║   Thread/req: ~10 GB  │  Event loop: ~100 MB  │  Goroutines: ~50 MB  ║
+    ║                                                                       ║
+    ║   MOST WEB SERVERS = I/O-BOUND (CPU is idle, waiting for DB/network)  ║
+    ║   Fix I/O-bound: cache, connection pool, async I/O                    ║
+    ║   Fix CPU-bound: profile first, then add cores                        ║
+    ║                                                                       ║
+    ║   GC PAUSES = why your p99 has periodic spikes                        ║
+    ║   Java GC pause: 10-500ms  │  Go GC: sub-ms  │  Use ZGC for Java     ║
+    ║                                                                       ║
+    ║   RAM > SSD > HDD (1000x gaps between each)                           ║
+    ║   Keep hot data in RAM. That's the whole game.                         ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```

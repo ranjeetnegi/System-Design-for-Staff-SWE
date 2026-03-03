@@ -211,6 +211,28 @@ ALTER TABLE users DROP COLUMN email;
 
 **Never**: Drop a column in the same deploy as code that stops using it. If rollback happens, code expects the column—it's gone. **Always** separate schema changes from code changes when possible, and make schema forward- and backward-compatible.
 
+### Blue-Green Deployment: The Instant Swap
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    BLUE-GREEN: THE INSTANT SWAP                                  │
+│                                                                                 │
+│   BEFORE SWITCH                         AFTER SWITCH                             │
+│   ┌─────────────┐                      ┌─────────────┐                          │
+│   │ Load Balancer│                      │ Load Balancer│                         │
+│   └──────┬──────┘                      └──────┬──────┘                          │
+│          │ 100% traffic                       │ 100% traffic                     │
+│          ▼                                    ▼                                  │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐      │
+│   │   BLUE      │    │   GREEN     │    │   BLUE      │    │   GREEN     │      │
+│   │ (current v1)│    │ (new v2)    │    │ (idle)      │    │ (serving)   │      │
+│   │ SERVING     │    │ IDLE        │    │             │    │ ✓ Instant   │      │
+│   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘      │
+│                                                                                 │
+│   Rollback = switch traffic BACK to Blue. Seconds, not minutes. No redeploy.     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Blue-Green: Practical Considerations
 
 ### Traffic Switching Mechanisms
@@ -308,6 +330,27 @@ The name comes from coal miners using canary birds to detect toxic gas—the can
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Canary Deployment: 1% First, Then Scale or Roll Back
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    CANARY: 1% FIRST — SMALL BLAST RADIUS                          │
+│                                                                                 │
+│   Stage 1: 1% to new version        Stage 2: If good → 10% → 50% → 100%          │
+│   ┌─────────────┐                   ┌─────────────┐                             │
+│   │ Load Balancer│                   │ Load Balancer│                             │
+│   └──────┬──────┘                   └──────┬──────┘                             │
+│     99% │ 1%                               │ 50% │ 50% (example)                 │
+│         ▼   ▼                                  ▼   ▼                              │
+│   ┌─────────────┐  ┌─────────────┐     ┌─────────────┐  ┌─────────────┐         │
+│   │ Baseline v1│  │ Canary v2   │     │ Baseline v1 │  │ Canary v2   │         │
+│   │ 99% traffic│  │ 1% traffic  │     │ 50% traffic │  │ 50% traffic │         │
+│   └─────────────┘  └─────────────┘     └─────────────┘  └─────────────┘         │
+│                                                                                 │
+│   If BAD at 1%: Route all back to baseline. Only 1% of users affected by bugs.   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Metrics to Watch
 
 | Metric | Why It Matters |
@@ -336,6 +379,26 @@ Reduces human toil and speeds up safe rollouts.
 - **Con**: Bug affects *all* servers (e.g., memory leak) but only X% of users see the feature. May still affect system-wide resources.
 
 **When to use**: User-visible behavior changes, A/B tests. **When not**: Performance changes, infra changes—those need real canary servers.
+
+### A/B Testing vs Feature Flags vs Canary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    A/B vs FEATURE FLAGS vs CANARY — DIFFERENT GOALS               │
+│                                                                                 │
+│   A/B TESTING              FEATURE FLAGS             CANARY                     │
+│   ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐         │
+│   │ Goal: Test       │     │ Goal: Toggle     │     │ Goal: Test      │         │
+│   │ different UX     │     │ features on/off  │     │ infra stability │         │
+│   │                   │     │                   │     │                   │         │
+│   │ Measure: User     │     │ Measure: N/A      │     │ Measure: Errors, │         │
+│   │ behavior,        │     │ (instant rollback│     │ latency, CPU     │         │
+│   │ conversion       │     │  without deploy)  │     │                   │         │
+│   └─────────────────┘     └─────────────────┘     └─────────────────┘         │
+│                                                                                 │
+│   "Which button color converts better?"  "Can I turn this off now?"  "Is v2 stable?"
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Advantages and Disadvantages
 
@@ -987,6 +1050,24 @@ Rolling back code is easy—deploy previous code. Rolling back schema (DROP COLU
 
 **Strategy**: **Always** make schema migrations backward-compatible.
 
+### Rollback: The Time Machine
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    ROLLBACK: THE TIME MACHINE                                     │
+│                                                                                 │
+│   TIMELINE                                                                      │
+│   10:00 AM              2:00 PM                    2:05 PM                      │
+│   ┌─────────────┐      ┌─────────────┐            ┌─────────────┐              │
+│   │ Last known  │      │ Something   │            │ Rollback to │              │
+│   │ good deploy │      │ goes wrong  │   ───────▶  │ 10 AM version│             │
+│   │ ✓ Stable    │      │ ✗ Errors    │   ROLLBACK  │ Traffic      │              │
+│   └─────────────┘      └─────────────┘            │ restored    │              │
+│                                                    └─────────────┘              │
+│   Then: Post-mortem. Fix. Redeploy when ready.                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ```
 SAFE SEQUENCE:
 1. Add column (nullable or default)     → Old and new code both work
@@ -1162,6 +1243,61 @@ Authors: [names]
 ---
 
 # Appendix: Deployment Strategy Comparison
+
+### Deployment Pipeline: Gates at Each Stage
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    DEPLOYMENT PIPELINE: GATES AT EACH STAGE                      │
+│                                                                                 │
+│   Code commit → CI (build+test) → Stage (integration) → Canary (1%) → Prod 100% │
+│        │              │                    │                   │          │     │
+│        │              │                    │                   │          │     │
+│   ┌────┴────┐    ┌─────┴─────┐    ┌─────────┴─────────┐    ┌─────┴─────┐         │
+│   │ Build   │    │ Unit tests │    │ Integration tests │    │ Monitor   │         │
+│   │ Lint    │    │ Pass?     │    │ E2E? Deploy to    │    │ Errors?   │         │
+│   │         │    │           │    │ staging           │    │ Latency?  │         │
+│   └────┬────┘    └─────┬─────┘    └─────────┬─────────┘    └─────┬─────┘         │
+│        │               │                    │                   │               │
+│        └───────────────┴────────────────────┴───────────────────┘               │
+│        Fail at any gate → Stop. Fix. Don't push broken code forward.           │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Deployment Risk Matrix: Why Deploying More Often Is Safer
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    DEPLOYMENT RISK MATRIX                                         │
+│                                                                                 │
+│   Frequency        │  Risk per deploy    │  Total risk      │  Outcome          │
+│   ─────────────────┼────────────────────┼──────────────────┼──────────────────  │
+│   Daily + flags    │  LOW (small blasts) │  LOW             │  Ship fast, recover│
+│   Weekly + canary  │  MEDIUM            │  MEDIUM          │  Balanced          │
+│   Monthly big-bang │  HIGH (100% blast) │  HIGH           │  Fear of deploy    │
+│   ─────────────────┼────────────────────┼──────────────────┼──────────────────  │
+│                                                                                 │
+│   Deploy often + contain blast radius = lower risk per change.                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### GitOps Flow: Desired State in Git
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    GITOPS: DESIRED STATE IN GIT                                  │
+│                                                                                 │
+│   ┌─────────┐     Change = PR     ┌─────────┐     PR merged     ┌─────────┐   │
+│   │   GIT   │ ◀────────────────── │  Deploy │ ◀──────────────── │  Monitor │   │
+│   │ (truth) │                      │  (auto) │                    │          │   │
+│   └────┬────┘                      └────┬────┘                    └────┬────┘   │
+│        │                                │                               │        │
+│        │ Rollback = revert PR            │                               │        │
+│        └────────────────────────────────┴───────────────────────────────┘        │
+│                                                                                 │
+│   Git is source of truth. Change = PR. Rollback = revert PR. Declarative.         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
 
 | Strategy | Rollback Speed | Blast Radius | Infra Cost | Complexity | Best For |
 |----------|----------------|--------------|------------|------------|----------|

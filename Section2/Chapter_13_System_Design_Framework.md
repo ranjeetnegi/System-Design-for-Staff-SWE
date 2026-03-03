@@ -83,6 +83,47 @@ Let's begin.
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    CHAPTER 13: SYSTEM DESIGN FRAMEWORK AT A GLANCE            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: Don't design until you've established context. Staff engineers ║
+║  use 5 phases as a CONTRACT before drawing a single box.                      ║
+║                                                                               ║
+║  THE 5-PHASE FLOW:                                                            ║
+║  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐       ║
+║  │ 1. USERS &  │───▶│ 2. FUNC    │───▶│ 3. SCALE    │───▶│ 4. NFRs     │       ║
+║  │   USE CASES │    │ REQUIREMENTS│   │             │    │             │       ║
+║  └─────────────┘    └─────────────┘    └─────────────┘    └──────┬──────┘       ║
+║         │                  │                  │                  │             ║
+║         └──────────────────┴──────────────────┴──────────────────┘             ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║                          ┌─────────────────┐                                   ║
+║                          │ 5. ASSUMPTIONS  │                                   ║
+║                          │    & CONSTRAINTS │                                   ║
+║                          └────────┬────────┘                                   ║
+║                                   │                                            ║
+║                                   ▼                                            ║
+║                      ╔═══════════════════════╗                                 ║
+║                      ║ NOW start designing!  ║                                 ║
+║                      ╚═══════════════════════╝                                 ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                                ║
+║  • Framework = contract with interviewer ("Do you agree?")                     ║
+║  • Senior jumps to architecture; Staff establishes context first                ║
+║  • 1K users ≠ 100M users → context changes EVERYTHING                          ║
+║  • Over-engineering and under-engineering both stem from wrong context          ║
+║  • 5-10 minutes on framework saves wasted design effort                         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: Why a Structured Framework Is Necessary at Staff Level
 
 ## The Problem with "Just Design"
@@ -151,6 +192,38 @@ The interviewer either confirms or corrects. Now you're on the same page.
 Without this contract, you might design something great—but for the wrong problem. That's not success; that shows you don't validate requirements before building.
 
 At Google, Staff engineers are responsible for making sure they're solving the right problem. The framework phase is where you show that.
+
+### Key Concept Visual: The Framework as Contract
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              SENIOR vs STAFF: THE CONTRACT MINDSET                            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   SENIOR (L5): "Design a notification system"                                  ║
+║   ┌─────────────────────────────────────────────────────────────────────┐    ║
+║   │  "Okay, we need a database, message queue, servers..."               │    ║
+║   │  → Jumps to solution WITHOUT establishing agreement                  │    ║
+║   │  → Might build something great for the WRONG problem                  │    ║
+║   └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║   STAFF (L6): "Design a notification system"                                  ║
+║   ┌─────────────────────────────────────────────────────────────────────┐    ║
+║   │  "Before I design, here's my understanding:                          │    ║
+║   │   • Users: End consumers + internal services (who sends?)            │    ║
+║   │   • Form: Send/receive notifications across push, email, SMS          │    ║
+║   │   • Scale: 30M DAU × 20/day = 7K/sec, peak 10x = 70K/sec             │    ║
+║   │   • NFRs: 99.9% uptime, 5-sec delivery P95                           │    ║
+║   │   • Constraints: Small team → favor operational simplicity           │    ║
+║   │   Does this match what you had in mind?"                             │    ║
+║   │  → CONTRACT first, then design                                       │    ║
+║   └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║   THE EXCHANGE:  You state understanding → Interviewer confirms/corrects       ║
+║   THE RESULT:    Same page. Design fits the ACTUAL problem.                   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -2282,6 +2355,35 @@ Goal: Understand that constraints are often more negotiable than they appear.
 
 ---
 
+# Visual Summary: Chapter 13 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║            VISUAL SUMMARY: CHAPTER 13 — SYSTEM DESIGN FRAMEWORK               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  THE FIVE PHASES (in order):                                                  ║
+║  ┌───────────────────────────────────────────────────────────────────────┐    ║
+║  │ 1. Users & Use Cases   → Who? What are they trying to do?             │    ║
+║  │ 2. Functional Reqs    → What must the system DO?                      │    ║
+║  │ 3. Scale              → How big? (Users, data, requests, growth)      │    ║
+║  │ 4. Non-Functional     → What qualities? (Availability, latency, etc.) │    ║
+║  │ 5. Assumptions        → What's given? What limits us?                  │    ║
+║  └───────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║  WHY FRAMEWORK?            WHAT IT PROVIDES              SENIOR vs STAFF      ║
+║  • Context determines     • Completeness (checklist)    • Senior: Jumps to   ║
+║    the right design       • Prioritization                architecture       ║
+║  • 1K ≠ 100M users        • Communication               • Staff: Contract    ║
+║  • Generic = wrong         • Flexibility                   first, then build ║
+║  • Framework = contract    • Calibration (right level)                       ║
+║                                                                               ║
+║  BACK-OF-ENVELOPE: 1 day ≈ 86,400 sec | QPS = Daily/100K | Peak = 2-10x avg  ║
+║                                                                               ║
+║  REMEMBER: "Here's what I understand we're building. Do you agree?"            ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

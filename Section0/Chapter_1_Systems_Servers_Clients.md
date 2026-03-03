@@ -8,6 +8,36 @@ Every distributed system—from a simple blog to Google's search infrastructure�
 
 This chapter gives you that foundation. You'll learn what a "system" really means when you're thinking beyond a single service, what makes servers different from clients (and why the same process can be both), what actually happens when you type a URL, and how the request/response pattern scales—and breaks—in real systems. By the end, you'll have the language and mental models to talk about these basics with Staff-level precision, and connect simple ideas to the trade-offs that shape real-world architecture.
 
+# Chapter at a Glance
+
+```
+                    ╔══════════════════════════════════════════════════════════╗
+                    ║           CHAPTER 1: THE WHOLE PICTURE                   ║
+                    ╠══════════════════════════════════════════════════════════╣
+                    ║                                                          ║
+                    ║   SYSTEM = Many parts, one purpose (like a restaurant)   ║
+                    ║                                                          ║
+                    ║   ┌────────┐  request   ┌────────┐  query  ┌─────────┐  ║
+                    ║   │ CLIENT ├───────────►│ SERVER ├────────►│DATABASE │  ║
+                    ║   │ (asks) │◄───────────┤(answers)│◄────────┤ (stores)│  ║
+                    ║   └────────┘  response  └────────┘  result └─────────┘  ║
+                    ║                                                          ║
+                    ║   KEY INSIGHT: Same process can be BOTH client & server  ║
+                    ║                                                          ║
+                    ║   ┌─────────────────────────────────────────────────┐    ║
+                    ║   │  1 user click  ──►  5-20 internal calls        │    ║
+                    ║   │  10K user QPS  ──►  50-200K internal QPS       │    ║
+                    ║   │  This is REQUEST AMPLIFICATION (fan-out)       │    ║
+                    ║   └─────────────────────────────────────────────────┘    ║
+                    ║                                                          ║
+                    ║   TYPING A URL: DNS ► TCP ► TLS ► HTTP ► Server ► Back  ║
+                    ║                 0ms   50ms  50ms  1ms   50ms     ~200ms  ║
+                    ║                                                          ║
+                    ║   L5 thinks: "I built this component"                    ║
+                    ║   L6 thinks: "How does this component affect the WHOLE?" ║
+                    ╚══════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # Part 1: What is a "System" in Software?
@@ -19,6 +49,31 @@ A **system** in software is a set of parts that work together for a purpose. Not
 Think of a restaurant. The menu, the waiter, the kitchen, the fridge, the stove, the cash register—each does one thing. No single part can run the restaurant. Together, they create the experience. That's a system.
 
 In software, when you open Netflix, you see movies. Behind that one experience: recommendation services, video delivery, playback state storage, payment processing, authentication. None of these can deliver "watch a movie" alone. Together, they form a **system**.
+
+### The Restaurant Analogy (Visual)
+
+```
+    ╔═══════════════════════════════════════════════════════════════════╗
+    ║              A RESTAURANT IS A SYSTEM                            ║
+    ╠═══════════════════════════════════════════════════════════════════╣
+    ║                                                                   ║
+    ║   Customer                                                        ║
+    ║   (CLIENT)  ───►  Waiter  ───►  Kitchen  ───►  Fridge/Pantry     ║
+    ║                   (API)       (SERVER)       (DATABASE)           ║
+    ║                                                                   ║
+    ║   "I'd like      Routes      Processes       Stores raw          ║
+    ║    pasta"        orders       the order       ingredients         ║
+    ║                                                                   ║
+    ║   ─────────────────────────────────────────────────────────────   ║
+    ║                                                                   ║
+    ║   Cash Register = Payment Service     Menu = API Contract        ║
+    ║   Reservations  = Rate Limiter        Waiting Area = Queue       ║
+    ║   Multiple Chefs = Thread Pool        Recipe Book = Business Logic║
+    ║                                                                   ║
+    ║   If the kitchen catches fire (crash), the dining room            ║
+    ║   (other services) might still work = FAULT ISOLATION             ║
+    ╚═══════════════════════════════════════════════════════════════════╝
+```
 
 ## Components That Make Up Systems
 
@@ -208,6 +263,34 @@ Drawing the boundary *narrower* (excluding Stripe) means: "When Stripe is down, 
 
 In interviews, showing boundary-thinking means: "I'd start by defining what's in scope. Our system will include X, Y, Z. We'll treat A, B as external dependencies with documented fallbacks. Here's how that affects our SLAs and failure modes."
 
+### Visual: Drawing the Boundary Line
+
+```
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                                                                     │
+    │   ┌─── YOUR SYSTEM (you own, you operate, you're on-call) ─────┐   │
+    │   │                                                             │   │
+    │   │   ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌────────────┐  │   │
+    │   │   │  API    │  │ Order    │  │Inventory│  │  Payment   │  │   │
+    │   │   │ Gateway │─►│ Service  │─►│ Service │  │ Orchestr.  │  │   │
+    │   │   └─────────┘  └──────────┘  └─────────┘  └─────┬──────┘  │   │
+    │   │                                                  │         │   │
+    │   └──────────────────────────────────────────────────┼─────────┘   │
+    │                                                      │             │
+    │                          BOUNDARY LINE               │             │
+    │   ┌─── EXTERNAL (you integrate, they operate) ──────┼─────────┐   │
+    │   │                                                  ▼         │   │
+    │   │   ┌─────────┐  ┌──────────┐  ┌─────────────────────────┐  │   │
+    │   │   │ Stripe  │  │ SendGrid │  │ CDN (CloudFront)        │  │   │
+    │   │   │(payment)│  │ (email)  │  │ (static assets)         │  │   │
+    │   │   └─────────┘  └──────────┘  └─────────────────────────┘  │   │
+    │   └───────────────────────────────────────────────────────────┘   │
+    │                                                                     │
+    │   YOUR SLA = what's inside YOUR boundary                            │
+    │   Stripe down ≠ your system down (but checkout IS broken)           │
+    └─────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 2: What is a Server? What is a Client?
@@ -337,6 +420,36 @@ Containers hit a sweet spot:
 | **Legacy monolith** | VM | Often easier to lift-and-shift a VM than to containerize. |
 
 **Staff-level decision**: Choose based on traffic pattern, latency requirements, team size, and operational maturity. "We use Kubernetes because we have 50 services and need orchestration" is valid. "We use Lambda for webhooks because they're sporadic and we don't want to pay for idle servers" is also valid. The wrong choice: "We use serverless for our user-facing API" when p99 latency matters and cold starts would hurt.
+
+### Visual: Server Evolution Timeline
+
+```
+    ════════════════════════════════════════════════════════════════════════
+                        SERVER EVOLUTION AT A GLANCE
+    ════════════════════════════════════════════════════════════════════════
+
+     BARE METAL          VMs              CONTAINERS         SERVERLESS
+     (pre-2000s)        (mid-2000s)       (2013+)           (2014+)
+         │                 │                 │                  │
+         ▼                 ▼                 ▼                  ▼
+    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────────┐
+    │ ████████ │     │ ┌──────┐ │     │ ┌──┐┌──┐ │     │  f( )        │
+    │ ████████ │     │ │ VM 1 │ │     │ │C1││C2│ │     │              │
+    │ ONE APP  │     │ ├──────┤ │     │ ├──┤├──┤ │     │  Runs only   │
+    │ ONE BOX  │     │ │ VM 2 │ │     │ │C3││C4│ │     │  when called │
+    │          │     │ └──────┘ │     │ └──┘└──┘ │     │              │
+    └──────────┘     └──────────┘     └──────────┘     └──────────────┘
+
+    Utilization:      Utilization:     Utilization:      Utilization:
+      5-15%             50-70%          70-90%            100% (pay/use)
+
+    Boot: N/A         Boot: minutes    Boot: seconds     Boot: 100ms-10s
+    Density: 1 app    Density: 5-20    Density: 50-200+  Density: ∞
+
+    Cost: $$$$$       Cost: $$$        Cost: $$          Cost: $ (at low vol)
+    Control: FULL     Control: HIGH    Control: MEDIUM   Control: LOW
+    ════════════════════════════════════════════════════════════════════════
+```
 
 ## Server Capacity: What Limits a Single Server?
 
@@ -845,6 +958,36 @@ One user action can trigger many internal calls:
 
 One of the most common mistakes in capacity estimation is assuming that "user QPS" equals "system QPS." In reality, a single user request often fans out to many internal requests. Staff engineers model this amplification explicitly—it drives provisioning, cost, and failure analysis.
 
+### Visual: The Fan-Out Iceberg
+
+```
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║                THE FAN-OUT ICEBERG                            ║
+    ║                                                               ║
+    ║         What the user sees:                                   ║
+    ║         ═══════════════════                                   ║
+    ║               1 click                                         ║
+    ║         ═══════════════════                                   ║
+    ║    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  ◄── Surface            ║
+    ║                                                               ║
+    ║         What actually happens:                                ║
+    ║         ══════════════════════                                ║
+    ║              1 API call                                       ║
+    ║             / | | | \                                         ║
+    ║            /  | | |  \                                        ║
+    ║           5 service calls                                     ║
+    ║          /||\ /||\ /||\                                       ║
+    ║         15-30 DB/cache ops                                    ║
+    ║        /||||\ /||||\ /||||\                                   ║
+    ║       50-100 total internal ops                               ║
+    ║                                                               ║
+    ║    ┌─────────────────────────────────────────────────────┐    ║
+    ║    │  10K user QPS × 20 fan-out = 200K internal QPS       │    ║
+    ║    │  Under-provision for 10K and you WILL crash at 10K  │    ║
+    ║    └─────────────────────────────────────────────────────┘    ║
+    ╚═══════════════════════════════════════════════════════════════╝
+```
+
 ### How 1 User Request Becomes 10–100 Internal Requests
 
 A user action—clicking "Load Feed," opening a product page, placing an order—triggers a tree of internal calls. Each downstream service may call *its* dependencies. The **fan-out factor** is the average number of internal requests generated per user request. Typical numbers: 5–20 for a moderately complex API; 50–100+ for a rich feed or dashboard.
@@ -1108,6 +1251,45 @@ Systems fail at every layer. Staff-level thinking means knowing **what can go wr
 - **"Our system is the monolith"**: Ignoring that one user request triggers many internal and external calls. Capacity and failure mode analysis must include **full request path** and **fan-out**.
 - **"We'll add caching later"**: Hot path without caching often becomes the first production fire. Design cache strategy (what to cache, where, TTL, invalidation) with the initial design.
 - **"If the DB is slow we'll scale it"**: Single DB has a ceiling. Staff engineers plan **read replicas**, **sharding**, or **different stores** before hitting the ceiling.
+
+---
+
+# Visual Summary: Chapter 1 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 1 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   1. SYSTEM = Many parts, one purpose                                 ║
+    ║      ┌──┐ ┌──┐ ┌──┐ ┌──┐                                            ║
+    ║      │S1│─│S2│─│S3│─│DB│  ◄─ Not one box. Many boxes, working        ║
+    ║      └──┘ └──┘ └──┘ └──┘     together for one goal.                  ║
+    ║                                                                       ║
+    ║   2. CLIENT asks, SERVER answers (roles, not identities)              ║
+    ║      Phone ──► API ──► DB                                             ║
+    ║      CLIENT    BOTH    SERVER  ◄─ API is client TO the DB             ║
+    ║                                                                       ║
+    ║   3. BOUNDARIES define ownership & blast radius                       ║
+    ║      ┌─ OURS ──────────┐  ┌─ EXTERNAL ─┐                             ║
+    ║      │ API, Services   │  │ Stripe, CDN │                             ║
+    ║      │ Our SLA = HERE  │  │ Their SLA   │                             ║
+    ║      └─────────────────┘  └─────────────┘                             ║
+    ║                                                                       ║
+    ║   4. URL JOURNEY = many hops, each adds latency                       ║
+    ║      DNS ► TCP ► TLS ► LB ► App ► DB ► back                          ║
+    ║      0ms  50ms  50ms  2ms  50ms 20ms = ~200ms total                   ║
+    ║                                                                       ║
+    ║   5. FAN-OUT: 1 user click = 10-100 internal operations               ║
+    ║      10K user QPS × 20 fan-out = 200K backend QPS                     ║
+    ║      ALWAYS multiply when doing capacity planning!                   ║
+    ║                                                                       ║
+    ║   6. L5 → L6 SHIFT: Component thinking → System thinking              ║
+    ║      "I built the cache" → "Cache failure causes thundering herd;    ║
+    ║       here's the stampede protection plan"                            ║
+    ║                                                                       ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

@@ -18,6 +18,46 @@ This chapter teaches you how to think, act, and communicate when requirements ar
 
 ---
 
+# Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           CHAPTER 10: DESIGNING UNDER AMBIGUITY — AT A GLANCE                 ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: L5 treats ambiguity as a blocker. L6 treats it as an          ║
+║  opportunity to demonstrate judgment—by asking, assuming, and proceeding.     ║
+║                                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+║  │                    THE AMBIGUITY → DESIGN FLOW                          │ ║
+║  │                                                                         │ ║
+║  │   Problem Given     →  Understand Core  →  Identify Critical Unknowns    │ ║
+║  │        │                     │                        │                 │ ║
+║  │        ▼                     ▼                        ▼                 │ ║
+║  │   "Design X"         "What are we solving?"    Scale? Latency?         │ ║
+║  │                                                      Consistency?       │ ║
+║  │        │                     │                        │                 │ ║
+║  │        └─────────────────────┴────────────────────────┘                 │ ║
+║  │                                  │                                      │ ║
+║  │                    Ask Targeted Q's  OR  State Assumptions              │ ║
+║  │                                  │                                      │ ║
+║  │                                  ▼                                      │ ║
+║  │                     Proceed with Flexibility                            │ ║
+║  │                                                                         │ ║
+║  └─────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Ask enough to understand core problem; not so much you appear paralyzed     ║
+║  • State assumptions explicitly: "I'm assuming X because Y"                  ║
+║  • Safe assumptions: reasonable, stated, reversible, conservative when hard   ║
+║  • Strong questions show understanding; weak questions ask for hand-holding   ║
+║  • Design for assumptions but note where flexibility exists                   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Quick Visual: Ambiguity Navigation at a Glance
 
 ```
@@ -165,6 +205,42 @@ Staff Engineers use a systematic approach to ambiguous problems. Here's the fram
 │   - Show how design would differ under different assumptions                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: Ask vs. Assume — Decision Flow
+
+When facing an unknown, use this flowchart to decide whether to ask or assume:
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              ASK vs. ASSUME — STAFF ENGINEER DECISION TREE                    ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║                         Facing an Unknown                                     ║
+║                                │                                             ║
+║                                ▼                                             ║
+║              ┌─────────────────────────────────────┐                          ║
+║              │ Would this fundamentally change      │                          ║
+║              │ the architecture? (scale, consis-   │                          ║
+║              │ tency, latency, compliance)         │                          ║
+║              └──────────────┬──────────────┬───────┘                          ║
+║                            │ NO            │ YES                               ║
+║                            ▼               ▼                                  ║
+║              ┌──────────────────┐  ┌──────────────────┐                        ║
+║              │  ASSUME          │  │  ASK             │                        ║
+║              │  State it:       │  │  One targeted    │                        ║
+║              │  "I'll assume X   │  │  question that   │                        ║
+║              │  because Y. If   │  │  reveals WHY it  │                        ║
+║              │  wrong, I'd..."   │  │  matters         │                        ║
+║              └──────────────────┘  └──────────────────┘                        ║
+║                            │               │                                  ║
+║                            └───────┬───────┘                                  ║
+║                                    ▼                                          ║
+║                         PROCEED with design                                   ║
+║                                                                               ║
+║  L5 trap: Asks for everything OR assumes silently. L6: Strategic balance.     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ## Example: Applying the Framework
@@ -2498,6 +2574,39 @@ For a system design problem (e.g., "Design a payment system"):
 | **H. Security & compliance** | ✅ Covered | Part 12.9; Data sensitivity, trust boundaries, compliance questions |
 | **I. Observability & debuggability** | ✅ Covered | Part 12.9; Metrics, logs, traces, production debugging |
 | **J. Cross-team & org impact** | ✅ Covered | Part 12.3; Multi-team implications, ownership, governance |
+
+---
+
+# Visual Summary: Chapter 10 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              VISUAL SUMMARY: CHAPTER 10 — DESIGNING UNDER AMBIGUITY           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WHY AMBIGUITY EXISTS          THE 5-STEP FRAMEWORK                           ║
+║  ─────────────────────         ────────────────────────                       ║
+║  • Real world = concerns,       1. Understand core problem                    ║
+║    not requirements             2. Identify critical unknowns                 ║
+║  • Interview recreates reality  3. Ask targeted questions                      ║
+║  • Tests: panic vs proceed      4. State assumptions explicitly               ║
+║                                 5. Proceed with flexibility                   ║
+║                                                                               ║
+║  ASSUMPTION SAFETY               QUESTION QUALITY                             ║
+║  ────────────────               ────────────────                              ║
+║  ✓ Reasonable given context     Weak: "What's QPS?" "SQL or NoSQL?"           ║
+║  ✓ Stated explicitly            Strong: "Scale changes architecture—         ║
+║  ✓ Reversible                         millions vs billions of events?"         ║
+║  ✓ Conservative when critical                                                 ║
+║                                                                               ║
+║  L5 vs L6 MINDSET               ONE-LINER                                    ║
+║  ────────────────               ─────────                                    ║
+║  L5: "I need requirements"      "Good decision now > perfect decision never"  ║
+║  L6: "I'll assume X because Y;                                               ║
+║       if wrong, here's how I'd adjust"                                        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

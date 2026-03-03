@@ -57,6 +57,39 @@ This section covers both phases together because they're deeply interrelated. No
 
 By the end of this section, you'll approach these phases with confidence. You'll know which quality attributes to consider, how to reason about trade-offs, and how to articulate the foundation your design stands on.
 
+### Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         CHAPTER 18: PHASE 4 & 5 — NON-FUNCTIONAL REQUIREMENTS & CONSTRAINTS   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT: NFRs determine architecture MORE than functional reqs.       ║
+║  Same features + different NFRs = completely different systems.              ║
+║                                                                               ║
+║  THE FLOW:                                                                   ║
+║                                                                               ║
+║    Phase 4: NFRs              Phase 5: Assumptions & Constraints             ║
+║    ┌─────────────┐             ┌─────────────────────┐                        ║
+║    │ Availability│             │ What we take for    │                        ║
+║    │ Latency     │────────────▶│ granted (Redis,     │───▶ Architecture      ║
+║    │ Consistency │             │ DB choice, etc.)     │     emerges            ║
+║    │ Reliability │             │ What limits us       │                        ║
+║    │ Scalability │             │ (budget, timeline)   │                        ║
+║    │ Security    │             └─────────────────────┘                        ║
+║    └─────────────┘                                                             ║
+║                                                                               ║
+║  TAKEAWAYS:                                                                   ║
+║  • 6 Core NFRs: Reliability, Availability, Latency, Scalability,             ║
+║    Consistency, Security—establish BEFORE designing                           ║
+║  • Quantify: "P99 <200ms" not "fast"; "99.9%" not "highly available"          ║
+║  • CAP: You can't have strong consistency + availability during partition    ║
+║  • State assumptions explicitly—protects design from misunderstanding          ║
+║  • Negotiate constraints: "Is 99.99% firm, or could we discuss 99.9%?"       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 # Part 1: Why Non-Functional Requirements Shape Architecture
@@ -108,6 +141,33 @@ Non-functional requirements force specific architectural patterns:
 - Partitioning/sharding
 
 If you don't establish NFRs before designing, you'll make architecture choices that may not support the qualities you actually need.
+
+### Visual: NFR → Architecture Forcing (What Each Quality Demands)
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         NFR → ARCHITECTURE FORCING — WHAT EACH QUALITY DEMANDS                ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   NFR                  │  FORCES THESE ARCHITECTURE CHOICES                    ║
+║   ────────────────────┼────────────────────────────────────────────────────  ║
+║   99.99%+ Availability│  Redundancy everywhere, auto-failover, no SPOF,      ║
+║                        │  geographic distribution, multi-region               ║
+║   ────────────────────┼────────────────────────────────────────────────────  ║
+║   <100ms Latency       │  Caching, denormalization, edge compute,              ║
+║                        │  minimized network hops                              ║
+║   ────────────────────┼────────────────────────────────────────────────────  ║
+║   Strong Consistency   │  Distributed consensus (Paxos/Raft), single leader,  ║
+║                        │  higher latency, lower availability (CAP trade-off)  ║
+║   ────────────────────┼────────────────────────────────────────────────────  ║
+║   High Throughput      │  Horizontal scaling, async processing,               ║
+║                        │  partitioning/sharding                              ║
+║                                                                               ║
+║   KEY: NFRs are NOT independent. Strong consistency + low latency + high     ║
+║   availability = impossible combo. Staff engineers PRIORITIZE and trade off.   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ## NFRs vs. Functional Requirements: The Interview Implication
 
@@ -2031,6 +2091,38 @@ Your task:
 - Negotiate which can be relaxed
 - Propose alternatives that meet the underlying needs
 - Document the final agreed constraints
+
+---
+
+### Visual Summary: Chapter 18 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║        VISUAL SUMMARY: CHAPTER 18 — NFRs & CONSTRAINTS IN ONE PICTURE        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  PHASE 4: Non-Functional Requirements    PHASE 5: Assumptions & Constraints  ║
+║  ───────────────────────────────────     ─────────────────────────────────   ║
+║  WHAT: How WELL the system does it        WHAT: What we assume + what limits  ║
+║  • Reliability (durability, correctness)   • "I assume Redis for cache"         ║
+║  • Availability (99% → 99.999%)           • "I assume single region initially"║
+║  • Latency (P50, P95, P99)                • "Budget: $X" "Timeline: Y"        ║
+║  • Scalability (vertical, horizontal)     • Simplifications (out of scope)    ║
+║  • Consistency (strong vs eventual)                                          ║
+║  • Security (AuthN, AuthZ, encryption)                                       ║
+║                                                                               ║
+║  AVAILABILITY → DOWNTIME:    99% = 3.6d/yr | 99.9% = 8.7h | 99.99% = 52m     ║
+║  CAP: During partition → pick C or A, not both                                ║
+║                                                                               ║
+║  L5: "It should be fast"           L6: "P99 latency under 200ms"             ║
+║  L5: Implicit assumptions          L6: "I'm assuming X. If not, I'd adjust."  ║
+║  L5: Treat all NFRs equal          L6: "Prioritizing availability over      ║
+║                                     consistency because..."                   ║
+║                                                                               ║
+║  STAFF ADVANTAGE: Surface NFRs and constraints BEFORE designing.              ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

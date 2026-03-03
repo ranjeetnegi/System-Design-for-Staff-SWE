@@ -10,6 +10,41 @@ This chapter teaches you to think in numbers. Not memorization—derivation. You
 
 These aren't numbers to memorize for an exam. They're the raw material for back-of-the-envelope estimation: the 60-second calculation that tells you if a single database will suffice, if you need 10 servers or 1000, and whether your availability target is achievable. By the end of this chapter, you'll be able to derive capacity, estimate cost, and reason about scale with Staff-level fluency.
 
+# Chapter at a Glance
+
+```
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║          CHAPTER 5: NUMBERS — YOUR ESTIMATION TOOLKIT                ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║   THE FORMULA (memorize this one):                                   ║
+    ║   ┌────────────────────────────────────────────────────────────┐     ║
+    ║   │                                                            │     ║
+    ║   │   QPS = DAU × actions_per_day ÷ 86,400                    │     ║
+    ║   │   Peak = QPS × 4                                           │     ║
+    ║   │   Storage = entities × size × retention_days               │     ║
+    ║   │   Servers = Peak_QPS ÷ QPS_per_server × 2 (redundancy)    │     ║
+    ║   │                                                            │     ║
+    ║   └────────────────────────────────────────────────────────────┘     ║
+    ║                                                                      ║
+    ║   SCALE MENTAL MAP:                                                  ║
+    ║   ┌─────┬──────────┬──────────────────────────────────────────┐     ║
+    ║   │Users│   QPS    │  What you need                           │     ║
+    ║   ├─────┼──────────┼──────────────────────────────────────────┤     ║
+    ║   │ 1K  │    ~10   │  1 server, 1 DB. Done.                  │     ║
+    ║   │100K │   ~1K    │  + Cache + Read replicas                │     ║
+    ║   │  1M │  ~10K    │  + LB + Connection pool + CDN           │     ║
+    ║   │ 10M │ ~100K    │  + Sharding + Queues + Multi-service    │     ║
+    ║   │100M │   ~1M    │  + Multi-region + Custom infra          │     ║
+    ║   └─────┴──────────┴──────────────────────────────────────────┘     ║
+    ║                                                                      ║
+    ║   AVAILABILITY:                                                      ║
+    ║   99.9% = 8.7 hrs downtime/year (most products)                     ║
+    ║   99.99% = 52 min/year (10x harder, 10x more expensive)            ║
+    ║   Serial: 0.999 × 0.999 × 0.999 = 0.997 (you LOSE nines)          ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## Part 1: Orders of Magnitude
@@ -206,6 +241,28 @@ Jeff Dean's famous list (approximate, varies by hardware):
 | Round-trip cross-continent | 100–200 ms | — |
 
 **Key insight**: There's a **million-fold** gap between L1 cache and disk. Memory is ~1000x faster than SSD. Network within a datacenter is ~1000x faster than cross-continent. Where you put data and how many network hops you make—that's what dominates latency.
+
+### Visual: Latency — If L1 Cache Were 1 Second...
+
+```
+    ═══════════════════════════════════════════════════════════════════
+      IF L1 CACHE ACCESS = 1 SECOND (human scale comparison)
+    ═══════════════════════════════════════════════════════════════════
+
+    L1 cache reference      │  1 second         │  Blink of an eye
+    L2 cache reference      │  14 seconds       │  A quick stretch
+    Main memory (RAM)       │  3.3 minutes      │  Make a coffee
+    SSD random read         │  9 hours          │  A full work day
+    HDD seek                │  46 DAYS          │  A month and a half!
+    Same-DC round trip      │  11.5 DAYS        │  Almost two weeks
+    Cross-US round trip     │  3.8 YEARS        │  A college degree
+    Cross-continent trip    │  7.6 YEARS        │  Elementary school
+
+    ───────────────────────────────────────────────────────────────
+    TAKEAWAY: Keep hot data in RAM. Every trip to disk is MONTHS
+    in human time. Every cross-region call is YEARS.
+    ═══════════════════════════════════════════════════════════════════
+```
 
 ### p50 vs p99: Why Averages Lie
 
@@ -479,6 +536,40 @@ Account for internal fan-out: one user request may trigger 5 internal calls.
 | 99.999% | 5.26 minutes | ~26 seconds | "Five nines"—very expensive |
 
 **Quick math**: Each "nine" cuts allowed downtime by ~10×. Going from 99.9% to 99.99% means 10× less downtime. Going to 99.999% means another 10×.
+
+### Visual: The Nines — What They Actually Mean
+
+```
+    ═══════════════════════════════════════════════════════════════════
+                    THE NINES: A YEAR IN PERSPECTIVE
+    ═══════════════════════════════════════════════════════════════════
+
+    1 year = 365 days = 8,760 hours = 525,600 minutes
+
+    99% (Two nines)     ████████████████████░░░░░░░░░░░░░░░░░░░░░░
+                        3.65 DAYS down. Users notice. A lot.
+
+    99.9% (Three nines) ████████████████████████████████████████░░░
+                        8.7 HOURS down. ~43 min/month. Standard target.
+
+    99.99% (Four nines) ████████████████████████████████████████████
+                        52 MINUTES/year. ~4 min/month. Enterprise.
+
+    99.999% (Five nines)████████████████████████████████████████████
+                        5 MINUTES/year. Telecom/finance only.
+
+    ───────────────────────────────────────────────────────────────
+    KILLER FACT: 10 services at 99.9% each = 0.999^10 = 99.0%
+    You just lost an ENTIRE NINE by chaining services!
+    ───────────────────────────────────────────────────────────────
+
+    Cost curve:
+    99%    → $          (basic setup)
+    99.9%  → $$$        (redundancy, health checks)
+    99.99% → $$$$$$     (multi-region, auto-failover)
+    99.999%→ $$$$$$$$$$  (custom everything)
+    ═══════════════════════════════════════════════════════════════════
+```
 
 ### Composite Availability: Serial Dependencies
 
@@ -1032,3 +1123,38 @@ You're at 99.0%—one nine lost. Every additional service costs you. Reduce the 
 **Action**: After week 4, budget nearly exhausted. Freeze risky changes. Focus on reliability. Postmortems. Fix root causes. Next month: fresh budget. If you consistently consume 100% of budget, either improve reliability or relax the SLO (and communicate to stakeholders).
 
 **Practice**: Track budget consumption weekly. Set alerts at 50% and 80%. When budget is low, prioritize reliability work over feature work. Use error budget as a shared language with product: "We've used 80% of our downtime budget—we need to pause risky deployments and focus on stability."
+
+---
+
+# Visual Summary: Chapter 5 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 5 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   THE ESTIMATION RECIPE (use every time):                             ║
+    ║   ┌───────────────────────────────────────────────────────────────┐   ║
+    ║   │  1. DAU × actions/day ÷ 86,400 = Avg QPS                     │   ║
+    ║   │  2. Avg QPS × 4 = Peak QPS                                   │   ║
+    ║   │  3. Peak QPS ÷ per-server QPS = Servers needed               │   ║
+    ║   │  4. Entities × size × retention = Storage                    │   ║
+    ║   │  5. State assumptions. Show your work. That's Staff-level.   │   ║
+    ║   └───────────────────────────────────────────────────────────────┘   ║
+    ║                                                                       ║
+    ║   KEY CONSTANTS:                                                      ║
+    ║   86,400 sec/day  │  2^10≈1K  │  2^20≈1M  │  2^30≈1G               ║
+    ║                                                                       ║
+    ║   LATENCY GAPS (1000x between each):                                  ║
+    ║   RAM (100ns) ──1000x──► SSD (100μs) ──100x──► HDD (10ms)           ║
+    ║                                                                       ║
+    ║   QPS ARCHITECTURE GUIDE:                                             ║
+    ║   < 1K     → Single server                                            ║
+    ║   1K-10K   → + Cache + Replicas                                       ║
+    ║   10K-100K → + Sharding + Queues                                      ║
+    ║   100K+    → Multi-region + Specialized infra                         ║
+    ║                                                                       ║
+    ║   AVAILABILITY: Each service in a chain MULTIPLIES failure risk       ║
+    ║   0.999^10 = 0.990 → Chaining 10 services loses you a whole nine     ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```

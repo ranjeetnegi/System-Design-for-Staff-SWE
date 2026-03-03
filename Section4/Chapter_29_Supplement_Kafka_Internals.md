@@ -191,6 +191,50 @@ Each partition has one **leader** broker and N **replicas** (followers). Produce
 - **In-Sync Replicas (ISR)**: Replicas that are caught up with the leader. `acks=all` waits for all ISR to acknowledge.
 - **Under-replicated partition**: A partition with fewer replicas than configured. Risk: reduced fault tolerance. Alert on this.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          ISR: IN-SYNC REPLICAS — WHO CAN BECOME LEADER?                      │
+│                                                                             │
+│   Partition has: Leader + 2 Followers                                       │
+│                                                                             │
+│   LEADER (Broker 1)        Follower 1           Follower 2                  │
+│   [0][1][2][3][4][5]       [0][1][2][3][4][5]   [0][1][2][3]               │
+│        LEO=6                    LEO=6                 LEO=4                │
+│        │                         │                      │                    │
+│        │                         │                      └── LAGGING!         │
+│        │                         │                         Not in ISR        │
+│        │                         └── IN SYNC ✓                               │
+│        │                             In ISR                                  │
+│        └── ISR = {Leader, Follower 1}  (Follower 2 excluded)                │
+│                                                                             │
+│   If leader dies: Only ISR members can become new leader.                   │
+│   Follower 2 must catch up before it can join ISR.                           │
+│   acks=all waits for all ISR (not Follower 2) before ACK to producer.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          KAFKA WRITE PATH: PRODUCER → BROKER → REPLICATION                   │
+│                                                                             │
+│   Producer ──▶ Partition Leader ──▶ Write to segment file                   │
+│                      │                          │                           │
+│                      │                          ▼                           │
+│                      │              Replicate to ISR followers              │
+│                      │                          │                           │
+│                      │                          ▼                           │
+│                      └────────────── ACK to producer ◀────────────────────  │
+│                                                                             │
+│   acks=0:  Fire and forget. ACK immediately. May lose if broker fails.       │
+│   acks=1:  ACK after leader writes. Lose if leader dies before replicate.     │
+│   acks=all: ACK after ALL ISR replicas confirm. Most durable.                 │
+│                                                                             │
+│   Producer send ──▶ Leader appends ──▶ Followers replicate ──▶ ACK          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 **Staff Insight**: Partition count affects replication traffic. 1000 partitions across 3 brokers = 333 leaders per broker + 666 replica fetches. Each partition has metadata and connection overhead. Very high partition counts (10K+) can stress ZooKeeper/KRaft and broker memory.
 
 ### ZooKeeper vs KRaft: Cluster Metadata
@@ -340,6 +384,33 @@ Consumer group offsets are stored in the internal topic `__consumer_offsets`. Ea
 
 **Monitoring**: Track lag per partition and per consumer group. Alert when lag exceeds threshold (e.g., 10K messages or 5 minutes behind). High lag can mean slow consumers, insufficient parallelism, or poison messages blocking progress.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          CONSUMER LAG: THE GROWING GAP                                       │
+│                                                                             │
+│   Partition log:  [0][1][2]...[948][949][950]...[998][999][1000]            │
+│                                        ▲                ▲                   │
+│                                        │                │                   │
+│                                   Consumer           Producer               │
+│                                   (offset 950)        (LEO 1000)             │
+│                                                                             │
+│   LAG = 1000 - 950 = 50 messages behind                                     │
+│                                                                             │
+│   Lag over time:                                                             │
+│   Lag ▲                                                                     │
+│       │         ╱╲   Producer surge / Consumer slow                         │
+│   50K │        ╱  ╲                                                         │
+│       │       ╱    ╲____                                                    │
+│   10K │______╱         ╲____  Recovery: consumer catching up                 │
+│       │                         ╲________                                   │
+│    0  └──────────────────────────────────────▶ Time                         │
+│                                                                             │
+│   Lag growing? → Consumer can't keep up. Add consumers or optimize.          │
+│   Lag stable but high? → Define SLA; may need more partitions.              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## ASCII Diagram: Consumer Group with Rebalance
 
 ```
@@ -466,6 +537,29 @@ Kafka stores partition data in **segment files** on disk. Each segment is a file
 - **Rotated** when segment size or time threshold is reached
 - **Deleted or compacted** based on `cleanup.policy`
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          KAFKA SEGMENT FILES: HOW PARTITIONS LIVE ON DISK                    │
+│                                                                             │
+│   Partition directory: order-events-0/                                      │
+│                                                                             │
+│   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐             │
+│   │ 0000000.log     │ │ 0000100.log     │ │ 0000200.log     │ ← ACTIVE     │
+│   │ [0..99]         │ │ [100..199]      │ │ [200..]  ◀──────│   (writes)   │
+│   │ (immutable)     │ │ (immutable)     │ │ (receiving new   │             │
+│   │                 │ │                 │ │  messages)       │             │
+│   └─────────────────┘ └─────────────────┘ └─────────────────┘             │
+│          │                      │                      │                     │
+│          ▼                      ▼                      ▼                     │
+│   Retention/compaction    Retention/compaction    Never compacted            │
+│   deletes when policy     deletes when policy    while active               │
+│   exceeded                exceeded                                          │
+│                                                                             │
+│   Old segments = immutable. Active segment = mutable. Cleanup runs async.   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Time-Based Retention
 
 `retention.ms=604800000` (7 days): Segments older than 7 days are deleted. Simple and predictable.
@@ -486,6 +580,29 @@ Kafka stores partition data in **segment files** on disk. Each segment is a file
 
 - **Use case**: Changelog topics, state stores, CDC (Change Data Capture)
 - **Example**: Topic `user-profiles` with key=user_id. Messages: {user_1, "John"}, {user_1, "John Doe"}, {user_2, "Jane"}. After compaction: {user_1, "John Doe"}, {user_2, "Jane"}. Latest state per key.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          COMPACTED TOPICS: THE LATEST STATE                                  │
+│                                                                             │
+│   NORMAL TOPIC (retention): Keeps ALL messages                               │
+│   [key=A,v1][key=B,v1][key=A,v2][key=C,v1][key=A,v3][key=B,v2]...           │
+│   Growing forever (until retention deletes by time/size)                     │
+│                                                                             │
+│   COMPACTED TOPIC (cleanup.policy=compact): Keeps LATEST per key            │
+│                                                                             │
+│   BEFORE compaction:                                                         │
+│   [user_1,"John"][user_2,"Jane"][user_1,"John Doe"][user_1,"John D."]       │
+│                                                                             │
+│   AFTER compaction (GC removes old values for same key):                    │
+│   [user_1,"John D."][user_2,"Jane"]                                         │
+│        ▲                    ▲                                               │
+│        └── Latest only      └── One entry per key                            │
+│                                                                             │
+│   Perfect for: CDC, changelog, state store. Rebuild state from compacted log.│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 **Tombstones**: A message with `key=X` and `value=null` means "delete key X." Compaction removes the key entirely. Essential for deletes in compacted topics (e.g., GDPR "right to be forgotten"). Tombstones themselves are retained for a period (`delete.retention.ms`, default 24 hours) so late-arriving consumers can process the delete; after that, the tombstone is removed by compaction.
 
@@ -579,6 +696,31 @@ Kafka provides exactly-once **within** its ecosystem via:
 2. **Transactional producer** (`transactional.id=my-txn-id`): Produce to multiple topics/partitions **atomically**. All or nothing.
 
 3. **Read-process-write** (consuming from input topic, processing, producing to output topic, committing offset): All in **one atomic transaction**. Consumer uses `isolation.level=read_committed` to skip aborted transactions.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          EXACTLY-ONCE: IDEMPOTENT PRODUCER + TRANSACTIONS                     │
+│                                                                             │
+│   IDEMPOTENT PRODUCER (single partition):                                    │
+│   Producer sends msg with (ProducerID, SequenceNum)                          │
+│   Broker deduplicates: Same seq num? Discard duplicate.                     │
+│   Retries don't create duplicates.                                           │
+│                                                                             │
+│   Producer ──(PID=1, Seq=5)──▶ Broker ──▶ "Already have Seq 5? Skip"        │
+│        │                            │                                        │
+│        └── Retry (network fail) ────┘ Same seq, no duplicate in log         │
+│                                                                             │
+│   TRANSACTIONS (cross-partition / cross-topic):                               │
+│   producer.beginTransaction()                                               │
+│   producer.send(topicA, msg1)                                                │
+│   producer.send(topicB, msg2)                                                │
+│   producer.commitTransaction()  ← All or nothing                             │
+│                                                                             │
+│   Abort? producer.abortTransaction() → No writes visible to consumers       │
+│   Consumer with isolation.level=read_committed skips aborted msgs            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## The Boundary Problem
 
@@ -719,6 +861,30 @@ If all answers are "no," **skip Kafka**. Choose a simpler tool.
 | **Ops complexity** | High | Low (managed) | Medium | Low |
 | **Cost at scale** | Brokers + disk | Per request | Self-hosted | Self-hosted |
 | **Best for** | Event streaming, replay, multi-consumer | Task queues, simple decoupling | Complex routing, AMQP | Real-time, simple replay |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          KAFKA vs SQS vs RABBITMQ: COMPARISON CARD                           │
+│                                                                             │
+│   ┌─────────────┬─────────────┬─────────────┐                               │
+│   │   KAFKA     │    SQS      │  RABBITMQ   │                               │
+│   ├─────────────┼─────────────┼─────────────┤                               │
+│   │ Log (replay)│ Queue       │ Queue       │                               │
+│   │ 100K+ /sec  │ 3K /sec     │ 10-50K /sec │                               │
+│   │ Ordered per │ FIFO limits │ Per queue   │                               │
+│   │  partition  │             │             │                               │
+│   │ Replay: YES │ Replay: NO  │ Replay: NO  │                               │
+│   │ Complex     │ Simple      │ Exchange    │                               │
+│   │ Multi-group │ Single cons │ routing     │                               │
+│   └─────────────┴─────────────┴─────────────┘                               │
+│                                                                             │
+│   Kafka: High throughput, replay, ordered partitions, multiple consumer    │
+│          groups. Ops: brokers, monitoring, lag.                              │
+│   SQS: Managed, pay per message, no replay, simple. Best for task queues.  │
+│   RabbitMQ: Exchange patterns, routing, lower throughput than Kafka.       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

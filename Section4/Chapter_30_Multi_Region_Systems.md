@@ -10,6 +10,38 @@ I've spent years building globally distributed systems at Google scale and debug
 
 This chapter teaches multi-region architecture as Staff Engineers practice it: with deep skepticism about when it's needed, clear-eyed understanding of what it costs, and practical judgment about how to implement it when it's genuinely required. We'll cover when geography matters, what trade-offs are unavoidable, and how to design systems that survive regional failures without creating global ones.
 
+### Chapter at a Glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                 CHAPTER 30: MULTI-REGION — THE BIG PICTURE                  │
+│                                                                             │
+│   WHY MULTI-REGION?                    TOPOLOGY CHOICES                     │
+│   ┌─────────────────┐                 ┌─────────────────┐                   │
+│   │ • Lower latency │                 │ • Active-Active  │                   │
+│   │   for global    │     ───────▶    │   (both serve)  │                   │
+│   │   users         │                 │ • Active-Passive│                   │
+│   │ • Disaster      │                 │   (one standby)  │                   │
+│   │   recovery      │                 │ • Read-local,   │                   │
+│   │ • Compliance    │                 │   write-central │                   │
+│   └─────────────────┘                 └────────┬────────┘                   │
+│                                                │                            │
+│   REPLICATION STRATEGIES              FAILOVER                               │
+│   ┌─────────────────┐                 ┌─────────────────┐                   │
+│   │ • Sync (slow,   │     ───────▶    │ • Manual: Human  │                   │
+│   │   strong)       │                 │   decides (safe)│                   │
+│   │ • Async (fast,  │                 │ • Automatic:    │                   │
+│   │   eventual)     │                 │   System decides │                   │
+│   └─────────────────┘                 │   (fast, risky)  │                   │
+│                                       └────────┬────────┘                   │
+│   TRADE-OFFS                                 │                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Latency vs Consistency │ Availability vs Correctness │ Cost vs Redundancy │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 **The Staff Engineer's First Law of Multi-Region**: Every region you add is a consistency decision you're making. Make sure you understand what you're giving up.
 
 ---
@@ -396,6 +428,50 @@ Multi-region architecture forces you into trade-offs that cannot be avoided. Und
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Cross-Region Latency Map
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CROSS-REGION LATENCY: WHY IT MATTERS                      │
+│                                                                             │
+│   Same AZ (us-east-1a → 1b):     ~1ms    ████                              │
+│   Same Region (us-east):          ~5ms    ████████████                      │
+│   US-East ↔ US-West:             ~70ms   ████████████████████████████████████
+│   US ↔ Europe:                  ~100ms   ████████████████████████████████████████████
+│   US ↔ Asia:                    ~200ms   ████████████████████████████████████████████████████████████
+│                                                                             │
+│   ⚠️  A synchronous cross-region call adds 200ms to EVERY request!          │
+│   ⚠️  US user → Asia primary for write = 200ms+ per operation               │
+│                                                                             │
+│   IMPLICATION: "Route to nearest" for reads. Writes? Either accept          │
+│   high latency OR use eventual consistency (local writes, async repl).      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Speed of Light Problem
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE SPEED OF LIGHT: PHYSICS LIMITS YOU                    │
+│                                                                             │
+│   Light in fiber: ~200,000 km/second = ~200 km/ms                           │
+│                                                                             │
+│   NY to London: 5,500 km                                                    │
+│   One-way: 5,500 ÷ 200 = 27.5 ms                                            │
+│   Round-trip: ~56 ms MINIMUM (ideal fiber, direct path)                     │
+│                                                                             │
+│   Reality: Routing, switching, multiplexing → 70-80ms typical               │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  YOU CANNOT MAKE THIS FASTER.                                        │   │
+│   │  No amount of optimization, caching, or CDN changes the speed of     │   │
+│   │  light. This is why you need local reads and async replication.      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Tension 2: Availability vs Correctness
 
 When regions can't communicate, you face the CAP theorem directly:
@@ -517,6 +593,32 @@ Five Regions:
 
 KEY INSIGHT: Network cost grows faster than compute/storage
 because replication is N×(N-1) for active-active.
+```
+
+### Multi-Region Cost Math: The Real Multiplier
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MULTI-REGION COST: 2 REGIONS ≠ 2× COST                    │
+│                                                                             │
+│   NAIVE: "2 regions = 2× infrastructure"                                    │
+│                                                                             │
+│   REALITY:                                                                  │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  • Compute: 2× (duplicate servers)                                   │   │
+│   │  • Storage: 2× (full replicas)                                     │   │
+│   │  • Cross-region data transfer: $0.02-0.09/GB (NEW cost!)            │   │
+│   │  • Operational complexity: More on-call, debugging, tooling         │   │
+│   │  • Failover headroom: Each region needs 1.5× capacity               │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   TYPICAL MULTIPLIER: 2.5× to 3× (not 2×)                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  Single region: $50K/mo  →  Two regions: $125-150K/mo                │   │
+│   │  The "extra" 0.5-1× is cross-region traffic + ops + headroom         │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **What Staff Engineers Intentionally Do NOT Build:**
@@ -704,6 +806,34 @@ Individual teams can't make these decisions—they affect the entire system. Sta
 │   │  REGION B (R)  │ ◀───replication───────────┘                            │
 │   └────────────────┘                                                        │
 │   Reads are local (fast). Writes go to central (consistent).                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Active-Active vs Active-Passive: Side-by-Side
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              ACTIVE-ACTIVE vs ACTIVE-PASSIVE: TRAFFIC & FAILOVER             │
+│                                                                             │
+│   ACTIVE-ACTIVE                                    ACTIVE-PASSIVE            │
+│   ┌─────────────────────────────────────┐         ┌────────────────────────┐  │
+│   │  US-EAST ◀──────▶ EU-WEST          │         │  US-EAST ──▶ EU-WEST   │  │
+│   │     ▲              ▲                │         │     ▲         (standby)│  │
+│   │     │              │                │         │     │                 │  │
+│   │  Traffic    Traffic                 │         │  Traffic  (no traffic)│  │
+│   │  both ways  both ways               │         │  only     wasted cap  │  │
+│   │                                     │         │                        │  │
+│   │  • Both regions serve traffic       │         │  • One serves, one idle│  │
+│   │  • Conflict resolution needed       │         │  • No conflicts (1 writer)│  │
+│   │  • Fast failover (just route)       │         │  • Promotion takes mins │  │
+│   └─────────────────────────────────────┘         └────────────────────────┘  │
+│                                                                             │
+│   FAILOVER: Automatic                          FAILOVER: Manual/Auto         │
+│   ┌─────────────────────────────────────┐     ┌────────────────────────┐    │
+│   │  Region A down → Route all to B     │     │  Primary down → Promote│    │
+│   │  (if designed for independence)    │     │  standby (RPO/RTO risk)│    │
+│   └─────────────────────────────────────┘     └────────────────────────┘    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1021,6 +1151,31 @@ FUNCTION ensure_read_your_writes(user_id, request, local_region):
 - Global write availability required
 - Central region has unreliable connectivity
 
+### Read-Local, Write-Global Pattern (Visual)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    READ-LOCAL, WRITE-GLOBAL: USER IN TOKYO                   │
+│                                                                             │
+│   READ (Fast):                           WRITE (Slower but consistent):     │
+│   ┌─────────────────────────────┐        ┌─────────────────────────────────┐ │
+│   │  User Tokyo                 │        │  User Tokyo                     │ │
+│   │       │                     │        │       │                         │ │
+│   │       ▼ 5ms                 │        │       │                         │ │
+│   │  Tokyo Replica ──► Data      │        │       │ 200ms                    │ │
+│   │  (local read, fast!)         │        │       ▼                         │ │
+│   └─────────────────────────────┘        │  US-EAST Primary                 │ │
+│                                          │       │                         │ │
+│   Users read from nearest region.        │       │ async replication       │ │
+│   No cross-region round-trip.             │       ▼                         │ │
+│                                          │  Tokyo Replica (eventually)     │ │
+│                                          └─────────────────────────────────┘ │
+│                                                                             │
+│   TRADE-OFF: Writes add 200ms for remote users. Acceptable for most apps.    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 4: Traffic Routing and User Affinity
@@ -1171,6 +1326,33 @@ NETWORK BEHAVIOR:
 - Stateful connections (WebSockets, persistent TCP)
 - Session affinity required
 - Need to route specific users to specific regions
+
+### DNS-Based vs Anycast Routing: How Users Get to the Right Region
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DNS vs ANYCAST: USER ROUTING COMPARISON                  │
+│                                                                             │
+│   DNS-BASED ROUTING                          ANYCAST ROUTING                │
+│   ┌─────────────────────────────┐           ┌─────────────────────────────┐  │
+│   │  User requests api.example   │           │  User requests 192.0.2.1     │  │
+│   │       │                      │           │       │                     │  │
+│   │       ▼                      │           │       ▼                     │  │
+│   │  DNS: "Where is user? Return │           │  Same IP advertised from     │  │
+│   │  nearest region's IP"        │           │  all regions. BGP routes     │  │
+│   │       │                      │           │  to nearest automatically.  │  │
+│   │       ▼                      │           │       │                     │  │
+│   │  Returns us-east IP or       │           │       ▼                     │  │
+│   │  eu-west IP (geo-based)      │           │  Network delivers to        │  │
+│   │       │                      │           │  closest datacenter          │  │
+│   │  ⚠️ TTL delay: 30s-5min     │           │  ⚠️ No DNS = faster failover│  │
+│   │  for failover                │           │  Stop BGP = traffic shifts  │  │
+│   └─────────────────────────────┘           └─────────────────────────────┘  │
+│                                                                             │
+│   SIMPLE setup, TTL limits failover        COMPLEX setup, instant failover  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Client-Side Routing and Sticky Sessions
 
@@ -1333,6 +1515,32 @@ At global scale, failure is not an exception—it's a constant. Something is alw
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Region Failure Scenarios: Blast Radius
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    REGION FAILURE: THREE SCENARIOS                          │
+│                                                                             │
+│   (a) SINGLE AZ FAILURE              (b) FULL REGION FAILURE                │
+│   ┌─────────────────────┐            ┌─────────────────────┐                │
+│   │  Region: AZ1  AZ2   │            │  US-EAST  EU-WEST   │                │
+│   │         ███   ✓     │            │    ███      ✓       │                │
+│   │  AZ1 down          │            │  Region down         │                │
+│   │  Multi-AZ handles   │            │  Need multi-region!  │                │
+│   │  Blast: 1 AZ only   │            │  Blast: All US users│                │
+│   └─────────────────────┘            └─────────────────────┘                │
+│                                                                             │
+│   (c) NETWORK PARTITION BETWEEN REGIONS                                     │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │  US-EAST  ────X────  EU-WEST    (link severed)                      │   │
+│   │     │                    │                                           │   │
+│   │  CAP applies! Can't communicate. Choose: Availability or Consistency │   │
+│   │  Split-brain risk. Conflict resolution needed.                        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Scenario 1: Full Region Isolation
 
 ### The Failure
@@ -1414,6 +1622,46 @@ DANGER ZONE:
         - Cascading failure
         - Healthy regions overloaded
         - Global outage
+```
+
+### Failover: The Manual vs Automatic Decision
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MANUAL vs AUTOMATIC FAILOVER                             │
+│                                                                             │
+│   MANUAL (Operator decides)              AUTOMATIC (System decides)         │
+│   ┌─────────────────────────────┐       ┌─────────────────────────────┐    │
+│   │  • Slower (mins to hours)   │       │  • Faster (seconds)          │    │
+│   │  • Fewer false positives    │       │  • Risk: false positive       │    │
+│   │  • Human judgment           │       │  • Can cause split-brain     │    │
+│   │  • Need on-call awake       │       │  • No human in loop          │    │
+│   └─────────────────────────────┘       └─────────────────────────────┘    │
+│                                                                             │
+│   WHEN MANUAL: Banking, critical systems. Avoid accidental failover.         │
+│   WHEN AUTOMATIC: User-facing, high-availability. Accept some risk.         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Untested Failover
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│     "Your failover plan that hasn't been tested is not a plan — it's a hope" │
+│                                                                             │
+│   PLANNED FAILOVER (Tested)               UNTESTED FAILOVER                  │
+│   ┌─────────────────────────────┐       ┌─────────────────────────────┐    │
+│   │  • Drills quarterly         │       │  • First run = 3am incident  │    │
+│   │  • Runbooks documented      │       │  • Unknown bugs surface      │    │
+│   │  • Known RTO/RPO            │       │  • Data loss discovered      │    │
+│   │  • On-call trained          │       │  • Panic, guesswork         │    │
+│   │  • Recovery predictable     │       │  • Hours instead of minutes  │    │
+│   └─────────────────────────────┘       └─────────────────────────────┘    │
+│                                                                             │
+│   TEST YOUR FAILOVER. Regularly. In production-like conditions.              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Cascading Failure Timeline: A Concrete Example

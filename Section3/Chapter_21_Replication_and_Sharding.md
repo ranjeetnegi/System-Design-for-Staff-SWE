@@ -16,6 +16,42 @@ This section is about what happens next—and more importantly, how to do it wit
 
 ---
 
+## Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           CHAPTER 21: REPLICATION AND SHARDING — AT A GLANCE                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   CORE CONCEPT: Replication = copies (scale READS + availability)             ║
+║                 Sharding = split data (scale WRITES + storage)                ║
+║                                                                               ║
+║   REPLICATION STYLES:                                                         ║
+║   • Leader-Follower: 1 leader, N replicas — 90% of prod (PostgreSQL, MySQL)  ║
+║   • Multi-Leader: Writes to multiple regions — conflicts! (CouchDB, CRDTs)    ║
+║   • Leaderless: Quorum writes/reads — Dynamo/Cassandra style                   ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │  SCALING JOURNEY                                                     │   ║
+║   │  Single node → Read replicas (read bottleneck?) → Shard (write/      │   ║
+║   │  storage bottleneck?)                                                 │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+║   SHARDING STRATEGIES: Hash | Range | Directory                               ║
+║   HOT PARTITION: One shard gets disproportionate load (e.g., celebrity)       ║
+║                                                                               ║
+║   KEY TAKEAWAYS:                                                              ║
+║   • Add complexity only when you've proven you need it                        ║
+║   • Replication does NOT scale writes — sharding does                         ║
+║   • Shard key determines everything — choose by access pattern                 ║
+║   • Sync vs async replication: Durability (sync) vs Latency (async)          ║
+║   • Plan for resharding from day one (consistent hashing, logical shards)     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## Quick Visual: The Scaling Journey
 
 ```
@@ -80,6 +116,38 @@ That's true. But it's like saying we have fire departments because fires are hot
 
 The first two are about not dying. The second two are about thriving. Staff engineers think about all four simultaneously.
 
+### Visual: Replication = Photocopies, Sharding = Splitting a Book Into Volumes
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         MEMORABLE ANALOGY: REPLICATION vs SHARDING                             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   REPLICATION = PHOTOCOPIES                    SHARDING = SPLITTING A BOOK     ║
+║   ─────────────────────────                    ───────────────────────────    ║
+║                                                                               ║
+║   Original document                             Encyclopedia (Vol 1: A-C)      ║
+║        │                                        Encyclopedia (Vol 2: D-F)     ║
+║        ├──► Copy 1 (replica)                    Encyclopedia (Vol 3: G-M)     ║
+║        ├──► Copy 2 (replica)                    Encyclopedia (Vol 4: N-Z)     ║
+║        └──► Copy 3 (replica)                                                  ║
+║                                                                               ║
+║   • SAME content everywhere                   • EACH volume = different data ║
+║   • Read from any copy (scale reads)          • Need to know which volume     ║
+║   • Write to original only (1 bottleneck)    • Can write to all in parallel   ║
+║   • If original lost → promote a copy         • Add volumes = add capacity    ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │  KEY INSIGHT:                                                        │   ║
+║   │  • Photocopies = more people can READ the same doc (read scaling)    │   ║
+║   │  • Book volumes = you can WRITE to different volumes at once         │   ║
+║   │    (write scaling) + each volume holds less (storage scaling)        │   ║
+║   │  • You can COMBINE: Each shard has its own replicas (photocopies)    │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ### 1.2 Leader-Follower Replication: The Workhorse
@@ -114,6 +182,41 @@ This is where 90% of production systems start, and where many stay forever.
 4. Followers apply changes in the same order
 5. Reads can go to leader OR followers (with caveats)
 
+### Visual: Leader-Follower Replication Step-by-Step
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  LEADER-FOLLOWER REPLICATION: Numbered steps + replication lag window       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   CLIENT                    LEADER                      FOLLOWERS
+   ──────                    ──────                      ─────────
+
+   (1) Write request ─────────►│
+                               │ (2) Write to WAL (local disk)
+                               │
+                               │ (3) Stream to followers ──► F1  F2  F3
+                               │         │                    │   │   │
+                               │         │                    │   │   └─ Apply (4)
+                               │         │                    │   └───── Apply (4)
+                               │         │                    └───────── Apply (4)
+   ◄── ACK (5) ───────────────│
+   (Client gets success)
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  REPLICATION LAG WINDOW (danger zone):                              │
+   │  Between (5) and when all followers apply (4) = 10ms - 5 seconds   │
+   │  Reads from followers in this window → STALE DATA                   │
+   │  Leader crash before (4) on all followers → potential data loss     │
+   └─────────────────────────────────────────────────────────────────────┘
+
+   Timeline:
+   T=0     T=5ms    T=10ms   T=15ms   T=20ms
+   │       │        │        │        │
+   Write   Leader   F1 has   F2 has   All in sync
+   starts  commits  it       it       (lag closed)
+```
+
 **Why this model dominates:**
 - Simple to reason about (one source of truth)
 - No write conflicts possible
@@ -142,6 +245,36 @@ Client ──▶ Leader ──▶ Follower(s) ──▶ ACK ──▶ Leader ─
 Client ──▶ Leader ──▶ Client (ACK)
               │
               └──────▶ Follower(s) (eventually)
+```
+
+### Visual: Sync vs Async Replication — Side-by-Side Timeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SYNCHRONOUS vs ASYNCHRONOUS: Same write, different behavior                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   SYNCHRONOUS (Leader waits for Follower ACK)
+   ──────────────────────────────────────────
+   Timeline:  ────▶────────▶────────▶────────▶
+   
+   Client ──Write──► Leader ──replicate──► Follower ──ACK──► Leader ──ACK──► Client
+                     │                      │
+                     │   WAITS here          │  Must succeed before
+                     │   (adds latency)      │  responding to client
+                     └──────────────────────┘
+   
+   Result: SLOWER (2+ RTT) but SAFER. If leader dies after ACK, data is on follower.
+
+   ASYNCHRONOUS (Leader does NOT wait)
+   ──────────────────────────────────
+   Timeline:  ──▶───
+   
+   Client ──Write──► Leader ──ACK──► Client   (immediate!)
+                     │
+                     └──────▶ Follower (background, eventually)
+   
+   Result: FASTER (1 RTT) but RISKY. Leader crash before replication = DATA LOST.
 ```
 
 - Write acknowledged as soon as leader persists locally
@@ -232,6 +365,34 @@ User updates profile picture:
 2. User immediately refreshes page
 3. `GET /profile` → hits follower → returns OLD picture
 4. User files support ticket: "Your website is broken"
+
+### Visual: Replication Lag — The Stale Read Problem
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STALE READ: User writes to leader, immediately reads from follower         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   Wall-clock time ─────────────────────────────────────────────────────▶
+   T=0         T=50ms      T=100ms     T=150ms     T=200ms
+
+   Leader:     [Write new photo]─────────────────────
+                     │
+   Follower:         │              [Apply write]────  (lag = 100ms)
+                     │                    │
+   User:        [POST]──[Refresh]──────────│
+                     │         │
+                     │         └── GET hits FOLLOWER
+                     │              Returns OLD photo! (stale)
+                     │
+                     └── User sees "success" but refresh shows old data
+                         "Your website is broken!"
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  THE LAG GAP: 0-100ms (or more). Reads in this window = stale.     │
+   │  FIX: Route reads to leader for 30s after write (read-your-writes) │
+   └─────────────────────────────────────────────────────────────────────┘
+```
 
 This is called **read-your-own-writes inconsistency**, and it's one of the most common bugs in distributed systems.
 
@@ -637,6 +798,42 @@ Google built Spanner because they needed multi-region writes with strong consist
 
 This is a $100M+ engineering investment. Unless you're at Google/Amazon/Microsoft scale, you probably don't need this. Accept the limitations of leader-follower or carefully constrained multi-leader.
 
+### Visual: Replication Styles Compared — Leader-Follower vs Multi-Leader vs Leaderless
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         REPLICATION STYLES: SIDE-BY-SIDE COMPARISON                            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  LEADER-FOLLOWER        MULTI-LEADER              LEADERLESS                  ║
+║  ───────────────        ────────────               ──────────                  ║
+║                                                                               ║
+║  [Leader]──►[F1]        [Leader A]◄──►[Leader B]   [N1] [N2] [N3] [N4]        ║
+║     │          [F2]         ▲              ▲        W=R=2 (quorum)             ║
+║     └────────►[F3]      US users       EU users    No single leader            ║
+║                                                                               ║
+║  WRITES: All → Leader   WRITES: Any leader  WRITES: Any node (quorum)         ║
+║  READS:  Leader/Foll.  READS:  Any leader  READS:  Any node (quorum)          ║
+║                                                                               ║
+║  PROS:                   PROS:                    PROS:                        ║
+║  • Simple                • Low latency (local)    • No single point of failure║
+║  • No conflicts          • Multi-region writes    • High availability         ║
+║  • 90% of production     • Offline-capable        • Handles node failures    ║
+║                                                                               ║
+║  CONS:                   CONS:                    CONS:                        ║
+║  • Single write point    • CONFLICTS!             • Complexity (tunable)      ║
+║  • Leader = bottleneck   • Resolution (LWW, CRDT) • Stale reads possible       ║
+║  • Failover complexity   • Data loss risk         • Hinted handoff, repair    ║
+║                                                                               ║
+║  USE: PostgreSQL,        USE: CouchDB,           USE: Cassandra,             ║
+║       MySQL, Aurora      Multi-region apps       DynamoDB, Riak               ║
+║                                                                               ║
+║  WHEN: Default choice.   WHEN: Geo latency       WHEN: Need max availability  ║
+║  Start here.             critical, offline sync  or no single leader           ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ### 1.5 Read Replicas: The Practical Scaling Tool
@@ -723,6 +920,76 @@ If you have:
 Replication cannot help you. Every write must still go through that single leader.
 
 **This is where sharding enters the picture.**
+
+### Visual: The Full Scaling Journey — What Breaks, What You Gain
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SCALING JOURNEY: Single DB → Read Replicas → Cache → Sharding              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   STAGE              WHAT YOU GAIN              WHAT BREAKS / COSTS
+   ─────              ─────────────              ───────────────────
+
+   Single DB           Simple, one source         Read bottleneck,
+   │                   of truth                  Write bottleneck,
+   ▼                   No coordination           Storage limit
+   
+   + Read Replicas     Scale READS 3-5x          Replication lag →
+   │                   Failover ready            Stale reads,
+   ▼                   HA                         Read-your-writes issues
+   
+   + Cache (Redis)     Faster reads              Cache invalidation,
+   │                   Offload DB                Stale data, memory cost
+   ▼
+   
+   + Sharding          Scale WRITES              Cross-shard joins,
+   │                   Scale storage            Transactions (2PC/Saga),
+   ▼                   Horizontal growth         Resharding pain,
+                                                  Operational complexity
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  GOLDEN RULE: Add complexity only when you've PROVEN you need it.   │
+   │  Try: query optimization, indexes, vertical scaling first.          │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: When to Replicate vs When to Shard — Decision Tree
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         REPLICATE vs SHARD: DECISION TREE BY BOTTLENECK                        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   START: What's your bottleneck?                                              ║
+║                          │                                                    ║
+║   ┌──────────────────────┼──────────────────────┐                            ║
+║   │                      │                      │                            ║
+║   ▼                      ▼                      ▼                            ║
+║ READ BOTTLENECK      WRITE BOTTLENECK      STORAGE BOTTLENECK                 ║
+║ • 50K reads/sec      • Leader at 20K       • Dataset > single                 ║
+║ • Leader OK          • WPS capacity        • node capacity                   ║
+║ • Replicas lagging   • Can't batch more    • (e.g., 2TB+)                     ║
+║      │                      │                      │                         ║
+║      ▼                      ▼                      ▼                         ║
+║  ┌──────────┐          ┌──────────┐           ┌──────────┐                    ║
+║  │ REPLICATE│          │  SHARD   │           │  SHARD   │                    ║
+║  │          │          │          │           │          │                    ║
+║  │ Add read │          │ Split    │           │ Partition│                    ║
+║  │ replicas │          │ data     │           │ by key   │                    ║
+║  └──────────┘          └──────────┘           └──────────┘                    ║
+║  • Scale reads        • Each shard has      • Each shard =                    ║
+║    horizontally        own leader             subset of data                  ║
+║  • Does NOT           • Scale writes        • Hash / Range /                  ║
+║    scale writes         horizontally          Directory                       ║
+║                                                                               ║
+║   TRY FIRST (before replicating): Query optimization, caching, indexes       ║
+║   TRY FIRST (before sharding): Vertical scaling, batching, write-behind       ║
+║                                                                               ║
+║   GOLDEN RULE: Replication ≠ write scaling. Shard only when necessary.        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 Sharding (also called partitioning) splits your data across multiple independent databases, each handling a subset of the data:
 
@@ -906,6 +1173,36 @@ get_shard(key, num_shards):
 - Range queries require scatter-gather (hit all shards)
 - Adding shards requires massive data movement
 - Hash collisions in the algorithm aren't hash collisions in data—it's about distribution
+
+### Visual: Hash Sharding vs Range Sharding — Side-by-Side
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HASH SHARDING              │  RANGE SHARDING                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   HASH-BASED                           RANGE-BASED
+
+   Keys: user_1, user_2, ...            Keys: 1-1M, 1M-2M, 2M-3M, ...
+        │                                    │
+        ▼ hash(key) % 4                      ▼ lookup range
+   ┌────┬────┬────┬────┐                 ┌─────────┬─────────┬─────────┐
+   │ S0 │ S1 │ S2 │ S3 │                 │ 0-1M    │ 1M-2M   │ 2M-3M   │
+   └────┴────┴────┴────┘                 └─────────┴─────────┴─────────┘
+        │                                    │
+   ✓ EVEN spread                        ✓ Range queries: "users 500K-600K"
+   ✗ Range query "users A-M"?           ✗ HOT SPOT: Recent users (2.9M-3M)
+     → Must hit ALL shards                 all on last shard!
+   ✗ Can't do "get users by prefix"
+
+   QUERY: "Get user 12345"              QUERY: "Get users created last week"
+   → hash(12345)%4 = 2 → Shard 2        → Only Shard 3 (time range)
+   → Single shard, fast                 → Single shard, fast
+
+   QUERY: "Get users A-M"               QUERY: "Get users 0-500K"
+   → ALL 4 shards (scatter-gather)      → Shard 0 only
+   → Slow, expensive                   → Fast!
+```
 
 **When to use:**
 - Point queries are dominant (get user by ID)
@@ -1126,6 +1423,37 @@ set_shard(key, shard):
 - Highly variable data sizes (large tenants need dedicated shards)
 - Complex placement requirements
 - VIP tenant isolation
+
+### Visual: Shard Key Selection Cheat Sheet
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CHOOSING THE RIGHT SHARD KEY                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   SHARD KEY          │  GOOD FOR                    │  BAD FOR
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+   user_id            │  User-scoped queries         │  Global analytics
+                      │  "Get my orders"             │
+                      │  Even distribution           │
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+   timestamp         │  Time-range queries           │  HOT PARTITION!
+                      │  "Events last week"          │  Recent = one shard
+                      │  (if used with compound)    │  All writes go to "now"
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+   geo / region      │  Regional queries             │  Skewed (NY > rural)
+                      │  Data residency              │
+                      │  Low latency (local)         │
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+   tenant_id         │  Multi-tenant SaaS           │  Large tenant = hot shard
+                      │  Isolation per customer      │
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+   (user_id, timestamp)│  User + time ordering       │  Complexity
+   compound          │  "My recent activity"        │
+   ──────────────────┼─────────────────────────────┼──────────────────────────
+
+   RULE: Shard key = your PRIMARY access pattern. Choose by how you query.
+```
 
 **Real Example: Multi-Tenant SaaS**
 
@@ -1431,6 +1759,37 @@ Shard 2 is now processing 50M events
 while other shards process thousands
 
 Your "evenly distributed" system is now 99% focused on shard 2
+```
+
+### Visual: The Hot Partition Problem — Celebrity Overload
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOT PARTITION: Celebrity user → one shard gets ALL their traffic          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   Shard 0          Shard 1          Shard 2          Shard 3
+   ┌──────┐         ┌──────┐         ┌──────┐         ┌──────┐
+   │  ░   │         │  ░   │         │██████│         │  ░   │
+   │  ░   │         │  ░   │         │██████│         │  ░   │
+   │  ░   │         │  ░   │         │██████│         │  ░   │
+   │  ░   │         │  ░   │         │██████│         │  ░   │
+   └──────┘         └──────┘         └──────┘         └──────┘
+   10% load         10% load         70% load!        10% load
+   Idle             Idle             OVERLOADED       Idle
+
+   Justin Bieber (50M followers) → hash(celebrity_id) % 4 = Shard 2
+   
+   Every post: 50M fan-out writes → ALL hit Shard 2
+   Every read: Followers read their feed → Shard 2 has Bieber's data
+   
+   Shard 2: CPU 95%, latency 2s, falling over
+   Shards 0,1,3: Bored. 5% utilization.
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  MITIGATION: Salting (spread celebrity across shards), dedicated    │
+   │  infrastructure for hot keys, or redesign (pull vs push fan-out).     │
+   └─────────────────────────────────────────────────────────────────────┘
 ```
 
 **Solutions to Hot Partitions:**
@@ -1849,6 +2208,31 @@ Sharding breaks joins, transactions, and aggregations. Here's how to handle each
 ```
 
 #### Problem 1: Cross-Shard Joins
+
+### Visual: Cross-Shard Join — Why It's Painful
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CROSS-SHARD JOIN: Data split. Query needs Shard 1 AND Shard 3.             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   ORDERS (sharded by order_id)          USERS (sharded by user_id)
+   ┌─────────┐ ┌─────────┐ ┌─────────┐  ┌─────────┐ ┌─────────┐ ┌─────────┐
+   │Shard 0  │ │Shard 1  │ │Shard 2  │  │Shard 0  │ │Shard 1  │ │Shard 2  │
+   │orders   │ │orders   │ │orders   │  │users    │ │users    │ │users    │
+   │...      │ │o1,o2,o3 │ │...      │  │u1,u2    │ │u3       │ │u4,u5    │
+   └─────────┘ └─────────┘ └─────────┘  └─────────┘ └─────────┘ └─────────┘
+
+   Query: "Orders with user names" (JOIN orders.user_id = users.id)
+   
+   Step 1: Query Shard 1 (orders) → get o1,o2,o3 with user_ids: 3, 4, 5
+   Step 2: user_id 3 → Shard 1, user_id 4,5 → Shard 2
+   Step 3: Query Shard 1 for user 3, Query Shard 2 for users 4,5
+   Step 4: MERGE in application. 3 round-trips. Slow!
+
+   Single-DB: 1 query, 10ms
+   Cross-shard: 3+ queries, 30-50ms, complex merge logic
+```
 
 ```
 Query: SELECT orders.*, users.name 
@@ -5270,5 +5654,45 @@ Replication and sharding are fundamental to building systems that scale beyond a
 6. **Operational cost is real.** Sharded systems require more sophisticated monitoring, testing, and incident response.
 
 In interviews, demonstrate that you understand both the power and the cost of these techniques. Don't reach for sharding by default—justify when it's needed. Don't ignore failure modes—address them proactively. That's Staff-level thinking.
+
+---
+
+## Visual Summary: Chapter 21 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║           CHAPTER 21: REPLICATION & SHARDING — ONE-PAGE SUMMARY               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  REPLICATION: Copies of same data     SHARDING: Split data across nodes       ║
+║  • Scales READS ✓   Writes ✗         • Scales WRITES ✓   Storage ✓           ║
+║  • Durability, availability           • Hash / Range / Directory             ║
+║                                                                               ║
+║  REPLICATION STYLES:                                                          ║
+║  • Leader-Follower: 1 leader, N replicas (PostgreSQL, MySQL) — default        ║
+║  • Multi-Leader: Conflicts! CRDTs, LWW. Use for geo/offline only              ║
+║  • Leaderless: Quorum W/R (Cassandra, DynamoDB) — no single point of failure  ║
+║                                                                               ║
+║  DECISION: Read bottleneck? → Replicate. Write/storage bottleneck? → Shard.    ║
+║  Try first: Query optimization, caching, vertical scaling before either.   ║
+║                                                                               ║
+║  SHARD KEY = EVERYTHING. Hot partition = one shard gets skewed load.          ║
+║  Mitigation: Subpartitioning, celebrity isolation, consistent hashing.      ║
+║                                                                               ║
+║  CROSS-SHARD: Joins (denormalize/fan-out), Txns (2PC vs Saga), Aggregations   ║
+║  RE-SHARDING: Double-write, ghost tables, read-through migration              ║
+║                                                                               ║
+║  NUMBERS: Leader 15-20K WPS limit; Sync replication = 2+ RTTs;                ║
+║           Sharding cost ~2-3× single node; Plan for resharding from day 1     ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  1. Add complexity only when proven necessary                                 ║
+║  2. Replication ≠ write scaling                                              ║
+║  3. Shard key by access pattern, not data shape                               ║
+║  4. Sync vs async: Durability vs latency — semi-sync for most                 ║
+║  5. Replication lag → read-your-writes inconsistency → sticky sessions       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---

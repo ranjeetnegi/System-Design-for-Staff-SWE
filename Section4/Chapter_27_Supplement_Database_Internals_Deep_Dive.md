@@ -109,6 +109,37 @@ Balanced trees maintain O(log N) height by constraining tree shape. They don't c
 
 A **B-tree** (Bayer tree, or "broad tree") has a **high branching factor**. Each node can have **hundreds** of children, not 2.
 
+### B-Tree: The Balanced Search Tree — Lookup Path
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    B-TREE: LOOKUP OF KEY "17" (Branching Factor 4)                    ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║                         ┌─────────────────────────┐                                   ║
+║                         │    ROOT (1 disk read)    │  Compare: 17 in [5, 25] range    ║
+║                         │  [5]  [15]  [25]  [35]  │  ► Follow pointer to child       ║
+║                         └────────────┬────────────┘                                   ║
+║                                      │                                                 ║
+║                    ┌──────────────────┼──────────────────┐                              ║
+║                    ▼                  ▼                  ▼                              ║
+║            ┌───────────────┐  ┌───────────────┐  ┌───────────────┐                    ║
+║            │  INTERNAL     │  │  INTERNAL     │  │  INTERNAL     │  (2nd disk read)   ║
+║            │ [2][4][6][8]  │  │ [10][12][14]  │  │ [20][22][24]  │  17 in [15,25]    ║
+║            └───────┬───────┘  └───────┬───────┘  └───────┬───────┘                    ║
+║                    │                  │                  │                              ║
+║                    │                  ▼                  │                              ║
+║                    │           ┌───────────────┐          │                              ║
+║                    │           │  LEAF NODE    │          │  (3rd disk read)             ║
+║                    │           │ [15][16][17]  │◄─────────┘  Found! Return row          ║
+║                    │           │   → data      │                                        ║
+║                    │           └───────────────┘                                        ║
+║                    │                                                                   ║
+║   Total: O(log_B N) disk reads. With B=500, 1B rows → ~4 reads.                        ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
 ```
 B-Tree vs Binary Tree for 1 Billion Rows:
 
@@ -468,7 +499,32 @@ Without this, `WHERE LOWER(email) = ...` cannot use an index on `email`—the fu
 
 PostgreSQL: `pg_stat_user_indexes` — `idx_scan` (how often index was used), `idx_tup_read`, `idx_tup_fetch`. Compare to `pg_stat_user_tables`.`seq_scan` to see scan vs index balance. Unused indexes (`idx_scan` = 0) are candidates for removal—they only add write cost.
 
-### Query Planner and Index Selection
+### Query Execution Plan: From SQL to Results
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    SQL QUERY → PARSER → PLANNER → EXECUTOR → RESULTS                   ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   SELECT * FROM users WHERE id = 12345                                                ║
+║              │                                                                        ║
+║              ▼                                                                        ║
+║   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐         ║
+║   │   PARSER     │──►│   PLANNER    │──►│   EXECUTOR   │──►│   RESULTS    │         ║
+║   │   (parse SQL) │   │   (pick plan) │   │   (run it)   │   │              │         ║
+║   └──────────────┘   └──────┬───────┘   └──────────────┘   └──────────────┘         ║
+║                             │                                                          ║
+║   PLANNER CHOOSES:                                                                     ║
+║   ┌─────────────────────────────────────┐  ┌─────────────────────────────────────┐     ║
+║   │  GOOD: Index Seek on users_pkey    │  │  BAD: Sequential Scan on users     │     ║
+║   │  → O(log n), 4 disk reads         │  │  → O(n), full table scan!          │     ║
+║   │  Cost: low                        │  │  Cost: high (planner picks this     │     ║
+║   └─────────────────────────────────────┘  │  when index missing or stats bad)  │     ║
+║                                             └─────────────────────────────────────┘     ║
+║   Use EXPLAIN ANALYZE to see which plan was chosen.                                    ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
 
 The planner estimates cost of each access path. **Index scan cost** = (pages_read × seq_page_cost) + (rows × cpu_tuple_cost). **Seq scan cost** = (table_pages × seq_page_cost) + (rows × cpu_tuple_cost). For small tables, seq scan often wins—reading the whole table is cheaper than index + random fetches. For large tables with selective predicates, index wins. The planner uses statistics (`pg_statistic`, `ANALYZE`) to estimate selectivity. Stale statistics cause bad plans: run `ANALYZE` regularly. **EXPLAIN (ANALYZE, BUFFERS)** shows actual rows, actual time, and buffer hits—essential for tuning.
 
@@ -687,6 +743,30 @@ Goal: **Readers never block writers. Writers never block readers.** (They can pr
 - **No read locks**: Readers don't take locks. They read from their snapshot.
 - **Writer-writer conflict**: Two transactions writing the same row still conflict. One wins; the other may get a serialization error or retry.
 
+### MVCC: Multiple Versions, No Locks — Version Chain
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    MVCC: READERS AND WRITERS DON'T BLOCK EACH OTHER                   ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   Row K:  Version 1 (balance=$100) ← Version 2 (balance=$150) ← Version 3 ($200)     ║
+║                xmin=100                   xmin=200                  xmin=300            ║
+║                xmax=200                   xmax=300                  xmax=NULL           ║
+║                                                                                       ║
+║   T1 starts (snapshot at 250): Sees Version 2. Balance = $150. No lock taken!         ║
+║   T2 writes Version 3. T1 STILL sees Version 2. No blocking!                           ║
+║   T2 commits. T1's snapshot is unchanged. Isolation.                                 ║
+║                                                                                       ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Reader (T1)           Writer (T2)                                              │ ║
+║   │  Read v2 ────────────  Write v3 ────────► Both proceed. No locks.               │ ║
+║   │  (snapshot)             (new version)   Readers see old; writers see new.       │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
 ## How It Works: Snapshots and Visibility
 
 Each transaction gets a **snapshot** at start: "I see the database as of now." The snapshot includes:
@@ -705,6 +785,35 @@ Each transaction gets a **snapshot** at start: "I see the database as of now." T
 ## VACUUM: Cleaning Up Old Versions
 
 Old row versions accumulate. A row updated 1000 times has 1000 versions (or 999 dead, 1 visible). They consume space and slow scans.
+
+### Vacuum/Compaction: Cleaning Up Dead Rows
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    MVCC CREATES DEAD ROWS — VACUUM CLEANS THEM UP                      ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   WITHOUT VACUUM (table bloats over time):                                             ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Page 1: [live][dead][dead][live][dead]...[dead]  ← 90% dead tuples             │ ║
+║   │  Page 2: [dead][live][dead][dead]...                                             │ ║
+║   │  ...    Table size grows. Scans read dead rows. Slow.                           │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+║   WITH VACUUM:                                                                        ║
+║   ┌─────────────────────────────────────────────────────────────────────────────────┐ ║
+║   │  Marks dead rows as "reusable" (doesn't return to OS by default)                │ ║
+║   │  Space can be reused by future INSERTs in same table                             │ ║
+║   │  Table size may not shrink, but scans skip dead = faster                         │ ║
+║   │  VACUUM FULL: Rewrites table, returns space to OS (exclusive lock!)              │ ║
+║   └─────────────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                                       ║
+║   Over time:                                                                           ║
+║   No vacuum    ████████████████████  (bloat grows)                                     ║
+║   With vacuum  ████▌▌▌▌▌▌▌▌▌▌▌▌▌▌▌  (stable, dead reclaimed)                            ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
 
 **VACUUM**:
 - Marks dead tuples (no longer visible to any active transaction) as reusable
@@ -798,6 +907,41 @@ In PostgreSQL, **each connection is a separate OS process**. Not a thread—a fu
 ## Connection Pool: Share a Few, Serve Many
 
 **Idea**: Application has 500 request-handling threads, but only **20** actual DB connections. A thread that needs the DB **borrows** a connection from the pool, runs its query, returns the connection.
+
+### Connection Pooling: The Waiting Room
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                    WITHOUT POOL: Every request opens a new connection                 ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   Request 1 ──► open connection ──► query ──► close   (expensive! ~10MB each)        ║
+║   Request 2 ──► open connection ──► query ──► close                                   ║
+║   Request 3 ──► open connection ──► query ──► close   500 requests = 500 connections ║
+║   ...                    DB server explodes                                           ║
+║                                                                                       ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                    WITH POOL: Reuse N connections                                     ║
+╠═══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   ┌─────────────────────────────────────────────────────────────────────────────┐   ║
+║   │  POOL (N=20 connections)                                                     │   ║
+║   │  [conn1][conn2][conn3]...[conn20]  ← available                               │   ║
+║   └─────────────────────────────────────────────────────────────────────────────┘   ║
+║            │                                                                         ║
+║   Request takes conn → runs query → returns conn to pool                             ║
+║                                                                                       ║
+║   When pool EXHAUSTED:                                                                ║
+║   ┌─────────────────────────────────────────────────────────────────────────────┐   ║
+║   │  [conn1]...[conn20] all in use                                              │   ║
+║   │  Request 21 → WAITS in queue until a conn returns                           │   ║
+║   │  (Or times out if wait too long)                                            │   ║
+║   └─────────────────────────────────────────────────────────────────────────────┘   ║
+║                                                                                       ║
+║   Key: 500 threads share 20 connections. DB server stays healthy.                     ║
+║                                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
 
 ```
 Without pooling:

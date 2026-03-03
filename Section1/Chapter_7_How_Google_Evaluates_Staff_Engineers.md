@@ -14,6 +14,42 @@ Let's begin.
 
 ---
 
+## Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              CHAPTER 7: HOW GOOGLE EVALUATES STAFF ENGINEERS                 ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CORE CONCEPT:                                                                ║
+║  Staff (L6) is not "Senior+." It's a qualitative shift—from executing on       ║
+║  problems to defining what problems matter and driving direction.            ║
+║                                                                               ║
+║  THE LEVELING FLOW:                                                           ║
+║                                                                               ║
+║    L4 (SWE)          L5 (Senior)           L6 (Staff)          L7 (Principal) ║
+║       │                   │                    │                    │        ║
+║       ▼                   ▼                    ▼                    ▼        ║
+║   "I'll do it"    "I'll build it well"   "Here's what we       "Org-wide       ║
+║   as given"      for my component"      should build"         direction"      ║
+║                        │                    │                                 ║
+║                        └────────────────────┘                                 ║
+║                    HARDEST TRANSITION: L5 → L6                                ║
+║                    (Scope, ownership, influence)                             ║
+║                                                                               ║
+║  KEY TAKEAWAYS:                                                               ║
+║  • Scope is created, not assigned—L6 finds impact beyond project size         ║
+║  • System design interviews test HOW you think, not the design itself         ║
+║  • 7 signals: Problem decomposition, tradeoffs, depth, failures, ops,         ║
+║    judgment, communication—demonstrate all                                   ║
+║  • Overreaching toward L7 (too strategic, too abstract) can hurt you         ║
+║  • Drive the interview; don't wait for direction                              ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Part 1: What Staff Engineer (L6) Means at Google
 
 ## The Leveling Landscape
@@ -346,6 +382,73 @@ Using buzzwords doesn't impress experienced interviewers. If anything, it raises
 ### Not: Years of Experience
 
 Interviewers don't care how many years you've been in the industry. They care about how you think today. A candidate with 8 years of experience who thinks like a mid-level engineer will be leveled as a mid-level engineer.
+
+## Key Concept: The 7 Signals Interviewers Are Trained to Identify
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         STAFF-LEVEL SIGNALS: DECISION TREE FOR INTERVIEW SUCCESS               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   RECEIVE PROBLEM                                                             ║
+║         │                                                                     ║
+║         ▼                                                                     ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 1. DECOMPOSE?   │────────────►│ Weak: Jump to boxes & arrows      │      ║
+║   │ Clarify use     │             └──────────────────────────────────┘      ║
+║   │ cases, scale,   │                                                         ║
+║   │ constraints     │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 2. ARTICULATE   │────────────►│ Weak: "We'll use Kafka" (why?)     │      ║
+║   │ TRADEOFFS?      │             └──────────────────────────────────┘      ║
+║   │ "X gives Y but  │                                                         ║
+║   │  costs Z"       │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 3. APPROPRIATE  │────────────►│ Weak: Too shallow OR too deep     │      ║
+║   │ DEPTH?          │             └──────────────────────────────────┘      ║
+║   │ Zoom where it   │                                                         ║
+║   │ matters         │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 4. FAILURE      │────────────►│ Weak: Happy path only               │      ║
+║   │ MODES?          │             └──────────────────────────────────┘      ║
+║   │ What can go     │                                                         ║
+║   │ wrong?          │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 5. OPS          │────────────►│ Weak: Stop at architecture         │      ║
+║   │ MATURITY?       │             └──────────────────────────────────┘      ║
+║   │ Monitoring,     │                                                         ║
+║   │ alerting, debug │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 6. PRACTICAL    │────────────►│ Weak: Death Star or too simple     │      ║
+║   │ JUDGMENT?       │             └──────────────────────────────────┘      ║
+║   │ Right-size for  │                                                         ║
+║   │ context         │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐     NO      ┌──────────────────────────────────┐      ║
+║   │ 7. COMMS        │────────────►│ Weak: Ramble, confuse interviewer  │      ║
+║   │ CLARITY?        │             └──────────────────────────────────┘      ║
+║   │ Structured,     │                                                         ║
+║   │ summarize first │     YES                                                  ║
+║   └────────┬────────┘                                                         ║
+║            ▼                                                                  ║
+║   ┌─────────────────┐                                                        ║
+║   │ STAFF-LEVEL     │  ← All 7 signals demonstrated                          ║
+║   │ ASSESSMENT      │                                                         ║
+║   └─────────────────┘                                                        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -2117,6 +2220,42 @@ Based on everything in this section, assess your readiness:
 - On a scale of 1-10, how Staff-level is your interview leadership?
 
 For each dimension below 7, write a specific development plan.
+
+---
+
+## Visual Summary: Chapter 7 in One Picture
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              VISUAL SUMMARY: CHAPTER 7 IN ONE PICTURE                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  L5 vs L6 MINDSET SHIFT:                                                      ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+║  │ L5: "Here's how I'll build it"  →  L6: "Here's what we should build"     │ ║
+║  │ L5: "I finished my task"        →  L6: "I identified the next 3 tasks"  │ ║
+║  │ L5: Scope: Component           →  L6: Scope: Problem space               │ ║
+║  │ L5: Impact: Within team         →  L6: Impact: Across teams               │ ║
+║  └─────────────────────────────────────────────────────────────────────────┘ ║
+║                                                                               ║
+║  WHAT INTERVIEWERS EVALUATE (not the design—your thinking):                   ║
+║  • Ambiguity handling │ Tradeoff articulation │ Communication │ Feedback     ║
+║                                                                               ║
+║  7 SIGNALS TO DEMONSTRATE:                                                    ║
+║  ① Decompose problem   ② Articulate tradeoffs   ③ Appropriate depth          ║
+║  ④ Failure mode awareness  ⑤ Operational maturity  ⑥ Practical judgment    ║
+║  ⑦ Communication clarity                                                     ║
+║                                                                               ║
+║  8 FAILURE PATTERNS (avoid these):                                            ║
+║  Execution without strategy │ Depth without breadth │ Solving without         ║
+║  questioning │ Local optimization │ Answering vs driving │ One solution     ║
+║  only │ Ignoring humans │ Perfectionism over pragmatism                      ║
+║                                                                               ║
+║  INTERVIEW TIP: Drive the discussion. Offer choices. Summarize before        ║
+║  diving deep. Calibrate for L6—hands-on + strategic, not L7 abstraction.     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 

@@ -10,6 +10,40 @@ This chapter builds that foundation. You'll learn the OSI model (and which layer
 
 ---
 
+# Chapter at a Glance
+
+```
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║        CHAPTER 4: NETWORKING — THE MENTAL MODEL                      ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║   Think of NETWORKING as POSTAL MAIL:                                ║
+    ║                                                                      ║
+    ║   TCP  = Registered mail (guaranteed delivery, signed receipt)        ║
+    ║   UDP  = Postcard (fast, no tracking, might get lost)                ║
+    ║   HTTP = The letter format (Dear Sir, ... Sincerely)                 ║
+    ║   IP   = The address on the envelope                                 ║
+    ║   Port = The apartment number                                        ║
+    ║   DNS  = The phone book (name → address)                             ║
+    ║                                                                      ║
+    ║   THE TWO LAYERS THAT MATTER:                                        ║
+    ║   ┌─────────────────────────────────────────────────────────────┐    ║
+    ║   │  L7 (Application)  HTTP, REST, gRPC    ◄── Your API logic  │    ║
+    ║   │  L4 (Transport)    TCP, UDP            ◄── Connections      │    ║
+    ║   └─────────────────────────────────────────────────────────────┘    ║
+    ║                                                                      ║
+    ║   DEBUGGING RULE: Start at L7, work down.                             ║
+    ║   "502 Bad Gateway" = L7.  "Connection refused" = L4.               ║
+    ║                                                                      ║
+    ║   BANDWIDTH vs LATENCY:                                              ║
+    ║   Bandwidth = how WIDE the pipe (MB/s)                               ║
+    ║   Latency   = how LONG the pipe (ms)                                 ║
+    ║   Small requests? Latency dominates. Big files? Bandwidth dominates. ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # Quick Visual: The Layers That Matter
 
 ```
@@ -235,6 +269,33 @@ HTTP/3 is HTTP over QUIC. It avoids TCP's head-of-line blocking while still prov
 | **Choice** | "We use TCP for our API" | "We use TCP because we need reliability. For real-time features we're evaluating QUIC/UDP" |
 | **Latency** | "Requests are slow" | "TCP handshake + TLS = 2-3 RTT before first byte. For 50ms RTT that's 100-150ms. Connection reuse is critical" |
 | **Head-of-line** | "Sometimes requests stall" | "TCP HoL blocking: one lost packet stalls the stream. HTTP/3/QUIC avoids this; consider for mobile/lossy networks" |
+
+### Visual: TCP vs UDP — When to Use Which
+
+```
+    ┌────────────────────────────┬────────────────────────────┐
+    │         TCP                │          UDP               │
+    │    "Registered Mail"       │      "Postcard"            │
+    ├────────────────────────────┼────────────────────────────┤
+    │                            │                            │
+    │   ✓ Every byte arrives     │   ✗ Packets may be lost    │
+    │   ✓ In order               │   ✗ May arrive out of order│
+    │   ✓ Connection setup       │   ✗ No connection (fire!)  │
+    │   ✗ Slower (handshake)     │   ✓ Faster (no handshake)  │
+    │   ✗ Head-of-line blocking  │   ✓ No blocking            │
+    │                            │                            │
+    │   USE FOR:                 │   USE FOR:                 │
+    │   • Web (HTTP/HTTPS)       │   • Video streaming        │
+    │   • Database connections   │   • Gaming (real-time)      │
+    │   • File transfers         │   • Voice/VoIP              │
+    │   • APIs (every byte       │   • DNS queries             │
+    │     must arrive)           │   • When "late > lost"      │
+    │                            │                            │
+    │   ANALOGY:                 │   ANALOGY:                 │
+    │   Phone call (connected,   │   Shouting across room      │
+    │   two-way, reliable)       │   (fast, maybe not heard)   │
+    └────────────────────────────┴────────────────────────────┘
+```
 
 ---
 
@@ -767,3 +828,39 @@ Networking fundamentals underpin every distributed system. Staff engineers:
 6. **Put servers close to users**: Geo-DNS, Anycast, CDN, regional deployment. Physics is the limit.
 
 When you design a system, ask: What's the request path? Where are the connections? What's the RTT? What fails and at which layer? The answers will shape your architecture—and your ability to debug it when things break.
+
+---
+
+# Visual Summary: Chapter 4 in One Picture
+
+```
+    ╔═══════════════════════════════════════════════════════════════════════╗
+    ║                    CHAPTER 4 — REMEMBER THIS                         ║
+    ╠═══════════════════════════════════════════════════════════════════════╣
+    ║                                                                       ║
+    ║   1. LAYERS: L7 (HTTP) and L4 (TCP) are what you debug most          ║
+    ║      502 = L7 problem    Connection timeout = L4 problem              ║
+    ║                                                                       ║
+    ║   2. TCP vs UDP:                                                      ║
+    ║      TCP = reliable, ordered, slower  (web, DB, APIs)                 ║
+    ║      UDP = fast, unreliable           (video, gaming, VoIP)          ║
+    ║      HTTP/3 = QUIC (UDP-based) — best of both worlds                  ║
+    ║                                                                       ║
+    ║   3. CONNECTIONS ARE EXPENSIVE — reuse them!                          ║
+    ║      New conn: 50-150ms (DNS+TCP+TLS)                                 ║
+    ║      Reused conn: ~0ms                                                ║
+    ║      Connection pooling = 20,000x faster than new connection          ║
+    ║                                                                       ║
+    ║   4. BANDWIDTH vs LATENCY:                                            ║
+    ║      ┌─────────────────────┬──────────────────────────┐              ║
+    ║      │ Small request (1KB) │ Latency dominates (RTT)  │              ║
+    ║      │ Big transfer (1GB)  │ Bandwidth dominates      │              ║
+    ║      └─────────────────────┴──────────────────────────┘              ║
+    ║      Users far away? Put servers closer (CDN, Geo-DNS)                ║
+    ║                                                                       ║
+    ║   5. STATUS CODES = a contract. Get them right!                        ║
+    ║      200=OK  201=Created  400=Bad input  401=Who are you?            ║
+    ║      403=No permission  404=Not found  429=Slow down  500=Our bug    ║
+    ║      502=Upstream broke  503=Overloaded  504=Upstream too slow        ║
+    ╚═══════════════════════════════════════════════════════════════════════╝
+```

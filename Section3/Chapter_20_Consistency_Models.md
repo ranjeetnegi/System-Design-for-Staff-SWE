@@ -12,6 +12,90 @@ This section demystifies consistency models. We'll start with intuition—what d
 
 By the end, you'll have practical heuristics for choosing consistency models, and you'll be able to explain your choices in interviews with the confidence that comes from genuine understanding.
 
+### Visual: The Bank Account Problem — Why Consistency Matters
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE BANK ACCOUNT PROBLEM                                │
+│                    Same account, $100 balance, two ATMs                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   WITHOUT CONSISTENCY (Eventual/No coordination):
+   ──────────────────────────────────────────────
+
+   ATM A (NY)                    ATM B (LA)                  Account Balance
+   ─────────                    ─────────                  ────────────────
+   Read: $100                                                     $100
+   Withdraw $80                                                  $100
+   Write: $20  ──────────────────────────────────────►          $20  ✓
+   Success!                                                     
+                                        Read: $100  ◄────────── $100 (stale!)
+                                        Withdraw $80
+                                        Write: $20  ──────────► $20  ✓
+                                        Success!
+
+   RESULT: Both withdrawals succeeded. Balance = $20. User withdrew $160!
+   OVERDRAFT. Money lost. Users confused. Regulatory nightmare.
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  WITH STRONG CONSISTENCY:                                            │
+   │                                                                      │
+   │  ATM A: Withdraw $80 → ACK (balance now $20)                          │
+   │  ATM B: Withdraw $80 → REJECTED ("Insufficient funds")                │
+   │                                                                      │
+   │  Second withdrawal sees the result of the first. One source of truth. │
+   └─────────────────────────────────────────────────────────────────────┘
+
+   LESSON: For money, inventory, anything where "double-spend" is harmful
+           → STRONG CONSISTENCY is non-negotiable.
+```
+
+---
+
+## Chapter at a Glance
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                 CHAPTER 20: CONSISTENCY MODELS — AT A GLANCE                  ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   CORE CONCEPT: Consistency is a SPECTRUM, not binary. Choose based on        ║
+║   "What breaks if this data is stale?" — not technical purity.                ║
+║                                                                               ║
+║   THE SPECTRUM (Strongest ←─────────────────────────────────→ Weakest):      ║
+║                                                                               ║
+║      Linearizable → Sequential → Causal → Read-Your-Writes → Eventual         ║
+║         $$        →    $$$     →   $$   →       $         →    $              ║
+║       Banking       Locks      Chat      Profiles       Like counts           ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │  DECISION DIAGRAM                                                     │   ║
+║   │                                                                       │   ║
+║   │    Money/Security? ──YES──▶ STRONG                                    │   ║
+║   │         │                                                            │   ║
+║   │        NO                                                            │   ║
+║   │         ▼                                                            │   ║
+║   │    Replies/Reactions? ──YES──▶ CAUSAL                                 │   ║
+║   │         │                                                            │   ║
+║   │        NO                                                            │   ║
+║   │         ▼                                                            │   ║
+║   │    User's own action? ──YES──▶ READ-YOUR-WRITES                       │   ║
+║   │         │                                                            │   ║
+║   │        NO                                                            │   ║
+║   │         ▼                                                            │   ║
+║   │    EVENTUAL (counters, feeds, analytics)                              │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+║   KEY TAKEAWAYS:                                                              ║
+║   • Strong = expensive ($15-25/1M ops cross-region); Eventual = cheap ($0.50) ║
+║   • Big companies use different models for different data in same system     ║
+║   • CAP: During partition → Consistency OR Availability (pick one)           ║
+║   • Read-your-writes solves "where did my post go?" — sticky sessions        ║
+║   • Causal: Reply always after parent (messaging, comments) — underrated     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
 ---
 
 ## Quick Visual: The Consistency Decision at a Glance
@@ -83,6 +167,41 @@ Before we define consistency models formally, let's understand them through user
 
 **Real-world analogy**: Email. You send an email. The recipient doesn't see it instantly—it takes seconds to minutes to propagate through mail servers. But eventually, it arrives.
 
+### Visual: Eventual Consistency — The Telephone Game
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE TELEPHONE GAME ANALOGY                               │
+│                    Message passed through many people                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   Person 1      Person 2      Person 3      Person 4      Person 5
+   ("Alice")    ("Bob")       ("Carol")      ("Dave")      ("Eve")
+
+   [Original]     [hears]       [hears]       [hears]       [hears]
+   "Pizza!"  ──►  "Pizza?"  ──►  "Pizza."  ──►  "Pizza!"  ──►  "Pizza!"
+      │              │              │              │              │
+      │              │              │              │              │
+   Has it        Has it         Has it         Has it         Has it
+   instantly     (1 sec)        (2 sec)        (3 sec)        (4 sec)
+
+   AT T=2:  Alice and Carol have "Pizza"; Bob might have a variant
+   AT T=4:  Everyone has some version
+   AT T=5:  Eventually everyone converges to same message
+
+   APPLIED TO DATA:
+   ────────────────
+   Write to Node A → propagates to B, C, D... over time
+   For a while: Node A has X=1, Node B has X=0 (stale), Node C has X=0
+   Eventually: All nodes have X=1 (converged)
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  LESSON: Different observers see different versions temporarily.      │
+   │  Given enough time + no new writes → everyone converges.            │
+   │  The "eventually" can be 50ms or 5 seconds—no guarantee.            │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
 **Technical reality**: Eventual consistency is cheaper and more available. Writes can be acknowledged immediately (to one replica), and propagation happens asynchronously. But users might see stale data.
 
 ## Causal Consistency: "Cause Always Precedes Effect"
@@ -92,6 +211,43 @@ Before we define consistency models formally, let's understand them through user
 **The mental model**: If action B was caused by action A, then anyone who sees B will also see A. Causally related events maintain their order. Unrelated events might appear in different orders to different observers.
 
 **Real-world analogy**: A threaded email conversation. You always see the original email before the reply. But two unrelated email threads might load in different orders.
+
+### Visual: Causal Consistency — The Chat Room (Reply Before Original?)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CAUSAL CONSISTENCY: Why order matters                    │
+│                    Alice: "Let's get pizza"  Bob: "Great idea!"             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   WITHOUT CAUSAL (Eventual consistency):
+   ────────────────────────────────────
+
+   Carol opens chat and sees:
+   ┌─────────────────────────────────────┐
+   │  Bob: "Great idea!"        ← HUH?   │  Reply before original = nonsense
+   │  Alice: "Let's get pizza"   ← What?  │
+   └─────────────────────────────────────┘
+
+   Carol thinks: "Great idea to what? Pizza? This makes no sense."
+
+   WITH CAUSAL CONSISTENCY:
+   ───────────────────────
+
+   Carol opens chat and sees:
+   ┌─────────────────────────────────────┐
+   │  Alice: "Let's get pizza"   ← First  │  Cause BEFORE effect. Always.
+   │  Bob: "Great idea!"         ← Then   │
+   └─────────────────────────────────────┘
+
+   Carol thinks: "Makes sense. Bob is agreeing to pizza."
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  CAUSAL = "If B was caused by A (e.g., Bob replied TO Alice),        │
+   │  everyone who sees B will also see A, and A comes before B."         │
+   │  Use for: Chat, comments, collaborative editing.                   │
+   └─────────────────────────────────────────────────────────────────────┘
+```
 
 **Technical reality**: Causal consistency is a middle ground. It's cheaper than strong consistency (no global coordination) but provides more guarantees than eventual consistency (no confusing out-of-order effects).
 
@@ -113,6 +269,44 @@ Linearizability → Sequential → Causal → Read-your-writes → Eventual → 
 
 **Linearizability (Strongest)**: All operations appear to happen atomically at a single point in time, and that order is consistent with real-time order. The gold standard, but expensive.
 
+### Visual: Linearizability Step-by-Step — "Looks Like One Copy"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  LINEARIZABILITY: 3 clients, 1 key (X). Wall-clock time on x-axis.           │
+│  Guarantee: Operations appear to happen at INSTANT between invoke & response │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   Wall-clock time ─────────────────────────────────────────────────────▶
+   T=0      T=1      T=2      T=3      T=4      T=5      T=6      T=7
+
+   Client A:  [──W(X=1)──]
+   Client B:        [──R(X)──]     [──W(X=2)──]
+   Client C:              [──R(X)──]           [──R(X)──]
+
+   VALID LINEARIZABLE ORDER:
+   ─────────────────────────
+   • A's write completes before B's read  → B must see X=1
+   • B's write completes before C's second read → C must see X=2
+   • C's first read is between A's write and B's write → C sees X=1
+
+   Timeline:  W(X=1) ── R(X)=1 ── R(X)=1 ── W(X=2) ── R(X)=2
+                    │         │
+                    └─ B sees A's write
+                              └─ C's first read (before B's write)
+
+   VIOLATION (NOT linearizable):
+   ────────────────────────────
+   If C's second read returned X=1 (while B already wrote X=2)
+   → C "went backward in time" = consistency violated
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  KEY INSIGHT: Every operation has a "moment" it appears to take effect │
+   │  between its start and end. All observers agree on that order.        │
+   │  "As if there's one copy, one server, one global clock."             │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
 **Sequential Consistency**: All operations appear in some order that's consistent across all observers, but that order doesn't need to match real-time.
 
 **Causal Consistency**: Operations that are causally related appear in order. Concurrent (unrelated) operations might appear in different orders to different observers.
@@ -120,6 +314,41 @@ Linearizability → Sequential → Causal → Read-your-writes → Eventual → 
 **Read-Your-Writes**: You always see your own writes, but others might not see them yet. A practical middle ground.
 
 **Eventual Consistency**: Given enough time, all replicas converge. No guarantees about what you see in the meantime.
+
+### Visual: The Consistency Spectrum — Cost, Use Case, Analogy
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         CONSISTENCY SPECTRUM: STRONGEST ←───────────────────→ WEAKEST         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  MODEL           │ COST/1M OPS  │ USE CASE          │ ANALOGY                ║
+║  ────────────────┼──────────────┼───────────────────┼──────────────────────  ║
+║  LINEARIZABLE    │ $15-25       │ Banking, payments │ Breaking news TV:       ║
+║  (Strongest)     │ (cross-region)│ Inventory checkout│ Everyone sees same     ║
+║                  │              │ Access control     │ event at same moment    ║
+║  ────────────────┼──────────────┼───────────────────┼──────────────────────  ║
+║  SEQUENTIAL      │ $8-15        │ Distributed locks │ Live sports broadcast:  ║
+║                  │              │ Auctions, bookings│ Same order for all,     ║
+║                  │              │                   │ not real-time sync      ║
+║  ────────────────┼──────────────┼───────────────────┼──────────────────────  ║
+║  CAUSAL          │ $2-5         │ Chat, comments    │ Morning briefing:      ║
+║                  │              │ Collaborative edit │ Cause before effect    ║
+║                  │              │ Order workflows    │ (headline before story)║
+║  ────────────────┼──────────────┼───────────────────┼──────────────────────  ║
+║  READ-YOUR-      │ $1-3         │ User profiles     │ Personal diary:        ║
+║  WRITES          │              │ Settings, UGC      │ You always see your    ║
+║                  │              │ Cart browsing      │ own entries first      ║
+║  ────────────────┼──────────────┼───────────────────┼──────────────────────  ║
+║  EVENTUAL        │ $0.50-1.50   │ Like counts,      │ Daily newspaper:       ║
+║  (Weakest)       │              │ View counters     │ Delivered tomorrow,     ║
+║                  │              │ Feeds, analytics   │ everyone gets same     ║
+║                  │              │ Caching            │ eventually             ║
+║                                                                               ║
+║  GOLDEN RULE: Don't pay for consistency you don't need.                       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -135,6 +364,39 @@ Imagine you're at a coffee shop. You post "At my favorite coffee shop!" to socia
 | **Eventual** | You post. Your app shows "Posted!" You refresh... and the post isn't there. You panic. Refresh again, there it is. (This is bad UX.) |
 
 Notice: The "worst" model (eventual) isn't abstractly bad—it's just wrong for this use case. For other use cases, it's perfectly fine.
+
+### Visual: Consistency Models as News Delivery — A Memorable Analogy
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         CONSISTENCY MODELS = HOW NEWS REACHES YOU                              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   LINEARIZABLE (Strong)           CAUSAL                         EVENTUAL      ║
+║   ─────────────────────          ───────                        ─────────    ║
+║   BREAKING NEWS TV                MORNING BRIEFING                NEWSPAPER    ║
+║   • Same event, same moment       • Headline before story        • Delivered   ║
+║   • Everyone sees live            • Cause always before effect   • tomorrow    ║
+║   • "We interrupt..."             • Reply always after original  • Everyone    ║
+║   • Banking, payments             • Chat, comments               • gets same   ║
+║   • Cost: 500ms+ latency          • Cost: medium                 • eventually  ║
+║                                                                               ║
+║   READ-YOUR-WRITES                                                             ║
+║   ────────────────                                                             ║
+║   PERSONAL RSS FEED                                                           ║
+║   • You always see YOUR subscriptions first                                    ║
+║   • Others may have different view                                            ║
+║   • Profile, settings, "my post"                                               ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │  Why this analogy works:                                             │   ║
+║   │  • Breaking news = can't wait, must be same for everyone (strong)   │   ║
+║   │  • Morning brief = order matters, not instant (causal)               │   ║
+║   │  • Newspaper = eventually everyone has same info (eventual)          │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 ---
 
@@ -269,6 +531,40 @@ Let's get specific about how consistency models affect users.
 - Settings changes
 - Most consumer applications
 
+### Visual: Read-Your-Writes — Post a Comment, See It (Or Not!)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    READ-YOUR-WRITES: User posts a comment                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   WITH READ-YOUR-WRITES (sticky session / write-flag routing):
+   ────────────────────────────────────────────────────────────
+
+   User:  [Post "Great article!"]  ──► Leader (write)  ──► Success!
+                │
+                │  Immediate refresh
+                ▼
+   User:  [Read feed]  ──► Same session → routed to Leader  ──► Sees own comment ✓
+          "Where did my post go?"  NEVER HAPPENS
+
+   WITHOUT READ-YOUR-WRITES (pure eventual, random replica):
+   ────────────────────────────────────────────────────────
+
+   User:  [Post "Great article!"]  ──► Leader (write)  ──► Success!
+                │
+                │  Immediate refresh (load balancer sends to Follower)
+                ▼
+   User:  [Read feed]  ──► Follower (hasn't replicated yet!)  ──► OLD data, no comment!
+          "I just posted! Where did it go?!"
+          User uploads again. Double post. Confusion. Support tickets.
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  FIX: After write, route THIS user's reads to leader for 30 sec     │
+   │  (sticky session / write-flag). Simple. Solves 99% of "ghost post"  │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 # Part 3: Why Large-Scale Systems Accept Inconsistency
@@ -394,6 +690,40 @@ Staff Engineers don't just say "strong consistency is expensive." They quantify 
 - Don't build per-request consistency negotiation when per-data-type consistency suffices (complexity cost exceeds benefit)
 - Don't build real-time consistency monitoring for eventually consistent data — batch audit checks are sufficient and 10× cheaper
 
+### Visual: Cost vs Strength Trade-off Curve
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CONSISTENCY: STRONGER = HIGHER COST (latency, throughput, coordination)     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   Cost / Complexity
+        ▲
+        │                                    ★ Linearizable
+        │                                 ★ Sequential
+        │                              ★ Causal
+        │                         ★ Read-Your-Writes
+        │              ★ Eventual
+        │    ★ None
+        │
+        └─────────────────────────────────────────────────────────────▶
+              Weak                    Consistency Strength                    Strong
+
+   LATENCY:     Low ◄─────────────────────────────────────────────► High
+                10ms                                                500ms+
+
+   THROUGHPUT:  High ◄─────────────────────────────────────────────► Low
+                100K ops/s                                         1K ops/s
+
+   COORDINATION: None (async) ◄────────────────────────────────────► Quorum (sync)
+                 Single replica ACK                              Multi-region consensus
+
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  GOLDEN RULE: Use the WEAKEST consistency that satisfies the need.  │
+   │  Every step stronger = more latency, lower throughput, higher cost.  │
+   └─────────────────────────────────────────────────────────────────────┘
+```
+
 ## What Big Companies Actually Do
 
 | Company | System | Consistency Model | Why |
@@ -464,6 +794,48 @@ If the cost is low (slight user confusion, eventually self-correcting), accept w
 │                              [EVENTUAL CONSISTENCY]                         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Visual: Use-Case Decision Tree — "Which Consistency Model Should I Use?"
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║         WHICH CONSISTENCY MODEL? (Follow the use case)                        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   START: What type of data/operation?                                        ║
+║                          │                                                    ║
+║   ┌─────────────────────┼─────────────────────┐                               ║
+║   │                     │                     │                               ║
+║   ▼                     ▼                     ▼                               ║
+║ BANKING/PAYMENT    CONVERSATIONAL         AGGREGATES                          ║
+║ • Transfer $       • Chat message         • Like count                         ║
+║ • Checkout         • Comment reply        • View counter                       ║
+║ • Inventory        • Doc edit             • Feed ranking                       ║
+║      │                    │                     │                             ║
+║      ▼                    ▼                     ▼                             ║
+║  ┌────────┐         ┌────────┐            ┌────────┐                          ║
+║  │ STRONG │         │ CAUSAL │             │EVENTUAL│                           ║
+║  │Lineariz│         │        │             │        │                           ║
+║  └────────┘         └────────┘             └────────┘                           ║
+║  • Spanner         • Messaging           • Cassandra                          ║
+║  • PostgreSQL     • Comment DB           • DynamoDB                            ║
+║    + sync          • CRDTs for merge     • Redis cache                         ║
+║                                                                               ║
+║   ┌─────────────────────────────────────────────────────────────────────┐   ║
+║   │  USER-OWNED DATA? (profile, settings, my post)                        │   ║
+║   │  → READ-YOUR-WRITES (sticky session to leader after write)            │   ║
+║   └─────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+║   EXAMPLES:                                                                   ║
+║   • Banking transfer     → STRONG (money lost = disaster)                     ║
+║   • Social feed          → EVENTUAL (latency matters, counts self-correct)    ║
+║   • Chat messages        → CAUSAL (reply before parent = confusing)           ║
+║   • Shopping cart items  → CAUSAL (items depend on add/remove order)           ║
+║   • Rate limiter         → STRONG (must prevent over-allocation)              ║
+║   • Block user           → STRONG (security must be immediate)                 ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ## Decision Heuristics
@@ -1037,6 +1409,54 @@ When choosing a consistency model, work through this decision tree:
 | Comment threads | Causal | Replies after parents |
 | Inventory at browse | Eventual | Exact count not critical |
 | Inventory at checkout | Strong | Prevent overselling |
+
+### Visual: Consistency Cheat Sheet — "If Building X, Use Y"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CONSISTENCY CHEAT SHEET: System → Model                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   SYSTEM TYPE              │  USE THIS CONSISTENCY    │  WHY
+   ────────────────────────┼──────────────────────────┼──────────────────────
+   Bank transfers           │  STRONG (Linearizable)    │  Money lost = disaster
+   Payment checkout         │  STRONG                  │  Can't oversell/double-charge
+   Access control / blocks  │  STRONG                  │  Security must be immediate
+   Chat / Messaging         │  CAUSAL                  │  Reply before original
+   Comment threads          │  CAUSAL                  │  Same as chat
+   User profile / settings  │  READ-YOUR-WRITES        │  User must see own changes
+   Shopping cart (browse)   │  READ-YOUR-WRITES        │  User sees own adds
+   Like counts / views      │  EVENTUAL                │  Approximate, self-correcting
+   News feed content        │  EVENTUAL                │  Staleness OK, latency critical
+   Analytics dashboards     │  EVENTUAL                │  Approximations anyway
+   Rate limiters            │  EVENTUAL                │  Approximate enforcement OK
+   Caching layers           │  EVENTUAL                │  Stale is expected
+
+   QUICK DECISION:
+   Money/Security? → STRONG  |  Replies/Reactions? → CAUSAL
+   User's own action? → READ-YOUR-WRITES  |  Else → EVENTUAL
+```
+
+### Visual: What Breaks When You Pick Wrong
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PICKED TOO STRONG                    │  PICKED TOO WEAK                    │
+│  (Over-engineered for the need)       │  (Under-engineered)                 │
+├──────────────────────────────────────┼─────────────────────────────────────┤
+│  • System is SLOW                    │  • Users see STALE data              │
+│  • Higher LATENCY on every write     │  • "Where did my post go?"           │
+│  • More EXPENSIVE infra              │  • DUPLICATES (double withdrawals)   │
+│  • Lower THROUGHPUT                  │  • LOST WRITES (overwritten)        │
+│  • Availability risk (errors during  │  • CONFUSING order (reply before    │
+│    partition)                         │    original)                        │
+│  • Users: "Why is this so slow?"     │  • Support tickets, churn            │
+├──────────────────────────────────────┼─────────────────────────────────────┤
+│  Example: Strong consistency for     │  Example: Eventual for banking       │
+│  like counts → 500ms per like        │  → overdraft, duplicate charges    │
+│  Users abandon "slow" feature        │  → regulatory fines, lawsuits        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
