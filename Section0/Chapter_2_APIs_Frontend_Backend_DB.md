@@ -15,11 +15,11 @@ This chapter walks you from the basics to Staff-level thinking. We'll look at AP
     ║                CHAPTER 2: THE FOUR BUILDING BLOCKS                   ║
     ╠══════════════════════════════════════════════════════════════════════╣
     ║                                                                      ║
-    ║   ┌──────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐     ║
-    ║   │   API    │───►│ FRONTEND  │    │ BACKEND  │───►│ DATABASE │     ║
-    ║   │ Contract │    │ What user │    │ The real │    │ Source   │     ║
-    ║   │ "Menu"   │    │ sees      │    │ work     │    │ of truth │     ║
-    ║   └──────────┘    └───────────┘    └──────────┘    └──────────┘     ║
+    ║   ┌──────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐      ║
+    ║   │   API    │───►│ FRONTEND  │    │ BACKEND  │───►│ DATABASE │      ║
+    ║   │ Contract │    │ What user │    │ The real │    │ Source   │      ║
+    ║   │ "Menu"   │    │ sees      │    │ work     │    │ of truth │      ║
+    ║   └──────────┘    └───────────┘    └──────────┘    └──────────┘      ║
     ║                                                                      ║
     ║   API = Restaurant menu (what you CAN order, how to order it)        ║
     ║   Frontend = Dining room (what customers experience)                 ║
@@ -67,7 +67,7 @@ Resources are nouns (`/users`, `/orders`). The HTTP method tells you the action.
 
 ```
     ┌─────────────────────────────────────────────────────────────────┐
-    │              REST = Resources + HTTP Methods                     │
+    │              REST = Resources + HTTP Methods                    │
     │                                                                 │
     │   Think of it as:  NOUN  +  VERB                                │
     │                                                                 │
@@ -87,7 +87,7 @@ Resources are nouns (`/users`, `/orders`). The HTTP method tells you the action.
     │   └──────────┴────────────┴──────────────┘                      │
     │                                                                 │
     │   Golden rule: POST can create duplicates on retry.             │
-    │   Fix: Use IDEMPOTENCY KEYS for critical POSTs (payments!)     │
+    │   Fix: Use IDEMPOTENCY KEYS for critical POSTs (payments!)      │
     └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -545,11 +545,11 @@ Rendering strategy directly impacts **Time to First Contentful Paint (FCP)** and
               │   API calls    │                │
               ▼                ▼                ▼
     ┌───────────────────────────────────────────────────────────┐
-    │                     BFF LAYER (optional)                   │
+    │                     BFF LAYER (optional)                  │
     │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
     │  │   Web BFF   │  │ Mobile BFF  │  │  Shared API │        │
     │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
-    └─────────┼────────────────┼────────────────┼──────────────┘
+    └─────────┼────────────────┼────────────────┼───────────────┘
               │                │                │
               └────────────────┼────────────────┘
                                │
@@ -878,21 +878,21 @@ At each stage: **What problem does it solve? What new problems does it introduce
     ║                                           ┌─────────────────┐ ║
     ║                                           │ 5. SHARDING     │ ║
     ║                                    ┌──────┤ Cross-shard = ☠ │ ║
-    ║                                    │ 4. CACHE              │ ║
-    ║                             ┌──────┤ Invalidation = hard   │ ║
-    ║                             │ 3. CONNECTION POOL          │ ║
-    ║                      ┌──────┤ Pool sizing = tricky        │ ║
-    ║                      │ 2. READ REPLICAS                   │ ║
-    ║               ┌──────┤ Replication lag = stale reads      │ ║
-    ║               │ 1. SINGLE DB                              │ ║
-    ║               │ Simple but limited                        │ ║
-    ║               └──────────────────────────────────────────-┘ ║
+    ║                                    │ 4. CACHE               │ ║
+    ║                             ┌──────┤ Invalidation = hard    │ ║
+    ║                             │ 3. CONNECTION POOL            │ ║
+    ║                      ┌──────┤ Pool sizing = tricky          │ ║
+    ║                      │ 2. READ REPLICAS                     │ ║
+    ║               ┌──────┤ Replication lag = stale reads        │ ║
+    ║               │ 1. SINGLE DB                                │ ║
+    ║               │ Simple but limited                          │ ║
+    ║               └──────────────────────────────────────────-─-┘ ║
     ║                                                               ║
-    ║    Users:    100   10K    100K     1M      10M     100M+     ║
-    ║    QPS:      100   1K     10K      100K    1M      10M+      ║
+    ║    Users:    100   10K    100K     1M      10M     100M+      ║
+    ║    QPS:      100   1K     10K      100K    1M      10M+       ║
     ║                                                               ║
-    ║    GOLDEN RULE: Don't jump steps. Each step buys you 10x.    ║
-    ║    Design schema NOW so step 5 is possible LATER.            ║
+    ║    GOLDEN RULE: Don't jump steps. Each step buys you 10x.     ║
+    ║    Design schema NOW so step 5 is possible LATER.             ║
     ╚═══════════════════════════════════════════════════════════════╝
 ```
 
@@ -1266,7 +1266,7 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│   API VERSIONING: FOUR APPROACHES                                            │
+│   API VERSIONING: FOUR APPROACHES                                           │
 │                                                                             │
 │   1. URL PATH VERSIONING:                                                   │
 │      GET /v1/users/123                                                      │
@@ -1279,7 +1279,7 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 │      GET /users/123                                                         │
 │      Accept: application/vnd.company.v2+json                                │
 │      ✓ Clean URLs, content negotiation native                               │
-│      ✗ Hidden (not visible in URL), harder to cache, harder to test        │
+│      ✗ Hidden (not visible in URL), harder to cache, harder to test         │
 │      BEST FOR: APIs where URL aesthetics matter                             │
 │                                                                             │
 │   3. QUERY PARAMETER:                                                       │
@@ -1289,14 +1289,14 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 │      BEST FOR: Quick versioning for internal APIs                           │
 │                                                                             │
 │   4. NO VERSIONING (evolve in place):                                       │
-│      Always add fields, never remove. Use optional fields.                 │
+│      Always add fields, never remove. Use optional fields.                  │
 │      ✓ Simple, no version management                                        │
-│      ✗ Schema grows forever, breaking changes impossible                   │
+│      ✗ Schema grows forever, breaking changes impossible                    │
 │      BEST FOR: Internal APIs with few consumers                             │
 │                                                                             │
-│   STAFF RECOMMENDATION: URL path (/v1/) for public APIs.                   │
-│   Evolve-in-place for internal APIs (add optional, never remove).          │
-│   Version only when breaking changes are unavoidable.                      │
+│   STAFF RECOMMENDATION: URL path (/v1/) for public APIs.                    │
+│   Evolve-in-place for internal APIs (add optional, never remove).           │
+│   Version only when breaking changes are unavoidable.                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1307,7 +1307,7 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │   EXPAND-CONTRACT: BREAKING CHANGE WITHOUT BREAKING CONSUMERS               │
 │                                                                             │
-│   Goal: Rename "email" → "contact_email" in API response                   │
+│   Goal: Rename "email" → "contact_email" in API response                    │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  PHASE 1 — EXPAND (Week 1):                                         │   │
@@ -1330,8 +1330,8 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 │   │  email field removed. Only after zero consumers still read it.      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│   WHY THIS MATTERS: No consumer experiences a breaking change.             │
-│   The "break" is spread across weeks, not deployed as a big bang.          │
+│   WHY THIS MATTERS: No consumer experiences a breaking change.              │
+│   The "break" is spread across weeks, not deployed as a big bang.           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1376,27 +1376,27 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║        QUICK REFERENCE: API VERSIONING — REMEMBER THIS                      ║
+║        QUICK REFERENCE: API VERSIONING — REMEMBER THIS                        ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  GOLDEN RULES:                                                                ║
-║  1. Add fields freely (optional, with default) — NOT a version bump          ║
-║  2. Never remove fields — deprecate, then remove after sunset                ║
-║  3. Never change field types — add new field with new type                   ║
-║  4. Version (v1→v2) ONLY for structural changes you can't evolve in place   ║
+║  1. Add fields freely (optional, with default) — NOT a version bump           ║
+║  2. Never remove fields — deprecate, then remove after sunset                 ║
+║  3. Never change field types — add new field with new type                    ║
+║  4. Version (v1→v2) ONLY for structural changes you can't evolve in place     ║
 ║                                                                               ║
 ║  VERSIONING CHOICE:                                                           ║
-║  Public API → URL path (/v1/)     Internal API → Evolve in place            ║
+║  Public API → URL path (/v1/)     Internal API → Evolve in place              ║
 ║                                                                               ║
 ║  BREAKING CHANGE PLAYBOOK:                                                    ║
-║  EXPAND → add new alongside old                                              ║
-║  MIGRATE → notify consumers, monitor usage, sunset headers                   ║
-║  CONTRACT → remove old after zero usage                                      ║
+║  EXPAND → add new alongside old                                               ║
+║  MIGRATE → notify consumers, monitor usage, sunset headers                    ║
+║  CONTRACT → remove old after zero usage                                       ║
 ║                                                                               ║
-║  DEPRECATION TIMELINE: 6 months (public), 1-3 months (internal)             ║
-║  MAX ACTIVE VERSIONS: 2 (anything more = maintenance nightmare)              ║
+║  DEPRECATION TIMELINE: 6 months (public), 1-3 months (internal)               ║
+║  MAX ACTIVE VERSIONS: 2 (anything more = maintenance nightmare)               ║
 ║                                                                               ║
-║  ONE-LINER: "An API is a promise. Version it to manage that promise."        ║
+║  ONE-LINER: "An API is a promise. Version it to manage that promise."         ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -1413,7 +1413,7 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
 
 ```
     ╔═══════════════════════════════════════════════════════════════════════╗
-    ║                    CHAPTER 2 — REMEMBER THIS                         ║
+    ║                    CHAPTER 2 — REMEMBER THIS                          ║
     ╠═══════════════════════════════════════════════════════════════════════╣
     ║                                                                       ║
     ║   1. API = CONTRACT (hardest to change later)                         ║
@@ -1422,10 +1422,10 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
     ║      • API boundary = Team boundary (Conway's Law)                    ║
     ║                                                                       ║
     ║   2. FRONTEND ←→ BACKEND split matters                                ║
-    ║      ┌─────────┐      ┌──────────┐      ┌──────────┐                 ║
-    ║      │  Web    │─────►│ Web BFF  │─────►│ Services │                 ║
-    ║      │  Mobile │─────►│Mobile BFF│──────┘          │                 ║
-    ║      └─────────┘      └──────────┘      └──────────┘                 ║
+    ║      ┌─────────┐      ┌──────────┐      ┌──────────┐                  ║
+    ║      │  Web    │─────►│ Web BFF  │─────►│ Services │                  ║
+    ║      │  Mobile │─────►│Mobile BFF│──────┘          │                  ║
+    ║      └─────────┘      └──────────┘      └──────────┘                  ║
     ║      BFF when clients need DIFFERENT data shapes                      ║
     ║                                                                       ║
     ║   3. DATABASE = hardest to scale                                      ║
@@ -1434,8 +1434,8 @@ At Staff level, API versioning isn't just "use /v1/" — it's a strategy that af
     ║      1:99 writes → Append logs + Column stores                        ║
     ║                                                                       ║
     ║   4. SCALING STAIRCASE: Don't skip steps                              ║
-    ║      Single DB → Replicas → Pool → Cache → Shard                     ║
-    ║      Each buys 10x. Design schema for the last step NOW.             ║
+    ║      Single DB → Replicas → Pool → Cache → Shard                      ║
+    ║      Each buys 10x. Design schema for the last step NOW.              ║
     ║                                                                       ║
     ║   5. CHOOSE DB FROM ACCESS PATTERN (not brand loyalty)                ║
     ║      Key lookup → Redis/DynamoDB                                      ║

@@ -17,20 +17,20 @@ This chapter gives you that foundation. You'll learn what a "system" really mean
                     ║                                                          ║
                     ║   SYSTEM = Many parts, one purpose (like a restaurant)   ║
                     ║                                                          ║
-                    ║   ┌────────┐  request   ┌────────┐  query  ┌─────────┐  ║
-                    ║   │ CLIENT ├───────────►│ SERVER ├────────►│DATABASE │  ║
+                    ║   ┌────────┐  request   ┌─────────┐  query  ┌─────────┐  ║
+                    ║   │ CLIENT ├───────────►│ SERVER  ├────────►│DATABASE │  ║
                     ║   │ (asks) │◄───────────┤(answers)│◄────────┤ (stores)│  ║
-                    ║   └────────┘  response  └────────┘  result └─────────┘  ║
+                    ║   └────────┘  response  └─────────┘  result └─────────┘  ║
                     ║                                                          ║
                     ║   KEY INSIGHT: Same process can be BOTH client & server  ║
                     ║                                                          ║
                     ║   ┌─────────────────────────────────────────────────┐    ║
-                    ║   │  1 user click  ──►  5-20 internal calls        │    ║
-                    ║   │  10K user QPS  ──►  50-200K internal QPS       │    ║
-                    ║   │  This is REQUEST AMPLIFICATION (fan-out)       │    ║
+                    ║   │  1 user click  ──►  5-20 internal calls         │    ║
+                    ║   │  10K user QPS  ──►  50-200K internal QPS        │    ║
+                    ║   │  This is REQUEST AMPLIFICATION (fan-out)        │    ║
                     ║   └─────────────────────────────────────────────────┘    ║
                     ║                                                          ║
-                    ║   TYPING A URL: DNS ► TCP ► TLS ► HTTP ► Server ► Back  ║
+                    ║   TYPING A URL: DNS ► TCP ► TLS ► HTTP ► Server ► Back   ║
                     ║                 0ms   50ms  50ms  1ms   50ms     ~200ms  ║
                     ║                                                          ║
                     ║   L5 thinks: "I built this component"                    ║
@@ -54,20 +54,20 @@ In software, when you open Netflix, you see movies. Behind that one experience: 
 
 ```
     ╔═══════════════════════════════════════════════════════════════════╗
-    ║              A RESTAURANT IS A SYSTEM                            ║
+    ║              A RESTAURANT IS A SYSTEM                             ║
     ╠═══════════════════════════════════════════════════════════════════╣
     ║                                                                   ║
     ║   Customer                                                        ║
-    ║   (CLIENT)  ───►  Waiter  ───►  Kitchen  ───►  Fridge/Pantry     ║
+    ║   (CLIENT)  ───►  Waiter  ───►  Kitchen  ───►  Fridge/Pantry      ║
     ║                   (API)       (SERVER)       (DATABASE)           ║
     ║                                                                   ║
-    ║   "I'd like      Routes      Processes       Stores raw          ║
+    ║   "I'd like      Routes      Processes       Stores raw           ║
     ║    pasta"        orders       the order       ingredients         ║
     ║                                                                   ║
     ║   ─────────────────────────────────────────────────────────────   ║
     ║                                                                   ║
-    ║   Cash Register = Payment Service     Menu = API Contract        ║
-    ║   Reservations  = Rate Limiter        Waiting Area = Queue       ║
+    ║   Cash Register = Payment Service     Menu = API Contract         ║
+    ║   Reservations  = Rate Limiter        Waiting Area = Queue        ║
     ║   Multiple Chefs = Thread Pool        Recipe Book = Business Logic║
     ║                                                                   ║
     ║   If the kitchen catches fire (crash), the dining room            ║
@@ -268,23 +268,23 @@ In interviews, showing boundary-thinking means: "I'd start by defining what's in
 ```
     ┌─────────────────────────────────────────────────────────────────────┐
     │                                                                     │
-    │   ┌─── YOUR SYSTEM (you own, you operate, you're on-call) ─────┐   │
-    │   │                                                             │   │
-    │   │   ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌────────────┐  │   │
-    │   │   │  API    │  │ Order    │  │Inventory│  │  Payment   │  │   │
-    │   │   │ Gateway │─►│ Service  │─►│ Service │  │ Orchestr.  │  │   │
-    │   │   └─────────┘  └──────────┘  └─────────┘  └─────┬──────┘  │   │
-    │   │                                                  │         │   │
-    │   └──────────────────────────────────────────────────┼─────────┘   │
-    │                                                      │             │
-    │                          BOUNDARY LINE               │             │
-    │   ┌─── EXTERNAL (you integrate, they operate) ──────┼─────────┐   │
-    │   │                                                  ▼         │   │
-    │   │   ┌─────────┐  ┌──────────┐  ┌─────────────────────────┐  │   │
-    │   │   │ Stripe  │  │ SendGrid │  │ CDN (CloudFront)        │  │   │
-    │   │   │(payment)│  │ (email)  │  │ (static assets)         │  │   │
-    │   │   └─────────┘  └──────────┘  └─────────────────────────┘  │   │
-    │   └───────────────────────────────────────────────────────────┘   │
+    │   ┌─── YOUR SYSTEM (you own, you operate, you're on-call) ─────┐    │
+    │   │                                                            │    │
+    │   │   ┌─────────┐  ┌──────────┐  ┌─────────┐   ┌────────────┐  │    │
+    │   │   │  API    │  │ Order    │  │Inventory│   │  Payment   │  │    │
+    │   │   │ Gateway │─►│ Service  │─►│ Service │   │ Orchestr.  │  │    │
+    │   │   └─────────┘  └──────────┘  └─────────┘   └─────┬──────┘  │    │
+    │   │                                                  │         │    │
+    │   └──────────────────────────────────────────────────┼─────────┘    │
+    │                                                      │              │
+    │                          BOUNDARY LINE               │              │
+    │   ┌─── EXTERNAL (you integrate, they operate)  ──────┼─────────┐    │
+    │   │                                                  ▼         │    │
+    │   │   ┌─────────┐  ┌──────────┐  ┌─────────────────────────┐   │    │
+    │   │   │ Stripe  │  │ SendGrid │  │ CDN (CloudFront)        │   │    │
+    │   │   │(payment)│  │ (email)  │  │ (static assets)         │   │    │
+    │   │   └─────────┘  └──────────┘  └─────────────────────────┘   │    │
+    │   └────────────────────────────────────────────────────────────┘    │
     │                                                                     │
     │   YOUR SLA = what's inside YOUR boundary                            │
     │   Stripe down ≠ your system down (but checkout IS broken)           │
@@ -982,7 +982,7 @@ One of the most common mistakes in capacity estimation is assuming that "user QP
     ║       50-100 total internal ops                               ║
     ║                                                               ║
     ║    ┌─────────────────────────────────────────────────────┐    ║
-    ║    │  10K user QPS × 20 fan-out = 200K internal QPS       │    ║
+    ║    │  10K user QPS × 20 fan-out = 200K internal QPS      │    ║
     ║    │  Under-provision for 10K and you WILL crash at 10K  │    ║
     ║    └─────────────────────────────────────────────────────┘    ║
     ╚═══════════════════════════════════════════════════════════════╝
@@ -1258,34 +1258,34 @@ Systems fail at every layer. Staff-level thinking means knowing **what can go wr
 
 ```
     ╔═══════════════════════════════════════════════════════════════════════╗
-    ║                    CHAPTER 1 — REMEMBER THIS                         ║
+    ║                    CHAPTER 1 — REMEMBER THIS                          ║
     ╠═══════════════════════════════════════════════════════════════════════╣
     ║                                                                       ║
     ║   1. SYSTEM = Many parts, one purpose                                 ║
-    ║      ┌──┐ ┌──┐ ┌──┐ ┌──┐                                            ║
-    ║      │S1│─│S2│─│S3│─│DB│  ◄─ Not one box. Many boxes, working        ║
-    ║      └──┘ └──┘ └──┘ └──┘     together for one goal.                  ║
+    ║      ┌──┐ ┌──┐ ┌──┐ ┌──┐                                              ║
+    ║      │S1│─│S2│─│S3│─│DB│  ◄─ Not one box. Many boxes, working         ║
+    ║      └──┘ └──┘ └──┘ └──┘     together for one goal.                   ║
     ║                                                                       ║
     ║   2. CLIENT asks, SERVER answers (roles, not identities)              ║
     ║      Phone ──► API ──► DB                                             ║
     ║      CLIENT    BOTH    SERVER  ◄─ API is client TO the DB             ║
     ║                                                                       ║
     ║   3. BOUNDARIES define ownership & blast radius                       ║
-    ║      ┌─ OURS ──────────┐  ┌─ EXTERNAL ─┐                             ║
+    ║      ┌─ OURS ──────────┐  ┌─ EXTERNAL ──┐                             ║
     ║      │ API, Services   │  │ Stripe, CDN │                             ║
     ║      │ Our SLA = HERE  │  │ Their SLA   │                             ║
     ║      └─────────────────┘  └─────────────┘                             ║
     ║                                                                       ║
     ║   4. URL JOURNEY = many hops, each adds latency                       ║
-    ║      DNS ► TCP ► TLS ► LB ► App ► DB ► back                          ║
+    ║      DNS ► TCP ► TLS ► LB ► App ► DB ► back                           ║
     ║      0ms  50ms  50ms  2ms  50ms 20ms = ~200ms total                   ║
     ║                                                                       ║
     ║   5. FAN-OUT: 1 user click = 10-100 internal operations               ║
     ║      10K user QPS × 20 fan-out = 200K backend QPS                     ║
-    ║      ALWAYS multiply when doing capacity planning!                   ║
+    ║      ALWAYS multiply when doing capacity planning!                    ║
     ║                                                                       ║
     ║   6. L5 → L6 SHIFT: Component thinking → System thinking              ║
-    ║      "I built the cache" → "Cache failure causes thundering herd;    ║
+    ║      "I built the cache" → "Cache failure causes thundering herd;     ║
     ║       here's the stampede protection plan"                            ║
     ║                                                                       ║
     ╚═══════════════════════════════════════════════════════════════════════╝
