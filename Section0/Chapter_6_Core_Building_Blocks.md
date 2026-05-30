@@ -1,1363 +1,2824 @@
-# Basics Chapter 6: Core Building Blocks — Hash, Cache, State, Idempotency, Queues, Sync/Async
+# Chapter 6: Core Building Blocks — Hash, Cache, State, Idempotency, Queues, Sync/Async
 
 ---
 
-## Introduction
+## 1. Learning Goal
 
-Every distributed system is built from a small set of fundamental building blocks. A rate limiter uses hash functions to distribute keys and state to track usage. A payment flow uses idempotency keys to safely retry. A notification system uses queues to decouple senders and delivery. A feed service uses caching to reduce database load. These blocks are everywhere—**hash functions** that distribute data, **caches** that accelerate reads, **state** (or its absence) that determines scalability, **idempotency** that enables safe retries, **queues** that decouple producers and consumers, and **sync vs async** patterns that shape latency and consistency.
+After reading this chapter, you will be able to:
 
-Staff Engineers don't just use these blocks; they understand the trade-offs. When to cache and when to invalidate. When to be stateless and where to put state. When to make an operation idempotent and how. When to use a queue instead of a direct call. When sync is appropriate and when async changes the game. This chapter gives you that depth—the intuition, the mechanics, and the Staff-level judgment that turns building blocks into robust architectures.
+- Explain what a hash function is and why it is deterministic, fixed-output, and one-way
+- Compare modulo hashing, consistent hashing, jump hashing, and rendezvous hashing — and choose the right one per scenario
+- Explain virtual nodes and why 100–200 vnodes per server produces better distribution than a raw ring
+- Design a full caching strategy: which pattern to use, what TTL to set, how to invalidate, how to handle stampedes and hot keys
+- Explain the difference between cache-aside, write-through, write-behind, write-around, and read-through — and when each applies
+- Explain why stateful servers cannot scale horizontally and how moving state to external stores solves this
+- Implement idempotency using both a database unique constraint and a Redis check-then-process pattern
+- Choose the correct queue delivery semantic (at-most-once, at-least-once, exactly-once) per use case
+- Compare Kafka and SQS and know when to use each
+- Design a dead letter queue strategy with retry, alerting, and backoff
+- Distinguish synchronous from asynchronous communication and apply the decision framework to 10+ real examples
+- Trace all six building blocks through a single checkout request from click to confirmation
 
-# Chapter at a Glance
+---
+
+## 2. Why This Matters
+
+Every distributed system is built from a small set of fundamental patterns. These are not abstract theory. They are the specific decisions that determine whether your system handles 10 million users or crashes at 50,000.
+
+**The cost of getting these wrong:**
+
+- **No idempotency on payment:** A network timeout causes a retry. The user is charged twice. Support tickets flood in. Engineers spend days building reconciliation tooling. Stripe was built around idempotency from day one specifically to prevent this.
+
+- **No consistent hashing:** You add one database shard. 90% of cached keys now route to the wrong server. The database receives 20x its normal load in a stampede of cache misses. Your on-call engineer gets paged at 3 AM.
+
+- **Stateful servers with sticky sessions:** One of your three app servers becomes hot because 40% of users were routed there. You cannot rebalance without losing sessions. You cannot take it down for maintenance without logging out users. You scale by adding servers but your load balancer cannot distribute evenly.
+
+- **Synchronous email sending during checkout:** Your email provider has a 2-second latency spike. Every checkout takes 2+ seconds. Conversion drops 30%. All because you chose sync when async was the right call.
+
+- **No dead letter queue on a payment processing worker:** A malformed message causes the consumer to crash in a loop. The worker restarts every 10 seconds. Legitimate messages behind it are never processed. Orders back up for hours before anyone notices.
+
+These are not hypothetical scenarios. They are production incidents that have happened at real companies. Every building block in this chapter exists because the absence of it caused real failures at scale.
+
+**What a Staff Engineer knows that an L5 does not:**
+
+An L5 knows how to use these patterns. An L6 knows:
+- *Why* each pattern exists (what failure it prevents)
+- *When not to use it* (what the cost is)
+- *What happens when it fails* (and has a mitigation plan)
+- *How to combine them* (checkout flow, notification system, feed system)
+- *How to explain the trade-off* precisely in an interview
+
+This chapter gives you that depth.
+
+---
+
+## 3. Core Concepts
+
+---
+
+### Building Block 1: Hash Functions
+
+#### Why Does This Exist?
+
+Before hash functions existed in distributed systems, engineers assigned data to servers using simple directory lookups: "user IDs 1–1000 go to server 1, 1001–2000 go to server 2." This worked until servers were added or removed — then someone had to manually update the directory, migrate data, and hope nothing broke during the transition.
+
+Hash functions solved this by making the assignment *computable*. Given a key, you compute a number deterministically, and that number tells you which server owns the key. No directory. No manual migration. No coordination.
+
+The deeper insight: a good hash function converts arbitrary inputs (user IDs, URLs, filenames) into a uniform distribution of numbers. This uniformity is what makes hash-based distribution work — if every server gets roughly equal numbers, no single server becomes a bottleneck.
+
+#### What Is a Hash Function? (First Principles)
+
+A **hash function** takes any input — a string, a number, a file — and produces a fixed-size output called a **hash**, **digest**, or **fingerprint**.
+
+Three essential properties:
+
+| Property | Meaning | Example |
+|----------|---------|---------|
+| **Deterministic** | Same input always produces the same output | `hash("alice")` always returns `0x3d2a...` |
+| **Fixed output size** | Output length is constant regardless of input | SHA-256 always produces 256 bits, whether input is 1 byte or 1 GB |
+| **One-way** (cryptographic) | Given the hash, you cannot recover the input | You cannot reverse `hash("password123")` to get `"password123"` |
+
+There is a fourth property that good hash functions have: **avalanche effect**. Change one bit in the input, and roughly half the output bits change. This ensures that similar inputs produce completely different hashes, which is what gives you good distribution.
+
+#### Common Hash Functions and When to Use Each
+
+| Hash Function | Output Size | Speed | Cryptographic? | Use Case |
+|--------------|-------------|-------|---------------|----------|
+| **MD5** | 128 bits | Fast | No (broken) | Legacy checksums only. Never for security. |
+| **SHA-256** | 256 bits | Moderate | Yes | Content integrity, digital signatures, content-addressable storage (Git uses SHA-1, moving to SHA-256) |
+| **SHA-1** | 160 bits | Moderate | Weakened | Deprecated. Git is migrating away from it. |
+| **xxHash** | 32 or 64 bits | Very fast | No | Hash tables, partitioning, sharding — speed matters, security does not |
+| **MurmurHash3** | 32 or 128 bits | Very fast | No | Hash tables, consistent hashing rings — similar use case to xxHash |
+| **bcrypt** | 184 bits | Deliberately slow | Yes | Password hashing — slowness prevents brute-force attacks |
+| **Argon2** | Variable | Deliberately slow | Yes | Modern password hashing — preferred over bcrypt for new systems |
+
+**Key rule:** Use a fast non-cryptographic hash (xxHash, MurmurHash) for partitioning and routing. Use a cryptographic hash (SHA-256) for integrity verification. Use a slow hash (bcrypt, Argon2) for passwords. Never use MD5 or SHA-1 for security purposes — they have known collision attacks.
+
+#### Hash Collisions: When They Matter and When They Do Not
+
+A **collision** occurs when two different inputs produce the same hash output.
+
+For a 256-bit hash, there are 2^256 possible outputs. The chance of a random collision is so small it is effectively zero for any practical system. For a 32-bit hash used in a hash table, collisions happen regularly — but hash tables are designed to handle them via chaining (each bucket holds a linked list) or open addressing (probe to the next empty slot).
+
+**When collisions matter:**
+- **Password hashing:** If two different passwords hash to the same value, an attacker who finds one password can authenticate as any user who had the other. Cryptographic hashes like SHA-256 are designed to make this computationally infeasible.
+- **Content-addressable storage:** Git identifies commits by their hash. If two different commits had the same hash, Git could not distinguish them. This is why the SHA-1 collision attack (SHAttered, 2017) was serious — it meant two different files could have the same Git hash.
+
+**When collisions do not matter:**
+- **Partitioning/sharding:** You are assigning keys to buckets. Multiple keys in the same bucket is expected and handled. A "collision" just means two keys go to the same shard — that is fine as long as distribution is roughly even.
+- **Hash tables:** Collisions are resolved by design (chaining or probing). They affect performance but not correctness.
+
+#### Uses in System Design
+
+| Use Case | Mechanism | Example |
+|----------|-----------|---------|
+| **Hash tables** | `hash(key) → bucket index` | HashMap in Java, dict in Python |
+| **Sharding** | `hash(user_id) % N → shard number` | Route user 12345 to shard 3 |
+| **Consistent hashing** | Hash both keys and nodes onto a ring | Route cache key to nearest server on ring |
+| **Checksums** | `hash(file content) → fingerprint` | Verify file was not corrupted during download |
+| **Cache keys** | `hash(query params) → cache key` | `GET /products?sort=price&page=2` → cache key `a3f2...` |
+| **Password storage** | `bcrypt(password + salt)` | Store hash in DB, never plaintext |
+| **Content addressing** | `hash(content) = content ID` | Git: commit hash identifies the commit |
+| **Deduplication** | `hash(record) → fingerprint` | Skip processing if fingerprint seen before |
+
+---
+
+#### The Problem with Modulo Hashing
+
+The simplest approach to distributing keys across servers:
 
 ```
-    ╔══════════════════════════════════════════════════════════════════════╗
-    ║           CHAPTER 6: YOUR SYSTEM DESIGN TOOLKIT                      ║
-    ╠══════════════════════════════════════════════════════════════════════╣
-    ║                                                                      ║
-    ║   6 BUILDING BLOCKS — every system uses some combination:            ║
-    ║                                                                      ║
-    ║   ┌──────────┐  ┌──────────┐  ┌──────────┐                         ║
-    ║   │  HASH    │  │  CACHE   │  │  STATE   │                         ║
-    ║   │ Distribute│  │ Speed up │  │ Where    │                         ║
-    ║   │ data     │  │ reads    │  │ does it  │                         ║
-    ║   │ evenly   │  │ 20-100x │  │ live?    │                         ║
-    ║   └──────────┘  └──────────┘  └──────────┘                         ║
-    ║   ┌──────────┐  ┌──────────┐  ┌──────────┐                         ║
-    ║   │IDEMPOTENT│  │  QUEUE   │  │SYNC/ASYNC│                         ║
-    ║   │ Safe     │  │ Buffer   │  │ Wait or  │                         ║
-    ║   │ retries  │  │ & decouple│  │ don't?   │                         ║
-    ║   └──────────┘  └──────────┘  └──────────┘                         ║
-    ║                                                                      ║
-    ║   DESIGN CHECKLIST (run for every system):                           ║
-    ║   [ ] How is data distributed?         → Hash                       ║
-    ║   [ ] What's cached? TTL? Invalidation?→ Cache                      ║
-    ║   [ ] Are services stateless?          → State                      ║
-    ║   [ ] Which writes need retry safety?  → Idempotency                ║
-    ║   [ ] What's async vs sync?            → Queue + Sync/Async         ║
-    ║                                                                      ║
-    ║   GOLDEN RULE: Sync for user-facing results.                         ║
-    ║                Async for side effects (email, analytics).            ║
-    ╚══════════════════════════════════════════════════════════════════════╝
+server_index = hash(key) % N
+```
+
+Where N is the number of servers. Fast. Simple. O(1). Works perfectly when N never changes.
+
+**The catastrophic problem:** When N changes, almost every key remaps to a different server.
+
+```
+Before: 10 servers
+  hash("user:alice") % 10 = 3  → Server 3
+
+After: add Server 10, now 11 servers  
+  hash("user:alice") % 11 = 7  → Server 7  (different!)
+```
+
+For a cache, this means: the moment you add or remove a server, approximately `(N-1)/N` of all cached keys are suddenly pointing to the wrong server. For 10 servers, that is 90% of your cache becoming invalid simultaneously. Every one of those cache misses hits your database. This is a **thundering herd** event.
+
+**Production failure story:** In 2008, a large social network added a database shard to their user data cluster. They were using modulo hashing. The reshard caused nearly all cache keys to miss. Their database tier received 40x normal load within seconds. The database fell over. The service was down for 45 minutes. This is the exact reason consistent hashing was developed.
+
+```mermaid
+flowchart TD
+    A[Request: hash user:alice] --> B["hash(user:alice) % N"]
+    B --> C{N changed?}
+    C -- No --> D[Route to correct server]
+    C -- Yes --> E["~90% of keys reroute"]
+    E --> F[Cache misses spike]
+    F --> G[Database receives 20x load]
+    G --> H[Database crashes]
+    H --> I[Outage]
+```
+
+```mermaid
+flowchart TD
+    A["Without consistent hashing: Add 1 server"] --> B["90% of keys remap"]
+    B --> C["Mass cache invalidation"]
+    C --> D["Thundering herd on DB"]
+    D --> E["Outage"]
 ```
 
 ---
 
-## Part 1: Hash Functions
+#### Consistent Hashing: How It Works
 
-### What Is a Hash Function?
+**The core idea:** Instead of using the server count N as the modulus, map both keys and servers onto a fixed ring. A key belongs to the nearest server clockwise from its position.
 
-A **hash function** maps an input of arbitrary size to a fixed-size output (the "hash" or "digest"). It has three key properties:
+**Ring construction:**
 
-| Property | Meaning |
-|----------|---------|
-| **Deterministic** | Same input → always same output |
-| **Fixed output size** | Output length is constant regardless of input size |
-| **One-way** (for cryptographic hashes) | Given the hash, you cannot recover the input |
+1. The output space of the hash function (0 to 2^32 or 0 to 2^64) is treated as a circular ring
+2. Each server is placed on the ring at position `hash(server_id)`
+3. Each key is placed on the ring at position `hash(key)`
+4. A key belongs to the server at the first position clockwise from the key's position
 
-**Example**: SHA-256("hello") always produces the same 256-bit (32-byte) output. Change one character, and the output changes completely (avalanche effect).
-
-### Common Hash Functions
-
-| Hash | Output Size | Use Case |
-|------|-------------|----------|
-| **MD5** | 128 bits | Deprecated for security; still used for checksums |
-| **SHA-256** | 256 bits | Cryptographic integrity, content addressing |
-| **xxHash, MurmurHash** | 32–64 bits | Non-cryptographic; fast for hash tables, partitioning |
-| **bcrypt, Argon2** | Variable | Password hashing (slow by design) |
-
-**When to use which**: For distributing data across nodes (consistent hashing, sharding), use fast non-cryptographic hashes. For integrity (checksums, content-addressable storage), use SHA-256. For passwords, use bcrypt or Argon2—never MD5 or raw SHA.
-
-### Collisions: When Two Inputs Produce the Same Hash
-
-A **collision** occurs when two different inputs produce the same hash. Good hash functions make collisions astronomically rare (SHA-256: 2^256 possible outputs). For non-cryptographic use (hash tables), occasional collisions are handled by chaining or probing.
-
-**Why it matters for system design**: When you hash a key to choose a server, a collision means two keys map to the same server. With a good hash and enough servers, collision rate is negligible. For security (password hashing), collisions would let an attacker find another password that hashes the same—cryptographic hashes are designed to prevent this.
-
-### Uses in System Design
-
-| Use Case | How Hash Is Used |
-|----------|------------------|
-| **Hash tables** | Key → hash → bucket index. O(1) lookup. |
-| **Consistent hashing** | Hash keys and server IDs onto a ring. Key goes to nearest server. |
-| **Sharding** | hash(user_id) % N → shard index. Even distribution. |
-| **Checksums** | Hash content to verify integrity (file transfer, storage). |
-| **Cache keys** | Hash query parameters → cache key. Deduplicate identical requests. |
-| **Password storage** | Hash(password + salt). Never store plaintext. |
-| **Content addressing** | Hash(content) = content ID (e.g., Git, IPFS). |
-
-### Consistent Hashing: The Key to Distributed Caches and Databases
-
-**Problem**: Simple modulo hashing—`hash(key) % N`—redistributes almost all keys when N changes (when you add or remove a server). That causes a thundering herd of cache misses or data migration.
-
-**Consistent hashing**: Map both keys and servers onto a ring (0 to 2^32 or 2^64). A key maps to the first server clockwise from its position. Add a server: only keys between its predecessor and it move. Remove a server: only its keys move to the next server.
-
-```
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                    CONSISTENT HASHING RING                               │
-    │                                                                         │
-    │                          0 / 2^32                                       │
-    │                              │                                          │
-    │                    Node A ●───┼───● Node D                               │
-    │                          ╲   │   ╱                                      │
-    │                           ╲  │  ╱                                       │
-    │                    Key K1 ●  │  ● Key K2                                │
-    │                           ╱  │  ╲                                       │
-    │                    Node B ●───┼───● Node C                              │
-    │                              │                                          │
-    │   Key K1 → hashes to point between Node D and Node A → goes to Node A   │
-    │   Key K2 → hashes to point between Node C and Node D → goes to Node D    │
-    │                                                                         │
-    │   Add Node E between A and D: only keys in that arc move to E           │
-    │   Remove Node B: only B's keys move to C                                 │
-    │                                                                         │
-    └─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph "Consistent Hash Ring (simplified as positions 0-360)"
+    A["Server A @ 30°"]
+    B["Server B @ 150°"]
+    C["Server C @ 240°"]
+    D["Server D @ 330°"]
+    K1["Key K1 @ 45° → Server B (next clockwise)"]
+    K2["Key K2 @ 200° → Server C (next clockwise)"]
+    K3["Key K3 @ 300° → Server D (next clockwise)"]
+    end
 ```
 
-**Virtual nodes (vnodes)**: To reduce imbalance, each physical server is hashed multiple times (e.g., 100–200 "virtual" positions). This smooths distribution when servers are added or removed.
-
-### ASCII Diagram: Hash Ring with Virtual Nodes
+**Adding a server (worked example):**
 
 ```
-                         Ring (0 to 2^32)
-    ┌──────────────────────────────────────────────────────┐
-    │                                                       │
-    │   A1    B1    C1    D1    A2    B2    C2    D2       │
-    │    ●-----●-----●-----●-----●-----●-----●-----●       │
-    │   ╱                                           ╲      │
-    │  ●                                             ●     │
-    │  D3                                            A3    │
-    │   ╲                                           ╱      │
-    │    ●-----●-----●-----●-----●-----●-----●-----●       │
-    │   C3    D4    A4    B3    C4    D5    A5    B4       │
-    │                                                       │
-    │   A1, A2, A3, A4, A5 = virtual nodes for Server A    │
-    │   Better distribution than 4 nodes with 1 position    │
-    │                                                       │
-    └──────────────────────────────────────────────────────┘
+BEFORE: Servers A (30°), B (150°), C (240°), D (330°)
+  Key K1 @ 45° → B (next clockwise from 45° is 150° = B)
+  Key K2 @ 200° → C (next clockwise from 200° is 240° = C)
+
+ADD Server E at 100°:
+  Now ring: A(30°), E(100°), B(150°), C(240°), D(330°)
+  
+  Key K1 @ 45° → E (next clockwise from 45° is now 100° = E)  ← MOVED
+  Key K2 @ 200° → C (unchanged)
+  
+Only keys in the arc between A and E (30° to 100°) move to E.
+That is ~1/5 of keys. The other 4/5 are undisturbed.
 ```
 
-### Consistent Hashing Deep Dive: Algorithm Walkthrough
-
-**Hash ring construction**: Map the output space (0 to 2^32 - 1) to a ring. Each node gets one or more positions on the ring via `hash(node_id)` or `hash(node_id + "#" + vnode_index)`. Each key maps to a position via `hash(key)`. The key belongs to the first node clockwise from its position.
-
-**Algorithm**:
-1. Sort node positions on the ring (ascending order)
-2. For key K: find smallest node position ≥ hash(K). If none (wraparound), use first node
-3. Binary search or jump table for O(log N) lookup
-
-**Adding a node**: Insert new node's position(s) on the ring. Keys between the new node and its predecessor (counter-clockwise) move to the new node. Only ~1/N of keys relocate.
-
-**Removing a node**: Remove node's position(s). Its keys move to the next node clockwise. Again ~1/N of keys move.
-
-**Virtual nodes (vnodes)**: Each physical node is hashed 100–200 times with different suffixes (e.g., "A#0", "A#1", ... "A#149"). Distributes one node's share across the ring. Without vnodes: if you have 3 nodes, one might get 50% of keys by chance. With 150 vnodes each, distribution smooths. Adding/removing a node spreads the movement across many arcs.
-
-**Worked example with ASCII**:
+**Removing a server:**
 
 ```
-    BEFORE: 3 nodes (A, B, C), ring 0–360 simplified
-
-                        0
-                        │
-              C ●───────┼───────● A
-                 ╲      │      ╱
-                  ╲     │     ╱
-              K1 ● │     │     ● K2
-                  ╱     │     ╲
-                 ╱      │      ╲
-              B ●───────┼───────●
-                      180
-
-    K1 hashes to 45°  → clockwise to A  (K1 → A)
-    K2 hashes to 270° → clockwise to B  (K2 → B)
-
-    ADD node D at 30° (between C and A):
-
-                        0
-                        │
-              C ●───────┼──● D  (NEW)
-                 ╲      │  ╱
-                  ╲     │ ╱
-              K1 ● │    │ ● K2
-                  ╱     │ ╲
-                 ╱      │  ╲
-              B ●───────┼────● A
-
-    Keys between C and D (arc from ~330° to 30°) move to D.
-    K1 (at 45°) still maps to A. Keys in arc 330°–30° move to D.
-    Only ~1/4 of keys move (one arc of four).
-
-    REMOVE node B:
-
-    B's keys (arc 180°–270° roughly) move to C (next clockwise).
-    K2 moves from B to C. Only B's keys are affected.
+REMOVE Server B at 150°:
+  Keys that were going to B (arc from 100° to 150°) now go to C (next clockwise = 240°)
+  Only B's keys move. All other keys are unaffected.
 ```
 
-### Hash-Based Sharding vs Consistent Hashing
+```mermaid
+flowchart LR
+    A["hash(key) → position on ring"] --> B["Scan clockwise for first server"]
+    B --> C["Assign key to that server"]
+    C --> D{Server added/removed?}
+    D -- "Add server" --> E["Only keys in new server's arc move (~1/N)"]
+    D -- "Remove server" --> F["Only removed server's keys move (~1/N)"]
+    E --> G["All other keys: unchanged"]
+    F --> G
+```
 
-**Simple hash sharding**: `shard = hash(key) % N`. Problem: when N changes (add/remove node), almost all keys remap. If you go from 10 to 11 shards, ~90% of keys move. That's a lot of cache invalidation or data migration.
+**The guarantee:** When you add or remove a server, only approximately `1/N` of all keys need to move. For 10 servers, that is 10% — not 90%.
 
-**Consistent hashing**: Only K/N keys move when you add or remove a node (K = total keys, N = nodes). Adding one node: ~1/N of keys move to it. Removing one: its keys go to the next node. This is why distributed caches (Memcached, Redis Cluster) and storage systems (Dynamo, Cassandra) use it. Staff Engineers understand both and choose based on resize frequency and tolerance for movement.
+---
 
-### Jump Hashing: O(1) Space, No Ring Required
+#### Virtual Nodes: Why You Need Them
 
-**Problem with consistent hashing**: The ring requires memory proportional to virtual nodes—O(V) where V = 100–200 × N. Lookup is O(log V) binary search. For very large node counts, this adds up.
+**The problem with a raw ring:** If you place each server at exactly one position on the ring, the distribution can be highly uneven by chance.
 
-**Jump hashing** (Google, 2014): A hash function that maps a key deterministically to one of N buckets. No ring, no sorted array, O(1) space. When N increases by one, only K/N keys move (same guarantee as consistent hashing).
+Example with 3 servers, randomly placed:
+```
+Ring positions (0–360°):
+  Server A @ 10°
+  Server B @ 15°  
+  Server C @ 200°
+
+Arc sizes:
+  A owns: 200° to 10° = 170° of the ring (~47% of keys)
+  B owns: 10° to 15° = 5° of the ring (~1.4% of keys)   ← almost nothing
+  C owns: 15° to 200° = 185° of the ring (~51% of keys)
+```
+
+Server B handles 1.4% of load while A and C handle nearly everything. This is terrible distribution.
+
+**Virtual nodes (vnodes) fix this:** Each physical server is placed on the ring at multiple positions. Typically 100–200 virtual positions per server, each computed as `hash(server_id + "#" + vnode_index)`.
 
 ```
-// Jump hash — pseudocode (Lamping & Veach, 2014)
-def jump_hash(key: uint64, num_buckets: int) -> int:
-    b, j = -1, 0
+Server A's vnodes: A#0 @ 12°, A#1 @ 67°, A#2 @ 134°, A#3 @ 198°, A#4 @ 287°, ...
+Server B's vnodes: B#0 @ 34°, B#1 @ 89°, B#2 @ 156°, B#3 @ 231°, B#4 @ 310°, ...
+Server C's vnodes: C#0 @ 45°, C#1 @ 112°, C#2 @ 178°, C#3 @ 256°, C#4 @ 334°, ...
+```
+
+With 150 vnodes each, the arc ownership is smoothed: each server gets approximately 1/3 of the ring, with only small statistical variance.
+
+**Adding a server with vnodes:** The new server's 150 vnodes are inserted across the ring. Each vnode takes a small arc from whichever server previously owned that arc. The load shift is spread across many existing servers, so no single server is hit hard.
+
+```mermaid
+flowchart TD
+    A["3 servers, 1 position each"] --> B["Uneven arc sizes: 47%, 1.4%, 51%"]
+    B --> C["Poor load distribution"]
+    C --> D["Add 150 vnodes per server"]
+    D --> E["Each server owns ~33% of ring"]
+    E --> F["Even load distribution"]
+    F --> G["Adding server: spread load shift across many arcs"]
+```
+
+---
+
+#### Jump Hashing: When You Do Not Need a Ring
+
+Consistent hashing with vnodes requires O(V) memory (where V = vnodes, typically 100–200 × N) and O(log V) lookup time via binary search. For very large clusters, this adds up.
+
+**Jump hashing** (Google, 2014) provides the same minimal-movement guarantee as consistent hashing, but with O(log N) time and O(1) space — no ring, no sorted array.
+
+```python
+# Jump hash — pseudocode (Lamping & Veach, 2014)
+def jump_hash(key: int, num_buckets: int) -> int:
+    b = -1
+    j = 0
     while j < num_buckets:
         b = j
-        key = (key * 2862933555777941757 + 1) % 2**64
+        key = (key * 2862933555777941757 + 1) % (2**64)
         j = int((b + 1) * (2**31 / ((key >> 33) + 1)))
     return b
 ```
 
-**Tradeoffs**:
-- O(log N) time (loop iterates O(log N) times), O(1) memory — no ring to maintain
-- Works only for contiguous buckets 0..N-1 — adding a bucket is fine, but removing bucket K (not the last) reshuffles everything
-- **Not suitable** for systems where arbitrary nodes leave (e.g., a server crashes). **Best for** static or append-only node sets: fixed shard counts, immutable storage tiers.
+The loop runs O(log N) times. No data structures needed beyond the key and bucket count.
 
-### Rendezvous Hashing (Highest Random Weight)
+**The guarantee:** When you go from N buckets to N+1 buckets, only K/(N+1) keys move to the new bucket (where K is total keys). This matches consistent hashing's property.
 
-**Problem**: Need consistent assignment like consistent hashing, but with arbitrary adds/removes and no ring structure. N is small (< 50 nodes).
+**Critical limitation:** Jump hashing only works for *contiguous* bucket numbering: 0, 1, 2, ..., N-1. You can add buckets (go from N to N+1), but you cannot remove an arbitrary bucket — removing bucket 3 from a 10-bucket set leaves a gap. You would have to remap everything to buckets 0–8.
 
-**Rendezvous hashing**: For each key K, compute a score `hash(K, node_i)` for every candidate node. Assign K to the node with the **highest score**. When a node leaves, each of its keys independently picks the next-highest node — no coordination, no ring.
+**When to use jump hashing vs consistent hashing:**
 
-```
-// Rendezvous hash — pseudocode
-def rendezvous_assign(key: str, nodes: list[Node]) -> Node:
-    return max(nodes, key=lambda n: hash(key + n.id))
-```
-
-**Tradeoffs**:
-- O(N) per lookup (must score all nodes). Fine when N is small (e.g., 5 replicas). Unusable when N = 10,000.
-- Any node can join or leave; only ~1/N of all keys remap
-- Used in: Nginx upstream selection, CDN origin selection, replica selection in distributed databases
-
-### Hashing Algorithm Comparison
-
-| Algorithm | Lookup | Memory | Handles Node Removal | Best For |
-|-----------|--------|--------|----------------------|----------|
-| **Modulo (`% N`)** | O(1) | O(1) | No (full remap) | Fixed-size hash tables |
-| **Consistent hashing** | O(log V) | O(V) vnodes | Any node, minimal move | Caches, distributed KV stores |
-| **Jump hashing** | O(log N) | O(1) | Last node only | Fixed/growing shard counts |
-| **Rendezvous hashing** | O(N) | O(N) | Any node, minimal move | Small N, CDN, replica selection |
-
-**L6 framing**: "Consistent hashing is not the only option. If we only add shards (never remove mid-range ones), jump hashing gives the same distribution guarantee with zero memory overhead. If N is small—say 5 replicas—rendezvous hashing is simpler and produces the same minimal-movement property without a ring."
+| Scenario | Use |
+|----------|-----|
+| Servers only added, never removed mid-range | Jump hashing |
+| Fixed shard count with occasional growth | Jump hashing |
+| Servers join and leave arbitrarily (caches, nodes fail) | Consistent hashing |
+| You need zero memory overhead | Jump hashing |
+| N is large (>10,000 nodes) | Jump hashing (O(1) memory vs O(V) for vnodes) |
 
 ---
 
-### Hash Collisions in Distributed Systems
+#### Rendezvous Hashing
 
-For partitioning, collisions (two keys to same hash) aren't a problem—you want many keys per partition. For content-addressable storage (hash of content = ID), collisions are catastrophic: two different contents with same hash would be indistinguishable. SHA-256's 2^256 space makes this negligible. For password hashing, collisions would let an attacker find another password that hashes the same—use bcrypt/Argon2, which are designed to be collision-resistant and slow.
+**The problem:** You need consistent assignment like consistent hashing, but N is small (fewer than 50 nodes), and you want to avoid the ring data structure entirely.
 
-### L5 vs L6: Hash Functions in System Design
-
-| Aspect | L5 Thinking | L6 Thinking |
-|--------|-------------|-------------|
-| **Sharding** | "We'll use user_id % 10" | "Modulo causes full redistribution on resize. We'll use consistent hashing or range-based with pre-splitting" |
-| **Cache** | "Redis caches by key" | "Our cache uses consistent hashing; adding a node moves ~1/N of keys, not all" |
-| **Collisions** | "Hash tables handle them" | "For our 1B keys and 32-bit hash, birthday paradox gives ~50K collisions—acceptable with chaining" |
-
-**Staff-Level Insight**: Hash function choice affects distribution quality, resize behavior, and security. Don't default—choose based on the problem. Consistent hashing is the standard for distributed caches and key-value stores; understand it cold.
-
----
-
-## Part 2: Caching — The Everyday Analogy
-
-### Cache = Faster, Smaller Copy of Frequently Accessed Data
-
-A **cache** is a store that holds a subset of data in a faster (and usually smaller) medium than the primary store. The goal: serve most requests from the cache, reducing load on the primary store and improving latency.
-
-**Analogy**: Your desk (cache) vs. the filing cabinet (database). You keep frequently used files on your desk. When you need one, you check the desk first. If it's there, you use it. If not, you walk to the cabinet, fetch it, and optionally put a copy on your desk for next time.
-
-### Types of Caches
-
-| Cache Type | Where It Lives | What It Caches | Typical Hit Rate |
-|------------|----------------|----------------|-------------------|
-| **Browser cache** | Client | Static assets, API responses | Varies by user |
-| **CDN cache** | Edge (near users) | Static assets, sometimes dynamic | 80–95% for static |
-| **Application cache** | Server (Redis, Memcached) | DB results, computed data | 80–99% |
-| **Database query cache** | Inside DB | Query results | 50–90% |
-| **CPU cache (L1/L2/L3)** | CPU | Memory accesses | 95%+ |
-
-**Layered caching**: A single request might hit browser cache → CDN → application cache → database. Each layer reduces load on the next.
-
-### Cache-Aside (Lazy Loading) Pattern
-
-The most common pattern: the application manages the cache. The cache doesn't know about the database.
-
-```
-    1. Receive request for key K
-    2. Check cache
-    3. If HIT: return cached value
-    4. If MISS: fetch from DB
-    5. Store in cache (for future requests)
-    6. Return value
-```
-
-```
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │                    CACHE-ASIDE PATTERN                               │
-    │                                                                     │
-    │   Request for key "user:123"                                         │
-    │                                                                     │
-    │   ┌─────────┐     1. Get user:123    ┌─────────┐                   │
-    │   │  App    │ ───────────────────►  │  Cache  │                   │
-    │   │ Server  │                        │ (Redis) │                   │
-    │   │         │  2a. MISS               │         │                   │
-    │   │         │ ◄───────────────────   │         │                   │
-    │   │         │                         │         │                   │
-    │   │         │  3. SELECT * FROM users  │         │                   │
-    │   │         │ ───────────────────►   │         │                   │
-    │   │         │                        │         │  ┌─────────┐      │
-    │   │         │  4. Return row          │         │  │   DB    │      │
-    │   │         │ ◄───────────────────   │         │  └─────────┘      │
-    │   │         │                         │         │                   │
-    │   │         │  5. SET user:123        │         │                   │
-    │   │         │ ───────────────────►   │         │                   │
-    │   │         │                         │         │                   │
-    │   │         │  6. Return to client    │         │                   │
-    │   └─────────┘                         └─────────┘                   │
-    │                                                                     │
-    └─────────────────────────────────────────────────────────────────────┘
-```
-
-### Visual: All Cache Patterns at a Glance
-
-```
-    ═══════════════════════════════════════════════════════════════════
-            CACHE PATTERNS — PICK THE RIGHT ONE
-    ═══════════════════════════════════════════════════════════════════
-
-    CACHE-ASIDE (most common):
-    App ──► Cache? ──HIT──► Return
-              │
-             MISS
-              │
-              ▼
-            DB ──► Put in cache ──► Return
-
-    WRITE-THROUGH:
-    App ──► Cache ──► DB (both updated together, always fresh)
-
-    WRITE-BEHIND:
-    App ──► Cache (immediate!) ──later──► DB (risky if cache dies)
-
-    WRITE-AROUND:
-    App ──► DB only. Cache populated on next read (miss first time)
-
-    READ-THROUGH:
-    App ──► Cache? ──HIT──► Return
-              │
-             MISS
-              │
-              ▼
-           CACHE itself loads from DB ──► Return  (app never talks to DB)
-
-    ┌────────────────┬─────────────┬──────────────┬────────────────────────┐
-    │    Pattern     │ Consistency │ Performance  │  Best For              │
-    ├────────────────┼─────────────┼──────────────┼────────────────────────┤
-    │ Cache-aside    │  Eventual   │  Good reads  │ Most web apps          │
-    │ Write-through  │  Strong     │  Slower write│ Sessions               │
-    │ Write-behind   │  Risky      │  Fast write  │ View counts            │
-    │ Write-around   │  Eventual   │  Miss on new │ Write-heavy            │
-    │ Read-through   │  Eventual   │  Miss on new │ Caching proxy layers   │
-    └────────────────┴─────────────┴──────────────┴────────────────────────┘
-    ═══════════════════════════════════════════════════════════════════
-```
-
-**Write path**: On write (create/update/delete), the app typically invalidates the cache (delete the key) or updates it. This keeps the cache consistent with the DB, at the cost of a possible cache miss on the next read.
-
-### Cache Hit Rate: The Multiplier Effect
-
-If 95% of requests hit the cache, only **5%** reach the database. That's a **20×** reduction in DB load. A system that would need 100 DB replicas to handle 2M read QPS needs only 5 replicas if cache handles 95%—and the cache might be 10–20 Redis nodes. The cost and complexity drop dramatically.
-
-**Target hit rates by use case**:
-- **Session data**: 99%+ (same user, same session)
-- **User profile**: 90–95% (frequently accessed, moderately changing)
-- **Product catalog**: 95–99% (mostly static)
-- **Real-time feed**: 70–90% (more dynamic, harder to cache)
-- **Search results**: 50–80% (high cardinality, many unique queries)
-
-If your DB can handle 10K QPS and you have 200K read QPS, you need a 95% hit rate (10K DB reads) or better. Cache hit rate directly determines how far your DB can stretch.
-
-**What affects hit rate**:
-- **Working set size**: Can your cache hold the hot data? If hot data is 10 GB and cache is 1 GB, you'll miss often.
-- **TTL**: Too short = more misses. Too long = stale data.
-- **Eviction policy**: LRU (Least Recently Used) is common. LFU (Least Frequently Used) for skewed access patterns.
-- **Key design**: Poor key design (e.g., user_id + timestamp for every second) leads to low reuse.
-
-### TTL: Time To Live
-
-**TTL** = how long a cached value is valid. After TTL seconds, the entry expires and is removed (or considered stale). Next request triggers a refresh from DB.
-
-| TTL | Use Case | Trade-off |
-|-----|----------|-----------|
-| **Short (60–300 s)** | Frequently changing data (prices, inventory) | Fresh, but lower hit rate |
-| **Medium (1–24 h)** | User profiles, content metadata | Balance freshness and hit rate |
-| **Long (24–72 h)** | Static content, rarely changing data | High hit rate, may serve stale |
-
-**Staff-level**: TTL is a trade-off. No single "right" value. Match TTL to the acceptable staleness of your data. For user-facing "last login" you might use 60 s. For "user's display name" you might use 1 hour.
-
-### Cache Invalidation: The Hard Problem
-
-Phil Karlton: "There are only two hard things in Computer Science: cache invalidation and naming things."
-
-**Why it's hard**: You have multiple sources of truth (cache, DB, other caches). When data changes, you must ensure all copies are updated or invalidated. Miss one, and you serve stale data. Invalidate too aggressively, and you destroy hit rate.
-
-**Strategies**:
-| Strategy | How It Works | When to Use |
-|----------|--------------|-------------|
-| **TTL only** | Rely on expiration. No explicit invalidation. | When eventual consistency is OK |
-| **Invalidate on write** | On DB write, delete/update cache key | When strong consistency needed |
-| **Write-through** | Write to cache and DB together. Cache is always fresh. | When reads heavily outweigh writes |
-| **Write-behind** | Write to cache immediately, async write to DB | When writes are very frequent; risk of loss |
-| **Version in key** | Key includes version. Old keys expire. | When you can't invalidate easily (e.g., CDN) |
-
-### Why Staff Engineers Care About Caching
-
-| Concern | Why It Matters |
-|---------|----------------|
-| **Consistency** | Cache can serve stale data. What's acceptable? |
-| **Complexity** | Cache invalidation, stampede, hot keys add complexity |
-| **Cost** | Redis/cluster costs money. Is the hit rate worth it? |
-| **Failure mode** | Cache down: do you fail or fall through to DB? Fall-through can thundering-herd the DB |
-| **Debugging** | "User says data is wrong" — is it cache? DB? Which layer? |
-
-**Staff-Level Insight**: Caching decisions affect consistency, complexity, cost, and user experience. Get it wrong and you either drown your database or serve stale data that confuses users. Design the cache layer with the same rigor as the database layer.
-
-### Cache Stampede and Mitigation
-
-When a popular key expires, many requests suddenly miss the cache and hit the database simultaneously—a **stampede**. One request could refresh; instead, 1000 do. Mitigations:
-- **Locking**: First requester acquires a lock, refreshes, releases. Others wait or get stale.
-- **Probabilistic early expiration**: When TTL is near end, one request (probabilistic) refreshes early. Spreads load.
-- **Background refresh**: Don't expire on read; refresh in background before TTL. Serve stale while refreshing.
-- **Bloom filters**: For "does this exist?" queries, a Bloom filter can prevent DB hits for non-existent keys.
-
-Staff Engineers anticipate stampede when designing cache invalidation and choose a mitigation that fits their consistency and load profile.
-
-### Write-Through, Write-Around, Write-Behind
-
-| Pattern | Flow | When to Use |
-|---------|------|--------------|
-| **Write-through** | Write to cache and DB together. Cache always has latest. | Strong consistency, read-heavy |
-| **Write-around** | Write to DB only. Cache populated on read (cache-aside). | Write-heavy, can tolerate read miss |
-| **Write-behind** | Write to cache immediately, async write to DB. | Very write-heavy; risk of data loss if cache fails |
-
-Write-through is simplest but doubles write load (cache + DB). Write-behind is fastest but requires careful handling of failures—what if the cache dies before flushing to DB? Most systems use write-around (cache-aside) for simplicity.
-
-### Hot Keys: When One Key Dominates
-
-A **hot key** is a key with disproportionate traffic. Example: a celebrity's profile, a best-selling product, a global config. All requests hit the same cache node or DB shard. That node becomes the bottleneck. Mitigations:
-- **Replicate the hot key** across multiple cache nodes (with a layer that fans out reads)
-- **Local cache** in the application (each server caches the hot key)
-- **Shard the key** (split the value, or use multiple keys for different aspects)
-- **Rate limit** if it's abuse
-
-Staff Engineers identify hot keys early (via metrics) and design for them—"every system has a hot path."
-
----
-
-## Part 3: State vs Stateless
-
-### Stateful: Server Remembers
-
-A **stateful** server keeps information between requests. Examples: session data in memory, in-memory caches, connection state. Request 1 and Request 2 can interact through server-side state.
-
-**Problem**: If the server dies, state is lost. If you have multiple servers, state is fragmented—Request 1 might hit Server A, Request 2 might hit Server B, and B doesn't have A's state. Load balancers must use "sticky sessions" (send same user to same server), which complicates scaling and failover.
-
-### Stateless: Each Request Is Independent
-
-A **stateless** server treats each request in isolation. All information needed to process the request is in the request itself (or in an external store the server looks up). The server does not rely on in-memory state from previous requests.
-
-**Benefit**: Any server can handle any request. Load balancer can round-robin freely. Add servers = add capacity. A server dies = no state lost. Horizontal scaling is straightforward.
-
-### Where to Put State: External Store
-
-When you need state (sessions, user preferences, etc.), put it in an **external store**—Redis, database, etc.—not in the application server's memory. Then the application server can be stateless: it fetches state from the store per request.
-
-```
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │                    STATEFUL vs STATELESS                              │
-    ├─────────────────────────────────────────────────────────────────────┤
-    │                                                                     │
-    │   STATEFUL (Session in server memory):                               │
-    │                                                                     │
-    │   Request 1 ──► Server A (stores session) ──► Response                │
-    │   Request 2 ──► Load balancer ──► Server B (no session!) ──► Fail    │
-    │                                                                     │
-    │   Must use sticky sessions: always send User X to Server A           │
-    │   Server A dies = lose all sessions. Hard to scale.                 │
-    │                                                                     │
-    │   ─────────────────────────────────────────────────────────────    │
-    │                                                                     │
-    │   STATELESS (Session in Redis):                                      │
-    │                                                                     │
-    │   Request 1 ──► Any Server ──► Redis (session) ──► Response           │
-    │   Request 2 ──► Any Server ──► Redis (session) ──► Response          │
-    │                                                                     │
-    │   Any server can handle any request. Add servers = scale out.       │
-    │   Redis dies = sessions lost (mitigate with Redis cluster)           │
-    │                                                                     │
-    └─────────────────────────────────────────────────────────────────────┘
-```
-
-### Stateless Services + Stateful Stores = Standard Pattern
-
-The standard microservice pattern: **stateless application servers** front a **stateful store** (database, cache, queue). The servers scale horizontally. The store is the source of truth. Servers are interchangeable.
-
-### JWT vs Session Cookies
-
-| Approach | Where State Lives | Stateless? | Trade-off |
-|----------|-------------------|------------|-----------|
-| **Session cookie** | Server (or Redis keyed by session ID) | Server is stateless if session in Redis; otherwise stateful | Server must look up session. Easy to invalidate. |
-| **JWT (JSON Web Token)** | In the token itself (signed, client sends it) | Yes—server validates signature, no lookup | Server doesn't store sessions. Hard to invalidate before expiry. |
-
-**JWT**: Token contains payload (user_id, roles, expiry). Server verifies signature. No DB/Redis lookup. Truly stateless. But revoking a user requires either short expiry (more re-auth) or a blocklist (which is state).
-
-**Session**: Server stores session in Redis. Cookie carries session ID. Server looks up session. Stateless servers, stateful store. Revocation = delete key from Redis.
-
-### ASCII Diagram: Stateful vs Stateless Architecture
-
-```
-    STATEFUL (avoid for scale):
-
-    ┌─────────┐     ┌─────────┐     ┌─────────┐
-    │ Client  │────►│ Server A│     │ Server B│
-    │         │     │(session │     │(no      │
-    │         │     │ in mem) │     │ session)│
-    └─────────┘     └─────────┘     └─────────┘
-                          │
-                    Sticky routing required
-                    A dies = session lost
-
-
-    STATELESS (preferred):
-
-    ┌─────────┐     ┌─────────┐     ┌─────────┐
-    │ Client  │────►│ Server A│     │ Server B│
-    │         │     │         │     │         │
-    │         │     └────┬────┘     └────┬────┘
-    │         │          │               │
-    │         │          └───────┬───────┘
-    │         │                  │
-    │         │                  ▼
-    │         │           ┌─────────────┐
-    │         │           │ Redis / DB   │
-    │         │           │ (session,    │
-    │         │           │  state)     │
-    │         │           └─────────────┘
-    │         │
-    └─────────┘     Any server, any request.
-                    Scale by adding servers.
-```
-
-### L5 vs L6: State Design
-
-| Aspect | L5 Thinking | L6 Thinking |
-|--------|-------------|-------------|
-| **Sessions** | "We use in-memory sessions" | "Sessions are in Redis; our app servers are stateless; we scale horizontally" |
-| **Scaling** | "We'll add more servers" | "Our servers are stateless; we add servers and they join the pool immediately" |
-| **Failover** | "We have 2 servers" | "Any server can handle any request; no sticky sessions; clean failover" |
-
----
-
-## Part 4: Idempotency
-
-### Definition: Same Effect, Multiple Times
-
-An operation is **idempotent** if performing it multiple times has the **same effect** as performing it once.
-
-- **GET /users/123**: Same every time. Idempotent.
-- **DELETE /users/123**: First time deletes. Second time, 404. Effect: user is gone. Idempotent.
-- **PUT /users/123** with body: Replaces resource. Same body, same result. Idempotent.
-- **POST /orders**: Each call creates a new order. Not idempotent.
-
-### Why It Matters: Retries Create Duplicates
-
-Networks fail. Clients time out. Servers crash. When a request fails, the client retries. If the operation is **not** idempotent, the retry can cause duplicates:
-
-- **"Charge $100"** retried = user charged twice.
-- **"Create order"** retried = two orders.
-- **"Send email"** retried = user gets two emails.
-
-If the operation **is** idempotent, the retry is safe. "Charge $100 with idempotency key X" — server checks: have I already processed X? If yes, return same result. If no, process and record X. Retry with same X = no double charge.
-
-### Idempotency Keys
-
-**Mechanism**: Client generates a unique key per logical operation (e.g., UUID). Sends it with the request. Server stores processed keys. If the same key arrives again, server returns the stored response without re-executing.
-
-**Implementation details**:
-- **Storage**: Processed keys must be stored somewhere—Redis, DB, or a dedicated store. Key: idempotency_key → (response, timestamp).
-- **TTL**: You can't keep keys forever. 24 hours is common. After that, a retry with the same key might be treated as new (and could duplicate). For payments, 24h is usually enough—users don't retry after days.
-- **Key format**: UUID v4 is standard. Ensure client doesn't reuse keys across different operations. "Create order" and "Create order line item" must have different keys.
-- **Idempotency key header**: Many APIs use `Idempotency-Key: <uuid>` header. Stripe, Square, and others use this pattern.
-
-```
-    Request 1: POST /charges { amount: 100, idempotency_key: "abc-123" }
-    → Server processes, stores result for "abc-123", returns 201
-
-    Request 2 (retry): POST /charges { amount: 100, idempotency_key: "abc-123" }
-    → Server finds "abc-123" already processed, returns same 201 (no new charge)
-```
-
-**Key scope**: One key per logical operation. "Create order" = one key. "Create order line item 1" = different key. Client must not reuse keys for different operations.
-
-### Which Operations Should Be Idempotent?
-
-| Operation | Idempotent? | Notes |
-|-----------|-------------|-------|
-| **GET** | Yes | Read-only |
-| **PUT** | Yes | Replace; same body = same result |
-| **DELETE** | Yes | Delete; second call = 404 |
-| **PATCH** | Depends | If PATCH is "set X to Y" and Y is in request, can be idempotent |
-| **POST** | No (by default) | Creates new resource each time. Use idempotency keys for payments, orders, etc. |
-
-### Payment Example: Without vs With Idempotency
-
-**Without**:
-```
-    Client: Charge $100 (request sent, network timeout before response)
-    Client: Retry charge $100
-    Server: Processes both. User charged $200. Bug.
-```
-
-**With idempotency key**:
-```
-    Client: Charge $100, idempotency_key=req-555
-    Server: Processes, records req-555, returns success
-    (Network timeout—client doesn't receive response)
-
-    Client: Retry charge $100, idempotency_key=req-555
-    Server: Sees req-555 already processed. Returns cached success. No second charge.
-```
-
-### Visual: Idempotency — The Safety Net
-
-```
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║            IDEMPOTENCY: WHY IT'S NON-NEGOTIABLE              ║
-    ╠═══════════════════════════════════════════════════════════════╣
-    ║                                                               ║
-    ║   WITHOUT idempotency key:                                    ║
-    ║                                                               ║
-    ║   "Charge $100" ──► Network timeout ──► Retry "Charge $100"  ║
-    ║        $100              ???                   $100            ║
-    ║   ─────────────────────────────────────────────────────────   ║
-    ║   Result: Customer charged $200. Support ticket. Refund.     ║
-    ║                                                               ║
-    ║   ═══════════════════════════════════════════════════════════ ║
-    ║                                                               ║
-    ║   WITH idempotency key:                                       ║
-    ║                                                               ║
-    ║   "Charge $100, key=abc" ──► timeout ──► Retry "key=abc"     ║
-    ║        $100                                  $0 (cached!)     ║
-    ║   ─────────────────────────────────────────────────────────   ║
-    ║   Result: Customer charged $100 exactly once. Happy user.    ║
-    ║                                                               ║
-    ║   RULE: Every POST that creates/charges/sends must have      ║
-    ║         an idempotency key. No exceptions for money.         ║
-    ╚═══════════════════════════════════════════════════════════════╝
-```
-
-### Caching Strategy Decision Framework
-
-```
-    START: Do you need to cache?
-           │
-           ▼ YES
-    ┌──────────────────────────────────────┐
-    │  How fresh must data be?              │
-    │  - Strong consistency required?       │
-    │  - Eventual OK (seconds/minutes)?     │
-    └──────────────────────────────────────┘
-           │
-           ├── Strong consistency ──► Write-through (write to cache + DB together)
-           │                          Cache always has latest. Higher write load.
-           │
-           ├── Eventual OK, read-heavy ──► Cache-aside (lazy load)
-           │                               Read: cache → miss → DB → populate cache.
-           │                               Write: invalidate or update cache.
-           │                               Simpler. Possible stampede on miss.
-           │
-           └── Very write-heavy, can tolerate loss ──► Write-back (write-behind)
-                                                      Write to cache; async to DB.
-                                                      Risk: cache fail = data loss.
-```
-
-| Strategy | Consistency | Write Load | When to Use | Real Example |
-|----------|-------------|------------|-------------|--------------|
-| **Cache-aside** | Eventual | Low (invalidate only) | Most web apps, product catalog | E-commerce product pages, user profiles |
-| **Write-through** | Strong | High (every write hits cache + DB) | Session data, config that must be fresh | User session, feature flags |
-| **Write-back** | Eventual, loss risk | Lowest | Analytics events, click tracking | Metrics, view counts |
-| **Write-around** | Eventual | Low | Write-heavy, read miss OK | Log aggregation, audit trail |
-| **Read-through** | Eventual | Low (cache handles DB load) | Read-heavy, caching proxy (Redis + Envoy), CDN | Product catalog via caching proxy, CDN edge cache |
-
-**Read-through vs cache-aside**: In cache-aside, the *application* checks the cache, then fetches from DB on miss. In read-through, the *cache layer itself* fetches from DB on miss—the app only ever talks to the cache. Read-through is simpler application code but requires a smart cache proxy (Redis with a loader plugin, DAX for DynamoDB). Cache-aside gives more control and works with any cache.
-
-**Impact on consistency**: Write-through guarantees cache and DB match. Cache-aside can serve stale until TTL or invalidation. Write-back can lose recent writes if cache fails. Choose based on domain: payments → strong. Product description → eventual.
-
-### Idempotency in Practice: Implementation Patterns
-
-**Database-level idempotency**: Use unique constraints. `INSERT ... ON CONFLICT DO NOTHING` or unique on (idempotency_key). DB rejects duplicate. Application checks affected rows; if 0, it's a retry—return cached response.
-
-```sql
--- Unique constraint ensures duplicate key = no insert
-CREATE UNIQUE INDEX idx_orders_idempotency ON orders(idempotency_key);
-INSERT INTO orders (idempotency_key, user_id, amount, ...)
-VALUES ('req-555', 123, 100, ...)
-ON CONFLICT (idempotency_key) DO UPDATE SET updated_at = NOW()
-RETURNING *;
--- First call: insert. Retry: update (no-op), return row. Idempotent.
-```
-
-**Application-level idempotency**: Store processed keys in Redis or a table. Before processing: `GET idempotency:req-555`. If exists, return stored response. If not, process, `SET idempotency:req-555 → response` with TTL (e.g., 24h).
+**Rendezvous hashing** (also called Highest Random Weight hashing): For each key, compute a score for every candidate server. Assign the key to the server with the highest score.
 
 ```python
-# Pseudocode
-def process_payment(idempotency_key, amount):
-    cached = redis.get(f"idempotency:{idempotency_key}")
-    if cached:
-        return json.loads(cached)  # Same response as first call
+def rendezvous_assign(key: str, servers: list) -> str:
+    # Score each server for this key
+    scored = [(hash(key + ":" + server), server) for server in servers]
+    # Return server with highest score
+    return max(scored)[1]
+```
+
+**Properties:**
+- When a server leaves, each of its keys independently re-evaluates and picks the next-highest server. No coordination needed.
+- Only ~1/N of keys move when a server is added or removed.
+- O(N) per lookup — you must score all N servers for each key.
+
+**When O(N) is acceptable:** When N is small (5 replicas, 10 CDN origins, 20 database read replicas). For these cases, rendezvous hashing is simpler than building and maintaining a vnode ring.
+
+**Real uses:** Nginx upstream selection, CDN origin server selection, read replica selection in distributed databases, consistent selection of cache replicas.
+
+---
+
+#### Hashing Algorithm Comparison Table
+
+| Algorithm | Lookup Time | Memory | Handles Arbitrary Removal | Best For |
+|-----------|-------------|--------|--------------------------|----------|
+| **Modulo (% N)** | O(1) | O(1) | No — full remap | Fixed-size in-memory hash tables |
+| **Consistent hashing + vnodes** | O(log V) | O(V) | Yes — any node, minimal move | Distributed caches, KV stores, Cassandra, Dynamo |
+| **Jump hashing** | O(log N) | O(1) | Last bucket only | Fixed/growing shard counts, immutable storage |
+| **Rendezvous hashing** | O(N) | O(N) | Yes — any node, minimal move | Small N: CDN origins, replica selection |
+
+**Staff-level framing:** "Consistent hashing is not always the right answer. If our shard count only grows (we never remove a shard mid-range), jump hashing gives the same redistribution guarantee with zero memory overhead. For our 5 read replicas, rendezvous hashing is simpler and avoids managing a ring entirely."
+
+---
+
+#### L5 vs L6: Hash Functions
+
+| Aspect | L5 Thinking | L6 Thinking |
+|--------|-------------|-------------|
+| **Sharding key** | "We use `user_id % 10`" | "Modulo causes full redistribution on resize. We use consistent hashing. Adding a shard moves ~10% of keys, not 90%." |
+| **Adding capacity** | "We add a server to the pool" | "We add a server's vnodes to the ring. Keys in its arcs migrate. During migration, we dual-read (old + new) to handle the transition window." |
+| **Hot partition** | "One shard is getting more traffic" | "Our shard key is `user_id` but one influencer account has 100x the traffic. We need a secondary index key or a dedicated shard for that account." |
+| **Hash function choice** | "We use MD5" | "MD5 for partitioning is fine, but we use xxHash — it is 10x faster and has better distribution for short strings. MD5 is deprecated for any security use." |
+
+---
+
+### Building Block 2: Caching
+
+#### Why Does This Exist?
+
+Databases are slow compared to memory. A typical disk read takes 1–10 milliseconds. A typical Redis read takes 0.1–1 milliseconds. Memory access is orders of magnitude faster than disk. If you could keep your most-used data in memory, reads would be 10–100x faster.
+
+Caching exists because **most systems have a small "hot set" of data that handles most of the read traffic**. The 80/20 rule applies to data: roughly 20% of your data items receive 80% of reads. If you can fit that 20% in a cache, you serve 80% of reads from memory without touching the database.
+
+**The mathematical impact:** If 95% of reads hit the cache:
+- Only 5% reach the database
+- Database load = 1/20th of total read load
+- A system needing 100 database replicas without caching needs only 5 with caching
+- The 95 saved replicas represent enormous cost savings
+
+**Production example:** At its scale, Twitter's feed service handles hundreds of thousands of reads per second. Each feed read touches dozens of tweet IDs. Without caching, each read would require multiple database round-trips. Their Memcached layer handles approximately 99% of reads. Without it, their database tier would need to be 100x larger.
+
+#### What Is a Cache? (Desk vs. Filing Cabinet)
+
+A **cache** is a faster, smaller storage layer that holds a subset of data from a slower, larger primary store.
+
+**The analogy:** Your desk (cache) vs. the filing cabinet in the corner (database).
+
+- You keep frequently-used files on your desk for immediate access
+- When you need a document, you check your desk first
+- If it is there (**cache hit**): you use it immediately — no trip to the cabinet
+- If it is not there (**cache miss**): you walk to the cabinet, get it, and put a copy on your desk
+
+The desk has limited space. Eventually you clear off documents you have not used recently to make room for new ones. This is **eviction**.
+
+#### Types of Caches in a System
+
+```mermaid
+flowchart LR
+    User["User Browser"] -->|"1. Browser cache"| CDN["CDN Edge Cache"]
+    CDN -->|"2. CDN miss"| AppServer["App Server"]
+    AppServer -->|"3. Application cache (Redis)"| DB["Database"]
+    DB -->|"4. DB query cache"| AppServer
+    AppServer --> CDN
+    CDN --> User
+
+    style User fill:#e8f5e9
+    style CDN fill:#fff9c4
+    style AppServer fill:#e3f2fd
+    style DB fill:#fce4ec
+```
+
+| Cache Type | Where | What It Caches | Typical Latency | Hit Rate |
+|------------|-------|----------------|-----------------|---------|
+| **CPU L1/L2/L3** | Inside the CPU | Memory addresses | 1–40 nanoseconds | 95–99% |
+| **Browser cache** | Client device | Static assets, API responses | 0 ms (disk) | Varies by user |
+| **CDN cache** | Edge servers near users | Static files, sometimes API | 5–50 ms | 80–95% for static |
+| **Application cache** | Server-side (Redis, Memcached) | DB results, computed data | 0.1–1 ms | 80–99% |
+| **Database query cache** | Inside DB engine | Query result sets | 1–5 ms | 50–90% |
+
+**Layered caching in practice:** A single request might pass through all these layers. A CDN hit never reaches your servers at all. An application cache hit never touches the database. Each layer protects the layers beneath it.
+
+---
+
+#### Cache-Aside Pattern: Step-by-Step
+
+Cache-aside (also called lazy loading) is the most common caching pattern. The application code manages the cache explicitly.
+
+**Read path:**
+
+```
+1. Request arrives for key K (e.g., "user:12345")
+2. Application checks cache: GET user:12345
+3a. Cache HIT → return value directly (fast path, ~0.5ms)
+3b. Cache MISS →
+      a. Query database: SELECT * FROM users WHERE id = 12345
+      b. Receive row from database (~5ms)
+      c. Write to cache: SET user:12345 <row> EX 3600 (TTL: 1 hour)
+      d. Return row to caller
+```
+
+**Write path (on data change):**
+
+```
+When user 12345 updates their profile:
+  a. Write to database: UPDATE users SET name = 'Alice' WHERE id = 12345
+  b. Invalidate cache: DEL user:12345
+  c. Next read will be a cache miss → loads fresh data → re-populates cache
+```
+
+```mermaid
+sequenceDiagram
+    participant App as App Server
+    participant Cache as Redis Cache
+    participant DB as Database
+
+    Note over App,DB: Read Path (Cache Miss)
+    App->>Cache: GET user:12345
+    Cache-->>App: (nil) — MISS
+    App->>DB: SELECT * FROM users WHERE id=12345
+    DB-->>App: {id:12345, name:"Alice", ...}
+    App->>Cache: SET user:12345 <data> EX 3600
+    Cache-->>App: OK
+    App-->>App: Return data to caller
+
+    Note over App,DB: Read Path (Cache Hit)
+    App->>Cache: GET user:12345
+    Cache-->>App: {id:12345, name:"Alice", ...} — HIT
+    App-->>App: Return data (no DB call)
+
+    Note over App,DB: Write Path (Invalidation)
+    App->>DB: UPDATE users SET name='Bob' WHERE id=12345
+    DB-->>App: OK
+    App->>Cache: DEL user:12345
+    Cache-->>App: OK (next read will refresh)
+```
+
+**Why cache-aside is preferred:**
+- The application controls what gets cached and for how long
+- Cache failures are graceful — on miss, fall back to database
+- Works with any cache technology (Redis, Memcached, in-process)
+- Simple to understand and debug
+
+---
+
+#### All Five Cache Patterns Explained
+
+**Write-Through:**
+
+Every write goes to both the cache and the database simultaneously.
+
+```
+Write "Alice" →
+  1. Write to cache: SET user:12345 {"name":"Alice"} EX 3600
+  2. Write to database: UPDATE users SET name='Alice' WHERE id=12345
+  3. Return success only after BOTH succeed
+```
+
+```
+Pros: Cache always has the latest data (strong consistency)
+Cons: Every write hits both cache and DB → higher write latency, double write load
+When: Session data, feature flags, any data that must always be fresh in cache
+Real example: User authentication token — must be consistent immediately
+```
+
+**Write-Behind (Write-Back):**
+
+Write to cache immediately. Write to database asynchronously later.
+
+```
+Write "Alice" →
+  1. Write to cache: SET user:12345 {"name":"Alice"} (immediate)
+  2. Return success immediately
+  3. Background worker: flush to DB within 5–30 seconds
+```
+
+```
+Pros: Extremely fast writes (cache speed, not DB speed)
+Cons: If cache dies before flush, data is lost. Complex recovery.
+When: View counts, like counts, metrics — where losing a few counts is acceptable
+Real example: YouTube view counter — you can afford to lose 100 views if cache crashes
+NEVER use for: Financial transactions, orders, anything where loss is unacceptable
+```
+
+**Write-Around:**
+
+Write directly to the database, bypassing the cache entirely. Cache is populated on reads.
+
+```
+Write "Alice" →
+  1. Write to database only: UPDATE users SET name='Alice' WHERE id=12345
+  2. Do NOT update cache (cache has stale or no entry)
+  Next read → cache miss → reload from DB → populate cache
+```
+
+```
+Pros: No cache pollution from write-heavy data that is rarely read
+Cons: First read after a write is always a cache miss
+When: Write-heavy data (logs, audit trails, bulk imports)
+Real example: Log ingestion — you write millions of log entries per minute but rarely read individual ones
+```
+
+**Read-Through:**
+
+The cache layer (not the application) is responsible for fetching from the database on a miss.
+
+```
+Read user:12345 →
+  1. Application calls cache: cache.get("user:12345")
+  2. Cache checks internally: Do I have this?
+  3a. HIT → cache returns value to application
+  3b. MISS → cache fetches from DB itself, stores it, returns to application
+  Application never talks to DB directly
+```
+
+```
+Pros: Simpler application code — always talk to cache, never directly to DB
+Cons: Requires a smart cache proxy that knows how to fetch from your DB
+When: Caching layers with built-in loaders (Redis + a loader function, DAX for DynamoDB)
+Real example: DynamoDB Accelerator (DAX) — DynamoDB with transparent caching built in
+```
+
+**Comparison Table:**
+
+| Pattern | Consistency | Write Latency | Read Latency | Data Loss Risk | Best For |
+|---------|-------------|---------------|--------------|---------------|----------|
+| **Cache-aside** | Eventual | Normal (DB only) | Fast after first miss | None | Most web apps, product catalog, user profiles |
+| **Write-through** | Strong | Slow (cache + DB) | Fast (always cached) | None | Sessions, config, tokens |
+| **Write-behind** | Eventual (async) | Very fast (cache only) | Fast | Yes (if cache dies) | View counts, metrics, non-critical counters |
+| **Write-around** | Eventual | Normal (DB only) | Slow (always misses first read) | None | Write-heavy, rarely-read data |
+| **Read-through** | Eventual | Normal | Fast after first miss | None | Smart cache proxies, DAX |
+
+```mermaid
+flowchart TD
+    Q1{Need strong consistency\nbetween cache and DB?}
+    Q1 -- Yes --> WriteThrough["Write-Through\n(write to both simultaneously)"]
+    Q1 -- No --> Q2{Write speed critical?\nCan tolerate some data loss?}
+    Q2 -- Yes --> WriteBehind["Write-Behind\n(write cache, flush DB async)\nNEVER for financial data"]
+    Q2 -- No --> Q3{Is this data frequently\nread after being written?}
+    Q3 -- Yes --> CacheAside["Cache-Aside\n(most common — lazy load on read)"]
+    Q3 -- No --> WriteAround["Write-Around\n(write DB only, cache on read)"]
+```
+
+---
+
+#### TTL: How to Choose the Right Value
+
+TTL (Time To Live) is the duration after which a cached entry automatically expires. Every cached entry should have one — caches that never expire entries grow unboundedly and will eventually serve dangerously stale data.
+
+**The fundamental trade-off:** Short TTL → fresh data, more cache misses, higher DB load. Long TTL → stale data, fewer misses, lower DB load.
+
+| Data Type | Acceptable Staleness | Recommended TTL | Reasoning |
+|-----------|---------------------|-----------------|-----------|
+| User session | Until logout | 24 hours | Session must be valid; revocation via explicit invalidation |
+| User profile (name, avatar) | Minutes to hours | 1–6 hours | Rarely changes; staleness is tolerable |
+| Product price | Seconds to minutes | 60–300 seconds | Can change hourly; users expect near-current prices |
+| Product description | Days | 24–72 hours | Very rarely changes |
+| Inventory count | Seconds | 10–60 seconds | Changes with every purchase; stale count causes oversell |
+| Homepage featured items | Minutes | 5–30 minutes | Controlled by marketing; near-real-time enough |
+| Static assets (JS, CSS) | Weeks | 7–30 days | Use versioned URLs; deploy new version with new URL |
+| Exchange rates | Minutes | 60 seconds | Business risk from stale rates |
+
+**Jitter:** If you set all entries to expire at the same TTL, they may all expire at nearly the same time (e.g., if a cache is loaded in bulk). Add a small random jitter to spread expirations:
+
+```python
+ttl = base_ttl + random.randint(0, base_ttl // 10)  # ±10% jitter
+```
+
+---
+
+#### Cache Invalidation: The Hard Problem
+
+Phil Karlton's famous quote: "There are only two hard things in Computer Science: cache invalidation and naming things."
+
+**Why it is hard:** You have multiple representations of the same data — one in the database, one or more in various cache tiers. When the database changes, all cache copies must either be updated or invalidated. Miss any one of them and you serve stale data.
+
+**Four invalidation strategies:**
+
+**1. TTL-only (time-based):**
+Accept that data may be stale for up to TTL seconds. Do not explicitly invalidate on writes.
+- Simple to implement
+- Works when eventual consistency is acceptable (product descriptions, static content)
+- Breaks when data must be fresh immediately (user balance, inventory count)
+
+**2. Invalidate on write (delete-on-write):**
+Every time you write to the database, delete the corresponding cache key.
+```python
+def update_user_profile(user_id, new_name):
+    db.execute("UPDATE users SET name = ? WHERE id = ?", new_name, user_id)
+    cache.delete(f"user:{user_id}")
+    # Next read will be a miss and refresh from DB
+```
+- More consistent than TTL-only
+- Adds complexity: must track which cache keys are affected by each write
+- Risk: if cache delete fails, stale entry persists until TTL
+
+**3. Write-through:**
+Update cache and database together on every write. Cache always reflects DB.
+- Strongest consistency
+- Higher write overhead (every write hits both systems)
+- If cache is down during a write, the write must still succeed (write DB, skip cache, invalidate on recovery)
+
+**4. Version in key:**
+Embed a version number or hash in the cache key. When data changes, increment the version. Old keys expire naturally.
+```
+Key: user:12345:v4   (v4 is the current version)
+On update: write user:12345:v5. Old v4 key expires via TTL.
+```
+- Works well for CDN cache (you cannot push invalidation to edge nodes reliably)
+- Requires the client to know the current version (often stored in a fast lookup)
+
+---
+
+#### Cache Hit Rate: The Multiplier Effect
+
+**The math:** If your cache handles H% of reads, your database handles only (100-H)% of reads.
+
+| Cache Hit Rate | DB Load Reduction | Effective DB Multiplier |
+|---------------|-------------------|------------------------|
+| 50% | 2x | 2x fewer DB calls |
+| 80% | 5x | 5x fewer DB calls |
+| 90% | 10x | 10x fewer DB calls |
+| 95% | 20x | 20x fewer DB calls |
+| 99% | 100x | 100x fewer DB calls |
+
+**What this means in practice:** A system receiving 2,000,000 read QPS with a 95% hit rate sends only 100,000 QPS to the database. At $0.20/hour per database replica handling 10,000 QPS, you need 10 replicas ($2/hour) instead of 200 ($40/hour). The cache pays for itself many times over.
+
+**What determines hit rate:**
+
+1. **Working set size vs cache size:** If your "hot" data is 10 GB and your cache is 1 GB, you can only hold 10% of it. Misses will be frequent. Increase cache size or reduce working set (TTL shorter = more churn).
+
+2. **TTL length:** Shorter TTL = more expirations = more misses. Longer TTL = higher hit rate = more staleness.
+
+3. **Key design:** If your cache key includes a timestamp (e.g., `product:123:2024-01-15T14:32:07`), you will never hit the same key twice. Cache keys must be designed for reuse.
+
+4. **Eviction policy:** LRU (Least Recently Used) evicts keys that have not been accessed recently. This naturally keeps the hot set in cache. LFU (Least Frequently Used) keeps the most-accessed items.
+
+5. **Access pattern:** If access is highly skewed (10% of items get 90% of traffic), a small cache handles a large fraction of requests. If access is uniform (every item equally popular), you need the entire dataset in cache to get good hit rates.
+
+---
+
+#### Cache Stampede: What It Is and Three Ways to Fix It
+
+**The problem:** A popular cache entry (e.g., the homepage product list) has a TTL of 60 seconds. At second 60, the TTL expires. In the next 100 milliseconds, 50,000 requests arrive. All of them miss the cache. All 50,000 hit the database simultaneously. The database — designed for 5,000 QPS — receives 500,000 QPS in a burst and crashes.
+
+This is a **cache stampede** (also called **thundering herd**).
+
+**Why it happens:** All entries cached at the same time expire at the same time. Popular entries attract many simultaneous requests.
+
+```mermaid
+flowchart TD
+    A["Cache entry expires (TTL = 0)"] --> B["50,000 requests arrive in 100ms"]
+    B --> C["All miss the cache simultaneously"]
+    C --> D["All 50,000 hit the database"]
+    D --> E["Database receives 10x normal load"]
+    E --> F["Database overwhelmed → slow/crash"]
+    F --> G["Cache cannot refresh → more misses → more DB load"]
+    G --> H["Cascading failure"]
+```
+
+**Mitigation 1: Request coalescing (locking)**
+
+The first request to miss the cache acquires a lock and refreshes. All other concurrent requests either wait for the lock or receive the stale value while refresh is in progress.
+
+```python
+def get_with_lock(key: str) -> dict:
+    value = cache.get(key)
+    if value is not None:
+        return value  # Cache hit
+
+    lock_key = f"lock:{key}"
+    if cache.setnx(lock_key, "1"):  # Acquire lock (atomic set-if-not-exists)
+        cache.expire(lock_key, 5)   # Lock expires in 5 seconds (safety)
+        try:
+            value = db.query(key)
+            cache.set(key, value, ex=3600)
+            return value
+        finally:
+            cache.delete(lock_key)  # Release lock
+    else:
+        # Another request is refreshing; wait briefly and retry or return stale
+        time.sleep(0.05)
+        return cache.get(key) or db.query(key)  # Fallback
+```
+
+**Mitigation 2: Probabilistic early expiration**
+
+Before the TTL fully expires, some requests probabilistically decide to refresh early. This spreads the refresh load over time rather than spiking at TTL=0.
+
+```python
+import math, random, time
+
+def get_with_early_expiry(key: str, beta: float = 1.0) -> dict:
+    value, expiry, delta = cache.get_with_metadata(key)
+    if value is None:
+        return refresh_from_db(key)  # Already expired, must refresh
     
-    result = charge_card(amount)
-    redis.setex(f"idempotency:{idempotency_key}", 86400, json.dumps(result))
-    return result
+    # Probabilistic early expiry: sometimes refresh before TTL=0
+    remaining_ttl = expiry - time.time()
+    if -delta * beta * math.log(random.random()) >= remaining_ttl:
+        # Refresh now (probabilistically, when TTL is getting low)
+        return refresh_from_db(key)
+    return value
 ```
 
-**Distributed idempotency (consensus)**: In a distributed system, two nodes might receive the same retry. Both check "have we processed req-555?" Need a shared store (Redis, DB) that both can read/write. Or use a distributed lock: first to acquire lock processes; second finds result already stored.
+**Mitigation 3: Background refresh (stale-while-revalidate)**
 
-**Payment systems case study**: Stripe, Adyen, PayPal all require idempotency keys for charges, refunds, payouts. Without: network retry = double charge. With: client sends `Idempotency-Key: uuid`. Server stores (key → response) for 24h. Retry with same key = return cached response. No second charge. Industry standard for financial APIs.
+Serve the stale value immediately. Trigger a background job to refresh the cache asynchronously. The user sees slightly stale data for one request cycle, but never waits for a DB round-trip.
 
-### Staff-Level Insight: Design for Retries
+```python
+def get_with_background_refresh(key: str) -> dict:
+    value, ttl = cache.get_with_ttl(key)
+    
+    if value is None:
+        # Completely expired — must synchronously refresh
+        return refresh_from_db(key)
+    
+    if ttl < 60:  # TTL under 60 seconds — trigger background refresh
+        background_queue.enqueue(refresh_task, key)  # Async, non-blocking
+    
+    return value  # Return current value immediately
+```
 
-**Every write API** that has financial, consistency, or user-visible side effects should be designed for idempotent retries. That means:
-- Accept idempotency keys for non-GET operations
-- Store processed keys (with TTL—you can't keep them forever)
-- On duplicate key: return same response as original, don't re-execute
-
-**L5 vs L6**: L5 builds the feature. L6 asks: "What happens when the client retries? Are we safe?"
+**Which to use:**
+- Request coalescing: when serving stale data is unacceptable (financial data, inventory counts)
+- Probabilistic early expiry: simple, no coordination, good for most use cases
+- Background refresh: best user experience (never stale, never waits), but requires background workers
 
 ---
 
-## Part 5: Queues — The Buffer Between Producer and Consumer
+#### Hot Keys: When One Key Gets All the Traffic
 
-### Queue = Decoupling Producer and Consumer
+A **hot key** is a single cache key that receives orders-of-magnitude more traffic than average.
 
-A **queue** sits between producers (who put messages) and consumers (who process them). The producer doesn't wait for the consumer. It enqueues and continues. The consumer processes at its own pace. If the producer is fast and the consumer is slow, the queue buffers. If the consumer is down, the queue holds messages until it's back.
+**Examples:**
+- A celebrity's profile page (`user:justinbieber`) requested by millions of followers simultaneously
+- A blockbuster product's listing page (`product:iphone-16-pro`) on launch day
+- A global configuration value (`config:feature-flags`) read by every server on every request
+- A trending hashtag's tweet list (`hashtag:superbowl`) during a live event
 
-### Why Queues?
+**Why it breaks things:** All requests for a hot key route to the same cache node (by consistent hashing). That single node must handle all 100,000 QPS while other nodes sit idle at 1,000 QPS. The hot node becomes the bottleneck.
 
-| Benefit | Explanation |
-|---------|-------------|
-| **Decoupling** | Producer and consumer don't need to know about each other. Change one without the other. |
-| **Async** | Producer doesn't block. Better throughput. |
-| **Buffering** | Absorbs traffic spikes. Consumer doesn't get overwhelmed. |
-| **Reliability** | Messages persist. Consumer can retry on failure. |
-| **Load leveling** | Smooth out bursty traffic into steady processing. |
+**Four solutions:**
 
-### Types of Queues
+**1. Local in-process cache:**
+Each application server keeps a small in-memory copy of extremely hot keys.
 
-| Type | Behavior | Example |
-|------|----------|---------|
-| **Simple FIFO** | First in, first out | SQS FIFO, RabbitMQ queue |
-| **Priority queue** | High-priority messages first | RabbitMQ priority queues |
-| **Dead-letter queue (DLQ)** | Failed messages go here for inspection/retry | SQS DLQ, RabbitMQ DLX |
-| **Log (Kafka)** | Append-only log; consumers read from offset. Not "pop" semantics | Kafka |
+```python
+from functools import lru_cache
+import time
 
-**Queue vs Log**: A queue typically removes a message when consumed. A log keeps messages; consumers track their offset. Kafka is a log. SQS is a queue. Both decouple producer and consumer, but semantics differ.
+# Simple in-process TTL cache
+_local_cache = {}
 
-### Examples: SQS, RabbitMQ, Redis, Kafka
-
-| System | Model | Best For |
-|--------|-------|----------|
-| **SQS** | Queue, at-least-once delivery | Simple async processing, AWS-native |
-| **RabbitMQ** | Queue, flexible routing | Complex routing, acknowledgments |
-| **Redis Lists** | Simple queue (LPUSH, BRPOP) | Low latency, simple use cases |
-| **Kafka** | Log, consumer groups | High throughput, event sourcing, replay |
-
-### Use Cases
-
-| Use Case | Why Queue |
-|----------|-----------|
-| **Email sending** | Don't block user. Worker sends async. |
-| **Order processing** | Decouple checkout from inventory/payment. |
-| **Image/video processing** | Heavy work. Queue job, process in background. |
-| **Event distribution** | One event, many consumers. Fan-out via queue. |
-| **Rate limiting** | Queue smooths request rate to downstream. |
-
-### ASCII Diagram: Producer → Queue → Consumers
-
-```
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │                    QUEUE PATTERN                                     │
-    │                                                                     │
-    │   ┌──────────┐    ┌──────────┐    ┌──────────┐                     │
-    │   │Producer 1│    │Producer 2│    │Producer 3│  ...                 │
-    │   └────┬─────┘    └────┬─────┘    └────┬─────┘                     │
-    │        │                │                │                          │
-    │        └────────────────┼────────────────┘                          │
-    │                         │                                           │
-    │                         ▼                                           │
-    │                  ┌─────────────┐                                    │
-    │                  │    QUEUE    │  (SQS, RabbitMQ, Kafka)            │
-    │                  │  (FIFO or   │                                    │
-    │                  │   Priority) │                                    │
-    │                  └──────┬──────┘                                    │
-    │                         │                                           │
-    │        ┌────────────────┼────────────────┐                          │
-    │        │                │                │                          │
-    │        ▼                ▼                ▼                          │
-    │   ┌─────────┐     ┌─────────┐     ┌─────────┐                       │
-    │   │Worker 1 │     │Worker 2 │     │Worker 3 │  ...                   │
-    │   └─────────┘     └─────────┘     └─────────┘                       │
-    │                                                                     │
-    │   Producers enqueue and continue. Workers process at their pace.   │
-    │   Queue absorbs spikes. Workers scale independently.                │
-    │                                                                     │
-    └─────────────────────────────────────────────────────────────────────┘
+def get_hot_key(key: str) -> dict:
+    if key in _local_cache:
+        value, expiry = _local_cache[key]
+        if time.time() < expiry:
+            return value  # Local hit — no network call
+    
+    value = redis.get(key)  # Fall through to Redis
+    _local_cache[key] = (value, time.time() + 5)  # Cache locally for 5 seconds
+    return value
 ```
 
-### L5 vs L6: Queue Design
+With 100 app servers, the Redis node now receives 100 QPS instead of 10,000 QPS for that key.
+
+**2. Key sharding (fan-out reads):**
+Store the same value under multiple keys. Read from a randomly selected key.
+
+```python
+NUM_SHARDS = 10
+
+def set_hot_key(key: str, value: dict):
+    for i in range(NUM_SHARDS):
+        redis.set(f"{key}:shard:{i}", value, ex=3600)
+
+def get_hot_key(key: str) -> dict:
+    shard = random.randint(0, NUM_SHARDS - 1)
+    return redis.get(f"{key}:shard:{shard}")
+```
+
+Now the traffic for this key is spread across 10 cache nodes (via consistent hashing of 10 different keys).
+
+**3. CDN for read-only hot data:**
+For data that does not change per user (a celebrity's public profile, a trending post), serve from CDN. The CDN handles millions of requests without touching Redis or your database.
+
+**4. Rate limiting and circuit breaking:**
+If a hot key is being accessed due to a bug (infinite loop in a client) or abuse, rate-limit requests per key. Circuit-break to a default value if the key exceeds threshold.
+
+---
+
+#### Eviction Policies: How the Cache Decides What to Remove
+
+When a cache reaches its maximum size, it must evict (remove) entries to make room for new ones. The eviction policy determines which entries are removed.
+
+| Policy | How It Works | Best For |
+|--------|-------------|---------|
+| **LRU** (Least Recently Used) | Evict the entry that was least recently accessed | General-purpose; keeps recently-accessed data |
+| **LFU** (Least Frequently Used) | Evict the entry accessed least often overall | Skewed access patterns; keeps perennially popular items |
+| **FIFO** (First In, First Out) | Evict the oldest entry | Simple but ignores access patterns |
+| **Random** | Evict a random entry | Simple; surprisingly competitive with LRU in some studies |
+| **TTL-based** | Evict expired entries first | Good default; combine with LRU for non-expired entries |
+
+**LRU vs LFU:** LRU is generally better for web caches where recency matters (if you accessed it recently, you probably will again). LFU is better for caches with stable, highly-skewed access patterns (some items are always popular regardless of when they were last accessed). Redis supports both via `maxmemory-policy`.
+
+---
+
+#### Production Failure Story: The Celebrity Photo Stampede
+
+**Incident:** In 2012, a major social network had a celebrity with 20 million followers post a new profile photo. The photo's metadata was cached with a 5-minute TTL. At exactly 5 minutes after the post, the cache entry expired. In the next 200 milliseconds, approximately 80,000 users loaded the celebrity's profile and all got a cache miss simultaneously. The database received 80,000 simultaneous queries for the same row. The database query planner could not handle the concurrent load on that single row's index. Response times spiked to 30 seconds. The page became effectively unavailable for that celebrity's profile for 4 minutes.
+
+**Fix applied:** They implemented per-entry TTL jitter and background refresh for accounts with followers above 1 million. TTL jitter ensured that even if two requests cached the same data, they would expire at slightly different times. Background refresh meant the cache was refreshed before expiry, so the stampede condition never arose.
+
+**Lesson:** Hot keys need special treatment. Standard cache patterns break at extreme traffic concentrations. Identify your hot keys in advance (follower count, product popularity, feature flag access frequency) and apply mitigations proactively.
+
+---
+
+#### L5 vs L6: Caching
 
 | Aspect | L5 Thinking | L6 Thinking |
 |--------|-------------|-------------|
-| **Choice** | "We use SQS" | "SQS for simple async; Kafka for event streaming and replay" |
-| **Failure** | "Worker retries" | "We have DLQ, retry with backoff, alert on DLQ depth" |
-| **Scaling** | "We add workers" | "We scale workers based on queue depth; each partition has one consumer" |
+| **Cache pattern** | "We cache database results in Redis" | "We use cache-aside with 5-minute TTL. On write, we invalidate the key. We add 10% TTL jitter to prevent mass expiration." |
+| **Hit rate** | "The cache is working well" | "Our target hit rate is 95%. Currently at 87% because our working set (8 GB) exceeds cache size (4 GB). We need to either increase cache memory or reduce TTL to evict more aggressively." |
+| **Stampede** | "Redis handles concurrent requests" | "Our celebrity accounts have 10M followers. We use local in-process caching for the top 1000 accounts (by follower count) with a 30-second TTL. This reduces Redis load by 95% for hot keys." |
+| **Failure** | "If Redis goes down, requests fail" | "If Redis goes down, we fall through to the database. We have circuit breakers: if DB latency exceeds 500ms for 10% of requests, we return cached-but-potentially-stale data from a secondary in-memory cache rather than hammering the DB." |
+| **Invalidation** | "We update the cache when data changes" | "We invalidate on write and use a 1-hour TTL as a backstop. We track which cache keys correspond to each database entity in a mapping table, so a write to `users:12345` also invalidates `feed:*` keys that contain that user's data." |
 
-### Queue Delivery Semantics: At-Most-Once, At-Least-Once, Exactly-Once
-
-| Semantic | Guarantee | Trade-off |
-|-----------|------------|-----------|
-| **At-most-once** | Message may be lost, never duplicated | Fast, simple; use when loss is acceptable |
-| **At-least-once** | Message delivered at least once; may duplicate | Safe for critical work; consumers must be idempotent |
-| **Exactly-once** | Message delivered precisely once | Hard to achieve; often "effectively once" via idempotency |
-
-Most systems aim for at-least-once with idempotent consumers. True exactly-once requires distributed transactions or log-based deduplication—complex. Staff Engineers choose the right semantic per use case: at-most-once for metrics, at-least-once for payments.
-
-### Kafka vs SQS: When to Use Which
-
-| Aspect | SQS | Kafka |
-|--------|-----|-------|
-| **Model** | Queue (message consumed, removed) | Log (retained, consumers track offset) |
-| **Replay** | No | Yes—re-read from offset |
-| **Ordering** | FIFO queues only, per partition | Per partition |
-| **Throughput** | 3K/sec default, 300K with batching | Millions/sec |
-| **Use case** | Simple async, task queues | Event streaming, high throughput, replay |
-
-Choose SQS when you need simple, managed, fire-and-forget. Choose Kafka when you need high throughput, replay, or event sourcing.
-
-### Queue Patterns: Fan-Out, Competing Consumers, Priority, DLQ, Delay
-
-**Fan-out pattern**: One message, many consumers. Publish to a topic; multiple subscriber queues or consumer groups each get a copy. Use for: event distribution (order placed → inventory, notifications, analytics all receive it).
-
-```
-    ┌─────────┐     ┌──────────┐     ┌─────────────┐
-    │Producer │────►│  Topic   │────►│ Consumer A  │
-    │         │     │ (fan-out)│     │ (inventory) │
-    │         │     │          │────►│ Consumer B  │
-    │         │     │          │     │ (notify)    │
-    │         │     │          │────►│ Consumer C  │
-    └─────────┘     └──────────┘     │ (analytics) │
-                                     └─────────────┘
-```
-
-**Competing consumers**: Multiple workers consume from the same queue. Each message goes to one consumer. Scales processing horizontally. Use for: task queues, job processing.
-
-```
-    ┌─────────┐     ┌──────────┐
-    │Producer │────►│  Queue   │──┬──► Worker 1
-    │         │     │          │  ├──► Worker 2
-    │         │     │          │  └──► Worker 3
-    └─────────┘     └──────────┘
-    (Each message delivered to exactly one worker)
-```
-
-**Priority queues**: Messages have priority. High-priority messages processed first. Use for: urgent vs normal (VIP user actions, critical alerts).
-
-```
-    ┌─────────┐     ┌─────────────────────┐     ┌─────────┐
-    │Producer │────►│  Priority Queue      │────►│ Worker  │
-    │ (high)  │     │  [P1][P1][P2][P2]   │     │         │
-    │ (low)   │     │  High dequeued first │     │         │
-    └─────────┘     └─────────────────────┘     └─────────┘
-```
-
-**Dead-letter queue (DLQ)**: Messages that fail after N retries go to a separate queue. For inspection, manual retry, or alerting. Use for: failed payments, corrupted data, poison messages.
-
-```
-    ┌─────────┐     ┌──────────┐     ┌─────────┐
-    │Producer │────►│  Queue   │────►│ Worker  │
-    │         │     │          │     │ (fails) │
-    │         │     │          │     └────┬────┘
-    │         │     │          │          │ retries exhausted
-    │         │     │          │          ▼
-    │         │     │          │     ┌─────────┐
-    │         │     │          │     │   DLQ   │  (inspect, retry)
-    │         │     │          │     └─────────┘
-    └─────────┘     └──────────┘
-```
-
-**Delay queues**: Message visible only after a delay. Use for: scheduled jobs, retry with backoff, "send email in 1 hour."
-
-```
-    ┌─────────┐     ┌──────────────┐     ┌─────────┐
-    │Producer │────►│ Delay Queue  │     │ Worker  │
-    │         │     │ (visibility  │────►│         │
-    │         │     │  timeout=5m) │     │         │
-    └─────────┘     └──────────────┘     └─────────┘
-    Message in queue 5 min before worker can process it.
-```
-
-| Pattern | When to Use | Example |
-|---------|-------------|---------|
-| **Fan-out** | One event, many independent consumers | OrderPlaced → inventory, email, analytics |
-| **Competing consumers** | Scale processing, any worker can handle | Image resize, email send, report generation |
-| **Priority** | Urgent messages first | VIP support, critical alerts |
-| **DLQ** | Handle failures, avoid poison messages | Failed payments, bad data |
-| **Delay** | Schedule for later | Reminder in 1h, retry with backoff |
-
-**Queue pattern selection guide**: Fan-out when one event triggers multiple independent actions. Competing consumers when you need to scale processing and any worker can handle any message. Priority when some messages are more urgent. DLQ always—failed messages need a place to go. Delay when you need scheduled or deferred processing.
 
 ---
 
-## Part 6: Synchronous vs Asynchronous
+### Building Block 3: State vs Stateless
 
-### Synchronous: Caller Waits
+#### Why Does This Exist?
 
-**Synchronous** = the caller sends a request and **blocks** until the response arrives. "I'll wait here until you're done."
+In the early days of web applications, each server kept user sessions in its own memory. A user logged in to Server A, and Server A stored their session (user ID, shopping cart, preferences) in a Python dictionary or Java HashMap in RAM.
 
-**Examples**: HTTP request-response. Function call. REST API. Browser loading a page.
+This worked fine with one server. The moment you added a second server, you had a problem: if the load balancer sent the user's next request to Server B, Server B had no session data. The user would appear to be logged out.
 
-```
-    Client ──► Request ──► Server ──► Process ──► Response ──► Client
-              (blocks)                    (blocks)         (continues)
-```
+The industry solution was **sticky sessions**: configure the load balancer to always send a particular user to the same server. This fixed the immediate problem but created a new set of problems:
 
-### Asynchronous: Caller Doesn't Wait
+- If Server A is overloaded, you cannot move users from it to Server B
+- If Server A crashes, all users whose sessions lived there are immediately logged out
+- You cannot deploy a new version of Server A without logging out its users
+- Auto-scaling becomes complicated — new servers start with no sessions; old servers cannot be removed while users are on them
 
-**Asynchronous** = the caller sends a request and **continues**. It gets the result later—via callback, polling, webhook, or event. "Here's my order, call me when it's ready."
+The solution was to stop storing state in the servers themselves and move it to a dedicated external store. With state externalized, every server is identical and interchangeable. This is the principle behind stateless servers.
 
-**Examples**: Message queue. Webhook. Email sending. Event-driven architecture. Server-Sent Events.
+#### What Stateful vs Stateless Means
 
-```
-    Client ──► Request ──► Server/Queue ──► (Client continues)
-                                    │
-                                    ▼
-                            Worker processes
-                                    │
-                                    ▼
-                            Callback / Webhook / Event
-```
+**Stateful server:** Stores data between requests in its own memory. Request N+1 can depend on state set by Request N, but only if both hit the same server.
 
-### Sync in System Design
+**Stateless server:** Stores nothing between requests. Every request is self-contained. If state is needed (e.g., who is the logged-in user?), the server fetches it from an external store on each request.
 
-| Scenario | Pattern |
-|----------|---------|
-| **User needs immediate response** | Sync: login, read data, checkout |
-| **Service A calls Service B** | Sync: A sends HTTP/gRPC, waits for B's response |
-| **API gateway → backend** | Sync: gateway forwards, waits for backend |
+```mermaid
+flowchart TD
+    subgraph "Stateful (BAD for scale)"
+        LB1[Load Balancer] -->|"User Alice → sticky to A"| SA[Server A\nSession: {alice: logged_in}]
+        LB1 -->|"User Bob → sticky to B"| SB[Server B\nSession: {bob: logged_in}]
+        SA -->|"Server A crashes"| X["Alice's session LOST"]
+    end
 
-**When sync**: When the user or caller needs the result to proceed. You can't show "Order confirmed" without the payment result. Sync is simpler: one request, one response, easy to reason about.
-
-### Async in System Design
-
-| Scenario | Pattern |
-|----------|---------|
-| **Work can be deferred** | Async: send email, generate report, process video |
-| **High volume, batch processing** | Async: ingest events, process in background |
-| **Decoupling** | Async: Service A publishes event; B, C, D subscribe |
-
-**When async**: When the user doesn't need the result immediately, or when you want to decouple. "Your video is processing—we'll email when done." Async improves throughput and resilience but adds complexity.
-
-### Async Challenges
-
-| Challenge | Why |
-|-----------|-----|
-| **Eventual consistency** | Result isn't available immediately. User might see stale state. |
-| **Error handling** | Sync: return error to caller. Async: where does the error go? DLQ? Retry? Notify? |
-| **Debugging** | Sync: one call stack. Async: trace across services, queues, workers. |
-| **Ordering** | Sync: natural order. Async: messages can arrive out of order. Need sequencing. |
-
-### Staff-Level: Choosing Sync vs Async
-
-Every interaction is a choice. Staff Engineers ask:
-
-- **Does the caller need the result now?** If yes, sync (or sync facade over async).
-- **Can we tolerate eventual consistency?** If yes, async is an option.
-- **What's the failure mode?** Sync: caller gets error. Async: need retry, DLQ, monitoring.
-- **What's the scale?** Sync under heavy load can back up. Async absorbs spikes.
-
-**Rule of thumb**: Default to sync for user-facing, result-dependent flows. Use async for side effects, notifications, and heavy processing. Don't async-ify everything—it adds operational burden.
-
-### ASCII Diagram: Sync vs Async
-
-```
-    SYNCHRONOUS (A waits for B):
-
-    ┌─────────┐                    ┌─────────┐
-    │   A     │ ─── Request ──────► │   B     │
-    │ (block) │                    │ process │
-    │         │ ◄── Response ──────│         │
-    │(continue)│                    └─────────┘
-    └─────────┘
-
-    Latency = round-trip. A is blocked. Simple. Easy to debug.
-
-
-    ASYNCHRONOUS (A doesn't wait):
-
-    ┌─────────┐       ┌─────────┐       ┌─────────┐
-    │   A     │ ─────► │  Queue  │ ─────► │   B     │
-    │(continues)       │         │        │ process │
-    └─────────┘       └─────────┘       └────┬────┘
-                                               │
-                                               ▼
-    ┌─────────┐       ┌─────────┐       Callback / Event
-    │   A     │ ◄───── │ Webhook  │ ◄─────┘
-    │(later)  │        │ or Poll  │
-    └─────────┘       └─────────┘
-
-    A continues immediately. B processes when it can. Result arrives later.
+    subgraph "Stateless (GOOD for scale)"
+        LB2[Load Balancer] -->|"Any request"| S1[Server 1\nNo state]
+        LB2 -->|"Any request"| S2[Server 2\nNo state]
+        LB2 -->|"Any request"| S3[Server 3\nNo state]
+        S1 -->|"Fetch session"| Redis[(Redis\nSessions)]
+        S2 -->|"Fetch session"| Redis
+        S3 -->|"Fetch session"| Redis
+    end
 ```
 
-### L5 vs L6: Sync vs Async
+#### The Standard Pattern: Stateless App Servers + Stateful External Stores
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    STANDARD ARCHITECTURE                     │
+│                                                             │
+│  Load Balancer (round-robin, no sticky sessions needed)     │
+│         │          │          │                             │
+│    ┌────▼───┐  ┌───▼────┐  ┌─▼──────┐                     │
+│    │Server A│  │Server B│  │Server C│  ← Stateless         │
+│    │(any    │  │(any    │  │(any    │    Interchangeable   │
+│    │request)│  │request)│  │request)│    Add/remove freely │
+│    └────┬───┘  └───┬────┘  └─┬──────┘                     │
+│         └──────────┼──────────┘                             │
+│                    │                                        │
+│         ┌──────────┼──────────┐                             │
+│         │          │          │                             │
+│    ┌────▼───┐  ┌───▼────┐  ┌─▼──────┐                     │
+│    │  Redis │  │  MySQL │  │  S3    │  ← Stateful stores   │
+│    │(session│  │(user   │  │(files) │    Source of truth   │
+│    │ cache) │  │ data)  │  │        │                      │
+│    └────────┘  └────────┘  └────────┘                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why this works:**
+- Any server handles any request — load balancer can freely distribute
+- Add a new server: it immediately starts handling requests (no warm-up, no session migration)
+- Remove a server: in-flight requests complete, then it shuts down cleanly (no session loss)
+- Scale independently: add more app servers without touching the state stores
+
+---
+
+#### Session Tokens vs JWT: A Deep Comparison
+
+There are two main approaches to authenticating users in a stateless architecture.
+
+**Server-side session tokens:**
+
+1. User logs in → server creates a session record in Redis: `session:abc123 = {user_id: 42, roles: [admin], expires: 2025-01-16}`
+2. Server returns session ID in a cookie: `Set-Cookie: session_id=abc123`
+3. Every subsequent request includes the cookie: `Cookie: session_id=abc123`
+4. Server looks up `session:abc123` in Redis to identify the user (~0.5ms)
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant Redis
+
+    Client->>Server: POST /login {username, password}
+    Server->>Redis: SET session:abc123 {user_id:42} EX 86400
+    Server-->>Client: 200 OK, Set-Cookie: session_id=abc123
+
+    Client->>Server: GET /dashboard (Cookie: session_id=abc123)
+    Server->>Redis: GET session:abc123
+    Redis-->>Server: {user_id: 42, roles: [admin]}
+    Server-->>Client: 200 OK Dashboard data
+```
+
+**JWT (JSON Web Token):**
+
+1. User logs in → server creates a signed token containing the user's data: `{"user_id": 42, "roles": ["admin"], "exp": 1737072000}`
+2. Server signs it with a secret key and returns it: `Authorization: Bearer eyJhbGci...`
+3. Every subsequent request includes the token: `Authorization: Bearer eyJhbGci...`
+4. Server validates the signature locally — **no Redis lookup needed**
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Client->>Server: POST /login {username, password}
+    Server-->>Client: 200 OK, token: eyJhbGci... (signed JWT)
+
+    Client->>Server: GET /dashboard (Authorization: Bearer eyJhbGci...)
+    Note over Server: Verify signature locally\n(no external call needed)
+    Server-->>Client: 200 OK Dashboard data
+```
+
+**Comparison:**
+
+| Aspect | Server-side Session Token | JWT |
+|--------|--------------------------|-----|
+| **Storage** | Redis (server-side) | Client-side (in token) |
+| **Network call per request** | Yes (1 Redis lookup) | No (local signature verification) |
+| **Revocation** | Instant (delete from Redis) | Difficult (token valid until expiry) |
+| **Scalability** | Redis must scale with traffic | Completely stateless |
+| **Token size** | Small (just the session ID) | Larger (contains all claims) |
+| **Logout all devices** | Trivially (delete all sessions for user) | Hard (need a revocation list) |
+| **Security risk** | Redis compromise exposes active sessions | JWT secret compromise is catastrophic |
+
+**When to use JWT:** Short-lived tokens (15–60 minutes) for APIs where instant revocation is not required. Mobile apps, third-party API access.
+
+**When to use server-side sessions:** Applications that need instant revocation ("log out all devices", "ban this user immediately"), long-lived sessions, or where you want centralized control over active sessions.
+
+**The revocation problem with JWTs:** If a user's account is compromised and you need to immediately invalidate their access, you cannot with pure JWTs — the token is valid until it expires. The workaround is a **JWT blocklist** (store revoked JIDs in Redis). But this reintroduces a server-side lookup, negating some of JWT's statelessness benefit. This is a genuine trade-off with no perfect answer.
+
+---
+
+#### What Breaks Without Stateless Design
+
+**Scenario: Stateful servers under load**
+
+Your system has 3 servers with sticky sessions. Traffic increases 3x. You need to add 3 more servers.
+
+Problems:
+1. The 3 new servers have no sessions — they cannot immediately serve users
+2. You cannot rebalance users from overloaded old servers to new empty servers without logging them out
+3. One overloaded old server has 60% of users — you need it to handle 3x traffic while new servers sit idle
+4. You cannot take an old server down for maintenance without logging out its users first
+
+**With stateless servers:** Add 3 new servers. Load balancer immediately starts routing requests to them. They fetch session data from Redis just like the old servers. Zero migration, zero user impact. The old servers can be drained and redeployed without logging anyone out.
+
+---
+
+#### L5 vs L6: State Design
 
 | Aspect | L5 Thinking | L6 Thinking |
 |--------|-------------|-------------|
-| **Choice** | "We'll use a queue" | "Sync for checkout—user needs confirmation. Async for email and analytics" |
-| **Consistency** | "It's eventually consistent" | "We use async for side effects; core flow is sync so user sees immediate result" |
-| **Failure** | "The worker will retry" | "We have retries, DLQ, and alerts. User-facing path stays sync so we can return errors" |
-
-**Staff-Level Insight**: Choosing sync vs async per interaction is a KEY architectural decision. It affects latency, consistency, complexity, and operability. Make the choice explicitly, per use case, and document the trade-off.
-
-### Hybrid Patterns: Sync Facade Over Async
-
-Sometimes you want async internally but sync externally. Example: "Create order" API. User expects immediate response. Internally: API writes to queue, returns "processing." Worker processes, updates DB. But user got a quick response with an order ID. For "get order status," they poll or use webhooks. The *creation* is async (queue), but the *API response* is sync (immediate 202 Accepted + order ID). This is a **sync facade**: the caller gets a fast sync response; the heavy work happens async. Staff Engineers use this pattern when user experience requires responsiveness but the work is slow or variable.
-
-### Event-Driven Architecture: Async at Scale
-
-When many services need to react to the same event, you don't call them all synchronously—that would create a web of dependencies and amplify latency. Instead: **publish an event**. Interested services subscribe. They process asynchronously. Order service publishes "OrderCreated." Inventory service subscribes and reserves stock. Notification service subscribes and sends email. Analytics subscribes and updates dashboards. No single orchestrator; each service is independent. Trade-off: eventual consistency, harder tracing, and the need for idempotent consumers (same event might be delivered more than once).
-
-### Sync vs Async Decision Matrix
-
-| Component / Use Case | Sync or Async? | Rationale | Real Example |
-|---------------------|----------------|-----------|--------------|
-| **User login** | Sync | User must see success/fail immediately | Auth API returns token or 401 |
-| **Product page load** | Sync | User waits for page; can't proceed without data | REST API; DB/cache read |
-| **Payment charge** | Sync (or sync facade) | User needs confirmation; retry is dangerous | Stripe API: wait for charge result |
-| **Order confirmation email** | Async | User doesn't wait; send in background | Queue → worker sends email |
-| **Analytics event** | Async | Fire-and-forget; no user blocking | Kafka/queue; batch to warehouse |
-| **Inventory reservation** | Sync | Checkout needs to know if in stock | Sync call to inventory service |
-| **Recommendation engine** | Async or sync with timeout | Can show "loading" or cached; not critical path | Pre-compute; cache; async refresh |
-| **Search indexing** | Async | Index updates don't block writes | CDC → queue → Elasticsearch |
-| **Webhook to partner** | Async | Partner may be slow; don't block our flow | Queue → worker POSTs to partner URL |
-| **Multi-service orchestration** | Mixed | Critical path sync; side effects async | Checkout: sync payment; async email, analytics |
-
-**Decision framework**:
-1. Does the caller need the result to proceed? → Sync
-2. Can we tolerate eventual consistency? → Async is an option
-3. Is it a side effect (logging, notification, analytics)? → Async
-4. Does the operation have high variance (slow downstream)? → Async to avoid blocking
-5. Is it financial or correctness-critical? → Prefer sync (or sync with async confirmation)
-
-**5+ real examples**:
-- **Stripe checkout**: Sync. Charge API returns success/decline. User sees result. Webhook for async notification to merchant.
-- **Netflix play**: Sync for license/DRM; async for playback analytics and recommendations.
-- **Uber match**: Sync for "finding driver" (user waits); async for driver location updates (WebSocket push).
-- **Slack message**: Sync for send (user sees "sent"); async for delivery receipts, read receipts, push to other clients.
-- **AWS S3 upload**: Sync for small uploads (PUT returns on complete); async/multipart for large files (client manages chunks).
-
-### Request-Response vs Fire-and-Forget vs Publish-Subscribe
-
-| Pattern | Caller Waits? | Use Case |
-|---------|---------------|----------|
-| **Request-response** | Yes | User needs result (login, read, checkout) |
-| **Fire-and-forget** | No, doesn't care about result | Logging, analytics, non-critical side effects |
-| **Publish-subscribe** | No, many consumers | Event distribution, fan-out |
-
-Understanding these three clarifies when to use sync (request-response), async with callback (fire-and-forget with notification), or event bus (pub-sub).
+| **Architecture** | "Our servers store session data" | "Our app servers are stateless. Session data lives in Redis with a 24-hour TTL. Any server handles any request. We scale by adding servers to the pool without any session migration." |
+| **JWT** | "We use JWT for authentication" | "We use JWT with 15-minute expiry for API access and refresh tokens (stored in Redis, 30-day TTL). Short JWT expiry limits the window of exposure if a token is compromised. Refresh tokens can be revoked immediately in Redis." |
+| **Failure** | "If a server goes down, some users lose their session" | "If a server goes down, in-flight requests fail (clients retry). Session data is in Redis — no session loss. Load balancer stops sending to the failed server within 5 seconds (health check interval)." |
 
 ---
 
-# Example in Depth: How Idempotency and Queues Fit in a Checkout Flow
+### Building Block 4: Idempotency
 
-**Scenario**: User clicks "Place order." Payment, inventory, and shipping must stay consistent; no double charge, no oversell.
+#### Why Does This Exist?
 
-**Sync path (user waits)**: (1) **Idempotency**: Request includes `Idempotency-Key: order_abc123`. Server: lookup key → if exists, return stored result (same order ID); if not, create order, store key → result, return. Retries (network, LB, client) don't create duplicate orders. (2) **State**: Order and payment state in **DB**; idempotency key → result in **cache or DB** (e.g. 24h TTL). (3) **Hash**: If orders are sharded by `user_id`, the same user's orders hit same shard; idempotency key can be scoped per user or global.
+Networks are unreliable. This is not a pessimistic view — it is an engineering fact. Packets are dropped. Connections time out. Load balancers retry requests. Mobile clients lose connectivity and retry when reconnected. In a distributed system at scale, you should expect that any request might be sent more than once.
 
-**Async path (after order accepted)**: (4) **Queue**: "Send confirmation email," "Update analytics," "Reserve shipping slot" → **queue** (e.g. Kafka, SQS). Workers consume; at-least-once delivery. (5) **Idempotency again**: Consumers must be **idempotent** (e.g. "send email" keyed by order_id + action so duplicate messages don't send twice). (6) **Cache**: Don't cache order creation result for long (user needs fresh status); cache product catalog, inventory counts (with invalidation on reserve).
+If your operations are idempotent, retries are harmless. If they are not, retries cause duplicates: double charges, duplicate orders, spam emails.
 
-**What we didn't do**: We didn't put payment on a queue without sync confirmation—user must see "paid" or "declined" before leaving. We didn't skip idempotency—one retry could double-charge. Staff-level: **sync for critical user-facing outcome**; **queue for side effects**; **idempotency on every write and every consumer**.
+The concept of idempotency was formalized in HTTP/1.1 (RFC 7231) specifically because the protocol acknowledges that clients might need to retry requests. The RFC defines which HTTP methods are idempotent so clients know which requests are safe to retry.
 
-## Breadth: Building Block Combinations and Failure Scenarios
+**Production failure story:** In 2011, a major e-commerce company had a bug where their mobile app's checkout screen would sometimes submit the payment request twice due to a race condition on the "Pay" button. Users who double-tapped were charged twice. Because the payment API was not idempotent, both requests succeeded. The company processed thousands of double-charges before the bug was caught. The refund and reconciliation process took weeks. The company redesigned their entire payment API to require idempotency keys for all charge operations as a result.
+
+#### What Idempotency Means (First Principles)
+
+An operation is **idempotent** if applying it multiple times produces the same result as applying it once.
+
+**Mathematical definition:** For an operation f and input x: `f(f(x)) = f(x)`
+
+**Elevator button analogy:** You press the "Floor 5" button. The elevator goes to floor 5. You press "Floor 5" again. Nothing changes — the elevator is already going to floor 5. The second press has no additional effect. Pressing the button N times has the same result as pressing it once.
+
+**HTTP method idempotency:**
+
+| Method | Idempotent? | Reason |
+|--------|------------|--------|
+| **GET** | Yes | Read-only. Same request returns same (or current) data. |
+| **HEAD** | Yes | Same as GET, just returns headers. |
+| **PUT** | Yes | "Set resource X to value Y." Doing it 5 times: X is still Y. |
+| **DELETE** | Yes | "Remove resource X." Second delete: X is already gone. 404. Same end state. |
+| **POST** | **No** | "Create a new resource." Each call creates a new one. |
+| **PATCH** | Depends | "Apply this change." If change is "set name to Alice" → idempotent. If change is "increment counter by 1" → not idempotent. |
+
+**The POST problem:** `POST /orders` creates a new order. If the client retries due to a timeout, a second order is created. This is the fundamental problem idempotency keys solve.
+
+---
+
+#### The Double-Charge Scenario: A Narrative
+
+Follow this request through a payment system without idempotency:
+
+```
+T=0ms:    User clicks "Pay $99.99"
+T=1ms:    Frontend sends POST /charges {amount: 99.99, card: "4111..."}
+T=5ms:    API server receives request, begins processing
+T=10ms:   Payment processor contacted, charge initiated
+T=15ms:   Payment processor confirms charge SUCCESS
+T=16ms:   API server begins preparing response
+T=20ms:   Network glitch — TCP connection drops
+T=21ms:   API server: response never delivered
+T=22ms:   API server closes connection, charge completed in DB
+T=25ms:   Frontend: request timed out after 24ms. Retrying...
+T=26ms:   Frontend sends POST /charges {amount: 99.99, card: "4111..."}
+T=30ms:   API server receives retry, processes as NEW request
+T=35ms:   Payment processor contacted again, charge initiated
+T=40ms:   Payment processor confirms charge SUCCESS (second charge!)
+T=41ms:   API server sends response: 200 OK
+T=42ms:   Frontend receives response, shows "Payment successful"
+T=43ms:   User sees one confirmation. They were charged twice. ❌
+```
+
+With idempotency:
+
+```
+T=0ms:    User clicks "Pay $99.99"
+T=1ms:    Frontend generates idempotency key: "pay-12345-abc-xyz" (UUID)
+T=2ms:    Frontend sends POST /charges {amount: 99.99, card: "4111...", 
+          Idempotency-Key: "pay-12345-abc-xyz"}
+T=5ms:    API server: check key "pay-12345-abc-xyz" in Redis → not found
+T=6ms:    Process payment...
+T=15ms:   Payment processor confirms charge SUCCESS
+T=16ms:   API server: store in Redis: "pay-12345-abc-xyz" → {status: success, charge_id: "ch_123"}
+T=20ms:   Network glitch — TCP connection drops
+T=25ms:   Frontend: request timed out. Retrying with SAME key...
+T=26ms:   Frontend sends POST /charges {amount: 99.99, card: "4111...",
+          Idempotency-Key: "pay-12345-abc-xyz"}
+T=27ms:   API server: check key "pay-12345-abc-xyz" in Redis → FOUND
+T=28ms:   API server: return stored result {status: success, charge_id: "ch_123"}
+T=29ms:   NO second charge. User charged exactly once. ✅
+```
+
+---
+
+#### Idempotency Keys: The Mechanism
+
+**How they work:**
+
+1. **Client generates a unique ID** for each logical operation. This should be a UUID v4 or another collision-resistant random ID. It must be generated once per *logical operation* (per "user clicked Pay"), not per *network request*.
+
+2. **Client sends the key** with every request, including retries. The key must be the same across retries. `Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000`
+
+3. **Server checks the key** before processing. Lookup: `GET idempotency:550e8400-...`
+   - Found: Return the stored response. Do not process again.
+   - Not found: Process the request, store the key → result, return the result.
+
+4. **Server stores the key** with a TTL (typically 24 hours). The stored value is the response (or enough information to reconstruct it).
+
+5. **After TTL expiry**, the key is gone. A retry with an expired key would be treated as a new request. Design your TTLs so that legitimate retries always occur within the window (24 hours is standard for payments).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant Redis
+    participant PaymentProcessor
+
+    Note over Client: Generate key once: "key-abc"
+
+    Client->>Server: POST /charges {amount:100, Idempotency-Key: key-abc}
+    Server->>Redis: GET idempotency:key-abc
+    Redis-->>Server: (nil) — not found
+    Server->>PaymentProcessor: Charge $100
+    PaymentProcessor-->>Server: {charge_id: "ch_123", status: "success"}
+    Server->>Redis: SET idempotency:key-abc {charge_id:"ch_123"} EX 86400
+    Server-->>Client: 201 {charge_id: "ch_123"} (NETWORK FAILURE — client never sees this)
+
+    Note over Client: Timeout! Retrying with SAME key
+
+    Client->>Server: POST /charges {amount:100, Idempotency-Key: key-abc}
+    Server->>Redis: GET idempotency:key-abc
+    Redis-->>Server: {charge_id: "ch_123"} — FOUND
+    Server-->>Client: 201 {charge_id: "ch_123"} (same response, no second charge)
+```
+
+---
+
+#### Implementation Pattern 1: Database Unique Constraint
+
+The simplest implementation — use the database's unique constraint enforcement.
+
+```sql
+-- Schema: orders table with unique constraint on idempotency_key
+CREATE TABLE orders (
+    id          SERIAL PRIMARY KEY,
+    idempotency_key VARCHAR(64) UNIQUE NOT NULL,
+    user_id     BIGINT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    status      VARCHAR(32) DEFAULT 'pending',
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_orders_idempotency ON orders(idempotency_key);
+```
+
+```python
+def create_order(idempotency_key: str, user_id: int, amount_cents: int) -> dict:
+    try:
+        result = db.execute("""
+            INSERT INTO orders (idempotency_key, user_id, amount_cents)
+            VALUES (%s, %s, %s)
+            RETURNING id, status, created_at
+        """, [idempotency_key, user_id, amount_cents])
+        return result.fetchone()  # Newly created order
+    
+    except UniqueViolationError:
+        # Duplicate key — this is a retry. Return the existing order.
+        result = db.execute("""
+            SELECT id, status, created_at FROM orders
+            WHERE idempotency_key = %s
+        """, [idempotency_key])
+        return result.fetchone()  # Return existing order without creating a new one
+```
+
+**Pros:** Atomically handles concurrent retries — the database's unique constraint enforcement is the lock. No additional infrastructure needed.
+
+**Cons:** Does not capture the *response* — only prevents duplicate creation. If the original request failed after inserting but before returning, the retry returns the incomplete order.
+
+---
+
+#### Implementation Pattern 2: Redis Check-Then-Process
+
+More flexible — stores the full response and handles any operation type.
+
+```python
+import json
+import uuid
+from redis import Redis
+from typing import Optional
+
+redis = Redis(host='localhost', port=6379)
+IDEMPOTENCY_TTL = 86400  # 24 hours
+
+def process_payment(idempotency_key: str, amount_cents: int, card_token: str) -> dict:
+    # Step 1: Check if we have already processed this key
+    cache_key = f"idempotency:{idempotency_key}"
+    cached = redis.get(cache_key)
+    
+    if cached is not None:
+        # Already processed — return the stored response
+        return json.loads(cached)
+    
+    # Step 2: Process the payment (this is the expensive, non-idempotent operation)
+    charge_result = payment_processor.charge(
+        amount_cents=amount_cents,
+        card_token=card_token
+    )
+    
+    # Step 3: Store the result with TTL
+    response = {
+        "charge_id": charge_result.id,
+        "status": charge_result.status,
+        "amount_cents": amount_cents,
+        "processed_at": charge_result.timestamp
+    }
+    redis.setex(cache_key, IDEMPOTENCY_TTL, json.dumps(response))
+    
+    return response
+```
+
+**The race condition problem:** Two concurrent requests with the same key arrive simultaneously. Both check Redis and both find the key absent. Both proceed to charge the card. This is a **TOCTOU (Time of Check to Time of Use)** race condition.
+
+**Fix: Atomic lock with SETNX:**
+
+```python
+def process_payment_safe(idempotency_key: str, amount_cents: int, card_token: str) -> dict:
+    cache_key = f"idempotency:{idempotency_key}"
+    lock_key = f"idempotency_lock:{idempotency_key}"
+    
+    # Step 1: Check cache first (fast path for already-processed keys)
+    cached = redis.get(cache_key)
+    if cached:
+        return json.loads(cached)
+    
+    # Step 2: Acquire a lock to prevent concurrent processing
+    # SETNX = "SET if Not eXists" — atomic, prevents race condition
+    lock_acquired = redis.set(lock_key, "1", nx=True, ex=30)  # 30-second lock TTL
+    
+    if not lock_acquired:
+        # Another request is processing this key. Wait and retry.
+        import time
+        time.sleep(0.1)
+        cached = redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        raise RetryableError("Concurrent idempotency key processing — retry")
+    
+    try:
+        # Step 3: Double-check after acquiring lock (another request may have finished)
+        cached = redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        
+        # Step 4: Process
+        charge_result = payment_processor.charge(amount_cents, card_token)
+        response = {"charge_id": charge_result.id, "status": charge_result.status}
+        redis.setex(cache_key, IDEMPOTENCY_TTL, json.dumps(response))
+        return response
+    finally:
+        redis.delete(lock_key)  # Always release the lock
+```
+
+---
+
+#### Implementation Pattern 3: Distributed Idempotency at Scale
+
+At high scale, multiple API server instances may receive concurrent requests with the same idempotency key (load balancer distributes retries across different servers).
+
+**Pattern:** Use the database as the canonical idempotency store, with Redis as a fast read-through cache.
+
+```python
+def process_payment_distributed(idempotency_key: str, amount_cents: int) -> dict:
+    # 1. Check Redis (fast)
+    cached = redis.get(f"idem:{idempotency_key}")
+    if cached:
+        return json.loads(cached)
+    
+    # 2. Check DB (authoritative, handles cross-server duplicates)
+    existing = db.execute(
+        "SELECT response FROM idempotency_records WHERE key = %s",
+        [idempotency_key]
+    ).fetchone()
+    
+    if existing:
+        # Populate Redis for future fast lookups
+        redis.setex(f"idem:{idempotency_key}", 3600, existing['response'])
+        return json.loads(existing['response'])
+    
+    # 3. Process (with DB-level unique constraint as final safety net)
+    try:
+        result = payment_processor.charge(amount_cents)
+        response = json.dumps({"charge_id": result.id, "status": result.status})
+        
+        db.execute(
+            "INSERT INTO idempotency_records (key, response, expires_at) VALUES (%s, %s, NOW() + INTERVAL '24 hours')",
+            [idempotency_key, response]
+        )
+        redis.setex(f"idem:{idempotency_key}", 3600, response)
+        return json.loads(response)
+    
+    except UniqueViolationError:
+        # Another server processed this key concurrently
+        existing = db.execute(
+            "SELECT response FROM idempotency_records WHERE key = %s",
+            [idempotency_key]
+        ).fetchone()
+        return json.loads(existing['response'])
+```
+
+---
+
+#### Stripe's Idempotency Implementation
+
+Stripe's payment API is the canonical example of idempotency done right. Here is how Stripe handles it:
+
+1. **Client generates a UUID** for each payment attempt and stores it locally (in the mobile app's database or the server's session).
+
+2. **Client sends `Idempotency-Key: <uuid>`** header with the charge request.
+
+3. **Stripe checks a distributed store** (their internal equivalent of the patterns above) for the key.
+
+4. **If found:** Stripe returns the exact same response as the original request — same HTTP status code, same response body, same charge ID.
+
+5. **If not found:** Stripe processes the charge, stores the key → response, returns the response.
+
+6. **Stripe retains keys for 24 hours.** After 24 hours, the key can be reused (though clients should not reuse them).
+
+7. **Stripe's rule:** The key is scoped to the API key — different merchants' keys do not conflict. And if the request body differs from the original (same idempotency key but different amount), Stripe returns a 422 error — protecting against client bugs that reuse keys for different operations.
+
+**The 422 body mismatch check** is crucial and often overlooked. If a client sends key "abc" with amount $100, then resends key "abc" with amount $200 (a bug), Stripe refuses rather than returning the $100 result. This prevents a subtle class of bugs where key reuse across different operations returns wrong results silently.
+
+---
+
+#### Which Operations Must Be Idempotent
+
+```
+CHECKLIST: Does this operation need an idempotency key?
+
+□ Does it charge money?                         → YES, mandatory
+□ Does it transfer funds between accounts?       → YES, mandatory
+□ Does it create an order or reservation?        → YES, mandatory
+□ Does it send an email, SMS, or notification?   → YES (to avoid duplicates)
+□ Does it provision a resource (VM, API key)?    → YES
+□ Does it debit or credit an external account?   → YES, mandatory
+□ Does it create a user account?                 → YES (or use unique constraint on email)
+□ Is it a read operation (GET)?                  → No (reads are naturally idempotent)
+□ Does it idempotently set a value (PUT)?        → No (PUT is naturally idempotent)
+□ Does it generate a report from existing data?  → Probably not (result is same on retry)
+```
+
+---
+
+#### L5 vs L6: Idempotency
+
+| Aspect | L5 Thinking | L6 Thinking |
+|--------|-------------|-------------|
+| **Payment API** | "We retry failed payments" | "Every charge has an idempotency key. The key is stored in Redis with 24-hour TTL. Duplicate keys return the stored response — no second charge. The key is generated client-side (UUID v4) before the first attempt." |
+| **Concurrent retries** | "We hope two retries don't arrive at the same time" | "We handle concurrent duplicates with a DB unique constraint as the safety net. Two concurrent requests with the same key: one succeeds on INSERT, one hits the UniqueViolation and reads the already-stored result." |
+| **Key expiry** | "We keep keys forever" | "We keep keys for 24 hours with automatic Redis TTL expiry. We also run a nightly DB cleanup for idempotency records older than 24 hours. After 24 hours, a retry would be treated as a new request — but this is acceptable because users do not retry payment attempts after a day." |
+| **Order creation** | "We use POST /orders" | "POST /orders requires `Idempotency-Key` header. We return 400 if it is missing. This is enforced at the middleware layer — no individual handler needs to check." |
+
+
+---
+
+### Building Block 5: Queues
+
+#### Why Does This Exist?
+
+Without queues, every operation is synchronous and tightly coupled. Service A calls Service B directly. If Service B is slow, Service A slows down. If Service B crashes, Service A's requests fail. If Service B cannot handle 10,000 requests per second but Service A sends 10,000 per second, Service B falls over.
+
+These are three separate problems that queues solve independently:
+
+- **Decoupling:** Service A and Service B do not know about each other. A publishes to the queue. B consumes from it. Either can be deployed, updated, or scaled without coordinating with the other.
+- **Buffering:** If Service A produces 10,000 messages/second but Service B processes 5,000/second, the queue absorbs the excess. Service B catches up during slow periods. Neither service falls over.
+- **Reliability:** If Service B crashes, messages stay in the queue. When it restarts, it processes from where it left off. Nothing is lost.
+
+**Production failure story:** In 2013, a large e-commerce platform had their checkout service call their email service synchronously. During Black Friday, their email service became slow due to high load from confirmation emails. Average checkout time went from 400ms to 4 seconds because every checkout blocked waiting for the email service. They lost an estimated 15% of sales during the peak hour before engineers noticed and rolled back the synchronous email call. The fix was to put email sending in a queue — checkout publishes "send email" event and returns immediately.
+
+#### What Is a Queue?
+
+A **queue** is a buffer between message producers and message consumers. Producers add messages to the queue and continue. Consumers read messages from the queue at their own pace.
+
+```
+Producer(s) → [Message 1][Message 2][Message 3][Message 4] → Consumer(s)
+              ← ─────────────── QUEUE ─────────────────── →
+              (producers never directly call consumers)
+```
+
+The queue sits between them, absorbing the difference in speed, isolating them from each other's failures, and allowing independent scaling.
+
+---
+
+#### Five Reasons to Use a Queue
+
+**1. Decoupling:** The checkout service should not know that an email service exists. It should not import the email service's client library, know its hostname, or depend on its uptime. If the email service is down, checkout should still work. Queues enable this separation.
+
+**2. Asynchronous processing:** The user does not need to wait for the email to be sent. They want confirmation that their order was placed. Send the order confirmation email in the background; the user sees "Order placed!" in 200ms regardless of how long the email takes.
+
+**3. Buffering traffic spikes:** During a flash sale, order volume spikes 50x. Your fulfillment service can only process 1,000 orders/minute. Without a queue, 50,000 orders/minute would overwhelm it. With a queue, orders flow in at 50,000/minute, sit in the queue, and the fulfillment service processes them at a steady 1,000/minute. The queue depth grows but nothing falls over.
+
+**4. Reliability:** If a worker processing messages crashes, messages remain in the queue. When the worker restarts (or a new instance starts), it picks up where it left off. Without a queue, in-flight work disappears when the worker crashes.
+
+**5. Load leveling:** Convert bursty input into steady output. Video uploads spike when users get home from work (6–8 PM). The transcoding pipeline runs steadily through the night. The queue smooths the spike into consistent work.
+
+---
+
+#### Queue vs Log: SQS vs Kafka
+
+There are two fundamentally different models:
+
+**Queue model (SQS, RabbitMQ):**
+- A message is consumed by exactly one consumer
+- After a consumer processes a message and acknowledges it, the message is deleted from the queue
+- If you add a second consumer, you get competing consumers — each message still goes to only one of them
+- You cannot re-read a message after it has been consumed
+
+**Log model (Kafka):**
+- Messages are appended to an ordered, persistent log
+- Messages are NOT deleted after consumption — they are retained for a configurable period (hours, days, weeks)
+- Multiple consumer groups can independently read the same messages from their own offsets
+- You CAN re-read old messages by resetting an offset
+
+```mermaid
+flowchart LR
+    subgraph "Queue Model (SQS)"
+        P1[Producer] --> Q[Queue]
+        Q --> C1[Consumer A]
+        Q --> C2[Consumer B]
+        note1["Each message → one consumer\nDeleted after ack"]
+    end
+
+    subgraph "Log Model (Kafka)"
+        P2[Producer] --> LOG["Log: [msg1][msg2][msg3][msg4]"]
+        LOG --> CG1["Consumer Group 1\n(offset: 3)"]
+        LOG --> CG2["Consumer Group 2\n(offset: 1)"]
+        note2["Each consumer group has its own offset\nMessages retained for days/weeks"]
+    end
+```
+
+**Kafka vs SQS Comparison:**
+
+| Aspect | Amazon SQS | Apache Kafka |
+|--------|-----------|--------------|
+| **Model** | Queue (message deleted on ack) | Log (messages retained) |
+| **Replay** | No — consumed messages gone | Yes — reset offset to re-read |
+| **Multiple consumers of same message** | No (competing consumers) | Yes (multiple consumer groups) |
+| **Throughput** | ~3,000 msg/sec (standard), up to 300K batched | Millions of messages/sec per partition |
+| **Message retention** | 1 minute to 14 days | Hours to weeks (configurable) |
+| **Ordering** | FIFO queues: per MessageGroupId | Per partition (strict) |
+| **Managed service** | Fully managed (AWS) | Self-managed (or Confluent/MSK) |
+| **Use case** | Simple async tasks, AWS-native workflows | Event streaming, high throughput, audit logs, event sourcing |
+| **At-least-once** | Yes (visibility timeout mechanism) | Yes (consumer commits offset) |
+
+**When to choose SQS:**
+- You need a simple, managed, reliable message queue
+- You are already in AWS and want zero operational overhead
+- Messages should be processed exactly once and then discarded
+- Your throughput is below 100K messages/second
+
+**When to choose Kafka:**
+- You need replay capability (new consumer wants historical events)
+- Multiple independent services need to consume the same events (fan-out without fan-out infrastructure)
+- You have high throughput (>100K messages/second)
+- You are building an event-driven architecture or event sourcing system
+- You need an immutable audit log of all events
+
+---
+
+#### Queue Delivery Semantics
+
+How many times is a message guaranteed to be delivered?
+
+**At-most-once:**
+- Message is sent once. If the consumer crashes before processing, the message is lost.
+- No retries. Messages may be lost but are never duplicated.
+- Simple implementation: delete from queue when consumer receives it (not when it finishes processing)
+
+```
+Producer → Queue → Consumer receives (Queue deletes immediately)
+If consumer crashes before processing: message is LOST (not redelivered)
+```
+
+**At-least-once:**
+- Message is delivered until acknowledged. If the consumer crashes after processing but before acknowledging, the message is redelivered.
+- Messages may be delivered more than once. Consumers must be idempotent.
+- Standard for SQS: message becomes invisible during processing (visibility timeout). Consumer sends explicit acknowledgment when done. If ack not received within timeout, message reappears.
+
+```
+Producer → Queue → Consumer receives (Queue marks invisible, NOT deleted)
+Consumer processes → Consumer sends ACK → Queue deletes message
+If consumer crashes: message reappears after visibility timeout → redelivered
+```
+
+**Exactly-once:**
+- Message is delivered precisely once. Never lost, never duplicated.
+- Extremely difficult to achieve in distributed systems. Requires distributed transactions or careful deduplication.
+- Kafka Transactions + idempotent producers + exactly-once semantics: achievable but complex and lower throughput.
+- In practice: use at-least-once + idempotent consumers. The result is "effectively exactly-once."
+
+```mermaid
+flowchart TD
+    Q1{Can you afford\nto lose messages?}
+    Q1 -- Yes --> ATMOST["At-most-once\n(metrics, analytics)\nSimplest"]
+    Q1 -- No --> Q2{Can your consumer\nhandle duplicates\nidempotently?}
+    Q2 -- Yes --> ATLEAST["At-least-once\n(most use cases)\nMake consumers idempotent"]
+    Q2 -- No --> EXACTLY["Exactly-once\n(financial ledgers)\nKafka transactions or\nDB unique constraints\nHighest complexity"]
+```
+
+**The practical standard:** Design consumers to be idempotent (handling the same message twice produces the same result) and use at-least-once delivery. This is simpler than exactly-once and still produces correct outcomes.
+
+---
+
+#### Dead Letter Queue (DLQ): Why It Is Mandatory
+
+**The problem:** A message in your queue cannot be processed. Maybe:
+- The message is malformed (missing required fields)
+- The consumer has a bug that makes it crash for this specific message
+- The message refers to a resource that no longer exists
+
+Without a DLQ, this "poison message" is retried indefinitely. The consumer crashes, the message reappears (visibility timeout), the consumer crashes again. All messages behind it in the queue are blocked. Nothing gets processed.
+
+**The DLQ pattern:** After N failed delivery attempts (typically 3–5), the message is moved to a separate Dead Letter Queue instead of being retried again. The main queue continues processing other messages unimpeded.
+
+```mermaid
+sequenceDiagram
+    participant Queue as Main Queue
+    participant Worker as Consumer Worker
+    participant DLQ as Dead Letter Queue
+    participant Alert as Alerting System
+
+    Queue->>Worker: Deliver message M1 (attempt 1)
+    Worker-->>Worker: Processing fails (exception)
+    Queue->>Worker: Redeliver M1 (attempt 2, after visibility timeout)
+    Worker-->>Worker: Processing fails again
+    Queue->>Worker: Redeliver M1 (attempt 3)
+    Worker-->>Worker: Processing fails again
+    Note over Queue: Max retries (3) reached
+    Queue->>DLQ: Move M1 to Dead Letter Queue
+    DLQ->>Alert: Alert: DLQ has 1 message
+    Note over DLQ: Engineers inspect M1,\nfix bug, manually requeue
+```
+
+**DLQ best practices:**
+- **Always configure a DLQ.** No exceptions. Any queue without a DLQ will eventually block on a poison message.
+- **Alert on DLQ depth > 0.** DLQ messages mean something is broken. You want to know immediately.
+- **Set DLQ retention high** (7 days or more). Engineers need time to investigate and replay.
+- **Build tooling to replay.** Being able to fix the bug and then requeue DLQ messages is essential.
+
+---
+
+#### Queue Patterns in Detail
+
+**Pattern 1: Fan-Out**
+
+One event triggers multiple independent consumers, each receiving a copy of the event.
+
+```
+"OrderPlaced" event
+    │
+    ├──► Inventory Service: reserve the items
+    ├──► Email Service: send confirmation email  
+    ├──► Analytics Service: record the conversion
+    ├──► Fulfillment Service: begin picking items
+    └──► Fraud Detection: check for suspicious patterns
+```
+
+Implementation in Kafka: Each service has its own consumer group. All groups receive every message independently, at their own pace.
+
+Implementation in SQS: Use SNS (Simple Notification Service) as a fan-out broker. SNS delivers to multiple SQS queues. Each service has its own SQS queue.
+
+```mermaid
+flowchart TD
+    Producer["Order Service"] --> SNS["SNS Topic\n(or Kafka topic)"]
+    SNS --> Q1["SQS Queue 1\n(Inventory)"]
+    SNS --> Q2["SQS Queue 2\n(Email)"]
+    SNS --> Q3["SQS Queue 3\n(Analytics)"]
+    Q1 --> W1["Inventory Workers"]
+    Q2 --> W2["Email Workers"]
+    Q3 --> W3["Analytics Workers"]
+```
+
+**Why fan-out matters:** Without it, the Order Service would need to directly call Inventory, Email, Analytics, Fulfillment, and Fraud Detection synchronously. Each call adds latency (20ms × 5 = 100ms minimum). Each service's outage risks the checkout flow. Adding a new consumer requires changing the Order Service. With fan-out, adding a new consumer requires zero changes to the Order Service.
+
+**Pattern 2: Competing Consumers**
+
+Multiple workers read from the same queue. Each message goes to exactly one worker. Used to scale processing horizontally.
+
+```
+Queue: [Job1][Job2][Job3][Job4][Job5][Job6]
+  ├──► Worker 1: processes Job1, then Job4
+  ├──► Worker 2: processes Job2, then Job5
+  └──► Worker 3: processes Job3, then Job6
+```
+
+Workers are stateless and interchangeable. To increase throughput, add more workers. To decrease costs during quiet periods, remove workers. Auto-scaling based on queue depth is the standard approach.
+
+**Pattern 3: Priority Queue**
+
+High-priority messages are processed before low-priority messages regardless of arrival order.
+
+Implementation approaches:
+- **Multiple queues:** High-priority queue, normal queue, low-priority queue. Workers always drain the high-priority queue first.
+- **RabbitMQ priority queues:** Built-in priority field (0–255). Messages with higher priority dequeued first.
+- **Kafka:** Use separate topics per priority. Consumer code polls high-priority topic first, low-priority only when high-priority is empty.
+
+```
+Priority-0 (critical): system alerts, payment failures   → process in <1 second
+Priority-1 (high): user-initiated actions                → process in <5 seconds
+Priority-2 (normal): background processing               → process in <60 seconds
+Priority-3 (low): analytics, bulk exports               → process when idle
+```
+
+**Pattern 4: Delay Queue**
+
+Messages become visible to consumers only after a specified delay. Used for:
+- Scheduled jobs: "Send abandoned cart email 1 hour after cart abandonment"
+- Retry with exponential backoff: "Retry this failed webhook in 30 seconds, then 60, then 120"
+- Soft deletes with grace period: "Actually delete this account 30 days after user requests deletion"
+
+SQS supports delivery delays up to 15 minutes. For longer delays, use a scheduled jobs system (cron + DB) or a dedicated delay queue service.
+
+---
+
+#### Queue Backlog Handling
+
+**The backlog problem:** Your queue depth is growing. Messages are arriving faster than consumers process them.
+
+**Immediate mitigation:** Add more consumer instances. If consumers are stateless (and they should be), adding instances immediately increases throughput. SQS + auto-scaling on queue depth is the standard pattern.
+
+**When adding consumers is not enough:**
+
+1. **The work is CPU-bound:** Each message takes 5 seconds of computation. You have 100 workers but receive 1,000 messages/second. You need 5,000 workers. Adding enough might not be practical or cost-effective.
+   - Solution: Optimize the per-message work, or reduce message rate at the source (backpressure)
+
+2. **The downstream service is saturated:** Your email workers process fast, but your SMTP provider limits you to 500 emails/second. 10,000 workers will not help — they all hit the same bottleneck.
+   - Solution: Rate-limit at the consumer, queue at the rate-limited layer, or pay for a higher tier of the service
+
+3. **Message volume is temporarily too high:** Flash sale spike — 10x normal volume for 2 hours.
+   - Solution: Queue absorbs the spike. Accept that processing will take longer than normal. Set expectations (user sees "your order is being processed"). Spin up extra workers for the duration.
+
+**Backpressure:** When the queue is full or the consumer is saturated, signal to the producer to slow down. HTTP 429 (Too Many Requests), gRPC flow control, Kafka producer backpressure.
+
+**Load shedding:** When the system is completely overwhelmed, drop low-priority messages intentionally rather than accepting all of them and processing none well. A better outcome is to drop analytics events during a crisis than to let the backlog block order processing.
+
+---
+
+#### L5 vs L6: Queue Design
+
+| Aspect | L5 Thinking | L6 Thinking |
+|--------|-------------|-------------|
+| **Queue choice** | "We use SQS for async processing" | "We use SQS for task queues (email, notifications) and Kafka for event streaming (order events, analytics). SQS because we need simple managed delivery; Kafka because we need multiple services to consume the same order events independently." |
+| **Delivery semantics** | "We use at-least-once delivery" | "We use at-least-once delivery. All consumers are idempotent — keyed by the message's order_id or event_id. Duplicate deliveries produce no additional side effects." |
+| **DLQ** | "We have a DLQ configured" | "DLQ with 7-day retention. Alert on DLQ depth > 0 fires within 5 minutes. We have a replay tool that can batch-requeue DLQ messages after a bug fix. SQS visibility timeout is 30 seconds with 3 max receives before DLQ." |
+| **Consumer scaling** | "We scale workers up when needed" | "We have CloudWatch alarm on SQS ApproximateNumberOfMessagesVisible > 100. Auto Scaling Group scales email workers from 2 to 20 instances. Scale-in uses a 10-minute cooldown to avoid thrashing during bursty periods." |
+| **Poison messages** | "We retry failed messages" | "After 3 failures, message goes to DLQ. We alert immediately. We log the full message and exception for each failure attempt. We never let a single bad message block the queue." |
+
+---
+
+### Building Block 6: Synchronous vs Asynchronous
+
+#### Why Does This Exist?
+
+Every communication between services is either synchronous (the caller waits for a response) or asynchronous (the caller continues without waiting). This choice has profound implications for latency, fault tolerance, coupling, and user experience.
+
+Synchronous communication is simpler to reason about but tighter in coupling. Asynchronous communication is more complex but more resilient.
+
+**The core insight:** Not every operation in a system has the same urgency. Charging a credit card must succeed before you confirm an order — that is synchronous. Sending a confirmation email can happen 10 seconds later — that is asynchronous. Bundling the email send into the synchronous checkout flow means email provider latency becomes checkout latency. This is the wrong design.
+
+**Staff engineers distinguish between operations by their urgency and coupling requirements.** The decision of sync vs async is made per-operation, not per-system.
+
+---
+
+#### Synchronous: Caller Blocks Until Response
+
+In **synchronous** communication, the caller sends a request and waits, doing nothing else, until the response arrives.
+
+```
+[Client] ──────── Request ──────────► [Server]
+                                           │
+         ◄──────── Response ─────────── (processes)
+[Client continues only after response]
+```
+
+**Properties:**
+- Simple: one request, one response, one code path
+- Immediate feedback: errors are returned to the caller synchronously
+- Tight coupling: caller's latency = callee's latency
+- Fragile: if callee is slow or down, caller blocks or fails
+
+**Examples:**
+- HTTP GET /products → response with product list
+- SQL SELECT → rows returned immediately
+- gRPC call → response with data
+- Function call → return value
+
+---
+
+#### Asynchronous: Caller Continues Immediately
+
+In **asynchronous** communication, the caller sends a request and immediately continues. The result arrives later through a callback, event, webhook, or polling.
+
+```
+[Client] ──── Request ────► [Queue/Service]
+[Client continues immediately]
+                                    │
+                             (processes later)
+                                    │
+                             [Callback/Webhook/Event]
+```
+
+**Properties:**
+- Complex: need to track in-flight work, handle failures, route results back
+- Non-immediate feedback: errors surface later, harder to show to users
+- Loose coupling: caller's latency independent of callee's latency
+- Resilient: callee can be down; work queues up and processes when it recovers
+
+**Examples:**
+- Publish "OrderPlaced" event → email worker sends email (async)
+- Upload video to S3 → transcoding pipeline processes in background
+- POST /reports → "report is generating, we will email you"
+- Webhook delivery → our system POSTs to partner URL, retry on failure
+
+---
+
+#### The Decision Framework
+
+```mermaid
+flowchart TD
+    Q1{Does the caller need\nthe result to proceed?}
+    Q1 -- Yes --> Q2{Is the operation\nfast enough to\nnot block UX?}
+    Q2 -- Yes --> SYNC["Sync\n(direct API call)\nUser waits, sees result"]
+    Q2 -- No --> FACADE["Sync facade over async\nReturn job ID immediately\nClient polls or gets webhook"]
+    Q1 -- No --> Q3{Is this a side effect\nor notification?}
+    Q3 -- Yes --> ASYNC["Async\n(queue + worker)\nFire and forget"]
+    Q3 -- No --> Q4{Multiple consumers\nneed the same event?}
+    Q4 -- Yes --> PUBSUB["Publish-Subscribe\n(Kafka/SNS)\nFan-out to all consumers"]
+    Q4 -- No --> ASYNC
+```
+
+**Ask these five questions for every inter-service call:**
+
+1. Does the caller need this result to continue? → Yes = sync
+2. Does the user see the result directly? → Yes = sync
+3. Can we afford to process this minutes later? → Yes = async is an option
+4. Is this a side effect (log, notify, audit)? → Yes = async
+5. What happens if the async worker fails? → Need DLQ, retry, and alerting
+
+---
+
+#### The Sync Facade Over Async Work Pattern
+
+Some operations are too slow to do synchronously but the user still needs *some* immediate response.
+
+**The pattern:**
+1. Receive the request
+2. Validate inputs synchronously (fast)
+3. Return an immediate "accepted" response with a job/order ID
+4. Put the heavy work in a queue
+5. Process asynchronously
+6. Update status in the database
+7. Client either polls for status or receives a webhook
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API
+    participant Queue
+    participant Worker
+    participant DB
+
+    User->>API: POST /videos/upload {file: ...}
+    API->>API: Validate file (sync, fast)
+    API->>Queue: Enqueue transcode job (async)
+    API->>DB: Create job record: status=pending
+    API-->>User: 202 Accepted {job_id: "job-456"}
+
+    Note over User: User continues browsing
+
+    Worker->>Queue: Poll for jobs
+    Queue-->>Worker: job-456
+    Worker->>Worker: Transcode video (slow, 5 minutes)
+    Worker->>DB: Update job-456: status=complete, url=...
+    Worker->>User: (Webhook) POST /webhooks {job_id: "job-456", status: "complete"}
+```
+
+**Real examples of sync facade:**
+- **Amazon checkout:** "Order placed!" returns in 200ms. Fulfillment, inventory, shipping all happen async.
+- **GitHub CI:** "Push received" returns immediately. Build kicks off asynchronously.
+- **Stripe payouts:** "Payout initiated" returns immediately. Bank transfer settles over days.
+- **S3 multipart upload:** Each part upload returns immediately. Complete request finalizes async.
+
+---
+
+#### Event-Driven Architecture
+
+At scale, many services need to react to the same events. Calling each synchronously creates a dependency web. Event-driven architecture uses a publish-subscribe model instead.
+
+**The pattern:**
+- Services publish events when things happen: "OrderPlaced", "UserRegistered", "PaymentSucceeded"
+- Other services subscribe to events they care about
+- No service knows about the others; they only know about the event types
+
+```mermaid
+flowchart LR
+    OrderService["Order Service"] --> |"OrderPlaced event"| Kafka["Kafka\n(event bus)"]
+    Kafka --> |"OrderPlaced"| InventoryService["Inventory Service\n(reserve stock)"]
+    Kafka --> |"OrderPlaced"| EmailService["Email Service\n(send confirmation)"]
+    Kafka --> |"OrderPlaced"| AnalyticsService["Analytics Service\n(record conversion)"]
+    Kafka --> |"OrderPlaced"| FulfillmentService["Fulfillment Service\n(pick and pack)"]
+    Kafka --> |"OrderPlaced"| FraudService["Fraud Detection\n(flag if suspicious)"]
+```
+
+**Benefits:**
+- Adding a new consumer (e.g., loyalty points service) requires zero changes to the Order Service
+- Each service scales independently
+- A consumer can be down for hours and catch up when it recovers
+- The Order Service cannot be slowed by downstream services
+
+**Challenges:**
+- **Eventual consistency:** Inventory may still show an item as available for milliseconds after an order is placed
+- **Ordering:** Events may arrive out of order. Kafka per-partition ordering helps, but only within a partition.
+- **Debugging:** A bug in how events are processed requires tracing through multiple services and queues
+- **Idempotency:** At-least-once delivery means consumers may receive the same event twice
+
+---
+
+#### Challenges of Async Systems
+
+**1. Eventual consistency:**
+The user places an order. The order service confirms it. The inventory service receives the event 500ms later and decrements stock. For that 500ms, the inventory count is stale. If two orders arrive simultaneously, both may see enough stock, both confirm, both decrement — resulting in oversell.
+
+Solutions: Optimistic locking in the inventory service (compare-and-swap), synchronous inventory check before async fulfillment, or accepting the occasional oversell and handling it as a business exception.
+
+**2. Error handling and visibility:**
+In sync: the error returns to the caller, who can show it to the user. In async: the error happens in a worker, potentially minutes after the user's request. The user may already be on a different page.
+
+Solutions: Polling endpoints ("GET /orders/456/status"), webhooks, email notification on failure, DLQ with alerting.
+
+**3. Message ordering:**
+Kafka guarantees ordering within a partition. SQS FIFO guarantees ordering within a MessageGroupId. Standard SQS has no ordering guarantee. If order matters (user profile "updated → deleted" must not arrive as "deleted → updated"), you need ordered delivery.
+
+**4. Debugging distributed async flows:**
+A request enters the system synchronously, spawns async jobs, which spawn more async jobs. When something goes wrong, tracing the failure requires correlating logs across services, queues, and workers.
+
+Solutions: Distributed tracing (Jaeger, Zipkin, AWS X-Ray), correlation IDs in every message, structured logging.
+
+---
+
+#### Detailed Decision Matrix: 12 Real Examples
+
+| Operation | Decision | Rationale | Failure Mode |
+|-----------|----------|-----------|-------------|
+| **User login** | Sync | User must see success/failure immediately to proceed | If auth service is down: return 503, user cannot log in |
+| **Load product page** | Sync + cache | User waits for page to render | Cache miss → DB load spike |
+| **Process payment charge** | Sync (or sync facade for 3DS) | User must see approved/declined before leaving checkout | Charge provider timeout → fail safely, do not retry without idempotency key |
+| **Send confirmation email** | Async (queue) | User does not need to wait for SMTP delivery | Email worker down → messages queue up, delivered when recovered |
+| **Update search index** | Async (CDC → queue → Elasticsearch) | New document is available immediately; search catchup takes seconds | Search shows stale results for up to 30 seconds |
+| **Reserve inventory** | Sync | Must know if in stock before charging | Inventory service timeout → fail checkout, no charge |
+| **Generate report** | Async + sync facade | Reports take minutes; return job_id immediately | Worker failure → DLQ alert, user gets error webhook |
+| **Record analytics event** | Async, at-most-once | Losing 0.1% of events is acceptable | Worker crash → events lost (OK for analytics) |
+| **Send push notification** | Async (queue) | Delivery is best-effort, user not blocking | Device offline → delivered when next online |
+| **Deliver webhook to partner** | Async with retries | Partner endpoint may be slow/down; retry with backoff | Partner consistently down → DLQ, alert, human intervention |
+| **Replicate data to read replica** | Async (replication lag) | Reads can tolerate slight staleness | Replication lag > threshold → reads stale data, need to handle in app |
+| **Multi-service checkout orchestration** | Sync for critical path; async for side effects | User needs immediate order confirmation | Async failure → DLQ, user already has order ID, support can resolve |
+
+---
+
+#### Fire-and-Forget vs Request-Response vs Pub-Sub
+
+Three communication patterns and when to use each:
+
+**Request-Response (Sync):**
+```
+Client → Request → Server → Response → Client
+```
+Use when: Caller needs the result. Simple. Caller and callee are tightly coupled.
+Examples: REST API calls, database queries, gRPC calls.
+
+**Fire-and-Forget (Async, one consumer):**
+```
+Producer → Queue → Consumer (one consumer, no response to producer)
+```
+Use when: Result does not need to be returned to the producer. Decoupled. Reliable with DLQ.
+Examples: Email sending, log writing, analytics events.
+
+**Publish-Subscribe (Async, many consumers):**
+```
+Publisher → Topic → Consumer A (copy)
+                 → Consumer B (copy)
+                 → Consumer C (copy)
+```
+Use when: Multiple independent services need to react to the same event. Highest decoupling.
+Examples: OrderPlaced event consumed by inventory, email, analytics, fulfillment.
+
+---
+
+#### L5 vs L6: Sync vs Async
+
+| Aspect | L5 Thinking | L6 Thinking |
+|--------|-------------|-------------|
+| **Default choice** | "We'll make it async to be safe" | "Async for side effects (email, analytics). Sync for the critical user path (payment, inventory check). Over-asyncing critical paths hides errors and makes debugging hard." |
+| **Checkout design** | "Use a queue for everything in checkout" | "Checkout is sync through payment and order creation — user needs immediate confirmation. Email, analytics, fulfillment are async (queue). The sync path takes 200–400ms. Async side effects complete within 30 seconds." |
+| **Error handling** | "Async errors go to the logs" | "Async errors go to DLQ. We alert on DLQ depth. We have a status endpoint so users can check order state. If the async fulfillment step fails, customer support can manually trigger it." |
+| **Consistency** | "Eventual consistency is fine" | "The core checkout flow (payment + order) is synchronous and strongly consistent. Side effects are async and eventually consistent. We tell users their order is placed (strong) but inventory updates may take a few seconds (eventual)." |
+| **Debugging** | "We can check the logs" | "Every async message has a correlation_id matching the original request. Distributed trace (X-Ray) follows the request through API → Kafka → worker. DLQ messages include the full stack trace and all retry attempts." |
+
+
+---
+
+## 4. Mental Models
+
+### The Toolbox Checklist
+
+Run this checklist for every system you design. It takes 60 seconds and prevents the most common architectural mistakes.
+
+```
+SYSTEM DESIGN BUILDING BLOCK CHECKLIST
+═══════════════════════════════════════
+
+□ HASH
+  - How is data distributed across servers/shards?
+  - What is the shard key? (user_id, tenant_id, order_id?)
+  - Consistent hashing or modulo? (consistent unless N never changes)
+  - What happens when a node is added or removed?
+  - Are there hot partitions? (celebrity user, viral product)
+
+□ CACHE
+  - What data is cached? (DB results, computed values, sessions?)
+  - Where is the cache? (Redis, Memcached, CDN, in-process?)
+  - What pattern? (cache-aside, write-through, write-behind?)
+  - What is the TTL? Is it appropriate for the data's change rate?
+  - What is the invalidation strategy? (TTL-only, invalidate-on-write?)
+  - What is the target hit rate? Does the cache size support it?
+  - What happens when the cache is down? (fallback to DB? circuit breaker?)
+  - Are there hot keys? How do you handle them?
+  - Is stampede protection needed for popular expiring keys?
+
+□ STATE
+  - Are application servers stateless?
+  - Where does session data live? (Redis with TTL?)
+  - JWT or server-side sessions? What are the revocation requirements?
+  - Can any server handle any request without sticky routing?
+
+□ IDEMPOTENCY
+  - Which write operations have side effects? (charge, create, send?)
+  - Do those operations accept idempotency keys?
+  - Where are idempotency keys stored? (Redis with 24h TTL?)
+  - How are concurrent duplicate requests handled? (SETNX lock? DB unique constraint?)
+  - Are queue consumers idempotent? (at-least-once delivery means duplicates)
+
+□ QUEUE
+  - What work is processed asynchronously?
+  - What queue system? (SQS for tasks, Kafka for events/streaming?)
+  - What delivery semantic? (at-least-once with idempotent consumers is standard)
+  - Is a DLQ configured? Is there an alert on DLQ depth > 0?
+  - What is the retry strategy? (exponential backoff, max retries?)
+  - How does the system handle a growing backlog? (autoscale workers, backpressure?)
+  - Is fan-out needed? (one event → multiple consumers?)
+
+□ SYNC / ASYNC
+  - Which interactions are synchronous? (user sees result immediately)
+  - Which are asynchronous? (side effects, notifications, background work)
+  - For async operations: how does the user find out when they complete?
+  - Are there operations that use sync facade over async work? (return job ID immediately)
+  - What is the error handling strategy for async failures?
+```
+
+If you answer all six boxes, you have addressed the most common gaps in system design interviews and production architectures.
+
+---
+
+### The Checkout Flow Synthesis: All Six Building Blocks in One Request
+
+The checkout flow is the canonical example that uses all six building blocks. Tracing it end-to-end shows how they interact.
+
+**User action:** User clicks "Place Order" with cart containing 3 items, card ending 4242.
+
+```mermaid
+flowchart TD
+    A["User clicks Place Order"] --> B["Load Balancer\n(round-robin — works because servers are STATELESS)"]
+    B --> C["App Server\n(fetch session from Redis — STATELESS + STATE)"]
+    C --> D["Idempotency Check\n(has this order been placed before? — IDEMPOTENCY)"]
+    D -- "Duplicate request" --> E["Return stored response\n(no double charge)"]
+    D -- "New request" --> F["Route to inventory shard\nvia consistent hashing — HASH"]
+    F --> G["Check inventory\ncache-aside pattern — CACHE"]
+    G -- "Cache HIT" --> H["Items available\n(no DB call needed)"]
+    G -- "Cache MISS" --> I["Query inventory DB\nPopulate cache"]
+    H --> J["SYNC: Call payment provider\n(user waits for approval)"]
+    I --> J
+    J -- "Declined" --> K["Return 'payment declined'\n(sync error to user)"]
+    J -- "Approved" --> L["Create order record in DB\n(write idempotency key → response)"]
+    L --> M["Return 'Order Confirmed'\norder_id: 12345"]
+    M --> N["ASYNC: Publish OrderPlaced event\nto Kafka — QUEUE"]
+    N --> O1["Email Worker\n(send confirmation)"]
+    N --> O2["Inventory Worker\n(decrement stock)"]
+    N --> O3["Analytics Worker\n(record conversion)"]
+    N --> O4["Fulfillment Worker\n(begin picking)"]
+```
+
+**Tracing each building block:**
+
+| Step | Building Block | What It Does | What Breaks Without It |
+|------|--------------|-------------|----------------------|
+| Load balancer routes to any server | **Stateless** | Any server can handle any request | With stateful servers, must use sticky sessions; cannot scale freely |
+| Fetch session from Redis | **State (external)** | App server reads user's cart from Redis | If session in server memory, a server restart loses cart |
+| Idempotency check at start | **Idempotency** | Detects retries, returns stored result | Double-click or retry = two orders, two charges |
+| Route to inventory shard | **Hash (consistent)** | Same item always goes to same shard | With modulo hash, adding a shard remaps 90% of keys, stampedes DB |
+| Check inventory in cache | **Cache (cache-aside)** | Serve inventory from Redis, not DB | Every checkout hits DB directly; DB overwhelmed at peak |
+| Sync payment call | **Sync/Async** | User waits for approval/decline | Async payment = user cannot see if card was charged |
+| Async email/inventory/analytics | **Queue + Sync/Async** | Side effects happen after user gets response | Sync email = email provider latency becomes checkout latency |
+| DLQ on queue consumers | **Queue (DLQ)** | Failed messages captured, not lost | Malformed message loops forever, blocks queue |
+
+---
+
+## 5. Real-World Examples
+
+### Netflix: Caching, Stateless Services, and Async Processing
+
+**Scale:** 260+ million subscribers, 100+ million streaming hours/day, hundreds of microservices.
+
+**Caching:**
+Netflix's EVCache (a modified Memcached with replication) serves as a distributed cache across AWS regions. Movie metadata, user profiles, and personalized recommendation scores are cached. Cache hit rates exceed 99% for metadata reads. Without EVCache, Netflix's databases would receive 100x their current load.
+
+Netflix uses a custom TTL strategy: high-churn data (recommendations change with viewing history) uses short TTLs (5–15 minutes). Low-churn data (movie descriptions, cast information) uses long TTLs (hours to days). Critical data (license validity for DRM) is fetched synchronously at playback time — no caching.
+
+**Stateless services:**
+Every Netflix microservice is stateless. User state is stored in Cassandra (long-term) and EVCache (short-term). This allows Netflix to deploy new versions of services via blue-green deployments without session loss. Any service instance can handle any request.
+
+**Async processing:**
+When a video is uploaded by a content partner, it goes through a transcoding pipeline with dozens of stages: quality analysis, encoding at multiple bitrates (240p through 4K), audio track processing, subtitle generation, thumbnail creation, DRM packaging. Each stage is a worker consuming from a queue. The pipeline is entirely asynchronous. A single video may take 24–48 hours to fully process. The upload confirmation is a sync facade: "Video received, processing begins" returns immediately.
+
+**Queue design:**
+Netflix uses a combination of Kafka (high-throughput event streaming: playback events, recommendation signals) and SQS (task queues: encoding jobs, notification delivery). Kafka topics retain events for 7 days, enabling replay for new consumer services or debugging.
+
+---
+
+### Stripe: Idempotency as a First-Class Design Principle
+
+**Scale:** Trillions of dollars in payment volume annually, millions of API calls per day.
+
+**Idempotency:**
+Stripe's API is built on idempotency as a foundational principle, not an afterthought. The `Idempotency-Key` header is documented for every non-idempotent API endpoint. Stripe's internal implementation stores idempotency key results for 24 hours. If the same key is sent with a different request body, Stripe returns HTTP 422 Unprocessable Entity — protecting against client bugs that accidentally reuse keys for different operations.
+
+Stripe recommends generating idempotency keys as UUIDs v4 on the client side, before the first attempt, and storing them durably (in the client's database) so they can be retrieved on retry. This ensures that even after a client restart, the retry uses the same key as the original attempt.
+
+**Payment flow:**
+Stripe's charge flow is synchronous from the client's perspective (you send a charge request and wait for approved/declined), but internally Stripe fans out asynchronously to fraud detection, card network authorization, 3DS authentication (if required), and notification to the merchant's webhook endpoint. The client sees a clean synchronous API; the complex async orchestration is hidden behind it.
+
+**Idempotency at the database level:**
+Stripe's storage system enforces idempotency with unique constraints at the database layer as a final safety net. Even if application-level idempotency logic fails (a bug, a race condition), the database will reject duplicate inserts. This defense-in-depth approach — application-level + database-level — is the pattern for critical financial systems.
+
+---
+
+### Amazon: Sync Facade, Queues, and the Two-Pizza Team Model
+
+**Scale:** Hundreds of millions of active customers, millions of sellers, billions of products.
+
+**Checkout flow — sync facade:**
+When you click "Place your order" on Amazon, you receive a confirmation in under 500ms. But the operations Amazon must perform — fraud scoring, inventory reservation across thousands of warehouses, payment authorization with multiple payment methods, tax calculation, shipping rate calculation, seller notification — cannot all complete in 500ms.
+
+Amazon uses a sync facade: the critical path (fraud check, payment authorization, order creation) runs synchronously. Everything else (warehouse notification, seller notification, shipping label generation, analytics) runs asynchronously via queues. The user gets immediate confirmation. The rest follows.
+
+**Stateless microservices:**
+Amazon's service-oriented architecture (described in Werner Vogels' famous 2006 blog post) consists of hundreds of independent microservices, all stateless. Each service owns its own database. State is never shared across service boundaries — it is communicated via explicit API calls or events. This allows each service to scale, deploy, and fail independently.
+
+**Queue-based decoupling:**
+Amazon's fulfillment pipeline is heavily queue-based. An order event triggers parallel pipelines: warehouse management (pick, pack, ship), seller management (notify seller, wait for confirmation), payment settlement (capture authorization, process payment). Each pipeline is a series of queue-consuming workers. Failures in one pipeline do not cascade to others. The DLQ for each pipeline is monitored; anomalies trigger immediate alerts.
+
+---
+
+### Facebook/Meta: Hash Rings, Hot Keys, and Real-Time Fan-Out
+
+**Scale:** 3+ billion monthly active users, hundreds of billions of messages, trillions of reads per day.
+
+**Consistent hashing:**
+Facebook's Memcached deployment (described in their NSDI 2013 paper) uses consistent hashing to distribute cache keys across thousands of Memcached servers per region. Adding servers to the cluster moves only ~1/N of keys, allowing live capacity expansion without full cache invalidation. Facebook's paper introduced several innovations on top of consistent hashing, including lease mechanisms for stampede prevention and regional replication strategies.
+
+**Hot keys — celebrity problem:**
+Facebook explicitly designed for the "celebrity problem": a celebrity with 30 million followers posts a status. Every follower's feed read in the next 60 seconds may request that post's content. This single key receives millions of reads per second — far exceeding any single cache node's capacity.
+
+Facebook's solution: they identify "hot" objects via monitoring (fan count, recent access rate) and route their cache reads differently. Hot objects are stored in multiple local cache replicas within each server cluster. Read requests are distributed across all replicas. Additionally, application servers maintain a local in-process LRU cache for the hottest objects, eliminating even the Memcached network round-trip.
+
+**Real-time notification fan-out:**
+When a celebrity posts, Facebook must deliver the notification to 30 million followers. This is an extreme fan-out problem. Facebook's solution is a tiered approach: they do not compute all 30 million feeds synchronously. Instead, the post is written once, and feeds are lazily populated on read (pull model) for most users. For high-follow accounts, a hybrid model pre-computes feeds for the most active followers. Async queues handle the notification delivery.
+
+---
+
+## 6. Design Trade-offs
+
+### When NOT to Use Consistent Hashing
+
+- **N never changes:** If your shard count is fixed (e.g., 16 PostgreSQL shards determined at launch, never changed), modulo hashing is simpler and equally correct. Consistent hashing's benefit — minimal redistribution on resize — is irrelevant if you never resize.
+- **Very small N (< 5 nodes):** With so few nodes, consistent hashing's complexity is not worth the benefit. A routing table or simple modulo is clearer.
+- **You need a routing table for other reasons:** If you are already maintaining a routing table (e.g., for range-based sharding), adding consistent hashing adds complexity without benefit.
+
+### When NOT to Cache
+
+- **Data that changes with every read** (e.g., random number generator output): No reuse, no hit rate, only overhead.
+- **User-specific data with very low access frequency:** If each user accesses unique data once a week, you will always miss the cache.
+- **Financial data requiring strong consistency:** Account balance, order total — fetch from the database directly. Stale cached values cause incorrect billing or fraud.
+- **Very fast primary store:** If your database query takes 1ms (in-process SQLite, small dataset), adding a cache adds latency without benefit.
+- **Early-stage system:** Cache adds complexity. In the early stages, optimize the database query first. Add caching only when database load becomes the bottleneck.
+
+### When NOT to Use a Queue
+
+- **User needs the result in the same request:** If a user submits a form and must see the result before they can proceed (e.g., form validation, payment confirmation), a queue adds complexity without enabling anything useful. Use sync.
+- **Very simple, low-volume operations:** If you are processing 10 messages/minute, the operational overhead of a queue system (monitoring, DLQ, retry configuration, visibility timeouts) may outweigh the benefits. A simple database-backed job table might be simpler and equally reliable.
+- **Strict ordering is required and complex to implement:** Kafka per-partition ordering is available, but if you need global ordering across many keys, queues make this harder, not easier.
+- **Debugging is already hard:** More asynchrony means more distributed traces to follow. If your team struggles with debugging already, adding async complexity can worsen MTTR.
+
+### When NOT to Make Operations Idempotent
+
+- **Operations that are naturally idempotent:** GET, PUT with the same body, DELETE — these already behave correctly on retry. Adding idempotency keys is unnecessary overhead.
+- **Operations where duplicate detection would be incorrect:** "Generate unique report at this timestamp" — you might actually want a new report each time. Idempotency key would return the old report, not a new one. Use idempotency keys only where duplicate prevention is the desired behavior.
+- **Very short-lived operations with no financial/side-effect impact:** Reading a non-critical configuration value — no need for idempotency keys.
+
+### The Sync vs Async Tension
+
+There is a genuine tension between two valid goals:
+- **Consistency and immediacy:** Users want to know the result of their action immediately. Sync achieves this.
+- **Resilience and throughput:** Systems are more resilient when they decouple operations. Async achieves this.
+
+The resolution is to be deliberate about each operation: not everything can or should be async, and not everything needs to be sync. The checkout example illustrates the middle ground — sync for the critical path, async for the side effects.
+
+---
+
+## 7. Common Interview Questions
+
+### Q1: "How does consistent hashing work? Why is it better than modulo hashing?"
+
+**Strong answer:**
+Consistent hashing maps both keys and server nodes to positions on a ring (0 to 2^32). A key belongs to the first server clockwise from its position. Adding a server: only keys in its arc (between it and its predecessor) move — approximately 1/N of all keys. Removing a server: only its keys move to the next clockwise server.
+
+Modulo hashing uses `hash(key) % N`. When N changes, almost all keys remap: going from 10 to 11 servers remaps ~90% of keys. For a cache, this means a mass cache miss event. At scale with thousands of requests/second, this can crash the database.
+
+Real-world use: Cassandra, DynamoDB, Redis Cluster, Memcached all use consistent hashing. Virtual nodes (100–200 per server) smooth distribution so one server does not get a disproportionately large arc by chance.
+
+---
+
+### Q2: "A celebrity posts a photo. Their 10 million followers load their profile in the next 60 seconds. What breaks and how do you fix it?"
+
+**Strong answer:**
+The photo's metadata (and the celebrity's profile) is a **hot key**. All 10M requests may route to the same cache node (consistent hashing maps one key to one node). That cache node becomes the bottleneck at potentially 100K+ QPS.
+
+Additionally, if the TTL expires during this spike, 10M requests simultaneously miss the cache — **stampede**. All hit the database.
+
+Fixes:
+1. **Key replication:** Store the celebrity profile under 10 shard keys (profile:123:shard:0 through :9). Read from a randomly selected shard. Now 10 cache nodes share the load.
+2. **Local in-process cache:** Each app server caches the top 1000 celebrity profiles locally for 30 seconds. At 100 app servers, Redis now receives 100 QPS instead of 10M QPS for that key.
+3. **Stampede prevention:** Background refresh — before TTL expires, a background job refreshes the entry. Serve the stale value while refreshing. Users never see a cache miss at stampede scale.
+4. **CDN for public data:** A celebrity's public profile is identical for all viewers. Serve it from a CDN. CDN handles billions of requests without touching your infrastructure.
+
+---
+
+### Q3: "How do you prevent double-charging in a payment system with unreliable networks?"
+
+**Strong answer:**
+Use idempotency keys. The client generates a UUID before the first payment attempt and stores it. Every request for this payment (including retries) sends the same UUID in the `Idempotency-Key` header.
+
+Server implementation:
+1. Check Redis for `idempotency:{key}` — if found, return stored response immediately (no processing)
+2. If not found, acquire a distributed lock (`SETNX idempotency_lock:{key}`)
+3. Double-check Redis after lock acquisition (concurrent duplicate may have processed)
+4. Process the payment
+5. Store `idempotency:{key} → {charge_id, status}` with 24-hour TTL
+6. Release lock
+
+The database also has a unique constraint on idempotency_key as a final safety net — even if Redis and the lock fail, the database rejects duplicate inserts.
+
+Stripe's rule: if the same key arrives with a different request body (different amount), return 422 — this prevents client bugs from silently returning wrong results.
+
+---
+
+### Q4: "Your Kafka consumer has been down for 6 hours. It comes back online. What happens?"
+
+**Strong answer:**
+Kafka retains messages based on retention policy (e.g., 7 days). The consumer's committed offset records the last successfully processed message. When it comes back online, it resumes from that offset — it will process all 6 hours of accumulated messages.
+
+Considerations:
+1. **Backlog size:** At 10,000 msg/sec, 6 hours = 216 million messages. With one consumer, catch-up will take 6 hours at normal throughput. Scale up consumer instances if faster catch-up is needed.
+2. **Ordering:** If the consumer depends on event order (user created before user updated), Kafka per-partition ordering is maintained. But if you add more consumer instances, different partitions may catch up at different rates. Ordering guarantees only apply within a partition.
+3. **Staleness:** Notifications sent 6 hours late may be confusing to users. Consider adding a staleness check: "if event timestamp is >1 hour old, skip notification delivery."
+4. **Downstream impact:** If the consumer's output feeds another system (e.g., search indexing), that system may have a 6-hour stale window. Plan for this.
+
+---
+
+### Q5: "Design the idempotency system for a checkout flow that calls 3 external services."
+
+**Strong answer:**
+The checkout calls: (1) Inventory Service, (2) Payment Service, (3) Order Service — in sequence.
+
+Problem: The client retries the entire flow on timeout. Each service may have already partially executed.
+
+Design:
+- Each service receives the same top-level idempotency key (generated by the client) plus a service-specific suffix: `key-inventory`, `key-payment`, `key-order`.
+- Each service independently checks its own idempotency store.
+- If Payment succeeded but Order Service failed: on retry, Payment Service returns cached success (no second charge). Order Service receives new request and creates the order.
+- If all three succeeded but client never got the response: all three return cached responses. Client gets the correct result.
+- Concurrent duplicates: each service uses `SETNX` + Redis or DB unique constraint to prevent parallel processing of the same key.
+
+The idempotency key structure: `{client_uuid}:{service_name}`. Storage: Redis, 24-hour TTL, value = serialized response.
+
+---
+
+### Q6: "When would you use write-behind caching? What are the risks?"
+
+**Strong answer:**
+Write-behind (write-back) caches data in Redis immediately and asynchronously flushes to the database. This reduces write latency dramatically — the write returns at cache speed (~0.5ms) instead of database speed (~5ms).
+
+Use when:
+- Very high write throughput with eventual consistency acceptable (view counts, like counts, metrics)
+- Writes that are frequently overwritten before being read (cursor position, draft content)
+
+Risks:
+- **Data loss:** If the Redis node crashes before flushing to the database, all unflushed writes are lost. For view counts, losing 1000 views is acceptable. For financial transactions, this is catastrophic.
+- **Ordering:** Multiple updates to the same key must be flushed in order. If updates arrive out of order, the database may have a stale value.
+- **Complexity:** Need a reliable flush process with its own error handling, retry, and monitoring.
+
+Never use for: Payment data, orders, any financial record, user-generated content that must not be lost.
+
+---
+
+### Q7: "Compare Kafka and SQS. When do you choose each?"
+
+**Strong answer:**
+SQS is a queue: messages are consumed and deleted. One message → one consumer. Managed by AWS.
+Kafka is a log: messages are retained for days/weeks. Multiple consumer groups each independently read every message at their own offset. High throughput (millions/sec). More operational complexity (unless using Confluent/MSK).
+
+Choose SQS when:
+- You need simple, managed, reliable async task processing
+- You are in AWS and want zero ops overhead
+- Each message should be processed by exactly one consumer
+- Throughput is moderate (<100K msg/sec)
+- You do not need replay capability
+
+Choose Kafka when:
+- Multiple independent services need to consume the same events (OrderPlaced consumed by inventory, email, analytics, fulfillment — each independently)
+- You need replay (new service wants historical events; debugging requires replaying events)
+- Very high throughput (>100K msg/sec)
+- You are building event sourcing or event-driven architecture
+- You need an audit log of all events
+
+Real decision: An e-commerce platform might use SQS for email and notification queues (simple task delivery) and Kafka for order events (inventory, analytics, fulfillment, and future services all need to consume them independently).
+
+---
+
+### Q8: "How does a cache stampede happen and how do you prevent it?"
+
+**Strong answer:**
+Cache stampede: A popular cache key expires. Thousands of requests arrive simultaneously, all miss the cache, and all hit the database at once. Database receives sudden massive load spike and may crash.
+
+Prevention strategies:
+
+1. **TTL jitter:** Spread expiration times randomly. Instead of TTL = 300 seconds for all entries, use TTL = 300 + rand(0, 30). Entries that were cached together expire at different times, preventing mass simultaneous expiry.
+
+2. **Request coalescing (lock):** When a cache miss occurs, the first request acquires a Redis lock (`SETNX`) and performs the DB read. Subsequent concurrent requests either wait briefly and get the result from cache (which the first request populated), or get the stale value while the first request refreshes.
+
+3. **Probabilistic early expiry:** Before TTL=0, use a formula based on the remaining TTL and the time it takes to refresh. Some requests "decide" to refresh early (probabilistically). This spreads the refresh load over time rather than concentrating it at the exact TTL expiry.
+
+4. **Background refresh:** Before TTL expires, a scheduled job refreshes the cache. Serve the current value while the background refresh is in progress. Users never hit a cold cache miss — they may see a slightly stale value for one request cycle, but never wait for a DB round-trip.
+
+For a system where 99% hit rate is required, combine jitter + background refresh.
+
+---
+
+### Q9: "What is the difference between stateful and stateless services? Why does it matter?"
+
+**Strong answer:**
+Stateful: Server stores session data in its own memory. Request from user Alice must go to the same server each time (sticky sessions). Server crash = session loss. Cannot rebalance users between servers. Scaling is complicated.
+
+Stateless: Server stores nothing between requests. Session data is in an external store (Redis). Any server can handle any request. Load balancer can freely distribute. Adding servers = immediate capacity increase. Server crash = no data loss (data is in external store).
+
+Why it matters:
+- **Horizontal scaling:** Stateless servers are interchangeable. Add 10 more during peak load; they work immediately. Remove them when peak subsides. Stateful servers require session migration or sticky routing.
+- **Deployments:** Deploy new version by replacing servers one at a time. Users seamlessly move to new servers. With stateful servers, deploying requires session drainage or user disruption.
+- **Failure handling:** Stateless server crashes are transparent. Load balancer stops routing to it. Users' next requests go to other servers. With stateful servers, crash = forced logout.
+
+Standard pattern: stateless app servers + stateful stores (Redis for sessions, database for persistent data).
+
+---
+
+### Q10: "Design a system where checkout must be idempotent across 3 services with network failures."
+
+**Strong answer:**
+Three services called in sequence: inventory reservation, payment charge, order creation.
+
+**Idempotency key design:**
+Client generates a UUID for this checkout attempt. Each service call uses a derived key:
+- `{client_uuid}:inventory` for inventory reservation
+- `{client_uuid}:payment` for the payment charge
+- `{client_uuid}:order` for order creation
+
+**Flow on first attempt:**
+1. Inventory: check key → miss → reserve → store `key → {reservation_id}` in Redis TTL 24h
+2. Payment: check key → miss → charge → store `key → {charge_id}`
+3. Order: check key → miss → create → store `key → {order_id}`
+
+**Flow on retry after Payment succeeded but Order failed:**
+1. Inventory: check key → hit → return stored reservation_id (no new reservation)
+2. Payment: check key → hit → return stored charge_id (no new charge)
+3. Order: check key → miss → create order → store key
+
+**Flow on retry after all three succeeded (client never got response):**
+All three return stored results. Client gets the correct outcome. Nothing is duplicated.
+
+**Concurrent duplicate prevention:** Each service uses `SETNX lock:{key}` before processing. Only one request proceeds; the other waits and reads the result the first request stored.
+
+---
+
+### Q11: "Your queue consumer is processing a message that causes it to crash. What happens?"
+
+**Strong answer:**
+Without a DLQ: Message is not acknowledged. After visibility timeout (e.g., 30 seconds on SQS), message reappears. Consumer processes it, crashes again. Infinite loop. This message blocks all other messages in the queue (or at minimum occupies a worker indefinitely).
+
+With a proper DLQ configuration:
+1. Message is delivered to consumer (attempt 1). Consumer crashes. No ack.
+2. After visibility timeout, message reappears (attempt 2). Consumer crashes.
+3. After attempt 3 (maxReceiveCount = 3 on SQS), SQS moves message to DLQ.
+4. Main queue continues processing other messages.
+5. DLQ depth > 0 alert fires. Engineers are paged.
+6. Engineers inspect DLQ message: malformed JSON field causing a NullPointerException.
+7. Engineers deploy a bug fix.
+8. Engineers replay the DLQ message (manually trigger requeue). Consumer processes it successfully.
+
+Key settings:
+- `maxReceiveCount`: 3–5 attempts before DLQ (balance between transient failures and poison messages)
+- `visibilityTimeout`: longer than your longest normal processing time (avoid false redelivery)
+- DLQ retention: 7 days (engineers need time to investigate)
+- Alert on `ApproximateNumberOfMessagesVisible > 0` for the DLQ
+
+---
+
+### Q12: "What is eventual consistency and when is it acceptable?"
+
+**Strong answer:**
+Eventual consistency means: after a write, all replicas will eventually reflect the new value, but there is a window where some reads may see the old value. The system is not immediately consistent — it converges to consistency over time.
+
+**When acceptable:**
+- Social media feed: if a new post takes 500ms to appear in all followers' feeds, no one cares
+- Product description: if a price update takes 5 seconds to propagate to all edge nodes, it is tolerable
+- User profile photo: if the new avatar takes a few seconds to appear everywhere, it is acceptable
+- Analytics: slightly stale dashboards are fine; real-time exactness not required
+
+**When NOT acceptable:**
+- Account balance: user must see the correct balance immediately after a transaction
+- Inventory count: selling an item must immediately prevent oversell (eventually consistent inventory = oversell risk)
+- Payment status: user must see the correct charge status immediately
+- Login/logout: after logout, the session must be immediately invalid everywhere
+
+**Technical levers:**
+- **Cache TTL:** Shorter TTL = less eventual inconsistency window
+- **Sync writes across replicas:** Read-your-writes consistency (user always reads their own writes from the same replica)
+- **Sync critical path, async side effects:** The checkout flow is synchronous (payment, inventory check) while analytics is eventually consistent
+
+---
+
+## 8. Key Takeaways
+
+### Summary of All Six Building Blocks
+
+**Hash functions distribute data evenly.**
+Use consistent hashing (not modulo) for distributed caches and databases. Adding a node moves ~1/N keys, not all of them. Virtual nodes (100–200 per server) smooth distribution. For fixed-size or grow-only shard sets, jump hashing is O(1) space and equally minimal. For small N, rendezvous hashing is simpler.
+
+**Caching is the most powerful scale lever.**
+A 95% cache hit rate reduces database load by 20x. Use cache-aside for most applications. Write-through for data that must always be fresh. Write-behind only for non-critical counters where loss is acceptable. TTL balances freshness and hit rate — match it to your data's change frequency. Plan for stampede: add jitter, use background refresh, replicate hot keys. Always have a plan for cache failure (fall through to DB with circuit breaker).
+
+**Stateless servers enable horizontal scaling.**
+Move all state to external stores. Any server handles any request. Adding servers is immediate capacity. No sticky sessions, no session migration, no session loss on server crash. Use Redis for sessions (with TTL), database for persistent state. JWT for short-lived stateless tokens; server-side sessions for instant revocation.
+
+**Idempotency is mandatory for writes with side effects.**
+Every operation that charges money, creates records, sends messages, or has external side effects must accept and honor idempotency keys. Client generates UUID per logical operation. Server stores key → response for 24 hours. Concurrent duplicates handled with SETNX lock or DB unique constraint. Stripe implements this as a first-class API feature — it is the industry standard for payment APIs.
+
+**Queues decouple and buffer.**
+Use queues for work the user does not need to wait for. At-least-once delivery with idempotent consumers is the standard pattern. Always configure a DLQ. Alert on DLQ depth > 0. Scale workers based on queue depth. Choose SQS for simple task queues, Kafka for event streaming and fan-out.
+
+**Sync when the user needs the result; async for side effects.**
+The checkout critical path (inventory check, payment, order creation) is synchronous — user sees confirmation immediately. Email, analytics, fulfillment are async — they happen in the background via queues. Async errors go to DLQ with alerting. Use distributed tracing and correlation IDs to debug async flows.
+
+---
+
+### L5 vs L6 Thinking: All Six Building Blocks
+
+| Building Block | L5 Answer | L6 Answer |
+|---------------|-----------|-----------|
+| **Hash** | "We hash user_id to distribute across shards" | "We use consistent hashing with 150 vnodes per shard. Adding a shard moves ~5% of keys. xxHash for speed — no security requirement here. During rebalance, we dual-read (old + new shard) to avoid misses." |
+| **Cache** | "We cache database results in Redis" | "Cache-aside with 5-min TTL. TTL jitter ±30s prevents stampede. Invalidate on write for user-visible data. Background refresh for top 100 celebrity profiles. 95% hit rate target. Circuit breaker falls through to DB if Redis is down — DB handles 5x load max." |
+| **State** | "Our servers are stateless" | "Stateless app servers behind ALB (round-robin). Session in Redis, 24-hour TTL. JWTs for API tokens (15-min expiry) + refresh tokens in Redis (30-day TTL, revocable). Deploying a new version: blue-green, drain old instances, zero session loss." |
+| **Idempotency** | "We retry on failure" | "All POST endpoints with side effects require `Idempotency-Key`. Middleware enforces it — 400 if missing. Keys stored in Redis (24h TTL). Concurrent duplicates: SETNX lock, then double-check. DB unique constraint as final safety net. Payment keys are scoped to user — key reuse across different users is not a concern." |
+| **Queue** | "We use Kafka for async processing" | "Kafka for order events (fan-out to inventory, email, analytics, fulfillment — each independent consumer group). SQS for notification delivery (simpler, managed). DLQ on every queue, 7-day retention, alert on depth > 0. Consumers are idempotent (keyed on event_id). Auto-scale workers on queue depth > 100." |
+| **Sync/Async** | "Checkout is sync, email is async" | "Sync critical path: inventory check, payment charge, order record — user waits 200–400ms for confirmation. Async: email, fulfillment, analytics, search indexing. Async errors are surfaced via order status endpoint (users can poll) and webhook. DLQ alert means fulfillment failures are never silent. Correlation IDs trace every request through all services." |
+
+---
+
+### The Golden Rule
+
+**Sync for user-facing results. Async for side effects.**
+
+When a user clicks a button and needs to see the outcome (did my payment succeed? is my item in stock?), the flow must be synchronous. The user is waiting. They need an answer.
+
+When an operation does not need to be visible immediately (send an email, update analytics, index search, send fulfillment notification), make it asynchronous. Move it to a queue. The user gets a faster response. The side effect happens in the background.
+
+This single distinction, applied consistently to every operation in your system, produces architectures that are fast, resilient, and operationally manageable.
+
+---
+
+## Exercises and Brainstorming
+
+### Exercise 1: Consistent Hashing Ring
+
+You have a consistent hashing ring with 5 servers (A, B, C, D, E) and 150 virtual nodes each.
+
+1. Roughly what percentage of keys move when you add server F?
+2. Which servers are affected when F is added?
+3. During the rebalance window (when keys are moving), some cache reads will miss. Describe two mitigations.
+4. Compare with modulo hashing: `hash(key) % 5 → % 6`. What percentage of keys remap?
+5. Why would you use jump hashing instead of consistent hashing for this use case?
+
+*Target answers: ~17% move to F; all 5 servers donate keys from their arcs where F's vnodes land; dual-read old+new and pre-warm; modulo remaps ~83%; jump hashing if node count only grows, for O(1) memory.*
+
+---
+
+### Exercise 2: Cache Strategy Decisions
+
+For each data type in an e-commerce system, choose a cache pattern and explain your TTL choice:
+
+| Data | Cache Pattern | TTL | Justification |
+|------|--------------|-----|---------------|
+| User session (cart, auth) | ? | ? | |
+| Product price (updates hourly) | ? | ? | |
+| Product description (rarely changes) | ? | ? | |
+| Inventory count (changes per purchase) | ? | ? | |
+| Order history (immutable after creation) | ? | ? | |
+| Homepage featured products | ? | ? | |
+| User's "last viewed" list | ? | ? | |
+
+*Then discuss: For inventory count, is caching safe at all? If you cache it for 60 seconds, what is the oversell risk?*
+
+---
+
+### Exercise 3: Idempotency Across Services
+
+A payment flow calls 3 services: Inventory, Payment, Order — in sequence. The client retries on timeout.
+
+1. Payment succeeds on attempt 1. Order creation fails. On retry, what happens at each service?
+2. All three succeed but client never receives the response. On retry, what should each service return?
+3. Two concurrent requests with the same idempotency key arrive 10ms apart. How do you prevent a double charge?
+4. Client generates idempotency keys as `user_id + timestamp (to the minute)`. What is the risk?
+5. Should the idempotency key TTL be 1 hour or 24 hours? What are the implications of each?
+
+---
+
+### Exercise 4: Queue Design
+
+Design the queue architecture for a food delivery system when an order is placed:
+
+Operations: (1) Notify restaurant, (2) Assign driver, (3) Send confirmation SMS to customer, (4) Charge payment method, (5) Update analytics dashboard, (6) Reserve loyalty points
+
+1. Which operations must be synchronous (in the request-response cycle)?
+2. Which can be in a queue?
+3. For the queue operations, is fan-out appropriate? Which operations are independent?
+4. If the driver assignment service is down for 30 minutes, what happens to orders in the queue?
+5. How do you handle a restaurant that never acknowledges the notification?
+
+---
+
+### "What If X Changes?" Scenarios
+
+**Hashing:**
+- "Your consistent hashing ring has 20 servers. Overnight, 3 servers fail simultaneously. Walk me through what happens to the cache."
+- "Your shard key is user_id, but one enterprise customer has 40% of your total data. How do you handle this hot shard?"
+- "You need to change your shard count from 16 to 32. What is the migration strategy with minimal downtime?"
+
+**Caching:**
+- "Your Redis cluster goes down at 2 PM on a Tuesday. Walk me through exactly what happens to your system and your mitigation steps."
+- "Your cache hit rate drops from 95% to 65% over 3 days. What is your diagnosis and fix?"
+- "A product goes viral. Its cache key is receiving 500K reads/second. Your Redis node for that key handles 80K reads/second. What do you do?"
+
+**Idempotency:**
+- "Your Redis idempotency store is down for 5 minutes. What happens to payment requests during that time?"
+- "A client keeps reusing the same idempotency key for different payment amounts (a bug). What should your API return and how do you detect this?"
+- "You need to reduce idempotency key TTL from 24 hours to 1 hour to save Redis memory. What is the risk?"
+
+**Queues:**
+- "Your order event Kafka topic has 3 days of backlog due to a consumer bug. The bug is fixed. How do you process the backlog without overwhelming downstream systems?"
+- "You discover your email consumer has been sending duplicate emails because messages were delivered twice. How do you make it idempotent?"
+- "A message in your SQS queue causes your consumer to crash every time it is processed. You have no DLQ configured. What happens?"
+
+**Sync/Async:**
+- "Your payment provider starts responding in 3 seconds instead of 200ms. You have a synchronous payment call in checkout. What is the impact and how do you mitigate?"
+- "You are asked to make the checkout flow fully asynchronous (payment via queue, result via webhook). What are the user experience implications? When is this appropriate?"
+
+---
+
+### Trade-off Debates
+
+**1. JWT vs server-side sessions for a high-security banking app:**
+- JWT: no Redis lookup per request, scales perfectly, but cannot revoke before expiry
+- Server sessions: instant revocation, one Redis lookup per request, Redis must be highly available
+- *A user's account is flagged for fraud at 2 AM. You need to invalidate their session immediately. Which approach supports this? What is the cost?*
+
+**2. Single large Kafka topic vs per-entity topics:**
+- Single topic: simple, one consumer group sees all events, global ordering possible
+- Per-entity (per user_id): parallel processing, per-entity ordering, N topics to manage, consumer isolation
+- *For order events, which approach handles a buggy consumer (crashes on one order type) more gracefully?*
+
+**3. Write-through vs cache-aside for a user profile cache:**
+- Write-through: always fresh, every write hits Redis + DB, higher write latency
+- Cache-aside: writes only hit DB, cache refreshes on next read, possible brief stale window
+- *A user updates their profile and immediately refreshes the page. Which approach guarantees they see the new value? Does the answer change if you have 200 app servers?*
+
+---
+
+## 9. Missing Depth: Failure Modes, Injection Scenarios, and Extended Trade-offs
+
+---
+
+### Building Block Combinations — Failure Modes Table
+
+When you combine two building blocks, each combination has its own failure mode. This table is what L6 candidates know and L5 candidates guess at.
 
 | Combination | Use case | Watch out for |
-|-------------|----------|----------------|
+|-------------|----------|---------------|
 | **Cache + DB** | Read-through cache for hot data | Stampede on miss; invalidation on write; cache-aside vs write-through choice |
 | **Queue + Idempotency** | Async workers with at-least-once | Duplicate messages; consumer must dedupe by key or idempotent action |
 | **Hash + State** | Sharded storage by user_id | Hot partition if one key dominates; rebalance when adding nodes |
-| **Sync + Timeout** | Call downstream with deadline | Timeout too short → false failures; too long → cascading delay; circuit breaker when downstream is down |
+| **Sync + Timeout** | Call downstream with deadline | Too short → false failures; too long → cascading delay; circuit breaker when downstream is down |
 | **State + Failover** | Session in Redis; Redis failover | Session loss or duplicate; use sticky sessions or short TTL and re-auth |
 
-**Failure scenarios**: **Cache down**: Fall through to DB; ensure DB can take full load or degrade (e.g. return stale from backup cache). **Queue backlog**: Consumers can't keep up; add workers or partition; alert on lag; DLQ for poison messages. **Idempotency key collision**: Two different requests same key → second gets first's result. Key must be unique per logical operation (e.g. client-generated UUID per "place order" click). **Hash rebalance**: Adding node moves keys; during rebalance some reads may miss—use consistent hashing and gradual rebalance, or dual-read during migration.
+#### Each Failure Explained With an Example
+
+**Cache + DB: What happens when your Redis cache goes down at 3 AM?**
+
+Walk through it step by step:
+
+1. All requests miss the cache (Redis is down, so every GET returns nil)
+2. All requests go directly to the database
+3. The database gets 20× its normal load (if your cache hit rate was 95%, now it sees 100% instead of 5%)
+4. The database slows down under the extra load
+5. Connection pool exhausts (each request holds a connection longer because the DB is slower)
+6. All requests start returning 503
+
+Mitigation: Your database needs enough headroom to handle 100% cache-miss traffic. Aim for DB to handle at least 20% of peak directly — meaning if peak QPS is 100K and hit rate is 95%, your DB must handle at least 20K QPS on its own (not just the 5K it normally sees). Have a circuit breaker on the cache path. Alert on cache hit rate dropping more than 5 percentage points from baseline.
 
 ---
 
-## Summary: Building Blocks as Design Decisions
+### Failure Injection Scenarios — Three Detailed Walk-throughs
 
-This chapter covered six building blocks that appear in every system:
-
-1. **Hash functions** — Distribution, sharding, consistent hashing. Choose the right tool for distribution vs security.
-2. **Caching** — Speed and load reduction. TTL, invalidation, hit rate. Design for consistency and failure.
-3. **State vs stateless** — Stateless servers scale. Put state in external stores. Standard pattern for microservices.
-4. **Idempotency** — Safe retries. Idempotency keys for every important write. Non-negotiable for payments and orders.
-5. **Queues** — Decoupling and buffering. Use when work can be deferred or when you need to absorb spikes.
-6. **Sync vs async** — Per-interaction choice. Sync when caller needs result now. Async when you can defer and absorb load.
-
-**Staff-Level Insight**: These aren't implementation details. They're architectural primitives. When you design a system, you're composing these blocks—and the quality of your composition depends on understanding their trade-offs. Master the blocks; then master the decisions that combine them into systems that scale.
+These are the scenarios interviewers use to separate L5 from L6. Concrete numbers are required. "It depends" is not an answer.
 
 ---
 
-## Composing Building Blocks: A Design Lens
+#### Scenario 1: Cache Stampede
 
-When you approach a new system design, ask:
+**Setup:** Product catalog cache with 5-minute TTL. At 9:00 AM, the TTL expires for a popular product. In the next 200ms, 50,000 requests arrive — and all miss the cache simultaneously.
 
-1. **Hash** — How is data distributed? Sharding key? Consistent hashing? What happens on resize?
-2. **Cache** — What's cached? Where? TTL? Invalidation strategy? What's the hit rate?
-3. **State** — Are services stateless? Where does state live? Sessions, config, user data?
-4. **Idempotency** — Which writes need retry safety? Do we use idempotency keys?
-5. **Queue** — What's async? What's the queue? Delivery semantics? DLQ?
-6. **Sync vs Async** — Which interactions are sync (user waits) vs async (fire-and-forget)?
+**Sub-question 1: What happens to your database?**
 
-This lens ensures you don't miss a critical block. A design that's stateless but forgets idempotency will double-charge on retries. A design that caches aggressively but has no invalidation strategy will serve stale data. A design that uses async everywhere will be hard to debug and reason about.
+50,000 queries hit the DB in 200ms — that is 250,000 QPS. If the DB handles 10K QPS normally, it is immediately overwhelmed. CPU spikes to 100%. Queries queue. Latency goes from 5ms to 5 seconds. Connections exhaust. Downstream errors cascade. This is a self-inflicted DDoS on your own database.
 
-**Example: Applying the lens to a "Design a payment system" prompt**
+**Sub-question 2: How do you prevent this? Two different mitigations.**
 
-- **Hash**: Not primary (payments are not sharded by hash in the same way as caches). But we might partition payment records by user_id or merchant_id for scaling.
-- **Cache**: Cache merchant config, currency rates. Don't cache the actual payment result for the payer (they need immediate confirmation)—but we might cache for idempotency key lookup.
-- **State**: Stateless API servers. Payment state in DB. Idempotency key store (Redis or DB).
-- **Idempotency**: Critical. Every charge, refund, transfer must accept idempotency keys. Non-negotiable.
-- **Queue**: Payment processing might be async (3DS, bank approval). Queue the "confirm payment" step; return "processing" to user. Webhook or poll for result.
-- **Sync vs Async**: User-initiated charge: sync response with "success" or "declined" (or redirect for 3DS). Internal reconciliation: async. Webhook to merchant: async (we retry).
+Mitigation A — Probabilistic Early Expiry (also called "jitter" or "early recomputation"): When a cache entry is within X% of its TTL remaining, randomly recompute it. For example: at TTL = 5 min, when 30 seconds remain, there is a 50% chance any request will refresh the cache. The first few requests probabilistically refresh it. By the time it expires, fresh data is already in cache. Zero thundering herd.
 
-Running this checklist in 30 seconds ensures you don't miss idempotency (disaster) or over-complicate with async where sync is needed. A design that caches aggressively but has no invalidation strategy will serve stale data. Staff Engineers run this checklist consciously.
+Mitigation B — Request coalescing (single-flighter): When a cache miss occurs, a lock (Redis distributed lock or in-process mutex) is acquired. Only ONE request fetches from DB. All other requests for the same key wait (or return stale if configured). When the one request completes, it populates the cache and releases the lock. All waiters read from cache. Cost: first-miss latency is higher (one request waits), but the DB sees exactly 1 query per cache miss instead of 50,000.
+
+**Sub-question 3: How to detect in monitoring before an outage?**
+
+Alert 1: Cache hit rate drops below threshold (e.g. < 90% for 30 seconds) → investigate miss spike.
+Alert 2: DB connection pool utilization > 80% → downstream pressure.
+Alert 3: DB query latency p99 > 2× baseline.
+
+If all three fire together at exactly HH:MM:00 (a round-minute TTL expiry time) → cache stampede. Add jitter to TTL: instead of exactly 300s, use 270–330s randomly. This staggers expiry times across requests that were cached at the same moment.
 
 ---
 
-## Failure Mode Cheat Sheet
+#### Scenario 2: Queue Backlog Cascade
 
-| Block | Failure Mode | Mitigation |
-|-------|--------------|------------|
-| **Hash** | Poor distribution, hot partition | Virtual nodes, rebalance |
-| **Cache** | Down, stampede, stale | Fall-through to DB, locking, TTL |
-| **State** | Lost on server death | External store (Redis, DB) |
-| **Idempotency** | Missing → duplicates | Idempotency keys on all writes |
-| **Queue** | Message lost, duplicate, DLQ overflow | Delivery semantics, retry, alert on DLQ |
-| **Async** | Result never arrives, ordering | Timeouts, callbacks, sequence numbers |
+**Setup:** Checkout service writes OrderCreated events to Kafka for async email, analytics, and fulfillment. Traffic spikes 10× during a flash sale. Consumers cannot keep up. Queue grows.
 
-Every block has failure modes. Design for them.
+**Sub-question 1: What happens when the queue reaches retention limit?**
+
+Kafka retention is time-based (e.g. 7 days) or size-based (e.g. 100 GB). If the retention limit is hit, oldest messages are deleted permanently. Email for orders from 7 days ago is never sent. Analytics data is permanently lost. Fulfillment events are lost → orders never fulfilled → customer support nightmare. NEVER let Kafka retention fill without alerting. Set an alarm when consumer lag exceeds a threshold (not just when retention fills).
+
+**Sub-question 2: How does backpressure propagate back to the checkout service?**
+
+It does not — automatically. Kafka is a fire-and-forget buffer. The checkout service produces messages and returns immediately regardless of consumer lag. What actually happens: (1) consumer lag metric grows silently, (2) business impact builds — emails not sent, orders not fulfilled, (3) when retention fills, data is permanently lost.
+
+To add backpressure: (1) checkout service monitors the consumer group lag metric (Kafka consumer group lag), (2) if lag exceeds a threshold, checkout service adds an artificial delay or returns 503 with Retry-After. This is not automatic — it requires explicit instrumentation.
+
+**Sub-question 3: Dropping messages vs applying backpressure — when is each acceptable?**
+
+Drop messages (at-most-once): acceptable for metrics, analytics, logging, telemetry. The value of the data degrades quickly; losing it is acceptable. Example: "user clicked button" event — losing 1% during a flash sale is fine.
+
+Apply backpressure: required for business-critical events: order fulfillment, payment confirmation, inventory updates. Losing these = lost orders, undelivered goods, billing discrepancies. Better to slow down the checkout (503, retry) than lose a fulfillment event.
+
+Hybrid approach: for emails, consider accepting some loss if the consumer is too far behind (an email for a completed order after 24 hours is worse than no email at all). For fulfillment and payment: never lose.
 
 ---
 
-## L5 vs L6: Building Block Mastery
+#### Scenario 3: Idempotency Key Collision
+
+**Setup:** Two different users submit idempotency keys that are numerically close (e.g. sequential integers assigned by the client).
+
+**Sub-question 1: What does your system return to User B whose key matched User A's request?**
+
+The server finds User A's stored result for that key and returns it — User B's request is treated as a retry of User A's request. User B might get User A's order confirmation, User A's payment response, or User A's account data. This is a data leak AND a functional bug. User B's order was never created. User A might get charged twice if the timing is wrong.
+
+**Sub-question 2: How should idempotency keys be generated to make collision astronomically unlikely?**
+
+Use UUID v4 (128-bit random number). Collision probability with 1 trillion keys is approximately 6 × 10^-8 (one in 17 billion). In practice: zero collisions.
+
+NEVER use sequential integers, timestamps, or user_id alone.
+
+```python
+import uuid
+key = str(uuid.uuid4())
+```
+
+If using ULIDs (time-sortable): still 80 bits of randomness — acceptable. If using short codes (6 chars): 36^6 = 2.2 billion possibilities — with birthday paradox, expect collision after ~50,000 keys. Too small for production.
+
+**Sub-question 3: Risk of using `timestamp + user_id` as idempotency key?**
+
+Risk 1: Same user makes two requests in the same millisecond (rare but possible with aggressive retries). Both get the same key → second request returns the first's response. The second operation never executes.
+
+Risk 2: On retry, if the retry happens in a different millisecond, the key is DIFFERENT → idempotency is broken entirely. The key must be the same on retry, but a timestamp-based key changes every millisecond.
+
+Solution: client generates a UUID ONCE before the first attempt and reuses it for all retries. Store it in local state before making the first call.
+
+---
+
+### Original Trade-off Debates — Three Deep Dives
+
+---
+
+#### Debate 1: Consistent Hashing vs Routing Table (e.g. Vitess)
+
+**Consistent hashing:**
+- No central routing state — the hash function and node list are all you need
+- O(log N) lookup with vnodes (binary search on the ring)
+- Minimal key movement on rebalance (~1/N)
+- Self-organizing — nodes join and leave without manual intervention
+
+**Routing table (e.g. Vitess shard map):**
+- Central shard map stored in a coordination service (ZooKeeper, etcd)
+- O(1) lookup — just a table scan
+- Explicit shard assignment — admin controls which data lives where
+- Arbitrary shard movement — you can split one hot shard into two without touching others
+
+**When to prefer a routing table:**
+1. You need precise control over which data lives where (compliance, data residency, tenancy isolation)
+2. You want to split one hot shard into two without moving other shards
+3. Small N (< 20 shards) where consistent hashing ring overhead is unnecessary
+4. Your team values predictability and explicit control over elegance
+
+**Operational cost of each:**
+Routing table requires a coordination service as a dependency (ZooKeeper or etcd), and all clients must query it on every request. It has a single point of failure for the map store. Consistent hashing needs only the hash function and the current node list — no coordination service, no single point of failure.
+
+**Real-world examples:**
+Google's Bigtable and Spanner use a form of routing table (tablet server assignment tracked by master). Amazon's DynamoDB uses consistent hashing. Both are valid at massive scale. The choice reflects operational preferences, not fundamental correctness.
+
+---
+
+#### Debate 2: Synchronous Write-Through vs Asynchronous Write-Behind for a Session Store
+
+**Write-through:**
+Every session write is synchronous to BOTH Redis and a backing DB. No data loss on Redis failure. Write latency = max(Redis, DB) ≈ 10ms instead of 1ms. Double write load on every session update.
+
+**Write-behind:**
+Write to Redis immediately (1ms response). Async write to DB in the background (50ms later). Write latency = Redis only (1ms). Risk: if Redis crashes in that 50ms window, the DB has stale data and the session is effectively lost.
+
+**The 100ms Redis crash scenario:**
+
+User logs in at T=0. Write-behind saves session to Redis at T=0 and queues a DB write. At T=50ms, the Redis node crashes before the DB write completes. The user's session is lost. On the next request, they appear logged out and are forced to re-authenticate.
+
+**User experience impact:**
+Write-through: user never loses their session under any failure scenario.
+Write-behind: user loses their session approximately 0.01% of the time (only if Redis crashes within the async write window). For most apps, this is acceptable — users just re-login. For financial or medical apps where session loss means lost in-progress work (form data, multi-step workflows), write-through is required.
+
+**Recommendation:**
+Use write-through for high-value sessions (banking, healthcare, checkout flows). Use write-behind for typical web app sessions (read-heavy, user does not lose critical data on re-auth).
+
+---
+
+#### Debate 3: Single Large Queue vs Many Small Queues
+
+**Single topic (one Kafka topic):**
+Simple to operate — one consumer group, all events in order together, easy to add new consumers. Blast radius: if one consumer group is a bad actor (pulls too fast, reprocesses poison messages), it can affect other consumer groups' visibility of the partition.
+
+**Per-entity topic (e.g. one topic per user_id or order_id):**
+Parallel processing, ordering guaranteed per entity, one slow consumer group does not affect others. Cost: N topics to manage, N consumer groups, N sets of lag metrics, N DLQs. At scale, this becomes unmanageable quickly.
+
+**For payment processing:**
+Use a single large topic with high partition count (e.g. 100 partitions). Shard by user_id or order_id so one user's payments are processed in order within a partition. This gives ordering where it matters without N separate topics. Blast radius: one slow consumer group affects all payments — use consumer groups carefully and isolate by criticality (payment processing vs. analytics use different consumer groups on the same topic).
+
+**The hybrid that actually works:**
+One topic per business domain (payments, orders, notifications) but NOT one per entity. Domains are stable and finite. Entities are infinite (one per user, one per order). Three topics with 50 partitions each vs. 10 million topics is not a real debate — domains win every time.
+
+---
+
+### Target Cache Hit Rates by Use Case
+
+These numbers come up in interviews. Know them, know why, and know how to calculate the multiplier effect.
+
+| Data type | Target hit rate | Reasoning |
+|-----------|-----------------|-----------|
+| Session data | 99%+ | Same user, same session — no reason to miss unless TTL is too short |
+| User profile (name, avatar, bio) | 90–95% | Frequently accessed, changes occasionally |
+| Product catalog | 95–99% | Mostly static, high reuse across users |
+| Real-time feed | 70–90% | Personalized, frequently updated — harder to cache effectively |
+| Search results | 50–80% | High cardinality (every query is somewhat unique); popular queries cached, long tail is not |
+
+**Why every percentage point matters:**
+
+A 95% hit rate means the DB sees 5% of traffic = 20× load reduction.
+An 80% hit rate means the DB sees 20% of traffic = 5× reduction.
+Going from 80% to 95% is a 4× improvement in DB protection. That is the difference between needing 4 DB replicas and needing 1.
+
+**How to measure it:**
+`hit_rate = cache_hits / (cache_hits + cache_misses)`
+
+Alert if hit rate drops more than 5 percentage points from baseline — this signals the cache is cold, TTL is misconfigured, or the working set grew beyond cache capacity.
+
+---
+
+### Cache Hit Rate Multiplier Table
+
+| Hit Rate | DB traffic (% of requests) | DB load reduction |
+|----------|---------------------------|-------------------|
+| 50% | 50% | 2× |
+| 80% | 20% | 5× |
+| 90% | 10% | 10× |
+| 95% | 5% | 20× |
+| 99% | 1% | 100× |
+
+**Worked example: 100K read QPS. DB handles 10K QPS.**
+
+- Without cache: need 10 DB replicas to handle 100K QPS
+- 90% cache hit: DB sees 10K QPS → 1 primary handles it
+- 95% cache hit: DB sees 5K QPS → 1 primary with comfortable headroom
+- 99% cache hit: DB sees 1K QPS → primary barely notices
+
+This is why a jump from 90% to 95% hit rate is worth engineering effort — it halves your DB load, which means half the number of replicas, half the cost, and twice the headroom before your next scaling event.
+
+---
+
+### Visual Summary: Chapter 6 in One Picture
+
+```mermaid
+mindmap
+  root((Chapter 6\nBuilding Blocks))
+    Hash
+      Consistent hashing
+      Virtual nodes
+      Jump hashing
+      Rendezvous hashing
+      Hot partition mitigation
+    Cache
+      Cache-aside
+      Write-through
+      Write-behind
+      Stampede prevention
+      Hot key replication
+      Hit rate targets
+    State
+      Stateless servers
+      External session store
+      JWT vs server-side sessions
+      Revocation strategy
+    Idempotency
+      UUID v4 keys
+      Redis SETNX lock
+      DB unique constraint
+      24-hour TTL
+      Body mismatch check
+    Queue
+      At-least-once + idempotent consumers
+      Kafka vs SQS
+      DLQ mandatory
+      Fan-out pattern
+      Backlog handling
+    Sync/Async
+      Sync for user-visible results
+      Async for side effects
+      Sync facade over async work
+      Correlation IDs
+      DLQ for async errors
+```
+
+---
+
+### Master L5 vs L6 Table — All Six Blocks
 
 | Block | L5 | L6 |
 |-------|----|----|
-| **Hash** | "We hash the key" | "We use consistent hashing; vnodes for balance; adding a node moves ~1/N keys" |
-| **Cache** | "We cache frequently accessed data" | "We cache with 5-min TTL; invalidate on write; stampede protection via probabilistic refresh" |
-| **State** | "Our servers are stateless" | "Stateless app servers; session in Redis with 24h TTL; we scale by adding servers" |
-| **Idempotency** | "We retry on failure" | "All write APIs accept idempotency keys; we dedupe for 24h; payments use it" |
-| **Queue** | "We use a queue for async" | "Kafka for events, at-least-once; idempotent consumers; DLQ with 7-day retention" |
-| **Sync/Async** | "We use async for slow stuff" | "Checkout is sync—user needs confirmation. Email and analytics are async—we use a queue" |
+| **Hash** | Uses `user_id % N` to shard; aware of consistent hashing | Chooses consistent hashing with 150 vnodes; explains why modulo causes mass redistribution; handles hot partitions with secondary shard key or dedicated shard for dominant key |
+| **Cache** | Puts data in Redis with a TTL; knows cache-aside | Tracks hit rate target (95%), sizes cache to fit working set, adds TTL jitter, implements background refresh for hot keys, has a DB fallback plan with circuit breaker when Redis is down |
+| **State** | Knows servers should be stateless; moves sessions to Redis | Explains JWT revocation problem, uses short-expiry JWTs + revocable refresh tokens, designs for zero-downtime deploys with stateless servers, understands that sticky sessions are a scaling anti-pattern |
+| **Idempotency** | Adds an idempotency key to the payment API | Generates UUID v4 client-side before first attempt, stores key → response with 24h TTL, handles concurrent duplicates with SETNX + double-check, adds DB unique constraint as safety net, rejects body mismatches |
+| **Queue** | Sends work to a queue for async processing; knows SQS vs Kafka | Configures DLQ on every queue, alerts on DLQ depth > 0, uses at-least-once with idempotent consumers, chooses Kafka for fan-out and replay, applies backpressure when consumer lag exceeds threshold |
+| **Sync/Async** | Makes user-facing flows sync, side effects async | Defines the sync critical path explicitly (payment + inventory check + order record), makes everything else async, instruments async flows with correlation IDs and distributed traces, ensures async errors surface via DLQ alerts and order status endpoints — never silently lost |
 
-The L6 answer includes *how* and *why* and *what happens when it fails*. That's the bar.
-
----
-
-# Visual Summary: Chapter 6 in One Picture
-
-```
-    ╔═══════════════════════════════════════════════════════════════════════╗
-    ║                    CHAPTER 6 — REMEMBER THIS                         ║
-    ╠═══════════════════════════════════════════════════════════════════════╣
-    ║                                                                       ║
-    ║   YOUR DESIGN TOOLKIT (ask these for EVERY system):                    ║
-    ║                                                                       ║
-    ║   ┌─ HASH ───────── How is data distributed? Consistent hashing?     ║
-    ║   ├─ CACHE ──────── What's hot? TTL? Invalidation? Stampede plan?    ║
-    ║   ├─ STATE ──────── Stateless servers + external store (Redis/DB)    ║
-    ║   ├─ IDEMPOTENCY ── Every critical write needs a retry-safe key     ║
-    ║   ├─ QUEUE ──────── Decouple slow work. Buffer spikes. DLQ for fails║
-    ║   └─ SYNC/ASYNC ── User waits? → Sync. Side effect? → Async        ║
-    ║                                                                       ║
-    ║   CHECKOUT FLOW (putting it all together):                            ║
-    ║   ┌─────────────────────────────────────────────────────────────┐    ║
-    ║   │  User clicks "Pay"                                          │    ║
-    ║   │     │                                                       │    ║
-    ║   │     ▼ SYNC (user waits)                                     │    ║
-    ║   │  [Idempotency check] → [Charge card] → [Create order]      │    ║
-    ║   │     │                                                       │    ║
-    ║   │     ▼ ASYNC (user doesn't wait)                             │    ║
-    ║   │  [Queue] → [Send email] [Update analytics] [Reserve ship]  │    ║
-    ║   └─────────────────────────────────────────────────────────────┘    ║
-    ║                                                                       ║
-    ║   FAILURE MODES:                                                      ║
-    ║   Cache down → DB gets hammered (thundering herd)                     ║
-    ║   Queue full → Backpressure or drop (have a DLQ!)                     ║
-    ║   No idempotency → Double charge on retry                             ║
-    ║   Stateful server dies → Session lost (use external store!)           ║
-    ╚═══════════════════════════════════════════════════════════════════════╝
-```
-
----
-
-# Exercises and Brainstorming
-
-## Exercise 1: Consistent Hashing — Add a Node
-
-You have a consistent hashing ring with 4 nodes (A, B, C, D) and 200 virtual nodes each. You add node E.
-
-1. Roughly what percentage of keys move to E?
-2. Which nodes are affected — do all 4 lose keys or just some?
-3. During the rebalance window, some reads will miss the cache. What mitigation strategies prevent a thundering herd on the DB?
-4. Compare with modulo hashing (`hash(key) % 4 → % 5`): what percentage of keys would have to move?
-
-*Target answer: ~20% of keys move to E; all nodes can potentially donate keys (from their arcs where E's vnodes land); mitigation = dual-read during migration or pre-warming; modulo = ~80% of keys remap.*
-
----
-
-## Exercise 2: Cache Strategy — Hot Key Problem (Celebrity Post)
-
-A celebrity with 10 million followers posts a photo. All 10M followers' feeds try to load the photo simultaneously within 2 seconds.
-
-1. Which cache pattern do you use for the photo content itself? Why?
-2. What breaks with a standard cache-aside implementation at this scale?
-3. Describe a stampede-prevention strategy (probabilistic early expiration or request coalescing) in concrete terms.
-4. Would write-through or read-through help here? Why or why not?
-5. The photo is 500 KB. At 10M requests in 2 seconds, what's the egress if even 1% miss the cache? Is a CDN sufficient, or do you need multi-tier caching?
-
----
-
-## Exercise 3: Idempotency Across 3 Services
-
-A payment flow calls: (1) Payment Service, (2) Inventory Service, (3) Order Service — in sequence. The client retries the entire flow on timeout.
-
-1. Where do you place idempotency keys? One key for the whole flow, or per-service? Justify.
-2. Payment has already charged the card when Inventory fails. What happens on retry?
-3. Design the deduplication store: what key do you use, what's the TTL, what do you store as the value?
-4. If two concurrent requests with the same idempotency key arrive simultaneously at the Payment Service, what race condition exists? How do you prevent a double charge?
-5. Should idempotency keys be client-generated or server-generated? What are the tradeoffs?
-
----
-
-## Exercise 4: Write-Through vs Cache-Aside — Decision
-
-For each of the following data types in an e-commerce system, choose a caching strategy (cache-aside, write-through, write-behind, read-through) and justify your choice in one sentence:
-
-| Data | Your Choice | One-Line Justification |
-|------|-------------|------------------------|
-| User session (JWT + cart) | ? | |
-| Product price (changes hourly) | ? | |
-| Product description (changes rarely) | ? | |
-| Inventory count (must not oversell) | ? | |
-| Order history (immutable after creation) | ? | |
-| Homepage featured products (updated by marketing) | ? | |
-
-*Discuss: Where strong consistency is required, is caching the right choice at all, or should you bypass the cache for reads?*
-
----
-
-## Exercise 5: Sync vs Async — Design a Checkout Flow
-
-Design the checkout endpoint for an e-commerce system. The operations are:
-
-- Validate cart (inventory check)
-- Charge payment
-- Create order record
-- Send confirmation email
-- Update analytics
-- Notify fulfillment service
-- Reserve shipping slot
-
-1. Which operations must be synchronous (in the request-response cycle)? Why?
-2. Which can be asynchronous (queued)?
-3. What happens if the async queue goes down? Does the user experience degrade?
-4. What's your idempotency strategy for each synchronous step?
-5. Draw the happy-path sequence. Then draw the failure path where payment succeeds but order creation fails.
-
----
-
-## "What If X Changes?" Brainstorming
-
-These are follow-up questions an interviewer might ask. Practice answering each in 60–90 seconds.
-
-**Hashing:**
-- "What if consistent hashing causes hotspots because a celebrity's content all maps to the same vnode range?"
-- "You're switching from 10 shards to 11 shards. Using modulo hashing, how would you migrate without downtime?"
-- "When would you use rendezvous hashing over consistent hashing?"
-
-**Caching:**
-- "Your Redis cache goes down at 3 AM. Walk me through exactly what happens to your system."
-- "A user updates their profile photo. How do you ensure all 500 CDN edge nodes see the new photo within 60 seconds?"
-- "Your cache hit rate drops from 95% to 70% overnight. What's your diagnosis checklist?"
-- "You have a hot key: one product is getting 100K reads/second but your Redis can only handle 80K. What are your options?"
-
-**Idempotency:**
-- "A user double-clicks the 'Place Order' button. Your frontend sends two identical requests 50ms apart. Walk through your idempotency design."
-- "Your idempotency key store (Redis) goes down. What happens to in-flight requests? What's your fallback?"
-
-**Queues:**
-- "Your Kafka consumer has been down for 6 hours. It comes back online. What's the backlog situation? What's your strategy?"
-- "A message keeps failing and going to the DLQ. How do you detect, alert, and recover?"
-- "You're asked to implement exactly-once delivery for a payment event. Is this possible? What guarantees does Kafka provide?"
-
----
-
-## Failure Injection Scenarios
-
-**Scenario 1: Cache Stampede**
-Your product catalog cache has a 5-minute TTL. At 9:00 AM, the TTL expires for a popular product page. In the next 200ms, 50,000 requests arrive and all miss the cache simultaneously.
-
-- What happens to your database?
-- How do you prevent this? Describe two different mitigations.
-- How would you detect this in your monitoring before it causes an outage?
-
-**Scenario 2: Queue Backlog Cascade**
-Your checkout service writes to a Kafka topic for async email/analytics/fulfillment. Traffic spikes 10× during a flash sale. Consumers can't keep up. The queue starts growing.
-
-- What happens when the queue reaches its retention limit?
-- How does backpressure propagate back to your checkout service?
-- What's the difference between dropping messages and applying backpressure? When is each acceptable?
-
-**Scenario 3: Idempotency Key Collision**
-Two different users happen to submit idempotency keys that are numerically close (e.g., sequential integers assigned by the client). Key 1001 collides with an existing request.
-
-- What does your system return to user B whose key matched user A's request?
-- How should idempotency keys be generated to make collision astronomically unlikely?
-- What's the risk of using `timestamp + user_id` as an idempotency key?
-
----
-
-## Trade-off Debates
-
-**1. Consistent hashing vs database sharding with a routing table**
-- Consistent hashing: no central routing state, O(log N) lookup with vnodes, minimal movement on rebalance
-- Routing table (e.g., Vitess): central shard map, O(1) lookup, arbitrary shard movement, explicit control
-- *When do you prefer the routing table approach? What's the operational cost of each?*
-
-**2. Synchronous write-through vs asynchronous write-behind for a session store**
-- Write-through: strong consistency, every write hits both Redis and DB, higher write latency
-- Write-behind: fast writes, risk of data loss if Redis dies before DB sync
-- *A user logs in, then your Redis node crashes 100ms later before write-behind flushes. What's the user experience?*
-
-**3. Single large queue vs many small queues**
-- Single topic: simple, one consumer group, ordering across all events
-- Per-entity topic (e.g., per user_id): parallel processing, ordering per entity, N topics to manage
-- *For a payment processing system, which would you choose? What's the failure blast radius difference?*
