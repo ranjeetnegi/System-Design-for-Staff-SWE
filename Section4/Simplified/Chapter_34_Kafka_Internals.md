@@ -4425,3 +4425,765 @@ Not knowing these facts.
 Diagnosing before prescribing.
 Naming the tradeoff before recommending.
 Designing for failure before designing for the happy path.
+## Supplemental Brainstorming: Chapter 34 — Kafka Internals
+
+*Questions 25-42: Advanced internals and cross-chapter integration.*
+
+### Section A: Advanced Kafka Mechanics (Q25-Q33)
+
+---
+
+**Question 25 — Partition Reassignment and Its Impact**
+
+Your Kafka cluster has 5 brokers and a topic with 20 partitions replicated at RF=3. Broker 2 is
+being decommissioned. You initiate a partition reassignment to move its 4 partition replicas to
+broker 5. Describe what happens mechanically during the reassignment. What is the impact on
+producer and consumer throughput during reassignment, and how do you minimize it?
+
+During partition reassignment: Kafka begins replicating the partition data from the current leader
+to the new replica on broker 5. Broker 5 starts fetching log segments from the leader sequentially
+from the beginning of the retention window. Until broker 5 has caught up to the leader's end offset,
+it is not in the ISR (In-Sync Replicas). During this catch-up phase, the partition has a reduced
+ISR. If the leader fails during catch-up, Kafka can only elect a new leader from the existing ISR,
+which may not include the fully caught-up broker 5.
+
+Throughput impact: the reassignment adds replication network traffic between the leader broker and
+broker 5. For a partition with 1 TB of data and 7-day retention, catch-up requires transferring
+1 TB of log data. At 100 MB/second replication throughput, that takes over 2.5 hours. During those
+2.5 hours, the leader broker's network is saturated with both normal consumer reads and the
+replication catch-up traffic for broker 5.
+
+Mitigation: use throttling. Kafka's kafka-reassign-partitions.sh tool accepts
+--throttle <bytes_per_second>. Set the throttle to 50 MB/second so reassignment uses half the
+broker's available network bandwidth. The reassignment takes longer (5+ hours instead of 2.5) but
+does not saturate the broker. Schedule reassignments during off-peak hours. Monitor ISR shrinkage
+on the affected partitions — if ISR drops below 2 during reassignment, temporarily pause the
+reassignment.
+
+- Calculate: at 50 MB/second throttle, how long does it take to reassign 4 partitions each with
+  250 GB of data? What is the total extra network traffic the leader broker handles?
+- Follow-up: the reassignment completes but broker 5 does not become the preferred leader. Kafka
+  still routes all reads and writes for those partitions through the old leader on broker 3.
+  What command fixes this, and what is "preferred leader election"?
+
+---
+
+**Question 26 — Log Compaction vs. Time-Based Retention: Choosing and Combining**
+
+You have two Kafka topics: (A) "user-preferences" where each user's latest settings matter but
+history does not, and (B) "user-transactions" where the full history must be retained for audit
+purposes. You consider: log compaction for topic A, time-based retention for topic B, and a
+hybrid cleanup.policy=compact,delete for a third topic C. Explain what each policy does
+mechanically, how the compaction thread works, and what the worst-case behavior of compaction
+is when the topic is heavily written.
+
+Log compaction (cleanup.policy=compact): Kafka periodically runs a compaction thread in the
+background. The compaction thread scans the "dirty" segment (all segments written since the last
+compaction) and builds an in-memory map of key -> latest_offset. It then rewrites log segments,
+keeping only the message with the highest offset for each key and discarding earlier versions. The
+result: only the latest value per key is retained, regardless of how old the partition is. A
+"tombstone" record (value=null for a key) causes the key to be deleted from the log entirely after
+a compaction cycle.
+
+Compaction does NOT run continuously. It runs when the ratio of "dirty" bytes to total bytes exceeds
+min.cleanable.dirty.ratio (default 0.5). If a topic is written heavily (1M events/second for a
+single key), the compaction thread may fall behind and the topic can grow significantly before the
+next compaction cycle runs. Worst-case: with min.cleanable.dirty.ratio=0.5 and a 100 GB partition,
+the dirty section can grow to 50 GB before compaction starts. During compaction, the dirty section
+can be temporarily expanded further before shrinking.
+
+Hybrid cleanup.policy=compact,delete: Kafka applies both policies. Older messages are deleted
+based on retention.ms (time-based). Among retained messages, compaction ensures only the latest
+value per key is kept. This is useful for topic C where you need both "don't retain data older
+than 30 days" AND "for recent data, only keep the latest value per key."
+
+For topic A (user-preferences): log compaction is correct. Users update settings infrequently but
+the latest value must always be available for new consumers (e.g., a new recommendation service
+that starts consuming from the beginning must get the current settings for all users, not replay
+every historical change).
+
+For topic B (user-transactions): time-based retention with a long window (2 years) and no
+compaction. Every transaction event must be preserved; compaction would discard earlier
+transactions for the same user.
+
+- Follow-up: a consumer starts from offset 0 on the compacted user-preferences topic. It reads
+  user 123's settings record and processes it. Five minutes later, another message arrives for
+  user 123 (a settings update). The compaction runs that night and removes the earlier record.
+  The consumer has already committed the offset past the old record. Is there any issue? What
+  if the consumer needs to restart from offset 0 again after the compaction?
+
+---
+
+**Question 27 — Kafka Connect: Source and Sink Connectors**
+
+You need to stream all new rows from a PostgreSQL "orders" table into a Kafka topic, and then
+stream processed events from that topic into an Elasticsearch index for search. Design the
+Kafka Connect pipeline using a source connector and a sink connector. Explain how the source
+connector detects new rows, what happens if the source connector restarts after a crash, and
+how you handle schema changes in the PostgreSQL table.
+
+Kafka Connect is a framework for running data ingestion pipelines without writing producer/consumer
+code. Connectors run inside Kafka Connect workers (JVM processes that Kafka manages). A source
+connector reads from an external system and publishes to Kafka. A sink connector reads from Kafka
+and writes to an external system.
+
+Source connector for PostgreSQL: use the Debezium PostgreSQL connector. Debezium reads the
+PostgreSQL WAL (Write-Ahead Log) using logical replication. Every INSERT, UPDATE, and DELETE to the
+orders table generates a change event published to a Kafka topic (e.g., "postgres.public.orders").
+Debezium stores its current WAL position (LSN — Log Sequence Number) in a Kafka topic called
+"connect-offsets." On restart, Debezium reads the last committed LSN from "connect-offsets" and
+resumes from that WAL position. No rows are missed (Kafka Connect provides at-least-once delivery;
+you must handle deduplication downstream if needed).
+
+Schema changes: if a column is added to the PostgreSQL orders table, Debezium detects the schema
+change from the WAL and publishes a schema change event. If Schema Registry is configured,
+Debezium registers the new schema version and subsequent events use the new schema. Old consumers
+that registered with BACKWARD compatibility can continue reading — the new column appears with a
+default value. Dropping a column from PostgreSQL is a breaking change; Debezium will publish events
+missing that field, which may break consumers expecting it.
+
+Sink connector for Elasticsearch: use the Confluent Elasticsearch Sink connector. It reads from
+the Kafka topic, maps Kafka message keys to Elasticsearch document IDs (enabling idempotent
+upserts), and indexes documents into Elasticsearch. If Elasticsearch is unavailable, the connector
+pauses (does not crash) and retries with backoff. Consumer lag accumulates in Kafka while
+Elasticsearch is down. When Elasticsearch recovers, the connector drains the lag.
+
+- Follow-up: you want zero-downtime migration of the Elasticsearch index (e.g., adding a new
+  field that requires an index mapping change). How do you use Kafka Connect's offset management
+  to replay the Kafka topic into a new Elasticsearch index, run both indexes in parallel, and
+  then switch traffic?
+
+---
+
+**Question 28 — Kafka Streams vs. Flink for Stream Processing**
+
+Your team must choose between Kafka Streams and Apache Flink for a stream processing job that
+computes 5-minute windowed aggregations of payment events, joins them with a slowly updating
+"merchant" reference table, and outputs results to another Kafka topic. Compare the two on:
+deployment complexity, state management, exactly-once semantics, late arrival handling, and the
+join semantics for the slowly-changing reference table.
+
+Kafka Streams: a Java library, not a separate cluster. Stream processing logic runs inside your
+application JVM alongside your normal application code. No separate cluster to operate. State is
+stored in local RocksDB instances on each application instance. State is backed up to Kafka
+changelog topics so it survives instance restarts. Deployment: add the library as a dependency,
+write the topology, package as a JAR, deploy like any microservice.
+
+Flink: a separate cluster (Flink Job Manager + Task Managers). Your job is submitted as a JAR to
+the Flink cluster. State is stored in Flink's managed state (in-memory or RocksDB). Checkpoints
+are taken periodically to durable storage (S3, HDFS). Flink offers more expressive windowing
+(event-time, session windows, sliding windows), better late-arrival handling via watermarks, and
+a richer operator library. Flink supports exactly-once via the two-phase commit sink.
+
+For this specific job:
+
+5-minute windowed aggregations: both support this. Flink's event-time watermark support is more
+precise for late arrivals. Kafka Streams supports windowed aggregations but late arrival handling
+requires manual configuration of grace periods and is less expressive than Flink's watermark API.
+
+Join with slowly-changing merchant table: in Kafka Streams, use a GlobalKTable for the merchant
+reference data. A GlobalKTable is replicated to every application instance, so every instance can
+do a local lookup without a network hop. Flink achieves the same with a broadcast join — the
+slowly-changing table is broadcast to all task managers. Both work. Kafka Streams is simpler to
+implement.
+
+Exactly-once: Kafka Streams supports exactly-once for Kafka-to-Kafka flows using Kafka's
+transactional API. Flink supports exactly-once for any sink that supports two-phase commit.
+
+Recommendation for this job: if the team already manages Kubernetes and is comfortable running
+distributed systems, Flink. If the team wants minimal operational overhead and the job does not
+require advanced windowing, Kafka Streams.
+
+- Follow-up: the payment aggregation job needs to join payment events with a "fraud-score" table
+  that updates every 5 seconds. The fraud-score table has 10 million rows. Can it be loaded
+  into a GlobalKTable or broadcast table? What is the memory implication?
+
+---
+
+**Question 29 — MirrorMaker 2: Cross-Cluster Replication**
+
+You use MirrorMaker 2 (MM2) to replicate Kafka topics from a US-East primary cluster to an
+EU-West disaster-recovery cluster. Your replication lag is normally under 5 seconds. A network
+partition between US-East and EU-West lasts 30 minutes. After the partition heals, describe what
+happens: (a) how MM2 recovers, (b) how much data was not replicated, and (c) how consumers on
+the EU cluster that were reading the replicated topics are affected.
+
+MirrorMaker 2 is a Kafka Connect cluster running in the target (EU-West) cluster. Its source
+connectors poll the US-East cluster for new messages. MM2 tracks its replication progress using
+consumer group offsets on the source cluster. When the network partition occurs: MM2's source
+connectors cannot connect to US-East. They pause and retry with backoff. No new data is replicated
+during the 30 minutes.
+
+After healing: MM2 source connectors reconnect to US-East. They resume from the last committed
+offset stored in the US-East "mm2-offsets" topic (MM2 stores its source cluster offsets in a
+topic on the source cluster). MM2 replays the 30 minutes of data that was not replicated. At
+normal replication throughput, if the backlog is 30 minutes of data and MM2 can process it faster
+than real-time, it catches up. If US-East ingestion is 1 GB/second and MM2 replication throughput
+is 1.2 GB/second, catch-up takes 30 minutes / 0.2 GB/sec advantage = 150 minutes to catch up
+while also keeping up with real-time data.
+
+Consumers on EU cluster: if EU-West consumers were reading the replicated topics during the 30-
+minute partition, they read up to the last replicated offset and then encountered no new data (the
+topic's high watermark in EU stopped advancing). Depending on consumer configuration, they either
+blocked (waiting for new messages) or returned empty poll results. No data loss for EU consumers
+— they just experienced 30 minutes without new data. After MM2 catches up, consumers resume.
+
+- Design the MM2 topic replication configuration that excludes internal topics (__consumer_offsets,
+  connect-configs) from replication while including all application topics.
+- Follow-up: a consumer group in EU-West committed offsets to the EU replicated topic during the
+  30-minute blackout. After the blackout, MM2 catches up and the EU topic now has 30 minutes of
+  new events. Will the EU consumer group automatically process the new events, or will there be
+  a consumer group offset issue?
+
+---
+
+**Question 30 — Consumer Group Rebalance: Impact and Mitigation**
+
+You have a consumer group with 20 instances consuming a topic with 20 partitions. A rolling
+deployment of your consumer service takes 10 minutes (one instance replaced at a time, 30 seconds
+per instance). Every time an instance is stopped and a new one starts, a rebalance occurs. Walk
+through the timeline: how many rebalances happen during the 10-minute deployment? What is the
+impact of each rebalance on consumer throughput? How do static group membership (group.instance.id)
+reduce this impact?
+
+With eager (stop-the-world) rebalancing: when instance 1 is stopped, it leaves the consumer group.
+The group coordinator detects this after session.timeout.ms (default 10 seconds). A rebalance
+begins. All 19 remaining instances stop processing, submit their partition assignments, wait for
+the group coordinator to send new assignments. Rebalance takes 5-30 seconds. Then instance 1's
+replacement joins: another rebalance. Total rebalances: 2 per replaced instance x 20 instances =
+40 rebalances. At 30 seconds of stop-the-world per rebalance: 40 x 30 seconds = 1,200 seconds of
+cumulative consumer downtime across the group, spread over 10 minutes. During each rebalance
+window, all 20 partitions are unassigned. Messages continue arriving in Kafka; consumer lag spikes.
+
+Static group membership (group.instance.id): assign each consumer instance a stable ID (e.g.,
+"consumer-1" through "consumer-20"). When an instance with a static ID leaves the group, the
+group coordinator does NOT immediately trigger a rebalance. It waits for session.timeout.ms. If a
+new instance joins with the same static ID within that window, the group coordinator reassigns the
+same partitions to the new instance without a full group rebalance. During a rolling deployment:
+stop instance 1, new instance 1 joins within session.timeout.ms (set to 60 seconds to give the
+new instance time to start), the coordinator reassigns only the 1 partition that was owned by
+instance 1. Throughput impact: 19 instances continue uninterrupted. Only the 1 partition being
+transferred experiences a brief processing gap. Total rebalances: 0 full-group rebalances, 20
+single-partition reassignments.
+
+Cooperative incremental rebalancing (partition.assignment.strategy=CooperativeStickyAssignor):
+further reduces impact by only revoking and reassigning partitions that actually need to move,
+rather than revoking all partitions and reassigning from scratch.
+
+- What is the correct value for session.timeout.ms if your rolling deployment guarantees each new
+  instance starts and joins the group within 45 seconds?
+- Follow-up: a consumer instance with static ID "consumer-7" crashes and is not restarted (the
+  deployment pipeline fails for that instance). Its static ID never rejoins. How does Kafka handle
+  this, and when does its partition get reassigned?
+
+---
+
+**Question 31 — Producer Idempotency: How It Actually Works**
+
+Explain the mechanical implementation of Kafka's idempotent producer (enable.idempotence=true).
+What is the producer ID (PID), what is the sequence number, and how does the broker use these
+to detect and deduplicate duplicates? What failure scenario does idempotency cover that acks=all
+alone does not cover?
+
+Without idempotency: a producer sends a batch with acks=all. The batch is replicated to all ISR
+replicas. The leader sends the ack. The ack is lost in the network before reaching the producer.
+The producer does not receive the ack and times out. It retries the same batch. The broker receives
+the batch again and writes it again — resulting in a duplicate record in the log.
+
+With idempotency (enable.idempotence=true): the producer is assigned a unique Producer ID (PID)
+by the broker when it connects. For each partition, the producer assigns a monotonically increasing
+sequence number to each batch, starting from 0. The sequence number is included in the batch header.
+The broker tracks, per (PID, partition), the last sequence number it successfully wrote. When a
+batch arrives, the broker checks: is this sequence number exactly (last_sequence + 1)? If yes,
+accept and write. If the sequence number equals last_sequence (duplicate retry): silently discard,
+return success to the producer. If the sequence number is lower than expected (out-of-order batch
+due to a bug): return an error. If the sequence number is higher than expected (gap in sequence):
+return an error indicating missed batches.
+
+This covers the ack-lost scenario: the broker wrote the batch, sent the ack, the ack was lost.
+Producer retries. Broker sees the same sequence number, recognizes it as a duplicate, discards it,
+returns success. No duplicate in the log.
+
+What idempotency does NOT cover: duplicates across producer restarts. The PID is assigned fresh on
+each producer startup. If a producer crashes and restarts, it gets a new PID. The broker does not
+know that the new producer is logically the same as the crashed producer. Any in-flight batches
+from the old producer that the broker already wrote will not be detected as duplicates by the new
+producer's sequence numbers.
+
+- How do Kafka transactions (initTransactions, beginTransaction, commitTransaction) extend
+  idempotency to cover the cross-restart duplicate case?
+- Follow-up: your producer is producing to 50 partitions. Each partition has an independent
+  sequence number tracked by the broker. If the producer crashes and restarts with a new PID,
+  how many independent duplicate scenarios are possible?
+
+---
+
+**Question 32 — Exactly-Once Transactions in Kafka: initTransactions, beginTransaction, commitTransaction**
+
+Walk through the complete lifecycle of a Kafka transaction for a Kafka Streams job that reads
+from topic A, transforms each message, and writes the result to topic B. Include: what happens
+at initTransactions, beginTransaction, the write of transformed messages, commitTransaction, and
+what happens if the Streams instance crashes between beginTransaction and commitTransaction. How
+does a consumer with isolation.level=read_committed handle the uncommitted messages?
+
+initTransactions: called once at application startup. The producer contacts the transaction
+coordinator broker (determined by hash(transactional.id) % num_partitions of the __transaction_state
+topic). The coordinator registers the transactional.id, assigns a Producer ID (PID) and epoch,
+and fences any previous producer with the same transactional.id and a lower epoch. "Fencing"
+means the coordinator will reject any future produce requests from the old PID/epoch combination.
+This is the mechanism that prevents the old (crashed) instance from completing a transaction
+that the new instance is taking over.
+
+beginTransaction: a local call. No network request. The producer marks itself as being inside a
+transaction. Subsequent produce calls are marked as part of this transaction in the batch header.
+
+Write to topic B: the producer sends batches to topic B's leader broker. The broker writes the
+batches to the log but marks them as "transactional — not yet committed." Consumers with
+isolation.level=read_committed cannot read these messages yet.
+
+Commit to topic A offsets: the producer sends an "add offsets to transaction" request, associating
+the consumed offsets from topic A with this transaction. The offsets will only be committed if the
+transaction commits.
+
+commitTransaction: the producer sends a commit request to the transaction coordinator. The
+coordinator writes "PREPARE_COMMIT" to the __transaction_state log, then sends "commit markers"
+to all topic partitions involved in the transaction (including topic B and the consumer group's
+offset topic). Brokers receiving commit markers mark the transactional batches as committed.
+
+Crash between beginTransaction and commitTransaction: the new producer instance starts,
+calls initTransactions with the same transactional.id. The coordinator sees a new epoch and
+fences the old PID. The coordinator checks the state of the in-progress transaction in
+__transaction_state and sees it was in ONGOING state. The coordinator issues an ABORT for that
+transaction — it sends abort markers to all involved partitions. The uncommitted batches in topic
+B are marked as aborted. Consumers with isolation.level=read_committed skip aborted batches.
+The messages are effectively invisible.
+
+- What is the transactional.id used for in practice, and why must it be unique per application
+  instance but stable across restarts of the same logical instance?
+- Follow-up: a consumer with isolation.level=read_uncommitted reads a transactional batch that
+  is later aborted. What does the consumer see?
+
+---
+
+**Question 33 — Monitoring Kafka: Consumer Lag, Under-Replicated Partitions, Request Rate**
+
+You are on-call for a Kafka cluster processing 200K messages/second. At 3 AM, an alert fires.
+Design the monitoring dashboard and the runbook for three scenarios: (A) consumer lag on the
+payment-processor group spikes to 500,000, (B) under-replicated partitions count goes from 0 to
+12, (C) broker request rate drops from 200K/sec to 0 for broker 3. For each: what is the likely
+cause, what commands do you run, and what is the remediation?
+
+**Scenario A — Consumer lag spike:**
+
+Likely causes: consumer crash-loop, slow message processing (CPU-bound model, slow external API),
+message producing rate spiked beyond consumer processing capacity, consumer rebalance storm.
+
+Commands: kafka-consumer-groups.sh --describe --group payment-processor shows per-partition lag,
+current offset, log end offset, and which consumer instance owns each partition. Check consumer
+logs for exceptions. Check broker CPU and network metrics for sudden throughput spikes.
+
+Remediation: if crash-loop, fix the bug and redeploy. If slow processing, scale out the consumer
+group (add instances up to the partition count). If message rate spiked, check the producer side
+for an upstream event that generated a burst (e.g., a batch import, a traffic spike). If
+rebalance storm, enable static group membership.
+
+**Scenario B — Under-replicated partitions:**
+
+Likely causes: one or more follower brokers are lagging behind the leader. Causes include: a broker
+that is overloaded (high disk I/O from compaction or reassignment), a broker that restarted and is
+catching up, network degradation between brokers, or a broker crash.
+
+Commands: kafka-topics.sh --describe --under-replicated-partitions shows which partitions are
+under-replicated and which replicas are out of sync. Check broker logs on the lagging replica for
+I/O errors, OutOfMemoryError, or network exceptions. Check broker JVM GC logs.
+
+Remediation: if a broker is catching up after a restart, wait — it will rejoin ISR when it catches
+up to the high watermark. If a broker is overloaded, reduce compaction throttle or move some
+partitions off that broker. If a broker has crashed, restart it or replace it and initiate
+partition reassignment.
+
+**Scenario C — Request rate drops to 0 for broker 3:**
+
+Likely causes: broker process crashed, OOM kill, disk full (Kafka writes stop when disk is 95%
+full), network interface failure, or ZooKeeper/KRaft connectivity loss.
+
+Commands: SSH to broker 3, check process status (systemctl status kafka), check disk space
+(df -h), check recent Kafka logs (/var/log/kafka/server.log). On the cluster: kafka-broker-api-
+versions.sh --bootstrap-server broker3:9092 — if this times out, the broker is unreachable.
+
+Remediation: if disk full, delete old log segments manually or increase disk. If OOM, check heap
+settings (-Xmx). If crashed, restart the broker. Leaders on broker 3's partitions will have
+already failed over to other ISR replicas (within the unclean.leader.election.enable window).
+After broker 3 restarts, preferred leader election restores leadership to broker 3.
+
+- Follow-up: consumer lag is 500,000 messages and growing. You scale the consumer group from 10
+  to 20 instances. The topic has 10 partitions. Does the lag stop growing? Why or why not?
+
+---
+
+### Section B: Cross-Chapter Integration (Q34-Q42)
+
+---
+
+**Question 34 — Ch34 + Ch29: Kafka Log Compaction vs. LSM-Tree Compaction**
+
+Kafka log compaction and LSM-Tree compaction in databases like RocksDB or Cassandra share a
+similar name and a vaguely similar concept. Compare the two rigorously: what problem does each
+solve, what is the mechanical process of each, and what are the performance costs of each?
+A teammate claims "Kafka compaction is just like RocksDB compaction." Is that accurate?
+
+LSM-Tree compaction: in a log-structured merge tree, all writes go to an in-memory memtable, which
+is flushed to immutable SSTable files on disk (level 0). As SSTables accumulate, they are compacted:
+multiple SSTables at level N are merged and sorted, producing fewer, larger SSTables at level N+1.
+The purpose is to improve read performance (fewer SSTables to scan) and reclaim space from deleted
+or overwritten keys. Compaction is CPU and I/O intensive — it involves reading multiple SSTables,
+merging/sorting the key-value pairs, and writing the result as a new SSTable. The cost is a
+background I/O amplification factor of 10-30x: for every byte written once, the compaction process
+reads and rewrites it 10-30 times over its lifetime.
+
+Kafka log compaction: the purpose is different — not to improve read performance (Kafka reads are
+sequential, always fast), but to reclaim storage by removing earlier versions of the same key.
+Kafka does not sort by key. It does not create a data structure that improves lookup speed. After
+compaction, a consumer reading offset 0 still reads sequentially — it just encounters fewer records
+because duplicate keys have been removed. Kafka compaction does not enable key-based random access.
+
+The claim is inaccurate: they solve different problems. LSM compaction merges sorted levels to
+improve read performance. Kafka compaction removes superseded key versions to reduce storage.
+LSM compaction produces a searchable B-tree-like structure per level. Kafka compaction produces
+a smaller sequential log. LSM compaction is triggered by SSTable count per level. Kafka compaction
+is triggered by the dirty-to-total bytes ratio.
+
+One meaningful similarity: both involve reading old data and writing a new, smaller representation
+of it. Both are background processes that compete with foreground read/write operations for I/O.
+
+- For a use case where you need both fast random key-value lookup AND event streaming, would you
+  use Kafka with log compaction alone? What would you add?
+- Follow-up: a compacted Kafka topic and a RocksDB instance are both used to store "latest user
+  preferences." What can RocksDB do that the compacted Kafka topic cannot?
+
+---
+
+**Question 35 — Ch34 + Ch33: Scaling Consumer Groups Beyond Partition Count**
+
+Your Kafka consumer group has 10 consumers for a topic with 10 partitions. You need to handle
+10x the current message rate. A teammate proposes adding 90 more consumers to the group (100
+total). Explain exactly what happens when you add the 91st consumer. Then design the correct
+approach to handle 10x message rate while working within Kafka's partition-consumer constraints.
+
+When you add the 91st consumer to a consumer group consuming a topic with 10 partitions: the
+91st consumer through 100th consumer receive no partition assignment. Kafka's partition assignment
+rule is hard: one partition can be assigned to at most one consumer within a consumer group at
+any time. 10 partitions means 10 consumers can be active at most. Consumers 11 through 100 sit
+idle, receiving empty poll results. They still maintain heartbeats and participate in rebalances,
+adding overhead to the group coordinator, but they do zero useful work.
+
+The correct approach to handle 10x message rate:
+
+Option 1 — Increase partition count: increase the topic from 10 to 100 partitions and add 90
+consumers. This is the primary Kafka scaling mechanism. Downside: partition count increase in a
+live topic requires careful planning (it does not reshuffle existing messages, so key-based
+routing changes meaning — messages that previously went to partition 3 for a given key may now
+go to partition 37 after the repartition, breaking ordering guarantees). For topics with key-based
+routing, increasing partitions while maintaining ordering is complex.
+
+Option 2 — Scale consumer processing: instead of adding more Kafka consumers, make each consumer
+process faster. Use a thread pool inside each consumer: the consumer thread polls Kafka and
+dispatches messages to a local thread pool of 10 worker threads. 10 consumers x 10 internal
+threads = effective parallelism of 100. Risk: offset management is harder (you must not commit an
+offset until all earlier offsets in that partition have been processed by the thread pool).
+
+Option 3 — Scale consumer infrastructure: if each consumer is CPU-bound and runs on a single-core
+VM, vertically scale the VM. 10 consumers on 16-core VMs may process 10x as fast as 10 consumers
+on single-core VMs.
+
+- If you increase partitions from 10 to 100 in a live system with key=user_id partitioning, what
+  happens to in-flight messages and ordering guarantees during the transition?
+- Follow-up: is there a way to serve multiple consumer groups from the same 10-partition topic
+  while each group gets the full throughput guarantee? Why or why not?
+
+---
+
+**Question 36 — Ch34 + Ch35: Lambda Architecture with Kafka**
+
+Design a Lambda architecture using Kafka. The stream layer (Flink) processes events in real-time
+and produces approximate results with low latency. The batch layer (Spark) reprocesses all events
+every 24 hours and produces accurate results. How do you manage Kafka retention to support both
+layers? What happens when Spark's accurate results differ from Flink's approximate results, and
+how do you reconcile them in the serving layer?
+
+Lambda architecture: two separate processing paths operating on the same source data. Stream layer:
+Flink reads from Kafka continuously, computes approximate results (windowed aggregations, session
+stats), writes to a "stream-results" store (e.g., Redis or a real-time database). Batch layer:
+Spark reads the entire event history from Kafka every 24 hours, recomputes accurate results
+(correct for late arrivals, deduplication, and any approximation errors), writes to a
+"batch-results" store (e.g., a data warehouse). Serving layer: queries merge stream results and
+batch results. For time windows that the batch layer has processed, serve batch results (accurate).
+For recent time windows (past 24 hours), serve stream results (approximate).
+
+Kafka retention for this design: Spark needs to read all events from the past 24 hours at
+minimum. If Spark's job is slow and takes 6 hours to complete, the oldest events it reads were
+30 hours old at job start. Set retention to 48 hours minimum. For resilience (Spark job failure
++ 24-hour retry), set retention to 72 hours. Cost: at 1 TB/day ingestion x RF=3 x 72 hours =
+9 TB of storage across the cluster.
+
+For historical reprocessing (Spark needs to recompute the past 6 months of data): Kafka retention
+cannot hold 6 months. Archive all Kafka events to S3 in Parquet format using a Kafka Connect S3
+sink. Spark reads historical data from S3, not Kafka.
+
+Reconciliation in the serving layer: when Spark produces accurate results for a time window, the
+serving layer must "upgrade" that window from stream (approximate) to batch (accurate). This is
+typically done via a version timestamp: Spark writes results with batch_run_timestamp. The serving
+layer queries: "for window W, if batch_run_timestamp exists and is recent, use batch result; else
+use stream result." Care must be taken to ensure there is no visible "flicker" as the serving
+layer transitions between the two sources.
+
+- Follow-up: the Lambda architecture's main criticism is that you maintain two codebases — one
+  Flink job and one Spark job — that must produce compatible results from the same input. The
+  Kappa architecture proposes eliminating the batch layer and using only the stream layer with
+  long-retention Kafka for reprocessing. What are the practical limits of the Kappa approach?
+
+---
+
+**Question 37 — Ch34 + Ch36: MirrorMaker 2 Failover and Offset Translation**
+
+MirrorMaker 2 replicates Kafka topics from US-East (primary) to EU-West (DR). The US-East cluster
+becomes unavailable. Consumers must failover and start reading from the EU-West cluster. Design
+the offset translation and consumer group failover. What is the worst-case duplicate processing
+window, and how do you bound it?
+
+Offset translation problem: a message at offset 1000 in US-East may be at offset 997 in EU-West,
+because MM2 replication is not guaranteed to preserve offsets. MM2 may batch messages differently.
+EU-West is a fresh cluster that received the replicated data. Consumer group "order-processor" has
+committed offset 1000 in US-East. After failover to EU-West, what offset should it start from?
+
+MM2 solves this with an offset translation topic: "mm2-offset-syncs." MM2 records the mapping
+between source cluster offsets and target cluster offsets. The mapping is approximate — MM2 records
+a sync point for every 4096 messages (configurable). MirrorMaker 2 provides the
+RemoteClusterUtils.translateOffsets() API that looks up the source offset and returns the
+corresponding target offset by finding the nearest sync point at or before the committed offset.
+
+Worst-case duplicate window: if the nearest sync point before US-East offset 1000 is at offset
+900 (MM2 recorded a sync at every 100 messages), the consumer starts from EU-West's equivalent
+of offset 900. Messages 900 to 999 that the consumer already processed in US-East are reprocessed.
+Worst-case duplicates: 100 messages (1 sync interval). To reduce this, decrease the offset sync
+interval in MM2 configuration (sync every 100 messages instead of 4096). This increases the
+frequency of sync writes to the offset-syncs topic but reduces the worst-case duplicate window.
+
+Consumer group failover procedure: (1) detect US-East unavailability via monitoring, (2) use
+RemoteClusterUtils.translateOffsets() to compute target offsets for each partition, (3) use
+kafka-consumer-groups.sh --reset-offsets --to-offset <translated_offset> on the EU-West cluster
+to set the consumer group's starting position, (4) restart consumers pointing to EU-West.
+
+- What is the worst-case message loss (as opposed to duplicates) that can occur during failover?
+  Under what conditions is message loss possible even with MM2?
+- Follow-up: after the US-East cluster recovers, you want to fail back. What is the failback
+  procedure, and how do you handle messages that were produced to EU-West during the failover
+  period (messages that do not exist in US-East)?
+
+---
+
+**Question 38 — Ch34 + Ch37: GDPR Deletion from an Immutable Kafka Log**
+
+EU user events are stored in a Kafka topic with 7-day retention. A GDPR deletion request arrives
+for user 123. The user's PII is embedded in 200 Kafka messages spread across 3 partitions over
+the past 7 days. Kafka is immutable — you cannot delete or modify individual messages. Design
+the compliant approach. Be specific about the technical mechanism, the audit trail, and what
+happens to the messages after the user's key is deleted.
+
+Approach 1 — Wait for retention expiry: do nothing. Messages expire in at most 7 days. GDPR's
+"right to erasure" requires deletion "without undue delay," typically interpreted as within 30
+days. 7-day retention satisfies this if the request is processed before the 7 days expire and
+no other system has consumed and stored the data. This approach is fragile: messages produced
+late in the 7-day window (e.g., day 6) persist for 1 day after the request; downstream consumers
+may have already read and stored the PII elsewhere.
+
+Approach 2 — Crypto-shredding (recommended): before writing to Kafka, encrypt all PII fields
+using a per-user AES-256 key stored in a Key Management Service (KMS). Kafka messages contain
+ciphertext, not plaintext PII. On GDPR deletion: delete the user's encryption key from KMS.
+All 200 messages now contain undecryptable ciphertext. The bytes remain in Kafka but are
+effectively meaningless without the key. Regulators widely accept that undecryptable ciphertext
+does not constitute personal data.
+
+Audit trail: log the deletion request: (user_id=123, deletion_requested_at=2026-06-15T10:00Z,
+kms_key_deleted_at=2026-06-15T10:00:03Z, kafka_topic_has_ciphertext_only=true). Store the
+audit record in an EU-resident durable store (not in Kafka, since Kafka's own retention would
+eventually expire it).
+
+Downstream handling: the user's PII was likely consumed from Kafka by downstream services and
+stored in their own databases. Publish a "user.deletion.requested" event to a dedicated compliance
+topic. Each downstream service subscribes, deletes or anonymizes its copy of the user's data,
+and publishes a "user.deletion.confirmed" event with its service name. A compliance coordinator
+service tracks confirmation from all known downstream services. Only when all have confirmed is
+the deletion considered complete for regulatory purposes.
+
+- What is the risk of approach 1 (wait for retention expiry) if the Kafka topic has a 30-day
+  retention? Does it still comply with GDPR's "without undue delay" standard?
+- Follow-up: a log compaction topic stores "latest user preferences" per user. The user's
+  preferences record is the most recent record for key=user_123. Crypto-shredding makes the
+  ciphertext unreadable. But the key "user_123" is itself visible in the Kafka log (keys are
+  not encrypted by default). Is the visible key a GDPR compliance risk?
+
+---
+
+**Question 39 — Broker Failure During a High-Throughput Write**
+
+Your Kafka cluster has 3 brokers. A topic has RF=3 and min.insync.replicas=2. Broker 1 is the
+leader for partition 0. At 14:00, while processing 500K messages/second, broker 1's disk fills
+up and the broker process stops accepting writes. Walk through the failure detection sequence,
+the leader election, the ISR impact, and the producer behavior during the election window.
+Specifically: what happens to producers using acks=all versus acks=1 during the ~10-second
+election window?
+
+Failure detection: Kafka brokers send heartbeats to the controller (the KRaft controller in modern
+Kafka, or the ZooKeeper-elected controller in older versions). The heartbeat timeout is
+controlled by zookeeper.session.timeout.ms (ZooKeeper) or broker.session.timeout.ms (KRaft),
+typically 6-18 seconds. When broker 1 stops sending heartbeats, the controller detects the failure
+after the timeout expires. During the detection window (up to 18 seconds), producers and consumers
+attempting to connect to broker 1 receive connection errors.
+
+ISR impact: broker 1 was in the ISR as leader. When it fails, the ISR shrinks from {1, 2, 3}
+to {2, 3}. min.insync.replicas=2, so {2, 3} satisfies the minimum. The controller elects a new
+leader from {2, 3} (first broker in ISR that is alive). Partition 0 now has a new leader on
+broker 2.
+
+Producer behavior with acks=all: the producer sends a batch to broker 1 (the leader). Broker 1 is
+down. The producer's connection to broker 1 fails after connection.timeout.ms. The producer
+refreshes metadata from another broker, discovers broker 2 is the new leader for partition 0, and
+retries the batch to broker 2. During the metadata refresh and leader election window (10-30
+seconds), the producer receives NotLeaderForPartition or LeaderNotAvailable errors. With retries
+enabled (retries=MAX_INT, default in modern Kafka), the producer retries automatically. With
+idempotence enabled, the retry is safe (duplicate detection via sequence numbers). With
+enable.idempotence=false and retries > 0, duplicates are possible if the batch reached broker 1
+before it crashed and was replicated to followers.
+
+Producer behavior with acks=1: the producer sends a batch to broker 1. If broker 1 acknowledged
+the batch (acks=1 means the leader acks before replicating), but then crashed before replicating,
+the data is lost — it is not on brokers 2 or 3. This is the data loss scenario that acks=1 allows.
+After election, the new leader broker 2 does not have that batch, and it is gone.
+
+- Calculate: at 500K messages/second and a 15-second election window, how many messages are
+  affected (in-flight or unacknowledged) during the leader election with acks=all versus acks=1?
+- Follow-up: min.insync.replicas=2 and only 2 brokers are alive. A producer with acks=all sends
+  a batch. The batch is written to both surviving brokers. Broker 2 then fails before acking.
+  Now only 1 broker is alive. What happens to the producer?
+
+---
+
+**Question 40 — Kafka Topic Naming, Access Control, and Multi-Tenant Operations**
+
+Your organization has 30 engineering teams each producing and consuming Kafka topics on a shared
+cluster. No naming conventions exist. Topics include: "test", "data", "events", "orders", "orders2",
+"orders-new", "orders-final", "orders-final-v2". Access control does not exist. A team's buggy
+consumer joins the wrong consumer group and resets offsets on a production topic. Design the topic
+naming convention, ACL strategy, and operational controls to prevent this class of incident in a
+multi-tenant shared cluster.
+
+Topic naming convention: enforce via a Kafka AdminClient interceptor that rejects topic creation
+if the name does not match the pattern: {team}.{environment}.{domain}.{version}, e.g.,
+payments.prod.orders.v1. This encodes team ownership (for ACL assignment), environment
+(prevents dev consumers from accidentally reading prod), domain (business context), and version
+(explicit versioning). Create a naming validation service called by the topic provisioning API
+— teams do not create topics directly via kafka-topics.sh, they request creation via an internal
+portal that enforces naming rules.
+
+ACL strategy: use Kafka ACLs (Access Control Lists) backed by each team's service account.
+Principle of least privilege: the payments team service account has WRITE access to
+payments.prod.*.* topics and READ access only to topics it explicitly depends on. No team has
+WRITE access to another team's topics. No team has the ability to delete topics or reset offsets
+for topics they do not own. Consumer group naming follows the same convention:
+{team}.{environment}.{domain}.{purpose}, e.g., payments.prod.orders.charge-processor. ACLs on
+consumer group names: teams can only use consumer groups prefixed with their team name.
+
+Operational controls: disable direct kafka-consumer-groups.sh --reset-offsets access in production.
+All offset resets must go through a change management portal that requires: team ownership
+verification, reason for reset, approval from a second team member, and an audit log entry.
+The portal calls Kafka Admin API on behalf of the requesting team after verification.
+
+- What monitoring do you put in place to detect when a new consumer group joins a production
+  topic that does not match any known consumer group for that topic?
+- Follow-up: a team needs to temporarily read another team's production topic to debug an
+  integration issue. Design a time-bound access grant mechanism that automatically expires the
+  ACL after 24 hours.
+
+---
+
+**Question 41 — Kafka in a Service Mesh: mTLS, Encryption, and Latency**
+
+Your organization runs Kafka inside a service mesh (Istio). All service-to-service communication
+is mTLS. The Kafka brokers are not part of the mesh — they use their own SASL_SSL authentication.
+Producers and consumers are mesh-enrolled pods that must communicate with Kafka. Explain the
+encryption and authentication path for a producer writing to Kafka. Then measure: at 500K
+messages/second, what is the additional latency from mTLS handshakes, and how do session
+resumption and connection pooling affect this?
+
+Authentication path: the producer pod is in the Istio mesh. Outbound traffic from the pod first
+hits the Envoy sidecar proxy. Since Kafka brokers are external to the mesh (not enrolled in Istio's
+mTLS), Envoy cannot perform mTLS on the Kafka port — it passes the traffic through as TCP passthrough
+for the Kafka port. The Kafka client itself then performs SASL_SSL authentication directly with the
+Kafka broker. This means: Istio mTLS applies to service-to-service traffic within the mesh (e.g.,
+producer service to a gateway service), but the Kafka connection uses Kafka-native SASL_SSL.
+
+The distinction matters: traffic from the producer pod to the Kafka broker is encrypted and
+authenticated via SASL_SSL, but it is NOT controlled by the Istio mesh. Istio cannot enforce
+network policies, observe, or rate-limit the Kafka connection.
+
+mTLS handshake latency: the TLS 1.3 handshake takes 1 RTT (round-trip time). At 1ms RTT
+between producer and broker, the handshake adds 1ms. At 500K messages/second from a single
+producer, connections are long-lived — the handshake occurs once per connection, not per message.
+With connection pooling (Kafka producers use persistent TCP connections), the per-message overhead
+is zero. The handshake cost is amortized over millions of messages per connection lifetime.
+
+Session resumption (TLS session tickets or TLS 1.3 0-RTT): allows reconnections to skip the
+full handshake by resuming a prior session. If a producer's connection to a broker drops and
+reconnects, 0-RTT session resumption adds no round trips. However, 0-RTT has security tradeoffs
+(replay attacks are possible) — most Kafka deployments disable 0-RTT and accept the 1 RTT
+reconnection cost.
+
+- What is the operational risk of running Kafka outside the service mesh when all other
+  services are inside the mesh? How does this affect observability of Kafka traffic?
+- Follow-up: a security audit requires end-to-end encryption of all Kafka messages including at
+  the broker storage layer (encryption at rest). What Kafka configuration enables this, and
+  what is the performance overhead?
+
+---
+
+**Question 42 — Kafka Capacity Planning for a New Product Launch**
+
+You are planning Kafka capacity for a new product launch in 3 months. Expected traffic: 50K
+users in the first hour, growing to 500K users by day 7. Each user generates 10 events/minute.
+Events average 1 KB each. You need 7-day retention, RF=3, 5 consumer groups, and a starting
+partition count that supports scale-out without repartitioning for at least 6 months. Design
+the initial cluster and the scale-out plan.
+
+Day 1, hour 1: 50K users x 10 events/minute / 60 = 8,333 events/second at 1 KB = 8.3 MB/sec
+ingestion. Day 7: 500K users x 10 events/minute / 60 = 83,333 events/second at 1 KB =
+83.3 MB/sec ingestion. 6-month projection (assuming 10x growth over 6 months from day 7 peak):
+833,333 events/second = 833 MB/sec. This is the capacity target.
+
+Partition count: design for 6-month peak. At 10 MB/sec per partition (conservative), 833 MB/sec
+requires at least 84 partitions. Round up to 100 partitions for headroom. Start with 100 partitions
+on day 1. This is excess capacity on day 1 (only 8.3 MB/sec total, trivially served by 100
+partitions with 1 consumer each). Consumer group scaling: at day 1, 5 consumer groups need
+at most 5 consumers each. At 6-month peak, 5 consumer groups need up to 100 consumers each.
+Scale consumer count from 5 to 100 over time without ever touching partition count.
+
+Broker sizing: at 6-month peak, write bandwidth 833 MB/sec + replication 2x = 2.5 GB/sec.
+Read bandwidth: 5 consumer groups x 833 MB/sec = 4.2 GB/sec. Total: 6.7 GB/sec.
+At 300 MB/sec usable per broker: 6.7 GB/sec / 300 MB/sec = 23 brokers needed. Start with
+6 brokers (handles day 7 traffic at 83 MB/sec x 3 RF = 250 MB/sec across 6 brokers = 42 MB/sec
+per broker — well within limits). Add brokers monthly as traffic grows. Kafka supports live broker
+addition without downtime.
+
+Storage: 833 MB/sec x 86,400 seconds/day x 7 days x 3 RF = 1,509 TB at 6-month peak. With 3:1
+compression: 503 TB. At 30 TB per broker: 17 brokers needed for storage alone at 6-month peak.
+Storage is the binding constraint at peak; broker count must reach at least 17 for storage even
+if bandwidth would be satisfied with fewer.
+
+Scale-out plan: month 1, 6 brokers, 100 partitions, 5 consumer instances per group.
+Month 3, 10 brokers, no repartitioning, scale consumers to 30 per group. Month 6, 23 brokers,
+same 100 partitions, consumers scaled to 100 per group. At month 6 if traffic exceeds 6-month
+projection, evaluate partition increase and plan the repartitioning carefully.
+
+- Follow-up: the product team tells you the launch will have a marketing push that may spike
+  to 10x expected traffic for 2 hours on day 1. Design the burst handling strategy that does
+  not require pre-provisioning 10x capacity permanently.

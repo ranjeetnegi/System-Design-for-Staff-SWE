@@ -5589,3 +5589,540 @@ MVCC
 *End of Chapter 29: Database Internals Deep Dive — Part E*
 *This is the final part of the chapter. Parts A through D cover B-Tree mechanics,*
 *WAL and durability, MVCC and transactions, and query execution internals.*
+## Supplemental Brainstorming: Chapter 29 -- Database Internals
+
+*Questions 24-43: Advanced mechanics and cross-chapter integration.*
+
+Practice these out loud. Aim for 5-7 minutes per question. Push past the first
+correct-sounding answer -- interviewers at L6 expect you to explore trade-offs, name
+numbers, and connect internals to operational reality.
+
+---
+
+### Section A: Deep Internals (Q24-Q33)
+
+---
+
+**Question 24 -- Size-tiered vs leveled compaction**
+
+Your team is running Cassandra for a time-series sensor dataset. Writes are constant
+at 80K/sec. Reads are infrequent batch exports that run nightly. A colleague proposes
+switching from the default STCS (size-tiered compaction) to LCS (leveled compaction).
+
+- Explain how STCS merges SSTables: same-size tiers collapse into the next tier. Why
+  does this produce large, infrequent compaction events instead of steady background work?
+- Explain how LCS maintains fixed-size levels (typically 160 MB each) and how it bounds
+  read amplification to roughly O(number of levels) -- usually 5 or fewer SSTable reads.
+- For this write-heavy, read-rare workload, which strategy is better? STCS tolerates
+  higher write amplification on reads in exchange for lower compaction overhead during
+  ingestion. LCS is better when reads dominate.
+- Follow-up: the nightly batch reads are slow even with STCS. You cannot switch to LCS
+  (write throughput would drop). What else can you do? (Hint: partition key design,
+  pre-sorted exports, bloom filter tuning.)
+
+---
+
+**Question 25 -- Bloom filter sizing and false positive rate**
+
+RocksDB is configured with bloom_bits_per_key = 10. Your LSM-Tree has 50 SSTables on
+disk. A point lookup for a key that does not exist in the database runs a bloom filter
+check on each SSTable before deciding to skip the disk read.
+
+- Derive the false positive rate for a bloom filter with 10 bits per key. The formula
+  is approximately (1 - e^(-kn/m))^k where k = number of hash functions, n = items,
+  m = bits. At 10 bits/key with k = 7 hash functions the false positive rate is
+  approximately 0.8%. Confirm this is low enough for your read SLA.
+- With 50 SSTables and 0.8% false positive rate, approximately how many SSTables will
+  you read unnecessarily on a missing-key lookup? (50 * 0.008 = 0.4, so nearly all
+  missing lookups will correctly skip all 50 SSTables.)
+- What happens to memory usage as you increase bloom_bits_per_key from 10 to 20?
+  False positive rate drops to near 0%, but the bloom filter for a 100M-key SSTable
+  now requires 100M * 20 bits = 250 MB of RAM per SSTable. With 50 SSTables that is
+  12.5 GB just for bloom filters. How do you decide the right trade-off?
+- Follow-up: block-level vs full-SSTable bloom filters -- when does a block-level bloom
+  filter help more than a file-level one?
+
+---
+
+**Question 26 -- WAL shipping vs logical replication**
+
+Your PostgreSQL primary is in us-east-1. You need a read replica in us-west-2 for
+disaster recovery and read scaling. Your DBA proposes WAL shipping (archive_command +
+restore_command). A developer proposes logical replication (pg_logical or built-in
+logical slots).
+
+- WAL shipping sends raw binary WAL files. The replica must be on the same PostgreSQL
+  major version. You cannot replicate individual tables; it is all-or-nothing. What
+  operational risk does a major-version upgrade create?
+- Logical replication decodes WAL into row-level changes (INSERT/UPDATE/DELETE) and
+  streams them as logical messages. You can replicate a subset of tables and even
+  replicate into a different PostgreSQL major version. What is the overhead of logical
+  decoding -- and why does it add CPU load on the primary?
+- WAL shipping has no per-row filtering overhead but adds recovery lag equal to the
+  WAL segment interval (default 16 MB). Logical replication can stream continuously but
+  has a replication slot on the primary that holds WAL until the subscriber confirms.
+  What happens if the subscriber disconnects for 48 hours?
+- Follow-up: you want zero data loss failover (RPO = 0). Can WAL shipping achieve it?
+  Can logical replication? Which PostgreSQL feature makes synchronous standby possible?
+
+---
+
+**Question 27 -- ARIES: UNDO vs REDO phases**
+
+After a sudden power loss, PostgreSQL restarts and enters crash recovery. Walk through
+the three phases of ARIES (Analysis, REDO, UNDO) and explain what happens to each of
+the following transactions in the WAL:
+- Transaction A: committed before the crash, all changes flushed to disk.
+- Transaction B: committed before the crash, but some dirty pages had not been flushed.
+- Transaction C: was active at the time of the crash, never committed.
+
+- Analysis phase: scan the WAL from the last checkpoint to the crash point. Build the
+  dirty page table (which pages were modified but not flushed) and the active
+  transaction table (which transactions were in-flight).
+- REDO phase: replay all WAL records from the oldest dirty page forward, including
+  records from uncommitted transactions like C. Why? Because we do not yet know which
+  pages made it to disk. REDO brings the database to the exact state at crash time.
+- UNDO phase: roll back uncommitted transactions like C by applying their compensation
+  log records (CLRs) in reverse. Transaction A and B require no undo -- they committed.
+- Follow-up: why does ARIES write CLRs during UNDO rather than just deleting the
+  original log records? What happens if the system crashes again during the UNDO phase?
+
+---
+
+**Question 28 -- Page cache and OS buffer pool interaction**
+
+PostgreSQL has its own shared_buffers pool (let us say 8 GB on a 32 GB machine). The
+OS also has a page cache. When PostgreSQL reads a page, it may be in shared_buffers,
+in the OS page cache, or only on disk.
+
+- Explain the double-buffering problem: a page evicted from shared_buffers but still in
+  the OS page cache does not cause a disk read -- it is served from OS cache. But the
+  page occupies RAM in two places simultaneously. What is the typical recommendation for
+  shared_buffers sizing to avoid wasting OS page cache? (25-30% of total RAM.)
+- O_DIRECT: some databases (InnoDB, RocksDB) use O_DIRECT to bypass the OS page cache
+  entirely and manage their own buffer pool. PostgreSQL does not use O_DIRECT. What are
+  the trade-offs? O_DIRECT eliminates double-buffering but loses the OS cache as a
+  safety net, and requires aligned I/O which complicates writes.
+- effective_cache_size in PostgreSQL is NOT a memory allocation -- it is a hint to the
+  query planner about how much total cache (shared_buffers + OS cache) is available.
+  Setting it too low causes the planner to underestimate index scan benefits and prefer
+  sequential scans. How do you set it correctly?
+- Follow-up: on a machine with 128 GB RAM running only PostgreSQL, what values would
+  you set for shared_buffers, effective_cache_size, and work_mem for a system doing
+  complex analytical queries with 50 concurrent users?
+
+---
+
+**Question 29 -- Index bloat and REINDEX in production**
+
+A PostgreSQL B-Tree index on a high-churn column (order_status updated millions of
+times per day) has grown to 40 GB but the underlying column data is only 2 GB. Your
+on-call engineer says the index has 95% bloat.
+
+- Explain how B-Tree index bloat accumulates: every UPDATE to a row creates a new heap
+  tuple (MVCC) and must also mark the old index entry as dead and insert a new one.
+  VACUUM can mark old index entries as reusable but cannot compact the index pages.
+  Over time, pages fill with dead entries and the tree grows taller than necessary.
+- REINDEX TABLE orders; reclaims all dead space but takes an exclusive lock, blocking
+  all reads and writes for the duration. On a 40 GB index that could mean minutes of
+  downtime. What is the alternative?
+- REINDEX CONCURRENTLY builds a new index in the background without blocking writes.
+  It is available from PostgreSQL 12+. What are the risks? (It can fail partway through,
+  leaving a INVALID index that must be dropped and retried. It also temporarily uses
+  double the disk space.)
+- pg_repack is an extension that can repack tables and indexes without exclusive locks.
+  How does it differ from REINDEX CONCURRENTLY in its approach?
+- Follow-up: how do you detect index bloat before it causes query slowdowns? Which
+  system view and query would you use?
+
+---
+
+**Question 30 -- Write stalls in LSM-Tree during compaction**
+
+Your RocksDB-backed service (using TiKV or a custom store) handles 100K writes/second
+under normal conditions. During a compaction event, write latency spikes from 2ms to
+200ms and the p999 goes to 2 seconds. On-call gets paged.
+
+- Explain why compaction causes write stalls: the memtable fills up faster than
+  compaction can flush it to L0 SSTables. When the number of L0 SSTables exceeds
+  level0_slowdown_writes_trigger (default 20 in RocksDB), the engine begins throttling
+  writes. When it exceeds level0_stop_writes_trigger (default 36), writes are fully
+  stalled until compaction catches up.
+- What are your tuning levers? Increase compaction thread pool (max_background_compactions).
+  Increase the memtable size so it fills less frequently (write_buffer_size). Increase
+  the max number of memtables allowed before stalling (max_write_buffer_number).
+- The root cause is often a burst of writes (e.g., a batch import) that exceeds the
+  sustained compaction throughput. How do you distinguish a tuning problem from a
+  provisioning problem?
+- Follow-up: write stalls are predictable with the right metrics. What Prometheus
+  metrics or RocksDB statistics would you alert on to detect compaction pressure before
+  it becomes a stall?
+
+---
+
+**Question 31 -- MVCC and long-running transactions in high-churn tables**
+
+A PostgreSQL table receives 50K updates/second. An OLAP query starts a REPEATABLE READ
+transaction and runs for 45 minutes scanning the entire table for a report.
+
+- While that transaction is active, can VACUUM reclaim any dead tuples created after
+  the transaction started? No -- VACUUM checks the oldest active transaction's xmin
+  (the transaction snapshot horizon) and skips any row version newer than it. Dead
+  tuples accumulate for 45 minutes at 50K updates/second = 135 million dead tuples.
+- Calculate the approximate heap bloat: if each dead tuple is 200 bytes, that is
+  135M * 200 = 27 GB of bloat accumulated during one analytics run. If this query
+  runs nightly, bloat compounds unless VACUUM can clean up between runs.
+- Mitigation options: (1) Run the analytics query against a read replica where vacuum
+  runs independently. (2) Use PostgreSQL logical replication to maintain a read replica
+  and route all long queries there. (3) Export data to a data warehouse for analytics.
+  (4) If you must run on primary, set statement_timeout or lock_timeout to cap query
+  duration.
+- Follow-up: what is transaction ID wraparound and why does it make long-running
+  transactions a safety risk beyond just bloat?
+
+---
+
+**Question 32 -- Covering indexes and index-only scans**
+
+Your e-commerce orders table has 500 million rows. A query fetches order_id, status,
+and created_at for all orders by user_id in the last 30 days. The existing index is
+on (user_id). The query is slow despite using the index.
+
+- Explain what happens with a non-covering index: PostgreSQL uses the index to find
+  the heap tuple pointers for matching user_id rows, then must do a heap fetch for
+  every row to retrieve status and created_at. At 500M rows with many orders per user,
+  this means thousands of random heap reads per query.
+- A covering index on (user_id, created_at, status) can satisfy the query entirely
+  from the index -- an index-only scan. The heap is not touched at all. What is the
+  prerequisite for an index-only scan to work? (The visibility map must show the pages
+  as all-visible -- VACUUM must have run on the heap pages.)
+- If the visibility map is not up to date, PostgreSQL must still check the heap for
+  every row to verify visibility. How do you force the visibility map to be updated
+  without a full table vacuum? (VACUUM ANALYZE target_table; -- or rely on autovacuum
+  running more aggressively.)
+- Follow-up: covering indexes increase write amplification. If this table receives
+  200K updates/second to the status column, what is the write cost of the covering
+  index and how do you decide if the read benefit justifies it?
+
+---
+
+**Question 33 -- Write amplification: measuring and minimizing**
+
+A distributed database team is reviewing storage costs. The system does 100K logical
+writes/second at 1 KB each = 100 MB/s of logical write throughput. The storage
+monitoring shows 800 MB/s of actual disk write I/O.
+
+- The write amplification factor is 800 / 100 = 8x. Name each contributor to this
+  amplification: (1) WAL write (1x overhead -- every logical write is also written
+  to WAL before the heap). (2) B-Tree page writes: a single row insert may cause a
+  full 8 KB page write even if only 100 bytes changed. (3) Secondary indexes: 5
+  indexes = 5 additional B-Tree writes per row. (4) Checkpointing: dirty pages are
+  written again during checkpoint. (5) Replication: WAL is shipped to replicas.
+- For an LSM-Tree system, write amplification comes primarily from compaction.
+  A key written to L0 may be rewritten during L0-to-L1 compaction, L1-to-L2
+  compaction, and so on. With 7 levels, a write may be physically written 7-10 times.
+- How do you reduce write amplification in a B-Tree system? Fewer secondary indexes,
+  larger pages, delayed checkpointing, partial page writes disabled (with UPS/NVRAM).
+- How do you reduce write amplification in an LSM-Tree system? Use leveled compaction
+  with a lower level multiplier, increase L0 size so early compactions are rarer, use
+  compression to reduce the bytes written per compaction pass.
+- Follow-up: SSD endurance is rated in drive writes per day (DWPD). A 2 TB NVMe SSD
+  at 1 DWPD tolerates 2 TB of writes per day. At 800 MB/s write I/O, how many TB per
+  day is the system writing? Does this exceed the drive's endurance rating?
+
+---
+
+### Section B: Cross-Chapter Integration (Q34-Q43)
+
+---
+
+**Question 34 -- Ch29 + Ch28: RocksDB read latency spike at 3x scale**
+
+A team chose RocksDB (an LSM-Tree engine, used internally by CockroachDB, TiKV, and
+many custom stores) for their user profile store expecting fast writes. At 3x their
+original scale they notice p99 read latency climbing from 5ms to 150ms. Writes are
+still fast. Nothing else changed.
+
+- Diagnose using LSM-Tree internals: at 3x scale, the dataset is 3x larger. More
+  SSTables exist across more levels. A point lookup now touches bloom filters on more
+  files per level and, when bloom filter false positives occur, reads more SSTable
+  blocks. Read amplification grows with the number of levels and files per level.
+- Compaction may be falling behind: if the compaction thread pool is not sized for
+  3x write volume, L0 SSTable count grows, and read amplification increases further
+  because L0 files are not sorted relative to each other (every L0 file must be
+  checked on a point lookup).
+- Fixes: (1) Increase compaction threads. (2) Increase bloom_bits_per_key to reduce
+  false positives. (3) Use leveled compaction if not already -- it bounds the number
+  of SSTables a read must check. (4) Add a row cache (RocksDB's block cache) sized to
+  hold the hot working set.
+- From Ch28: if the access pattern is Zipfian (20% of user profiles get 80% of reads),
+  a cache hit rate of 80%+ would eliminate most disk reads. Evaluate whether a Redis
+  layer in front of RocksDB (look-aside cache) would be more cost-effective than
+  re-tuning the storage engine.
+- Follow-up: at 10x scale, read amplification becomes structural. At what point do
+  you migrate to a different storage engine (e.g., a B-Tree-based store for read-heavy
+  user profiles) rather than continuing to tune RocksDB?
+
+---
+
+**Question 35 -- Ch29 + Ch33/Ch34: Kafka log segments vs LSM-Tree SSTables**
+
+Kafka's storage model uses append-only log segments on disk. LSM-Trees also use
+append-only structures (the WAL and SSTables). A systems design interviewer asks you
+to compare the two.
+
+- Kafka segments: Kafka appends messages sequentially to the active segment file.
+  When the segment reaches max.bytes (default 1 GB) it is rolled. Old segments are
+  retained for a configured retention period then deleted. There is no in-place update;
+  consumers read sequentially by offset.
+- LSM-Tree SSTables: also immutable, append-only files. But SSTables are sorted by key
+  and support point lookups and range scans. Kafka segments are ordered by arrival time
+  (offset), not by key, so a point lookup by message key requires scanning all segments
+  or using an offset index file.
+- Compaction in Kafka: Kafka log compaction retains only the latest value per key,
+  discarding older values. This is analogous to LSM merging: when two SSTables contain
+  the same key, the newer value wins. But Kafka compaction is triggered by log.cleaner
+  threads and targets a compaction ratio, not size tiers or levels.
+- Compaction in Cassandra (LSM): size-tiered or leveled, focused on reducing read
+  amplification and reclaiming space from tombstones and superseded versions. The goal
+  is query performance, not retention policy.
+- Fast appends in Kafka: sequential disk writes, batch acknowledgment, page cache
+  exploitation with sendfile(). Kafka never rewrites existing data, so there is no
+  compaction-induced write stall for producers.
+- Follow-up: Kafka uses an offset index (sparse index mapping offset to byte position)
+  to enable O(log n) seeks. How is this similar to and different from a B-Tree index?
+
+---
+
+**Question 36 -- Ch29 + Ch35: Scanning 500M rows in PostgreSQL for a batch job**
+
+Your batch job must scan 500 million rows in a PostgreSQL orders table to compute
+weekly revenue by region. The job takes 4 hours and is blocking the nightly ETL window.
+
+- Sequential scan vs index scan: for a full-table scan, a sequential scan is almost
+  always faster than a B-Tree index scan because sequential I/O is 10-100x faster than
+  random I/O. The query planner should choose a sequential scan for a predicate that
+  matches more than ~5% of the table. If it is not, check statistics and force with
+  enable_indexscan = off.
+- Index-only scans and covering indexes: if you only need a few columns (order_id,
+  region, amount, created_at), a covering index on those columns lets PostgreSQL read
+  entirely from the index, which is smaller than the heap and can be scanned
+  sequentially. For a 500M row table with 50 columns, the covering index may be 5-10x
+  smaller than the heap scan.
+- Parallel sequential scans: PostgreSQL supports parallel seq scans (max_parallel_workers_per_gather).
+  With 8 workers, the 4-hour job could drop to ~30 minutes. Tune max_parallel_workers
+  and max_parallel_maintenance_workers. Be aware that this consumes additional I/O and
+  CPU -- size the parallel workers to not starve OLTP queries.
+- Parquet on S3 vs PostgreSQL: for this purely analytical workload, exporting data to
+  Parquet (columnar, compressed) and querying with Athena or Spark is often 10-100x
+  faster and cheaper. Parquet stores each column separately -- a scan of amount and
+  region reads only those columns' bytes, not the entire row. PostgreSQL is row-oriented
+  and must read full pages even if you need two columns.
+- Decision framework: if the batch job runs daily and the table is append-mostly, use
+  an incremental export pipeline (Debezium -> S3 -> Parquet) rather than full-table
+  PostgreSQL scans. Reserve PostgreSQL for OLTP; use the data lake for analytics.
+- Follow-up: the team wants to stay on PostgreSQL. Would partitioning the table by
+  week on created_at help? How does partition pruning reduce the scan? What is the
+  operational cost of maintaining a partitioned table?
+
+---
+
+**Question 37 -- Ch29 + Ch38: Write amplification and cloud storage cost**
+
+Your LSM-Tree system (RocksDB-backed) has a write amplification factor of 10x. Logical
+write throughput is 100K writes/second at 1 KB each.
+
+- Calculate physical disk I/O: 100K * 1 KB * 10 = 1,000,000 KB/s = ~1 GB/s of disk
+  writes. Confirm your storage I/O provisioned IOPS and throughput can sustain this.
+  On AWS EBS (gp3), max throughput is 1 GB/s and max IOPS is 16,000 for a single
+  volume. You will need io2 Block Express or multiple striped volumes.
+- Calculate monthly cloud storage write cost: 1 GB/s * 86,400 s/day * 30 days =
+  2,592 TB of data written per month. At AWS EBS io2 pricing (~$0.125/GB-month for
+  storage + $0.065/IOPS-hour for provisioned IOPS), this is a significant line item.
+  EBS charges for storage provisioned, not bytes written, but IOPS and throughput
+  add up. Estimate the cost of provisioned IOPS needed for 1 GB/s throughput.
+- How does compaction strategy affect cost? With size-tiered compaction, compaction
+  events are bursty (high IOPS spikes during compaction). Provisioned IOPS must cover
+  the peak. With leveled compaction, compaction is steady and smaller, so you can
+  provision for average rather than peak IOPS.
+- Reducing write amplification by 2x (from 10x to 5x) cuts physical I/O in half,
+  halving IOPS provisioning cost. Strategies: larger memtable, fewer levels, key
+  prefix compression, value separation (WiscKey approach where large values are stored
+  in a separate value log, not in the LSM-Tree itself).
+- Follow-up: at 100K writes/second, what is the monthly data ingestion and how long
+  until you hit a 100 TB storage cap? How does SSTable compression (Snappy, Zstd)
+  change the storage footprint? Zstd at 3x compression ratio cuts the cap extension
+  factor by 3x.
+
+---
+
+**Question 38 -- Ch29 + Ch36: WAL shipping replication lag across regions**
+
+You are replicating a PostgreSQL primary in us-east-1 to an EU replica in eu-west-1
+using WAL shipping. The primary generates 500 MB WAL files. A major write burst just
+generated 2 GB of WAL in 60 seconds.
+
+- Calculate replication lag: a transatlantic TCP connection sustains roughly 50-100
+  MB/s depending on congestion and MTU. Transferring 2 GB at 50 MB/s takes 40 seconds.
+  During that 40 seconds, the EU replica is 40 seconds behind -- plus the time for
+  the replica to apply the WAL. Application is another 5-20 seconds for heavy WAL.
+  Total lag: 45-60 seconds.
+- WAL shipping sends complete segment files (default 16 MB each). The EU replica
+  only starts applying a segment after the entire file has arrived. If the primary
+  is idle and the current segment never fills, the replica can be minutes behind
+  even with no network lag. Tune wal_sender_timeout and archive_timeout to force
+  segment rotation.
+- RTO if the primary dies: you need to promote the replica. Promotion requires
+  replaying any received but unapplied WAL. If 500 MB of WAL arrived but was not
+  applied, applying it at 50 MB/s application rate takes ~10 seconds. Total RTO
+  from detection to promotion: 30-120 seconds in a well-tuned setup.
+- RPO: any WAL that was not shipped before the crash is lost. With WAL shipping,
+  RPO = last_shipped_segment_time to crash_time. This can be up to 16 MB of writes
+  (one segment) or more if shipping is lagging. For RPO = 0, you need synchronous
+  streaming replication, not WAL shipping.
+- Follow-up: how does streaming replication differ from WAL shipping in terms of
+  latency and RPO? What is the operational complexity of running synchronous streaming
+  replication across two AWS regions? What effect does it have on primary write latency?
+
+---
+
+**Question 39 -- Ch29 + Ch28: Choosing between PostgreSQL and Cassandra for a write-heavy IoT workload**
+
+An IoT platform ingests 500K sensor readings/second. Each reading is a small key-value
+pair (device_id, timestamp, value). Queries are: (1) latest reading per device, (2)
+all readings for a device in the last hour. No transactions, no joins.
+
+- PostgreSQL with B-Tree: 500K writes/second will overwhelm a single PostgreSQL
+  instance (practical ceiling is ~50-100K writes/second on high-end hardware). Even
+  with sharding, each write touches the B-Tree (random I/O for random device_ids),
+  WAL, and secondary indexes. The random I/O pattern for a wide device_id space will
+  cause constant page splits and high I/O amplification.
+- Cassandra with LSM-Tree: append-only writes go to the memtable first (in-memory,
+  very fast). Flushes are sequential. Cassandra is designed for this exact pattern:
+  wide partitions keyed by (device_id, timestamp) support both latest-reading queries
+  (read last row of partition) and time-range queries (efficient slice reads).
+- From Ch28: the key question is whether the partition key design avoids hot partitions.
+  If 1% of devices generate 99% of writes, those partitions become hot spots even in
+  Cassandra. Solution: add a bucket to the partition key to spread load.
+- Trade-offs of Cassandra: eventual consistency, no transactions, no joins, complex
+  schema design upfront (denormalization required). Trade-offs of PostgreSQL: requires
+  significant sharding/partitioning work to reach 500K writes/sec, but you get ACID
+  and simpler querying.
+- Follow-up: at what write volume does PostgreSQL become impractical without specialized
+  solutions like Citus or TimescaleDB? When you hit that wall, what are the migration
+  risks of moving 5 TB of historical data from PostgreSQL to Cassandra?
+
+---
+
+**Question 40 -- Ch29 + Ch33: CDC with Debezium and WAL logical decoding**
+
+Your team is implementing change data capture (CDC) from PostgreSQL to Kafka using
+Debezium. Debezium uses PostgreSQL logical replication to stream row-level changes.
+
+- Explain what happens in PostgreSQL: a logical replication slot is created. As
+  transactions commit, PostgreSQL logical decoding reads the WAL and produces
+  row-level change events (INSERT/UPDATE/DELETE with before/after values) using
+  the pgoutput or wal2json plugin.
+- The replication slot holds WAL until Debezium confirms it has read and processed
+  it. If Debezium goes down for 6 hours, how much WAL accumulates? At 100 MB/s of
+  WAL generation, 6 hours = 2.16 TB. Your pg_wal directory must have space for this.
+  If it fills, PostgreSQL panics and shuts down.
+- Debezium publishes changes to Kafka topics. The Kafka topic is partitioned by
+  primary key, ensuring that changes to the same row always go to the same partition
+  and are processed in order. Why is ordering-by-key important for downstream consumers?
+- Schema changes (DDL) are a challenge: if you ALTER TABLE to add a column, Debezium
+  must handle the schema change gracefully. Debezium uses a schema registry (Confluent
+  Schema Registry or AWS Glue) to track schema versions.
+- Follow-up: you want exactly-once delivery from PostgreSQL to your data warehouse.
+  Debezium + Kafka guarantees at-least-once by default. How do you achieve exactly-once
+  semantics end-to-end? (Hint: idempotent consumers, deduplication by LSN.)
+
+---
+
+**Question 41 -- Ch29 + Ch35: Building an incremental data pipeline on top of WAL**
+
+Your data engineering team wants to move from nightly full exports of a 10 TB
+PostgreSQL database to an incremental pipeline that keeps the data warehouse current
+within 5 minutes.
+
+- Full export approach: every night, pg_dump --format=custom produces a 10 TB dump.
+  Restoring it to the warehouse takes 6 hours. You are always at least 6 hours behind.
+- Incremental approach using WAL: Debezium (logical replication) streams changes to
+  Kafka within seconds of commit. A Flink or Spark Streaming job reads Kafka and
+  applies upserts to the warehouse. The warehouse is now within 5 minutes of the source.
+- Challenges of incremental pipelines: (1) Handling deletes: a logical delete in
+  PostgreSQL becomes a tombstone event in Kafka -- the warehouse must support deletes
+  or soft-delete patterns. (2) Schema evolution: an ALTER TABLE on the source must
+  be propagated to the warehouse schema. (3) Bootstrapping: the initial snapshot of
+  10 TB must be loaded consistently (without blocking the source) before the streaming
+  pipeline takes over.
+- The snapshot-then-stream problem: Debezium solves this with a consistent snapshot
+  mode -- it takes a snapshot while holding an ACCESS SHARE lock, records the LSN at
+  snapshot time, then switches to streaming from that LSN. But holding a lock on a
+  10 TB table for hours blocks DDL.
+- Follow-up: if the warehouse is BigQuery or Snowflake, how do you efficiently apply
+  upserts? Both support MERGE statements but they are expensive at high frequency.
+  What is the pattern of micro-batching upserts every 5 minutes vs. streaming every
+  second?
+
+---
+
+**Question 42 -- Ch29 + Ch36: Split-brain during multi-region failover and the WAL**
+
+You are running PostgreSQL with streaming replication between us-east-1 (primary) and
+eu-west-1 (standby). The network between regions partitions for 3 minutes. During the
+partition, your automatic failover system promotes the EU standby to primary.
+
+- The original primary in us-east-1 is still running and accepting writes (it did not
+  crash -- it just cannot reach EU). For those 3 minutes, both regions are accepting
+  writes. This is split-brain.
+- When the network partition heals, the us-east-1 node connects to the new EU primary
+  and discovers it is behind. The WAL timelines have diverged. PostgreSQL uses timeline
+  IDs to detect this: after promotion, the new primary increments the timeline ID.
+  The old primary's WAL after the split point is on a different timeline and cannot
+  be automatically merged.
+- Data written to us-east-1 during the split must be manually recovered or discarded.
+  How much data is at risk? 3 minutes of writes at whatever the application's write
+  rate is. At 10K writes/second, up to 1.8 million transactions are unrecoverable.
+- Preventing split-brain: (1) Require a quorum of replicas to acknowledge before
+  promoting (Patroni with etcd quorum). (2) Use a fencing token / STONITH to shoot
+  the old primary before promoting. (3) Use synchronous replication so the primary
+  cannot commit without EU replica ACK -- but this means any network partition also
+  stalls writes on the primary.
+- Follow-up: what is the correct RTO vs RPO trade-off here? A strict RPO = 0 requires
+  synchronous replication and accepting write stalls during any inter-region network
+  hiccup. A looser RPO = 3 minutes allows async replication and faster failover.
+  How do you present this trade-off to a product team?
+
+---
+
+**Question 43 -- Ch29 + Ch38: Cost of dead tuple bloat and vacuum at scale**
+
+Your PostgreSQL cluster stores 20 TB of live data but the actual disk footprint is
+60 TB. The extra 40 TB is dead tuple bloat. You are paying for 60 TB of EBS storage.
+
+- Calculate the monthly cost difference: on AWS, gp3 EBS is $0.08/GB-month.
+  40 TB * 1024 GB/TB * $0.08 = $3,277/month wasted on bloat storage.
+  At io2 pricing ($0.125/GB-month), that is $5,120/month wasted.
+- Why did bloat reach this level? Most likely: (1) autovacuum is too conservative
+  (default autovacuum_vacuum_scale_factor = 0.2 means vacuum triggers when 20% of
+  the table is dead -- on a 1 TB table that is 200 GB of dead tuples before vacuum
+  even starts). (2) Long-running transactions (analytics jobs) blocking vacuum's
+  ability to reclaim space.
+- Fix autovacuum thresholds: set autovacuum_vacuum_scale_factor = 0.01 (trigger at
+  1% dead tuples) and autovacuum_vacuum_threshold = 1000 for high-churn tables.
+  Override at the table level with ALTER TABLE ... SET (autovacuum_vacuum_scale_factor = 0.01).
+- Immediate reclamation: VACUUM FULL compacts the table but requires an exclusive lock.
+  pg_repack reclaims space online without locking. At 60 TB, pg_repack will take
+  many hours -- plan this during low-traffic windows and monitor replication lag
+  (pg_repack generates significant WAL).
+- Structural fix: move long-running analytical queries to a read replica. The primary
+  vacuum is no longer blocked. Use idle_in_transaction_session_timeout = 5min to
+  kill stuck transactions automatically.
+- Follow-up: after reclaiming the 40 TB, autovacuum must prevent the bloat from
+  returning. What monitoring would you set up to alert before bloat exceeds 10% of
+  live data size? Which pg_stat_user_tables columns are the key signals?
+
+---
+
+*End of Supplemental Brainstorming: Chapter 29.*

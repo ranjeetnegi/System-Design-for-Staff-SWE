@@ -7263,3 +7263,651 @@ This concludes Chapter 33: Event-Driven Architectures — Kafka and Streams.
 The chapter has covered the full arc from Kafka fundamentals (Part A), delivery semantics and exactly-once (Part B), consumer group mechanics and rebalancing (Part C), stream processing with Kafka Streams and Flink (Part D), operational concerns including monitoring and GDPR (Part E), and this final section of design problems and exercises (Part F).
 
 The core judgment that L6 interviews test is not whether you know Kafka's configuration parameters — it is whether you can reason about the failure modes, the tradeoff space, and the points at which Kafka's guarantees end and your application's responsibility begins. Every question in this section is designed to put you at exactly those boundaries.
+# Supplemental Brainstorming: Chapters 33 and 34
+
+Advanced questions for self-testing and interview prep. These assume you have already worked through
+all twenty questions in each chapter. The focus here is on patterns that appear frequently in L6
+system design interviews but were not covered in depth in the main text.
+
+---
+
+## Supplemental Brainstorming: Chapter 33 — Event-Driven Architecture
+
+*Questions 25-42: Advanced patterns and cross-chapter integration.*
+
+### Section A: Advanced Event-Driven Patterns (Q25-Q33)
+
+---
+
+**Question 25 — Saga Pattern: Order Across Four Services**
+
+Your e-commerce system processes orders using four independent microservices — Order, Payment,
+Inventory, and Shipping — each with its own database. A user submits an order. Payment charges
+the card successfully. Inventory then attempts to reserve stock but fails because the item just
+sold out. Design the saga pattern that handles this rollback. Include the event sequence, the
+compensating transactions, and the failure handling for the case where the compensating
+transaction itself fails.
+
+A saga is a sequence of local transactions where each step publishes an event that triggers the
+next step. A failed step triggers compensating events in reverse. The sequence here is:
+Order.created -> Payment.charge_requested -> Payment.charged -> Inventory.reserve_requested ->
+Inventory.reserve_failed -> Payment.refund_requested -> Payment.refunded -> Order.cancelled.
+
+The hard part is compensation failure. If the Payment.refund_requested event is emitted but the
+payment service crashes before processing it, the customer has been charged and the order is
+cancelled. Solutions: (a) store saga state in a durable "saga log" table so a recovery process
+can replay the compensating events after the service restarts, (b) use idempotency keys on all
+compensating operations so retrying a refund is safe, (c) expose a manual reconciliation endpoint
+that the on-call team can invoke if automated compensation exhausts its retry budget.
+
+At L6 you must also discuss the visibility problem: from the customer's view, between the failed
+inventory step and the completed refund, the order is in an ambiguous state. Design an
+"order-status" read model that reflects the current saga state so the customer sees "Your payment
+is being reversed" rather than a stale "Order confirmed" screen.
+
+- Draw the full event sequence including the compensation path.
+- Where does saga state live, and who owns it?
+- Follow-up: how do you detect a saga that has been stuck in a partial state for more than 10 minutes
+  and no event has arrived to advance or roll it back?
+
+---
+
+**Question 26 — Outbox Pattern: Atomic Event Publishing**
+
+Your Order service writes to a PostgreSQL database and publishes a "order.created" event to Kafka.
+These are two separate writes. If the database commit succeeds but the Kafka produce call fails
+(network timeout, broker unavailable), the order exists in the database but no downstream service
+knows about it. Design the outbox pattern. Explain how it solves the dual-write problem and what
+infrastructure components are required.
+
+The outbox pattern: instead of writing to Kafka directly, the Order service writes the event as a
+row into an "outbox" table inside the same PostgreSQL transaction as the order. One atomic
+transaction writes both the order row and the outbox row. A separate "relay" process reads
+uncommitted outbox rows and publishes them to Kafka, then marks them as published. If the relay
+crashes after publishing but before marking, it retries — Kafka consumers must handle the
+resulting duplicate via idempotency.
+
+The relay can be implemented two ways: (a) polling — a background thread queries
+"SELECT * FROM outbox WHERE published = false ORDER BY created_at LIMIT 100" on a short interval,
+or (b) Debezium / Change Data Capture — Debezium tails the PostgreSQL WAL (write-ahead log) and
+emits an event to Kafka the moment the outbox row is committed. CDC is lower latency and
+lower database load than polling but requires a running Debezium connector and the WAL configured
+with logical replication enabled.
+
+- What is the worst-case latency from order creation to Kafka event publish with (a) polling at
+  100ms intervals and (b) CDC? When does each approach break down?
+- Follow-up: the outbox table grows without bound if the relay falls behind. Design the cleanup
+  strategy that does not lose events.
+
+---
+
+**Question 27 — Event Sourcing vs. CQRS: When They Are Not the Same Thing**
+
+A team says "we are doing event sourcing and CQRS together." An interviewer asks: can you do
+CQRS without event sourcing? Can you do event sourcing without CQRS? Give a concrete example of
+each. Then describe what problems arise when you combine them and try to add a new query model
+three years later when the event log has 2 billion events.
+
+Event sourcing: the source of truth is the append-only event log, not a mutable state table. Current
+state is derived by replaying events from the beginning (or from a snapshot). CQRS: reads and writes
+use separate models. Write model accepts commands and validates business rules. Read model is
+optimized for specific query patterns.
+
+CQRS without event sourcing: the write model stores current state in a relational table. The read
+model is a separately maintained materialized view (could be in Elasticsearch, Redis, a denormalized
+table). No event log exists — just the two models synchronized via CDC or application-level dual
+writes. Many systems do this. It is simpler than event sourcing.
+
+Event sourcing without CQRS: a single service replays the event log to derive current state for
+both command processing and query answering. Possible for small data volumes; becomes slow as the
+log grows because every query requires state reconstruction.
+
+The 2-billion-event problem: adding a new read model means replaying all 2 billion events from the
+beginning. At 100K events/second replay speed, that is 20,000 seconds — about 5.5 hours. During
+those 5.5 hours the new read model is stale. Solutions: (a) periodic snapshots that the new
+consumer can start from, (b) compact the event log to the latest-per-entity state using Kafka
+log compaction (but this destroys the ability to answer point-in-time queries), (c) store events
+in an object store like S3 in Parquet format, enabling Spark batch replay in parallel across
+many workers.
+
+- Follow-up: what schema evolution strategy lets you add fields to events without breaking the
+  replay of 2-billion-event history?
+
+---
+
+**Question 28 — Exactly-Once Semantics: What They Actually Mean**
+
+An engineer says "we enabled exactly-once in Kafka so our pipeline is exactly-once end-to-end."
+Identify the precise scope of Kafka's exactly-once guarantee. In a pipeline that reads from
+Kafka, calls an external REST API, and writes results to a PostgreSQL table, does enabling Kafka's
+transactional producer give you exactly-once end-to-end? Explain each component in the pipeline
+and where duplicates can still occur.
+
+Kafka's exactly-once guarantee applies to Kafka-to-Kafka pipelines. Specifically: a producer using
+transactions and the transactional API guarantees that a batch of messages is either all committed
+to the destination topic or none are, even if the producer crashes mid-batch. A consumer using
+isolation.level=read_committed will not see uncommitted messages from an aborted transaction.
+
+What exactly-once does NOT cover: (a) the call to an external REST API — if the consumer crashes
+after the API call succeeds but before committing the Kafka offset, the API call runs again on
+restart; most REST APIs are not idempotent unless you design them to be (via idempotency keys),
+(b) the write to PostgreSQL — if the consumer crashes after the PostgreSQL write but before
+committing the offset, the PostgreSQL write happens again unless the write itself is idempotent
+(upsert or INSERT ON CONFLICT DO NOTHING using event_id as the key).
+
+The end-to-end exactly-once guarantee requires: idempotent external API calls using a stable
+idempotency key derived from the Kafka event, AND idempotent database writes. Kafka's
+transactional producer alone provides exactly-once only for the Kafka-to-Kafka segment.
+
+- Walk through a concrete crash scenario at each step of the pipeline and identify which step
+  causes a duplicate, which causes a message loss, and which is covered by Kafka transactions.
+- Follow-up: your pipeline calls Stripe to charge a user. Stripe returns HTTP 200 but the
+  response never reaches your consumer (connection reset). What do you do?
+
+---
+
+**Question 29 — Dead Letter Queue: Design for Production**
+
+Your payment event consumer fails on 0.1% of messages. The failures are a mix of: transient
+network errors (payment processor temporarily unavailable), data quality errors (malformed event,
+missing required field), and business logic errors (account frozen, insufficient balance). Design
+a dead letter queue strategy that handles all three failure types correctly. Include retry
+schedules, alerting thresholds, and the human review workflow for events stuck in the DLQ.
+
+A single DLQ is the wrong answer. Different failure types require different handling:
+
+Transient errors: retry with exponential backoff. The message stays in the main consumer loop
+for up to 3 attempts (immediate, 1 second, 5 seconds), then if still failing, it moves to a
+"retry" topic with a delay (implemented via a separate consumer that reads the retry topic but
+only processes messages whose retry_after timestamp has passed). Retry schedule: 30 seconds,
+5 minutes, 30 minutes, 2 hours. After 4 retries, move to the DLQ.
+
+Data quality errors: retry will never succeed. Move immediately to the DLQ. Tag the DLQ message
+with error_type=SCHEMA_ERROR. Alert the team that owns the producer schema. Do not retry.
+
+Business logic errors (account frozen): not a bug — the system is working correctly. These should
+be published to an "order-rejected" topic as a first-class outcome event, not treated as errors
+at all. The upstream service subscribes to order-rejected to notify the user. Never put
+intentional business rejections into a DLQ.
+
+Alerting: DLQ depth > 0 for SCHEMA_ERROR type triggers a page within 5 minutes. DLQ depth > 100
+for any type triggers a page. DLQ depth > 10 for payment events triggers an immediate incident.
+
+Human review workflow: DLQ events are replayed through an admin console that shows: event payload,
+error trace, number of retry attempts, and a "replay now" button that re-publishes the event to
+the main topic with a force-process flag for operators to investigate.
+
+- Follow-up: your DLQ has accumulated 500,000 messages over a weekend. How do you safely drain
+  it on Monday without overwhelming the payment processor?
+
+---
+
+**Question 30 — Event Versioning in a Live System**
+
+Your "payment.processed" event has been at version 1 for two years. Now you need to add a
+currency_code field (required), rename user_id to customer_id, and remove the legacy_ref field
+that no one uses. Three consumer services exist: consumer A was just deployed and can handle v2,
+consumer B is a third-party system that cannot be updated for 60 days, consumer C is an internal
+system being decommissioned in 90 days. Design the versioning strategy that allows the producer
+to deploy without breaking any consumer.
+
+First, separate the three changes by compatibility impact: adding a new field (currency_code) is
+backward-compatible only if it has a default value. Renaming a field (user_id to customer_id) is
+a breaking change — it is effectively removing one field and adding another. Removing a field
+(legacy_ref) is backward-compatible if consumers ignore unknown fields.
+
+Strategy: produce two versions simultaneously during the transition period. The producer writes
+to both "payment.processed.v1" and "payment.processed.v2" topics (or embeds a version header and
+writes to one topic, with consumers filtering on the version header). Consumer A reads v2. Consumers
+B and C continue reading v1. The v1 topic is deprecated with a sunset date of 90 days. At day 60,
+consumer B must be updated or given an adapter service that translates v1 to v2 internally. At day
+90, the v1 topic is closed.
+
+The cleanest production implementation: use Schema Registry with Avro. Register v1 and v2 schemas.
+The producer includes the schema ID in each message. Consumer B reads v1 messages via the v1 schema.
+Consumer A reads v2 messages. Field renaming is handled by aliasing: in the v2 Avro schema,
+customer_id has an alias "user_id" so Avro's schema resolution can read v1 messages into a v2
+reader schema by matching the alias.
+
+- What is the minimum retention period for the v1 topic given that consumer C is being decommissioned
+  in 90 days but may replay up to 7 days of events?
+- Follow-up: a fourth consumer starts consuming after v1 is closed and needs events from 30 days
+  ago. What options exist?
+
+---
+
+**Question 31 — Schema Evolution in a Live System Using Schema Registry**
+
+Your Kafka cluster has 50 topics. Each topic uses JSON with no schema registry. You need to
+migrate to Avro with Schema Registry to enable schema enforcement and backward-compatible
+evolution. Design the migration strategy. What breaks during migration? How do you run JSON
+and Avro producers on the same topic during the cutover period?
+
+The core problem: Kafka topics are byte arrays. A JSON-producing service writes plain UTF-8 JSON.
+An Avro-producing service writes a 5-byte magic prefix (magic byte + schema ID) followed by the
+Avro-encoded binary payload. A consumer that expects JSON will fail to parse an Avro message and
+vice versa. You cannot mix formats on the same topic without consumer-side detection logic.
+
+Migration approach: for each topic, create a parallel new topic (e.g., "payments-v2-avro"). Migrate
+one service at a time: (1) register the Avro schema in Schema Registry, (2) update the producer to
+write to the new topic in Avro, (3) update each consumer to read from the new topic, (4) once all
+consumers are migrated, drain and close the old JSON topic. Run both topics in parallel during the
+transition — the old topic for consumers not yet migrated, the new topic for consumers already
+migrated.
+
+A single-topic migration is possible but fragile: add a version prefix byte to every message
+(0x00 = JSON, 0x01 = Avro). Consumers check the prefix and dispatch to the appropriate
+deserializer. This avoids creating new topics but permanently increases consumer complexity.
+
+Schema Registry must be highly available before migration begins. If Schema Registry goes down,
+Avro producers cannot fetch schema IDs and will fail to produce. Ensure Schema Registry is
+deployed in a 3-node cluster with schema caching enabled on the producer side (cache the schema
+ID locally so production continues for minutes even if Schema Registry is briefly unreachable).
+
+- Follow-up: you migrate 48 of 50 topics. The two remaining topics use a complex nested JSON
+  structure that is not expressible in Avro (contains arbitrary nested maps with non-string keys).
+  What do you do?
+
+---
+
+**Question 32 — Fan-Out Patterns and Their Scaling Limits**
+
+A "post.created" event triggers fan-out to 50 million followers. Three implementation approaches
+exist: (A) the feed service reads the event and writes a feed entry to each follower's feed
+table directly, (B) a fan-out service publishes one "add-to-feed" event per follower to Kafka
+(50 million events), (C) followers pull their feed on request and the feed is computed at read
+time from the events of accounts they follow. Analyze the throughput, latency, storage, and
+failure characteristics of each. When does each break down?
+
+Approach A (in-process fan-out): single consumer does 50M database writes per celebrity post.
+At 10K writes/second per consumer instance, one post takes 5,000 seconds to fan out. This does
+not work for celebrity accounts. For accounts with 1,000 followers it is fine.
+
+Approach B (Kafka fan-out): 50M events published to Kafka. At 1M events/second producer throughput,
+fan-out takes 50 seconds just to produce. Storage: 50M events x 200 bytes = 10 GB per celebrity post.
+If 10 celebrities post per minute, that is 100 GB/minute of fan-out events. Downstream consumers
+must process 50M events per post — at 100K events/second per consumer group, that is 500 seconds
+behind before even starting on the next post. Kafka fan-out is only viable for accounts with
+under ~100K followers.
+
+Approach C (pull at read time): zero fan-out cost at write time. At read time, for a user following
+1,000 accounts, the feed service queries the last 20 posts from each account (1,000 queries) and
+merges them. This is 1,000 database reads per feed refresh. For 10M active users refreshing feeds
+every 5 minutes, that is 2M feed loads/minute x 1,000 queries = 2 billion queries/minute. Database
+does not survive this.
+
+Production hybrid (Twitter/Meta approach): use approach A for non-celebrity accounts (< 10K
+followers), approach C for celebrity accounts (> 1M followers), and a mix for accounts in between.
+Define "celebrity" via a flag set by an async job that detects accounts exceeding the threshold.
+
+- Follow-up: a celebrity account with 50M followers switches to private. All 50M pre-computed feed
+  entries must be invalidated. Design the invalidation event and the downstream cleanup.
+
+---
+
+**Question 33 — Pull vs. Push Consumer Models**
+
+Kafka uses a pull model: consumers poll the broker for new messages. SQS and RabbitMQ can push
+messages to consumers. Compare the two models across: backpressure handling, latency, consumer
+crash behavior, and the ability to serve consumers with heterogeneous processing speeds. In what
+scenarios is push preferable to pull, and vice versa?
+
+Pull model: the consumer controls the read rate. If the consumer is slow, it simply polls less
+frequently or processes fewer messages per batch. The broker is never overwhelmed by slow consumers
+because the broker does not push messages — it just stores them. This is why Kafka handles
+heterogeneous consumers naturally: a fast consumer reads at 1M events/second, a slow analytics
+consumer reads at 10K events/second, both read from the same topic at their own pace without
+affecting each other or the broker. Downside: increased latency. The consumer must poll on a
+schedule. With fetch.max.wait.ms=500ms, a message published immediately after a poll cycle waits
+up to 500ms before the next poll reads it.
+
+Push model: the broker delivers messages immediately when they arrive. Latency is lower — the
+message reaches the consumer within milliseconds of being stored. Downside: the broker must
+manage backpressure. If the consumer is slow, the broker must either queue messages (using memory),
+drop them, or apply flow control. In RabbitMQ, this is handled via prefetch count — the broker
+sends at most N unacknowledged messages to a consumer before pausing. If N is set too high, a
+slow consumer is overwhelmed. If N is too low, throughput suffers.
+
+Push preferable: when you need the lowest possible latency and all consumers process at roughly
+the same rate (e.g., mobile push notifications via APNs/FCM). Pull preferable: when consumers
+have heterogeneous processing speeds, when replay is needed, when the number of consumers is
+large and variable, or when producer and consumer throughput are mismatched (the key Kafka use
+case).
+
+- Follow-up: you want sub-10ms latency from Kafka publish to consumer processing. What Kafka
+  consumer configuration changes reduce latency at the cost of throughput?
+
+---
+
+### Section B: Cross-Chapter Integration (Q34-Q42)
+
+---
+
+**Question 34 — Ch33 + Ch28: Saga Pattern Across Microservice Databases**
+
+You are migrating from a monolith with a single PostgreSQL database to microservices where each
+service owns its own database. A user creates an order, which triggers payment, inventory, and
+shipping services. Design the saga pattern for this flow. What happens if payment succeeds but
+inventory fails? How do you ensure the customer is not charged for an item that cannot be
+shipped?
+
+The monolith version of this flow was a single database transaction: BEGIN; insert order; charge
+payment; decrement inventory; create shipment; COMMIT. Atomicity was free. In microservices, you
+cannot span a transaction across four databases. The saga pattern replaces the database transaction
+with a sequence of events and compensating actions.
+
+Forward path (choreography style): Order service publishes "order.created". Payment service
+consumes it, charges the card, publishes "payment.charged". Inventory service consumes
+"payment.charged", tries to reserve stock, and publishes either "inventory.reserved" or
+"inventory.failed". If "inventory.reserved": Shipping service creates a shipment, publishes
+"shipment.created". If "inventory.failed": Payment service must consume "inventory.failed" and
+issue a refund, publishing "payment.refunded". Order service consumes "payment.refunded" and
+publishes "order.cancelled".
+
+The customer-is-charged-but-inventory-fails scenario: the compensating transaction is the refund.
+The critical design requirement is that the refund compensating transaction is idempotent and
+retried until it succeeds. Use an idempotency key (order_id) for the refund call. The payment
+service must maintain a state machine: CHARGED -> REFUND_PENDING -> REFUNDED. If the payment
+service crashes before processing "inventory.failed", the refund event is replayed by Kafka on
+consumer restart — the idempotency check prevents double-refund.
+
+The gap: between "payment.charged" and "payment.refunded", the customer's card shows a charge.
+The order-status read model must show "Processing reversal" during this window, not "Order
+confirmed."
+
+- What is the maximum acceptable time between "inventory.failed" and "payment.refunded" from the
+  customer's perspective, and what monitoring do you put in place to alert if that SLA is violated?
+- Follow-up: the payment processor is down. The "payment.refund_requested" event has been retried
+  50 times over 2 hours. What is the escalation path?
+
+---
+
+**Question 35 — Ch33 + Ch30: Zero-Downtime Schema Evolution with Avro**
+
+Your Kafka topics use JSON. The schema changes: a new required field "currency_code" (string, no
+default) is added. The producer deploys first. Consumers receive messages with the new field they
+do not understand. Design the zero-downtime schema evolution strategy using Avro and Schema
+Registry. Define the deployment order, the compatibility mode to configure in Schema Registry,
+and how you handle the window between producer deploy and consumer deploy.
+
+With JSON and no schema registry, you have no enforcement layer. The producer adds currency_code
+and starts publishing. Old consumers deserialize the JSON and ignore the unknown field (if their
+JSON library uses lenient parsing) or throw an exception (if strict mode). You have no way to know
+which consumers are lenient and which are strict without checking each codebase.
+
+Avro with Schema Registry solves this via compatibility modes. Configure BACKWARD compatibility on
+the topic's schema: new schemas must be readable by consumers using the previous schema. With
+BACKWARD compatibility, adding a new field is only allowed if it has a default value. A "required"
+field with no default is not backward-compatible — Schema Registry will reject the schema
+registration attempt.
+
+Correct approach: add currency_code with a default value ("USD" or null, depending on business
+rules). Register this schema in Schema Registry. It passes BACKWARD compatibility check. Deploy
+the producer. Old consumers read new messages; Avro schema resolution fills currency_code with
+the default value for old consumer schemas. Deploy new consumers. New consumers read the field
+directly.
+
+If the business requirement truly is that currency_code is required with no default, you need a
+two-phase migration: (1) deploy consumers that can handle both the presence and absence of the
+field (using FULL compatibility — both backward and forward compatible), (2) deploy the producer
+that includes the field, (3) confirm all old consumers are drained, (4) make the field required
+in a follow-up schema version.
+
+- What Schema Registry compatibility mode would you use if you also need to allow old consumers to
+  read new messages AND new consumers to read old messages simultaneously?
+- Follow-up: Schema Registry is unavailable during the producer deployment window. The producer
+  caches schema IDs locally. How long does production remain stable, and what happens when the
+  cache expires?
+
+---
+
+**Question 36 — Ch33 + Ch35: Kafka for Real-Time and Batch Consumers Simultaneously**
+
+Your streaming pipeline on Kafka feeds both a real-time dashboard (Flink, sub-1-second latency)
+and a nightly batch analytics job (Spark, processes all events from the entire day). Design the
+Kafka topic structure and retention policy to serve both consumers efficiently. What happens to
+Spark's batch job if Kafka retention is set to 4 hours?
+
+The tension: Flink needs data within milliseconds of it arriving. Spark needs all data from the
+past 24 hours available at 2 AM when the batch job runs. If retention is 4 hours, the Spark job
+starting at 2 AM can only read back to 10 PM — it misses 18 hours of data.
+
+Retention must be set to at least 25 hours (24-hour lookback plus 1 hour of buffer for job
+scheduling variability). In practice, use 48 hours to accommodate batch job retries and
+incident recovery. Cost implication: at 1 TB/day ingestion with RF=3, 48-hour retention requires
+6 TB of storage across the cluster versus 12 TB for the current 2-year retention. The batch job
+is the retention driver here.
+
+Topic structure: one primary topic with 48-hour retention serves both Flink and Spark. Flink reads
+from the tail (latest offset, always near real-time). Spark reads from the beginning of the current
+day's window. Separate consumer groups ensure Flink's committed offsets do not interfere with
+Spark's committed offsets.
+
+If the nightly Spark job fails and needs to reprocess three days of data for debugging, 48-hour
+retention is insufficient. Solution: configure the topic with 48-hour retention for operational
+use, and separately sink all events to S3 (via a Kafka Connect S3 Sink connector) for long-term
+archival at low cost. Spark reruns read from S3 for historical data, not from Kafka. Kafka is for
+operational freshness; S3 is for historical depth.
+
+- Follow-up: Spark's batch job runs at 2 AM but takes 4 hours, finishing at 6 AM. A second
+  Spark job needs to start at 5 AM using the output of the first job. How do you orchestrate
+  this dependency without using Kafka?
+
+---
+
+**Question 37 — Ch33 + Ch36: Multi-Region Kafka with EU Data Residency**
+
+You run Kafka across three regions: US-East, EU-West, AP-Southeast. EU regulations require that
+EU user events containing PII stay within the EU region. Your analytics pipeline is in the US-East
+region and needs to compute global user engagement metrics. An EU user generates an event. Design
+the data flow: how does the EU event reach the US analytics pipeline without violating data
+residency requirements?
+
+The key insight: PII (name, email, IP address, user behavior linked to identity) must stay in EU.
+Aggregate metrics (event count, session duration, feature usage rate) can leave EU because they
+are not linked to individual identifiable users once aggregated.
+
+Data flow: the EU Kafka cluster receives the raw event with PII. A Flink job running in EU reads
+the raw event, anonymizes it (strips name, email, replaces user_id with a pseudonymous hashed ID
+salted per-day so it cannot be reverse-engineered), and publishes the anonymized event to an
+"eu-anonymized-events" topic. MirrorMaker 2 replicates "eu-anonymized-events" from EU-West to
+US-East. The US analytics pipeline consumes from US-East only and never touches EU PII.
+
+The raw EU topic with PII is never replicated outside EU. MirrorMaker 2 replication rules must
+explicitly whitelist only the anonymized topic for cross-region replication. Audit log: each
+event that is anonymized and replicated is logged with a correlation ID in an EU-resident audit
+store for regulatory inspection.
+
+Edge case: a specific EU event is needed for a fraud investigation. A US-based fraud analyst
+needs the PII. This access must go through an EU-hosted data access service with explicit
+legal authorization, not through the analytics Kafka topic.
+
+- How do you ensure the MirrorMaker 2 replication rules are enforced and cannot be bypassed by
+  a misconfigured producer that writes directly to the US topic?
+- Follow-up: AP-Southeast has similar residency requirements for users in Singapore. Design the
+  replication topology that serves the US analytics pipeline with anonymized global data while
+  respecting two separate residency constraints.
+
+---
+
+**Question 38 — Ch33 + Ch38: Kafka Cost Analysis and Optimization**
+
+Your Kafka cluster handles 500K messages/second at an average size of 2 KB per message.
+Infrastructure: 3 broker instances of r5.2xlarge ($0.504/hour each), 1 TB of new data per day
+stored with 7-day retention and replication factor 3. Cross-AZ replication traffic charges apply
+at $0.01/GB. Identify the top two cost drivers. Design changes to reduce total monthly cost by
+at least 40% without degrading the 500K messages/second throughput or reducing retention below
+5 days.
+
+First, calculate the full cost.
+
+Broker compute: 3 x $0.504 x 24 x 30 = $1,089/month.
+
+Storage: 1 TB/day x 7 days = 7 TB raw. With RF=3: 21 TB total. At $0.10/GB for EBS gp2:
+21,000 GB x $0.10 = $2,100/month. With LZ4 compression at 3:1 ratio: 21 TB compresses to 7 TB,
+costing $700/month. Cross-AZ replication: 500K events/sec x 2 KB x 2 replica writes crossing AZ
+(assuming 3 AZs, each replica write may cross an AZ boundary) = ~2 GB/sec cross-AZ traffic.
+2 GB/sec x 86,400 seconds x 30 days = 5,184 TB/month x $0.01/GB = $51,840/month.
+
+Cross-AZ replication is the dominant cost by a large margin. The top two drivers are: (1) cross-AZ
+replication traffic at ~$52K/month, and (2) storage at $2,100/month uncompressed.
+
+Reductions: (a) enable LZ4 compression on producers — reduces both storage and cross-AZ traffic
+proportionally. Storage drops from $2,100 to $700 (-$1,400). Cross-AZ traffic drops from $51,840
+to $17,280 (-$34,560), assuming 3:1 compression. (b) Co-locate brokers and replicas in the same
+AZ where possible by configuring rack-aware replica assignment to minimize cross-AZ traffic (some
+cross-AZ traffic is unavoidable for durability, but the volume can be reduced). (c) Reduce
+retention from 7 to 5 days: storage drops from 7 TB/day x 5 = 5 TB raw x 3 replicas with
+compression = roughly $500/month. Total savings with compression + reduced retention = over
+$36,000/month, exceeding the 40% target.
+
+- Follow-up: a product manager asks you to increase retention to 30 days for compliance. Estimate
+  the additional monthly cost, and propose a tiered storage approach using S3 to cap the Kafka
+  cluster cost.
+
+---
+
+**Question 39 — Consumer Group Isolation for Critical vs. Non-Critical Consumers**
+
+You have a Kafka topic "user-events" consumed by four consumer groups: (A) real-time
+personalization (P99 latency < 100ms), (B) fraud detection (P99 latency < 500ms), (C) analytics
+aggregation (batch, can tolerate 1-hour lag), (D) data lake sink (batch, can tolerate 4-hour lag).
+A bug in consumer C causes it to crash and rebalance every 30 seconds. Explain the blast radius
+of consumer C's rebalance on consumer groups A, B, and D.
+
+Kafka consumer group rebalances are isolated per consumer group. Consumer group C rebalancing does
+not trigger a rebalance in consumer groups A, B, or D. Each consumer group independently manages
+its partition assignments. Consumer C's repeated crashes affect only its own group membership and
+its committed offsets. Groups A, B, and D continue consuming normally.
+
+However, there are indirect effects: if consumer C is producing significant load on the broker
+during its crash loop (repeated JoinGroup requests, SyncGroup requests, offset commit attempts),
+this increases the load on the Kafka broker's group coordinator. Under extreme conditions (hundreds
+of crash-looping consumers), the group coordinator can become a bottleneck that increases latency
+for all groups using that coordinator. In practice, a single crash-looping consumer group of
+modest size does not noticeably impact other groups.
+
+The real blast radius of consumer C's bug: consumer C's own lag grows unboundedly because it
+crashes before processing messages. After enough time, consumer C's lag reaches the point where
+it needs to read messages that have fallen outside Kafka's retention window. At that point,
+consumer C receives an OffsetOutOfRange error and must reset its offset — either to the earliest
+available offset (losing events that have expired) or to the latest offset (skipping all the
+accumulated lag). This is the silent data loss risk: not in groups A, B, D, but in group C itself.
+
+- How do you detect that consumer C has crossed the retention boundary and is about to lose data?
+  What automated action should trigger?
+- Follow-up: design a monitoring dashboard that shows, for each consumer group, the estimated time
+  remaining before the consumer lag exceeds the topic's retention window.
+
+---
+
+**Question 40 — Event-Driven Idempotency in Payment Systems**
+
+A payment processing consumer reads "charge.requested" events and calls an external payment
+processor. The consumer crashes after the charge succeeds but before it commits the Kafka offset.
+On restart, the consumer re-reads the same event and calls the payment processor again. The
+customer is charged twice. Design a complete idempotency solution that prevents this without
+using Kafka's exactly-once transactions (the payment processor is external and not transactional).
+
+The solution requires idempotency at both the application layer and the external API layer.
+
+Application layer: before calling the payment processor, insert a record into an idempotency table:
+"INSERT INTO payment_attempts (event_id, user_id, amount, status) VALUES (?, ?, ?, 'PENDING')
+ON CONFLICT (event_id) DO NOTHING." If this insert returns 0 rows affected, the event has already
+been processed (successfully or in-progress). Read the existing row's status. If "COMPLETED," skip
+and commit the Kafka offset. If "PENDING," a previous attempt started but the consumer crashed
+before updating the status. Proceed with the charge, using the same idempotency key.
+
+External API layer: pass event_id as the idempotency key to the payment processor's API. Stripe,
+Braintree, and most modern payment processors support this. If the processor has already processed
+a charge for this idempotency key, it returns the original response without charging again.
+
+The gap: the payment processor charges the card (idempotency key was new, so the charge runs),
+the processor returns HTTP 200, but the network connection resets before the consumer receives the
+response. The consumer treats the call as failed (exception thrown) and retries. On retry, the
+same idempotency key is sent to the processor. The processor returns the original successful
+response. The consumer now knows the charge succeeded. This is the correct behavior — the
+idempotency key on the external API is what makes the retry safe.
+
+- What happens if event_id is not stable across consumer restarts (e.g., it is generated by the
+  consumer, not embedded in the Kafka event)? Why must idempotency keys be derived from the
+  event, not generated by the consumer?
+- Follow-up: the idempotency table grows without bound. Design the cleanup strategy, and explain
+  how long records must be retained relative to Kafka topic retention.
+
+---
+
+**Question 41 — Ordering Guarantees Across Multiple Topics**
+
+A financial system publishes three event types to three separate topics: "account.created"
+(topic A), "transaction.processed" (topic B), "account.closed" (topic C). A downstream audit
+service must process these events in strict causal order per account: account.created must be
+processed before any transaction.processed for that account, and account.closed must be processed
+last. With separate topics, how do you enforce causal ordering? Design the architecture without
+merging all events into one topic.
+
+Kafka's ordering guarantee is: within a single partition of a single topic. Across topics, there
+is no ordering guarantee. A consumer reading topic B may see transaction.processed events for
+account 123 before the account.created event for that same account has been processed from topic A.
+
+Solutions:
+
+Option 1 — Event timestamps with retry: the audit service reads from all three topics. When it
+encounters a transaction.processed for account 123 and has not yet seen account.created for
+account 123, it parks the transaction event in a local buffer and retries processing it after a
+short delay. Risk: if account.created is never received (producer failure), the buffered
+transaction event waits forever.
+
+Option 2 — Sequence numbers embedded in events: every event for account 123 includes a monotonic
+sequence number assigned by the account service. account.created has sequence=1. The audit service
+tracks the last processed sequence per account and buffers out-of-order events. This is reliable
+but requires the account service to be the single source of sequence numbers, which re-centralizes
+ordering control.
+
+Option 3 — Single "account-lifecycle" topic: merge all three event types into one topic, keyed
+by account_id. All events for account 123 land in one partition in arrival order. Ordering is
+guaranteed by Kafka. The cost is a more complex schema (union type or envelope pattern) and the
+inability to subscribe to only transaction events without also receiving account lifecycle events.
+This is the correct L6 answer: partition-level ordering is the only reliable ordering Kafka
+provides. Design event types that need ordering to share a partition.
+
+- Follow-up: the three topics have different replication factors and different retention periods.
+  When you merge them, what replication factor and retention period do you use?
+
+---
+
+**Question 42 — Event-Driven Architecture for a Global Leaderboard**
+
+A mobile gaming platform runs a global leaderboard updated in real-time. Players from 180 countries
+submit score events. The leaderboard must show the top 100 players globally, updated within 5
+seconds of a new top score. 10 million active players submit scores at peak (roughly 50,000
+scores/second). Design the event-driven architecture from score submission to leaderboard update
+to mobile client display.
+
+Score events flow from mobile clients through an API gateway to a Kafka topic "score.submitted"
+partitioned by player_id. Each partition is processed by a Flink consumer group that maintains
+a local sorted set of scores seen on that partition. A global aggregation stage merges the
+per-partition top-100 lists into a global top-100 using a Flink global window with a 1-second
+tumbling window.
+
+The global aggregation is the bottleneck: all partitions must report to a single global aggregator,
+which becomes a single-threaded computation. For 50,000 events/second this is manageable if the
+aggregation is O(log N) per event (sorted structure). At 5-second update SLA: Flink emits a new
+global top-100 every 2 seconds (with 3 seconds of buffer for downstream propagation).
+
+The global leaderboard result (a 100-element JSON array) is published to a "leaderboard.updated"
+topic. A WebSocket service consumes this topic and fans out the new leaderboard to all connected
+mobile clients using a pub-sub broadcast. At 10M active players with 10% viewing the leaderboard
+at any moment, that is 1M WebSocket connections receiving a 100-element update every 2 seconds.
+This requires a horizontally scaled WebSocket tier (e.g., 100 servers at 10K connections each)
+with a shared pub-sub layer (Redis Pub/Sub or the Kafka topic itself as the broadcast channel).
+
+- What happens to the leaderboard display when the Flink aggregation job fails and restarts?
+  Design the recovery behavior so clients see a degraded-but-not-broken experience.
+- Follow-up: players in China cannot use Kafka topics hosted in the US due to latency and
+  regulatory requirements. Design a regional leaderboard architecture that merges into the global
+  leaderboard every 10 seconds.
+
+---
+---
+

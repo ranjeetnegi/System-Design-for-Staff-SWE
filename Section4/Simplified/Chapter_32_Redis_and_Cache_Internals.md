@@ -2649,3 +2649,257 @@ An L5 engineer describes what a system does. An L6 engineer describes what a sys
 *End of Chapter 32: Redis and Cache Internals*
 
 *End of Section 4: Storage Systems Deep Dive*
+## Supplemental Brainstorming: Chapter 32 -- Redis Internals
+
+*Questions 21-40: Advanced patterns and cross-chapter integration.*
+
+---
+
+### Section A: Advanced Redis Patterns (Q21-Q30)
+
+---
+
+**Question 21 -- Redis Pub/Sub vs Redis Streams: Pick One**
+
+A product manager asks you to add real-time notifications to your e-commerce app. Events include order placed, payment confirmed, and shipment updated. You reach for Redis. There are two options: Pub/Sub and Streams. Your interviewer wants you to choose one and justify it.
+
+- Redis Pub/Sub delivers messages only to subscribers connected at the time of publish. If a subscriber disconnects for 2 seconds during a traffic spike, those messages are gone permanently. There is no replay, no persistence, no consumer group acknowledgment. The failure mode is silent data loss.
+- Redis Streams stores messages in an append-only log. Consumer groups read with explicit acknowledgment (XACK). If a consumer crashes mid-processing, its pending messages appear in XPENDING and are re-assigned via XAUTOCLAIM after a configurable idle timeout. Messages persist until XTRIM or MAXLEN trims them.
+- For order lifecycle events, Streams is almost always correct. Missing an "order confirmed" event is not acceptable -- the customer may never receive the confirmation email. Pub/Sub is appropriate only for ephemeral signals: live presence indicators, game state, dashboard counters where a missed update is corrected by the next one arriving in milliseconds.
+
+Follow-up: Your team argues Pub/Sub is simpler to implement. You agree it is simpler. Under what load and what message loss tolerance does the simplicity advantage disappear and Streams becomes mandatory? Frame your answer in concrete terms: at what percentage of missed events does your on-call team start getting paged?
+
+---
+
+**Question 22 -- Redis Streams as a Lightweight Kafka Alternative**
+
+Your startup cannot afford a Kafka cluster. You are already running Redis. An engineer proposes using Redis Streams for your internal event bus -- order events, inventory updates, audit logs. Your interviewer asks you to compare Redis Streams to Kafka and identify the three points where Streams breaks down at scale.
+
+- Redis Streams supports consumer groups, XACK acknowledgment, XPENDING pending-entry lists, and replay from any stream offset. This covers a large fraction of Kafka's core use cases and is a legitimate choice for small to medium systems.
+- Limitation 1 -- memory cost of retention: all Streams data lives in memory. At 1TB of event history, Redis is prohibitively expensive (a 209GB managed instance costs roughly $5,000/month). Kafka stores data on commodity SSDs at $0.01-0.02 per GB per month. Limitation 2 -- no partition-level ordering across nodes: a single Redis Stream must reside on one hash slot for ordering to be meaningful. Kafka partitions provide parallel ordered consumption across multiple brokers by design. Limitation 3 -- no connector ecosystem: Kafka Connect offers 200+ source and sink connectors, schema registry, and exactly-once producer semantics. Redis Streams has none of this natively.
+- Decision rule: Redis Streams is right when retention fits in memory (hours to a few days), total event volume is under 50GB, and the team is small. Plan a Kafka migration when you hit those thresholds.
+
+Follow-up: You use Redis Streams and your stream grows to 50 million entries over 3 months, consuming 80% of memory. Some consumer groups are 6 hours behind (nightly batch jobs). How do you trim safely without losing events not yet consumed? What does XTRIM with MINID do differently from XTRIM with MAXLEN?
+
+---
+
+**Question 23 -- Pipeline Batching to Reduce Round-Trip Time**
+
+Your Redis client makes 50 individual GET calls in a tight loop to build a single API response. Redis latency is 1ms. Your API response time is 60ms. Your interviewer asks you to fix this without changing Redis data structures and without using MGET.
+
+- The root cause is serial round-trips. Each command waits for the previous reply before the next is sent. At 1ms RTT, 50 serial commands = 50ms in network latency alone, before Redis execution time. The fix is not to speed up Redis -- it is to eliminate the serial waiting.
+- Redis pipelines batch multiple commands into a single TCP write. The client buffers all 50 GETs, flushes them in one packet, Redis processes them in order and sends all 50 replies in one response. Network cost drops from 50 round-trips to 1 round-trip. Expected latency improvement: ~50ms removed from the network portion.
+- Pipelines are not atomic. Other client connections can interleave commands between pipeline entries. Pipelines guarantee execution order within the batch but not isolation from other clients. For atomic multi-command writes, use MULTI/EXEC or Lua scripts. Most Redis client libraries recommend pipeline batch sizes of 100-1000 commands; above 10,000, outbound buffer overhead becomes counterproductive.
+
+Follow-up: You pipeline 1,000 GET commands and notice a brief 200MB spike in Redis server-side memory. Explain why (Redis buffers the full reply in memory before sending it). Your operations team asks for a maximum pipeline size that keeps the server-side reply buffer under 50MB. Estimate that limit, showing your calculation.
+
+---
+
+**Question 24 -- SCAN vs KEYS: Why KEYS is a Production Outage Waiting to Happen**
+
+A junior engineer writes a background job that runs `KEYS user:*` every 5 minutes to count active user sessions and post the count to a metrics dashboard. In staging (100K keys) it runs in 2ms. In production (15 million keys) Redis blocks all commands for 3 seconds every 5 minutes. Explain what happened and fix the entire approach.
+
+- Redis is single-threaded for command execution. KEYS is O(N) over the entire keyspace: for 15 million keys, Redis must scan every hash table bucket before returning any result. During those 3 seconds, no other commands execute -- no GETs, no SETs, no health check replies. Every client waiting for Redis times out. Your monitoring system is causing the outage it was meant to detect.
+- SCAN cursor MATCH user:* COUNT 100 iterates incrementally. Each call processes a small batch of hash table buckets and returns immediately. Other commands execute between SCAN calls. Total work is the same O(N) but spread over thousands of fast, non-blocking iterations.
+- Better fix for this specific use case: do not scan at all. Maintain a dedicated counter key `sessions:active:count` that you INCR on session creation and DECR on deletion. Handle TTL-based expiry with keyspace notifications. The dashboard reads one key in microseconds.
+
+Follow-up: SCAN is non-atomic. Keys can be created or deleted between calls. If you need a point-in-time consistent snapshot of all keys matching a pattern -- for an audit report -- SCAN cannot guarantee completeness. Design a consistent inventory mechanism that uses neither KEYS nor SCAN and does not require Redis 7.0+ features.
+
+---
+
+**Question 25 -- Lua Scripting for Atomic Multi-Step Operations**
+
+You implement a token bucket rate limiter with two separate Redis commands: GET current tokens, then DECR if tokens > 0. Your interviewer points out a race condition that allows 2x the permitted burst at high concurrency. Fix it using Lua, and explain the operational risk of Lua in production.
+
+- The race condition: two simultaneous requests for user 42 with 1 token remaining both execute GET and see 1. Both conclude they can proceed. Both execute DECR. Count becomes -1. Two requests proceed when the limit was 1. At high concurrency, this allows unlimited bursts past the limit.
+- Redis evaluates Lua scripts atomically: the entire EVAL or EVALSHA script runs to completion before any other command from any connection executes. Encoding the GET-check-DECR logic in Lua eliminates the race. Use SCRIPT LOAD to upload the script once and get its SHA. Call EVALSHA on every request to avoid resending the script text (hundreds of bytes) on each call.
+- Lua scripts block Redis for their entire duration. A well-written rate limiter script completes in under 1ms. Never put file I/O, network calls, or unbounded loops inside a Redis Lua script. Redis kills scripts exceeding `lua-time-limit` (default 5000ms) with a BUSY error, which blocks Redis in the same way KEYS does.
+
+Follow-up: You need the rate limit check atomic across 3 keys in Redis Cluster: user limit, IP limit, and global API limit. Your Lua script references all 3 keys. It fails with CROSSSLOT. Explain the cluster constraint, and redesign the key layout using hash tags to colocate all 3 keys on the same slot without changing the semantic meaning of each limit.
+
+---
+
+**Question 26 -- Redlock: Distributed Locking and Its Controversy**
+
+You need a distributed lock so only one invoice generation job runs at a time across 50 app servers. A colleague proposes `SET lock:invoice:{id} {uuid} NX EX 30`. You propose Redlock. Your interviewer wants you to explain Redlock, defend it, and then explain why a prominent database researcher said it is not safe.
+
+- The simple SET NX lock has two failure modes: if the Redis instance fails while the lock is held, the lock disappears and all workers race to acquire it. With Sentinel, there is a window where the lock has been SET on the primary but not yet replicated -- if the primary fails, the promoted replica has no lock record and two workers acquire the "same" lock concurrently.
+- Redlock uses 5 independent Redis primaries (not a cluster). To acquire: record the start time, then send SET key uuid NX PX ttl to all 5. The lock is considered acquired if at least 3 of 5 succeed AND the elapsed time to acquire is less than ttl minus a clock drift factor. To release, a Lua script on all 5 nodes checks that the stored value matches uuid before deleting, preventing release of another client's lock.
+- Martin Kleppmann's critique: a GC pause can cause a client to believe it holds the lock after the TTL has expired. Client A acquires the lock, GC pause for 35 seconds, lock expires, Client B acquires the lock, Client A resumes thinking it still holds it -- both clients are in the critical section. Antirez responded that fencing tokens at the resource layer solve this: each lock acquisition returns a monotonically increasing token; the resource server rejects operations with stale tokens. The practical takeaway: Redlock is safer than single-instance locks but should not be the sole correctness mechanism for financial operations without fencing tokens on the resource side.
+
+Follow-up: You are using Redlock to protect a payment deduction. The client acquires the lock, deducts $100, then GC pauses for 45 seconds. The lock expires. Another client acquires the lock and deducts $100 again. The user is charged twice. What change outside of Redis prevents this double-charge regardless of what the lock does?
+
+---
+
+**Question 27 -- Sorted Sets for Leaderboards**
+
+You are building a competitive game leaderboard for 5 million players. Requirements: (1) update a player's score in real time, (2) get a player's current rank, (3) display the top 100 players, (4) show the 50 players above and below a given player. You must support 50,000 score updates per second at peak. Pick your data structure and justify every operation's complexity.
+
+- Redis Sorted Sets (ZSET) handle all four operations natively. ZADD updates or inserts a score in O(log N). ZREVRANK returns rank in O(log N). ZREVRANGE with indices 0-99 returns the top 100 in O(log N + 100). For nearby players: ZREVRANK for rank R, then ZREVRANGE from R-50 to R+50 -- O(log N + 100). At 5 million members: log2(5M) ≈ 23 comparisons per operation. At 50,000 updates/second, this is well within single-node throughput capacity.
+- Memory estimate: each entry requires a 64-bit double score plus the member string. For member strings like "user:7823451" (12 bytes), each entry uses roughly 80-100 bytes in hashtable encoding. At 5 million members: 400-500MB. Fits on a single Redis instance with headroom.
+- Tie-breaking: sorted sets order equal-score members lexicographically by member name. If tie-breaking should favor earlier achievement, encode time into the score: `effective_score = points * 1_000_000 + (1_000_000 - seconds_since_epoch_mod_1000000)`. The player who reached the score earlier has a slightly higher fractional value and ranks above equal-score opponents.
+
+Follow-up: You also need per-country leaderboards for 50 countries. Naively: 51 sorted sets, 51 ZADDs per score update. At 50,000 updates/second that is 2.55 million Redis commands/second -- approaching single-node throughput limits. Design an approach that reduces ZADD fan-out while still supporting per-country top-100 queries with sub-second latency.
+
+---
+
+**Question 28 -- Sorted Sets for Sliding Window Rate Limiting**
+
+Your API allows 100 requests per user per 60-second window. Your current INCR+EXPIRE implementation uses a fixed window. A user discovers they can make 100 requests at 11:59:59 and 100 more at 12:00:01, sending 200 requests in 2 seconds without triggering the limit. Replace this with a sliding window using a Redis Sorted Set.
+
+- For each user, maintain a sorted set where the score is the request timestamp in milliseconds and the member is a unique request ID (UUID or timestamp+nonce). On each request, run a Lua script atomically: (1) ZREMRANGEBYSCORE to remove entries older than now_ms - 60000, (2) ZCARD to count remaining entries in the window, (3) if count >= 100 return -1 (rejected), (4) ZADD with the new entry, (5) EXPIRE the key to 60 seconds so inactive user keys do not accumulate.
+- Lua is required for atomicity. Without it, two simultaneous requests at count 99 both pass the ZCARD check and both get added, bringing the count to 101. The Lua script makes the check-and-insert atomic.
+- Memory cost: at 100 entries per window per user, each sorted set uses at most ~10KB. At 1 million concurrently active users: 10GB. A dedicated rate-limiting Redis cluster with 16GB RAM handles this with room to spare -- worth calculating before deploying to avoid surprises.
+
+Follow-up: The rate limit key `ratelimit:user:42` and a separate metadata key `ratelimit:meta:user:42` (storing user tier and custom limit) land on different hash slots in Redis Cluster. Your Lua script needs both keys. It fails with CROSSSLOT. Solve this using hash tags and explain the trade-off: colocating all hot-user keys on one slot concentrates load on one node. At what per-user request rate does this hot-spot actually become a problem?
+
+---
+
+**Question 29 -- Replication Lag and Split-Brain in Redis Sentinel**
+
+Your Redis Sentinel setup has one primary in us-east-1a and two replicas in us-east-1b and us-east-1c. `down-after-milliseconds = 5000`. Network latency between the primary and one replica spikes to 800ms for 30 seconds. Walk through what users experience during the spike, then model a full partition that triggers split-brain and describe the permanent data loss.
+
+- During the latency spike: Redis replication is asynchronous -- the primary confirms writes to clients immediately without waiting for replica acknowledgment. The affected replica receives writes with 800ms delay. Reads from that replica return data up to 800ms stale. For session validation or cart reads, 800ms staleness may be acceptable. For checkout balance validation, this replica must not be used -- the price of reading stale data is overselling or incorrect charges.
+- Split-brain scenario: the primary becomes completely unreachable to Sentinel. Sentinel quorum declares it ODOWN. A replica is promoted. Writes now go to the new primary. The old primary has not crashed -- some clients can still reach it and continue writing. When the partition heals, the old primary discovers a higher-epoch primary exists, demotes itself to a replica, and discards all writes it accumulated during the partition. Those writes are permanently and silently lost.
+- Mitigation: configure `min-replicas-to-write 1` and `min-replicas-max-lag 10`. This forces the primary to stop accepting writes if no replica is replicating with lag under 10 seconds. The isolated primary cannot accumulate writes that will be discarded at failover. The trade-off: if replicas fall behind, the primary returns errors. This is a deliberate CP choice -- consistency over availability.
+
+Follow-up: You set `min-replicas-to-write 1` and `min-replicas-max-lag 10`. A replica lag spike causes your primary to stop accepting writes for 8 seconds. Your on-call team asks: should we disable this setting to restore availability? What business data would you consult before making this decision? What is the reversible way to test disabling it without permanently changing the configuration?
+
+---
+
+**Question 30 -- Redis Cluster vs Redis Sentinel: When to Choose Which**
+
+A new team is launching a recommendation feature with 80GB of cached data, 150K writes/second at peak, and a requirement for automatic failover. They ask you: Cluster or Sentinel? Your interviewer wants a decision framework with concrete thresholds, not definitions from the Redis documentation.
+
+- Redis Sentinel provides high availability for a single logical Redis instance. It monitors the primary, detects failure, and promotes a replica automatically. It does not increase data capacity or write throughput -- you still have one primary. Use Sentinel when: your entire dataset fits on one node AND your write throughput fits within single-node capacity (~100K-200K ops/second depending on command mix). Multi-key commands work normally. Operationally simpler: 1 primary + 2 replicas + 3 Sentinel processes.
+- Redis Cluster shards data across multiple primaries using 16,384 hash slots. This scales both data capacity (more nodes = more total memory) and write throughput (each primary handles a subset of writes). The cost: CROSSSLOT errors on multi-key operations across different slots, hash tag discipline required for co-location, and minimum 6 nodes (3 primaries + 3 replicas). At 80GB data and 150K writes/second: a single large instance might hold 80GB but 150K writes/second approaches saturation. Two primaries each handle 75K writes/second and 40GB of data -- a cleaner fit.
+- Common mistake to call out: teams use Cluster "for HA" when they actually fit within Sentinel's capacity. The 6-node minimum and CROSSSLOT complexity are not worth it if a single node is sufficient. Always calculate both thresholds before recommending Cluster.
+
+Follow-up: Your dataset is 40GB today, growing at 5GB/month. Your current node has 64GB RAM. You have roughly 4 months before you outgrow it. Walk through the Sentinel-to-Cluster migration: what happens to existing keys, how do you resolve the CROSSSLOT errors that appear in application code after the migration, and how do you run a zero-downtime cutover in production?
+
+---
+
+### Section B: Cross-Chapter Integration (Q31-Q40)
+
+---
+
+**Question 31 -- Ch32 + Ch28: Session Storage -- Redis vs PostgreSQL at 10M Users**
+
+You store session tokens in Redis with a 30-minute TTL. 10 million users, 2 active sessions each = 20 million session keys. Your VP of Engineering proposes moving sessions to PostgreSQL (which you already operate) to simplify the stack. Do the math on both options and identify the one scenario where PostgreSQL is actually the better choice.
+
+- Redis memory calculation: each session stores a token (32 bytes), user ID (8 bytes), permissions bitmap (16 bytes), locale (8 bytes), device fingerprint (64 bytes), plus ~50 bytes of Redis key and hash table overhead = roughly 310 bytes per session. 20 million sessions x 310 bytes = 6.2GB. A single managed Redis node (13GB RAM, ~$160/month) holds this with growth room. Each session GET returns in under 1ms.
+- PostgreSQL throughput analysis: assume 50% of 10M users are online at peak = 5M active sessions. At one session validation SELECT per request, and requests arriving every 10 seconds per session: 500K SELECTs/second. A well-tuned PostgreSQL primary handles 10K-40K simple indexed SELECTs/second. You need 3-5 read replicas behind PgBouncer to reach 500K reads/second. Per-lookup latency: 2-10ms vs sub-millisecond for Redis. This is operationally complex and significantly slower.
+- When PostgreSQL beats Redis for sessions: session data requires JOINs to validate (e.g., linked subscription object), session creation must be transactionally atomic with another write, or user count is small enough that SELECT load is under 5K/second. At 10M users with the above profile, Redis is the correct choice.
+
+Follow-up: You keep sessions in Redis. A security incident requires immediate enumeration of all active sessions for user 42 (who may have dozens across devices) and revocation. Redis does not support secondary index lookups by value. Design the additional data structure that makes this O(1) without a SCAN, and show the write path that keeps the index consistent when sessions expire naturally via TTL.
+
+---
+
+**Question 32 -- Ch32 + Ch28: TTL Precision and the Thundering Herd at Expiry**
+
+You run a batch cache warm-up job every hour. It writes 10,000 product listing cache entries to Redis, all with `TTL = 3600`. Exactly one hour later, all 10,000 keys expire within the same second. Your catalog database receives 10,000 concurrent queries, overwhelms the connection pool (100 connections), and query latency spikes to 30 seconds. Users see timeouts. Diagnose the root cause and propose three independent mitigations.
+
+- Root cause: synchronized expiry from deterministic TTLs on keys written at the same time. The batch warm-up created a time bomb: a perfectly effective cache that expires all at once. The database connection pool (100 connections) faces 10,000 simultaneous queries. Queue depth grows. Latency rises. Timeouts cascade. This is the textbook thundering herd.
+- Mitigation 1 -- jitter the TTL at write time: replace `TTL = 3600` with `TTL = 3600 + randint(-300, 300)`. Keys expire over a 10-minute window. Database receives ~17 queries/second instead of 10,000 in one second. Mitigation 2 -- proactive background refresh: a background process watches TTLs and refreshes keys when TTL drops below 10% of the original (360 seconds for a 3600-second TTL). The key never actually expires from the application's perspective. Mitigation 3 -- probabilistic early expiration (PER): on a cache read, before returning the value, calculate `if (TTL_remaining < beta * log(random())) { refresh_now() }`. This is the algorithm from the cache stampede prevention literature. Worth naming in a Staff interview -- it shows you have read beyond the obvious.
+- All three can be combined. Jitter is the lowest-effort fix. PER is the most elegant (no background process required). Background refresh is the most predictable for traffic patterns.
+
+Follow-up: You implement jitter. After a Redis flush (node replacement with data loss), all keys are written simultaneously during post-flush warm-up. Jitter does not help because every key is new at the same moment. The thundering herd occurs on the first load after a cold start. Design a warm-up sequence for the cold-start case that staggers key writes to prevent the initial thundering herd.
+
+---
+
+**Question 33 -- Ch32 + Ch31: In-Process LRU Cache Warm-Up After Rolling Restart**
+
+Your Redis cache serves product listings with 95% hit rate. You add a local in-process LRU cache (10K entries, Caffeine) on each of 20 app servers as a first tier. Hit rate rises to 99.9%. You deploy via rolling restart. Each restarted server has a cold in-process cache. Design the warm-up strategy and address the cache invalidation gap.
+
+- Organic warm-up impact: a cold server handles 5% of traffic. Its effective hit rate is 0% (local) + 95% (Redis fallback) = 95%. Fleet-wide effective hit rate: 0.95 x 5% + 0.999 x 95% = 99.7%. This is acceptable. But with 20 sequential restarts at 5 minutes each to warm up organically, you run with degraded hit rate for 100 minutes. Quantify this tradeoff before deciding whether pre-warming is worth the complexity.
+- Pre-warming strategy -- popularity-based: maintain a sorted set `cache:popularity` where each member is a cache key and the score is hit count. Every server increments the score on each local cache miss (ZINCRBY). When a server restarts, before entering load balancer rotation (enforced via a readiness probe), it calls ZREVRANGE cache:popularity 0 9999, fetches those 10K keys from Redis via pipeline, and populates the in-process cache. Warm-up takes seconds. Server enters rotation with a pre-warmed cache.
+- Invalidation gap: the in-process cache has no invalidation channel. If a product price changes in the database, you delete the Redis key, but all 20 servers still serve the old price from their local caches until the local TTL expires. Solution: set local TTL much shorter than Redis TTL -- local TTL = 30 seconds, Redis TTL = 5 minutes. Maximum staleness = 30 seconds. For most use cases this bounds the problem acceptably.
+
+Follow-up: A flash sale starts. Prices change for 500 products. You need in-process cache invalidation on all 20 servers within 1 second. You cannot use Redis Pub/Sub (too unreliable for this). You cannot afford Kafka for this internal signal. Design the simplest mechanism that achieves sub-second invalidation on all 20 servers with at-least-once delivery.
+
+---
+
+**Question 34 -- Ch32 + Ch33: Real-Time Notifications -- Pub/Sub vs Streams vs Kafka**
+
+You are building a real-time notification system. When an order ships, you must push a notification to all of the customer's connected devices (1-3 per customer) and update 3 internal dashboards. Peak: 1 million connected customers. Evaluate Redis Pub/Sub, Redis Streams, and Kafka on persistence, delivery guarantee, consumer groups, and replay.
+
+- Redis Pub/Sub: no persistence, at-most-once delivery, no consumer groups, no replay. A subscriber disconnected at publish time misses the message permanently. For device notifications: acceptable as a best-effort signal if you have an APNs/FCM fallback for disconnected clients. For dashboards: acceptable if the next event corrects any missed update. Not acceptable if every notification must be delivered exactly once.
+- Redis Streams: persistent until trimmed, at-least-once delivery via XACK, consumer groups with re-delivery on crash, replay from any entry ID. A fan-out worker reads stream events and delivers to each subscriber's device via push service. Streams does not natively broadcast to 1 million recipients simultaneously -- you build the fan-out layer on top.
+- Kafka: built for this use case at scale. Partitioned topics allow parallel consumption. Exactly-once semantics with transactional producers and idempotent consumers. Configurable retention (hours to years). Replay from any offset. Kafka Connect ecosystem. The fan-out architecture is the same as Streams -- Kafka does not push to devices directly -- but Kafka's retention and consumer group maturity handle compliance and scale naturally. Operational cost: 3-broker cluster adds 2-3 days of SRE setup. For a startup, Redis Streams is pragmatic. For 1 million subscribers with SLA requirements, Kafka's guarantees are worth the overhead.
+
+Follow-up: You choose Redis Streams. Six months later, legal requires all shipment notifications retained for 2 years for consumer dispute resolution. Redis Streams at 2-year retention would require 500GB-1TB of memory just for this one stream. Design the migration path to Kafka without breaking existing consumers in the transition window.
+
+---
+
+**Question 35 -- Ch32 + Ch33: Exactly-Once Delivery in Redis Streams**
+
+Your Redis Stream consumer reads a payment event (deduct $50 from a wallet), executes the deduction, and ACKs with XACK. The consumer crashes after the deduction but before the ACK. XAUTOCLAIM re-delivers the event on restart. The wallet is deducted twice. Fix this without migrating to Kafka, using idempotency at the consumer layer.
+
+- Redis Streams consumer groups guarantee at-least-once delivery. A message is re-delivered if it remains in the pending-entry list past the idle timeout. There is no built-in exactly-once. You must implement idempotency at the consumer.
+- Idempotency pattern: each stream entry has a unique ID (e.g., 1719000000000-3). Before processing, the consumer checks a deduplication record in PostgreSQL. If the record exists, skip the deduction and ACK immediately. If not: begin a database transaction, check again inside the transaction (to prevent phantom reads), execute the wallet deduction, insert the deduplication record, commit, then ACK in Redis with XACK. The database transaction makes the deduction and deduplication record atomic. If the consumer crashes after the commit but before the ACK, re-delivery hits the deduplication check and is skipped.
+- The deduplication record must live in PostgreSQL, not Redis. If Redis loses the deduplication SET (crash, eviction), re-delivery gets no protection. Storing it in the same durable system as the wallet balance guarantees the deduplication survives any Redis failure.
+
+Follow-up: Your stream processes 10,000 payment events/second across 10 consumers. Each deduplication SELECT adds 2ms. At 1,000 events/second per consumer, this adds 2 seconds of database query time per second per consumer -- unsustainable. Design a deduplication approach that handles 10,000 events/second without adding per-event database reads on the critical path.
+
+---
+
+**Question 36 -- Ch32 + Ch36: Network Partition Across 3 Redis Regions**
+
+You run Redis Cluster across 3 regions: US-East (slots 0-5461), EU-West (slots 5462-10922), AP-South (slots 10923-16383). A BGP routing issue isolates EU-West for 4 minutes. Describe: what writes succeed, what data is lost, and design a strategy to minimize loss for inventory counts specifically.
+
+- What Redis Cluster does: it requires a majority of cluster nodes reachable to accept writes. EU-West cannot reach US-East or AP-South. After `cluster-node-timeout` (default 15 seconds), EU-West primaries detect they lack majority and stop accepting writes. EU-West becomes read-only. This is the safe behavior -- but there is a 15-second window at the start of the partition where EU-West may still accept writes.
+- Data loss window: writes accepted during those 15 seconds exist only on EU-West nodes. When the partition heals and epochs reconcile, EU-West writes from that window may be rolled back. This is permanent, silent data loss. For inventory counts, lost writes mean wrong counts, which cause overselling.
+- Mitigation: (1) reduce cluster-node-timeout to 5 seconds (cuts the loss window from 15s to 5s). (2) Store inventory counts in PostgreSQL as the source of truth and use Redis only as a read cache -- a 15-second cache outage causes slow reads, not inventory loss. (3) Use `min-replicas-to-write 1` with a cross-region replica requiring acknowledgment before confirming a write -- eliminates the data loss window but adds 15ms write latency per operation.
+
+Follow-up: Reducing cluster-node-timeout to 5 seconds means a 5-second GC pause (not a real failure) will trigger a false failover. Calculate the right timeout for a system where P99 GC pause is 2.5 seconds and typical network partition duration is 8 seconds. What is the minimum timeout that avoids false positives from GC pauses while still detecting real partitions before they cause excessive data loss?
+
+---
+
+**Question 37 -- Ch32 + Ch36: Cache Invalidation Across Multi-Region Redis Deployments**
+
+Your application runs in 3 regions, each with its own Redis cluster. When a product price changes, the pricing service (running in US-East) must invalidate cached prices in all 3 regional Redis clusters. Design the invalidation system and quantify the staleness window for each approach.
+
+- Approach 1 -- synchronous cross-region DEL: pricing service sends DEL to all 3 regions before returning success. Latency added: US-East to EU-West ~100ms + US-East to AP-South ~180ms = ~280ms added to every price change. Unacceptable for a user-facing API. Risk: if AP-South Redis is temporarily unavailable, the entire price change fails or leaves a stale cache indefinitely with no retry.
+- Approach 2 -- async invalidation via event bus: pricing service writes the price and publishes `price.changed` to a Kafka topic. Each region has a local consumer group that executes DEL on its local Redis on receipt. Pricing service returns success in <10ms. Invalidation propagates to all regions within ~500ms (typical cross-region Kafka consumer lag). Staleness window: up to 500ms.
+- Approach 3 -- layered TTL as a safety net: even if the invalidation consumer crashes, cached prices refresh when TTL expires. Set product TTL = 5 minutes. Normal case (invalidation works): <500ms staleness. Worst case (invalidation system down): 5 minutes staleness. A Staff engineer presents the layered approach (event bus + TTL) as defense-in-depth. Neither mechanism alone is sufficient; combined, they bound staleness even under failure.
+
+Follow-up: Your Kafka invalidation consumer processes `price.changed` in EU-West and DELetes the EU-West Redis key. 200ms later, a cache read re-populates the key with the new price. A second price change arrives, its invalidation DELetes the key, and the next read fetches the correct (second) price. This is safe. Now model the race where the re-cache of the OLD price happens AFTER the DEL for the second invalidation. How do you prevent stale data from being written back to the cache after the invalidation has already run?
+
+---
+
+**Question 38 -- Ch32 + Ch37: GDPR Deletion -- Finding All Redis Keys for a User**
+
+A GDPR right-to-erasure request arrives. The user's data is in Redis across 3 namespaces: `session:`, `cart:`, `recommendation:`. None of these keys contain the user ID directly -- they use opaque tokens as identifiers. Design the deletion strategy, ensure completeness, and address the cross-slot atomicity problem in Redis Cluster.
+
+- The core problem: SCAN with a user ID pattern cannot find the user's keys because the user ID is not in the key name. You cannot query Redis by value. The only solution is a reverse index maintained at key creation time.
+- Reverse index design: for each user, maintain a Redis SET `user:42:keys`. When creating `session:f3a9b2c1d4e5` for user 42, run a Lua script that atomically executes SADD user:42:keys session:f3a9b2c1d4e5 AND SET session:f3a9b2c1d4e5 {data}. On GDPR deletion: SMEMBERS user:42:keys returns all 14 keys, DEL each, then DEL user:42:keys. The reverse index must also be stored in PostgreSQL as the authoritative source -- if Redis is flushed and rebuilt, the PostgreSQL copy is used to reconstruct the deletion.
+- Cross-slot atomicity: `user:42:keys` and `session:f3a9b2c1d4e5` almost certainly hash to different slots in Redis Cluster. A Lua script referencing both fails with CROSSSLOT. Fix: use hash tags. Designate a convention: all keys for user 42 include `{u42}`. Keys become `{u42}:session:f3a9b2c1d4e5`, `{u42}:cart:abc123`, `{u42}:keys`. All hash to the same slot. Lua scripts work. Trade-off: all of user 42's data is pinned to one Redis node.
+
+Follow-up: The hash tag approach creates hot spots for enterprise power users. User 1 (a SaaS admin) has 500,000 active sessions. All their data lands on one Redis Cluster node, saturating its memory and CPU. Design a sharding strategy that enables GDPR deletion enumeration without concentrating all of one user's data on a single node.
+
+---
+
+**Question 39 -- Ch32 + Ch38: Memory Fragmentation Cost Analysis**
+
+Your Redis cluster costs $8,000/month (cache.r6g.2xlarge x 6 nodes, 64GB RAM each). You observe `redis_mem_fragmentation_ratio = 1.35` on all nodes. Calculate the wasted memory, translate it to monthly cost, and evaluate four remediation options with their trade-offs.
+
+- Fragmentation calculation: fragmentation_ratio = used_memory_rss / used_memory. A ratio of 1.35 means the OS allocated 35% more memory than Redis claims to use for data. Total OS-allocated: 6 x 64GB = 384GB. Total Redis data memory: 384GB / 1.35 = 284GB. Wasted (fragmented, unusable): 100GB (26% of total). Dollar cost: $8,000/month x (100GB / 384GB) = approximately $2,083/month in wasted spend. Equivalently: you could defer a cluster expansion by several months if you eliminated fragmentation.
+- Remediation option 1 -- MEMORY PURGE: one-time jemalloc defragmentation pass. Brief CPU spike (5-10 seconds). No data risk. Safe to run during off-peak. Fragmentation creeps back over time. Option 2 -- activedefrag yes: continuous background defragmentation at low intensity. Keeps fragmentation below 1.10 with <5% CPU overhead. Best long-term option for stable systems. Option 3 -- rolling restart: restart nodes one at a time (via Cluster replica promotion or Sentinel failover). Each fresh instance starts at ratio 1.0. Most impactful but most disruptive: 5-10 minutes per node. Option 4 -- value size normalization: if workload has highly variable value sizes (1KB then 500B then 10KB in the same slot), switching to uniform serialization reduces allocator churn long-term.
+
+Follow-up: You enable activedefrag. Over 48 hours, fragmentation drops from 1.35 to 1.08, freeing 25GB across the cluster. Your dataset grows at 4GB/month. The freed 25GB buys roughly 6 months before hitting the memory ceiling. Your architecture review asks: is this a one-time savings or ongoing? Explain how activedefrag maintains low fragmentation going forward, and describe the conditions under which it stops being effective (hint: extremely high write throughput with large, variable-size values).
+
+---
+
+**Question 40 -- Ch32 + Ch38: Redis Encoding Types and Memory Optimization at Scale**
+
+You cache 10 million user preference objects in Redis as JSON strings. Average JSON size: 800 bytes. Total memory for this key type: ~9GB. Your infrastructure budget is constrained. Show how Redis internal encoding types can reduce this to under 3.5GB without changing application behavior.
+
+- Current storage breakdown: 800 bytes of JSON data + 32 bytes Redis object header + ~64 bytes hash table overhead = approximately 896 bytes per key-value pair. At 10 million entries: 8.96GB.
+- Hash encoding optimization: split the JSON into a Redis Hash using HSET user:pref:42 field1 val1 field2 val2 ... If the hash has fewer than 128 fields (hash-max-listpack-entries) AND all field values are under 64 bytes (hash-max-listpack-value), Redis uses listpack encoding internally. Listpack stores all entries in a single contiguous memory block with no per-entry pointer overhead and no hash table. A 20-field preference hash in listpack uses approximately 300-400 bytes versus 896 bytes as a JSON string -- a 55-65% reduction. Verify encoding with OBJECT ENCODING user:pref:42; you want to see "listpack". If it returns "hashtable", the thresholds have been exceeded and the savings are lost.
+- Risk of encoding promotion: adding any new field over 64 bytes causes listpack-to-hashtable conversion for that key. The conversion is irreversible (Redis does not downgrade) until the key is deleted and rewritten. Make it a code review requirement that new field additions are checked against encoding thresholds before deployment, with a monitoring alert if the listpack percentage in production drops below 95%.
+
+Follow-up: After the optimization, memory drops from 9GB to 3.2GB. Three months later, you add `custom_theme_css` (up to 2KB for some users). 20% of 10 million users set a custom theme. Those 2 million hashes convert from listpack (~350 bytes) to hashtable (~1,100 bytes). Calculate the net memory increase from this one field, and design a hybrid encoding strategy: store the 20 small fields in a listpack hash, store `custom_theme_css` separately as a standalone string key only for users who have set it. Show the key naming convention and the read/write code path for both cases.
+
+---
+
+*End of Supplemental Brainstorming -- Chapter 32.*

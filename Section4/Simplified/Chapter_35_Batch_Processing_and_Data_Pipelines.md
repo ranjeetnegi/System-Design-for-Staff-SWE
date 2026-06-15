@@ -4325,3 +4325,241 @@ Do not say these things:
 *End of Chapter 35: Batch Processing and Data Pipelines.*
 
 *This is the final section. All brainstorming questions and exercises are in Part D.*
+# Supplemental Brainstorming: Chapters 35, 36, 37
+
+---
+
+## Supplemental Brainstorming: Chapter 35 -- Batch Processing
+
+*Questions 21-40: Advanced topics and cross-chapter integration.*
+
+---
+
+### Section A: Advanced Batch Patterns (Q21-Q30)
+
+---
+
+**Question 21 -- Spark executor memory sizing**
+
+Your Spark job is crashing with OutOfMemoryError on executors. The job reads 200GB of Parquet files, does a join between a 190GB fact table and a 10GB dimension table, and writes the result to S3. Your cluster has 20 executors, each with 16GB RAM allocated. Explain the breakdown of executor memory in Spark (heap vs off-heap, execution vs storage pools) and redesign the memory configuration to fix the crash.
+
+- Spark splits executor memory into reserved memory (300MB fixed), user memory, Spark memory (execution + storage). The default Spark memory fraction is 60% of the remaining heap. Execution memory is used for joins, shuffles, aggregations. Storage memory is used for cached RDDs/DataFrames. They share a unified pool and evict each other.
+- The 10GB dimension table is a candidate for broadcast join. Broadcasting avoids a shuffle entirely. With 20 executors and 200GB input, each executor reads ~10GB of Parquet. Partition count matters: if partitions are too large, execution memory overflows to disk (spill), then OOM.
+- Increase executor memory to 24GB, set spark.executor.memoryFraction to 0.7, enable broadcast join for the 10GB dimension (spark.sql.autoBroadcastJoinThreshold = 12GB), and increase the number of partitions (spark.sql.shuffle.partitions = 400 instead of default 200).
+- Follow-up: When would you move to off-heap memory (spark.memory.offHeap.enabled = true)? What workloads benefit, and what are the GC implications?
+
+---
+
+**Question 22 -- On-heap vs off-heap memory trade-offs**
+
+You're running a Spark job that processes 500GB of user event data. The job runs on JVM-based executors and you're seeing frequent GC pauses (5-10 seconds every few minutes), causing task failures and speculative task re-executions. Explain the trade-off between on-heap and off-heap memory in Spark and decide whether off-heap is the right fix here.
+
+- On-heap memory is managed by the JVM garbage collector. Large heaps (> 8GB) lead to long GC pauses because the GC must scan all live objects. Spark's Tungsten engine uses unsafe memory operations and compact binary encoding to reduce GC pressure even within the heap -- but the GC still applies.
+- Off-heap memory (native memory outside JVM heap) bypasses GC entirely. Spark manages it manually via sun.misc.Unsafe. You enable it with spark.memory.offHeap.enabled = true and spark.memory.offHeap.size. This is useful for memory-intensive operations (sorts, aggregations) where GC becomes the bottleneck.
+- The trade-off: off-heap reduces GC pauses but complicates memory management. Memory leaks can crash the JVM process permanently, not just pause it. You lose JVM crash dumps. Off-heap is best for stable, well-tested pipelines with predictable memory patterns.
+- Follow-up: If GC is the bottleneck, what is the alternative to off-heap? (Smaller executor heaps with more executors, using G1GC with tuned region sizes, or switching to non-JVM runtimes like Arrow-based processing.)
+
+---
+
+**Question 23 -- Checkpointing in Spark Streaming vs Structured Streaming**
+
+Your team has a Spark Streaming job (DStream API) that has been running for 6 months. It checkpoints state to HDFS every 30 seconds. A new team member says "just migrate it to Structured Streaming and use stateful operations." The manager says "the checkpoint formats are incompatible." Explain the checkpoint differences and the migration path.
+
+- Spark Streaming (DStream) checkpoints serialize the entire DAG, including the DStream graph structure, RDD lineage, and operator state. The checkpoint is tightly coupled to the Spark version and the code structure. If you change the code (add a new transformation), the old checkpoint is invalid and the job must restart from scratch, losing state.
+- Structured Streaming uses a different checkpoint format: a Write-Ahead Log of offsets plus state stored as versioned Parquet files (using RocksDB or in-memory state store). The checkpoint is decoupled from the query plan to some extent. Schema changes to state require explicit state schema migration.
+- Migration path: you cannot reuse DStream checkpoints in Structured Streaming. Options: (1) drain the DStream job, let it finish processing all in-flight data, then start the Structured Streaming job from the current Kafka offset. Accept a small state loss or re-derive state from the batch layer. (2) Run both in parallel during a transition window.
+- Follow-up: In Structured Streaming, what happens to state when you do a rolling deployment that changes the schema of your stateful operator? How does Spark handle backward compatibility of the state store?
+
+---
+
+**Question 24 -- Delta Lake ACID transactions on a data lake**
+
+Your team writes to S3-based data lake from multiple Spark jobs running concurrently: a nightly batch job that writes daily summaries, an hourly incremental job that appends new rows, and an ad-hoc job that fixes bad rows. Without a transactional layer, you are seeing corrupted reads mid-write. Design a solution using Delta Lake.
+
+- S3 is not a transactional store. Concurrent writers can produce partial writes visible to readers. The "S3 eventual consistency" issue (now largely resolved with strong consistency) was historically a problem, but concurrent multi-writer issues remain because there is no locking mechanism native to S3.
+- Delta Lake adds a transaction log (_delta_log directory) that records every operation as a JSON commit file. Writers use optimistic concurrency: they read the current log version, write their data files, then attempt to commit by writing a new log entry. If two writers try to commit the same version, the loser retries or fails with a conflict error.
+- Concurrent readers always see a consistent snapshot because they read from a committed log version. Time travel queries read older log versions. The nightly batch, hourly append, and ad-hoc fix job each get serialized through the log, preventing partial-write visibility.
+- Follow-up: Apache Iceberg also provides ACID transactions on object stores. Compare Delta Lake vs Iceberg for: (a) engine compatibility (Spark, Flink, Trino), (b) schema evolution support, (c) partition evolution support. Which would you pick for a multi-engine data lake?
+
+---
+
+**Question 25 -- Data quality validation at pipeline ingestion**
+
+Your batch pipeline ingests 10 million user event rows nightly from an upstream team's S3 bucket. Last month, an upstream schema change caused 3 days of bad data to be loaded into your warehouse before anyone noticed (a nullable field was made non-nullable upstream, silently corrupting joins). Design a data quality gate at ingestion.
+
+- The first layer is schema validation: compare the incoming Parquet schema against the expected schema contract (field names, types, nullability). Any schema mismatch should halt the pipeline before any data is written to the downstream warehouse. Tools: Great Expectations, Deequ (AWS), or custom schema registry checks.
+- The second layer is statistical validation: check row counts (is today's file within +/- 20% of the 30-day rolling average?), null rates per column, value range checks (no negative user IDs, no timestamps in the future), and referential integrity checks (all user_id values exist in the user dimension table).
+- The third layer is anomaly detection on derived metrics: if the pipeline produces aggregates (daily active users, revenue), compare the new values against historical trends using z-score or median absolute deviation. A sudden 40% drop in DAU signals a data quality problem, not a product change.
+- Follow-up: Where do you store validation results? How do you notify on-call automatically? How do you handle a "quarantine and continue" strategy where bad rows are isolated but the pipeline continues with good rows?
+
+---
+
+**Question 26 -- Pipeline observability in Airflow/Prefect**
+
+Your Airflow DAG runs 47 tasks across a 6-hour nightly pipeline. Last week it failed silently: tasks appeared green, but S3 outputs were empty because the Spark job succeeded with zero rows processed (a filter bug). Design the observability layer for this pipeline.
+
+- Task-level success/failure is not sufficient observability. You need output validation as a distinct task step: after each Spark job writes to S3, a lightweight validation task checks that the output path exists, the file count is non-zero, and the row count is within expected range. This validation task blocks downstream tasks from running if it fails.
+- SLA monitoring: track expected completion time per task and per DAG run. Airflow has built-in SLA miss alerts. Set the SLA for the full DAG to 5.5 hours; if it is not done by 5:30 AM, send an alert so the on-call can investigate before business hours start.
+- Lineage and audit: emit structured logs from each task (task name, start time, end time, rows read, rows written, input paths, output paths). Push these to a central observability store (BigQuery table or OpenTelemetry-compatible backend). This lets you trace which task processed which data, and replay any task with the exact same inputs.
+- Follow-up: How do you monitor the cost of each DAG run over time? If a Spark task that used to cost $12 now costs $80, you want to know immediately. What metric do you capture, and where?
+
+---
+
+**Question 27 -- Cost of Spark jobs: spot instances and shuffle cost**
+
+Your team runs a daily Spark batch job on AWS EMR using 50 on-demand r5.4xlarge instances for 4 hours. The monthly cost is around $14,000. Your manager asks you to cut this by 60%. Design a cost optimization strategy covering spot instances, shuffle optimization, and right-sizing.
+
+- Spot instances cost 60-90% less than on-demand but can be interrupted with 2-minute warning. EMR supports mixed fleets: use on-demand for the master node and task-critical core nodes, and spot for task nodes (which can be interrupted without data loss since they do not store HDFS data). A 70% spot / 30% on-demand mix gives 50-60% savings with low interruption risk for most jobs.
+- Shuffle is the most expensive Spark operation. Each shuffle stage writes all intermediate data to disk and then re-reads it across the network. Minimize shuffles by: using broadcast joins for small tables, pre-partitioning input data to match the join key (partition pruning), and using sort-merge join with pre-bucketed tables. Shuffle cost is both time cost and I/O cost on spot instances (interrupted mid-shuffle = wasted work).
+- Right-sizing: profile the job to find the actual CPU and memory utilization. If executors use 8GB of their 16GB allocation, halve the executor memory and double the number of executors on smaller instances. Compute-optimized instances (c5) may be cheaper than memory-optimized (r5) if the job is not memory-bound.
+- Follow-up: Calculate the exact cost. 50 x r5.4xlarge on-demand = $1.008/hr each = $50.40/hr x 4 hours = $201.60/day = $6,048/month. (The $14K figure implies the job runs twice daily or the instance count is higher -- work through the math.) With 70% spot at $0.22/hr per instance, what is the new monthly cost?
+
+---
+
+**Question 28 -- Incremental processing vs full reprocessing**
+
+Your nightly Spark batch job does a full table scan of 2TB of S3 data to compute daily aggregates. The data grows by 20GB per day. In 6 months, the full scan will take 8 hours, exceeding your overnight batch window. Design the transition to incremental processing and explain when full reprocessing is still necessary.
+
+- Incremental processing reads only the new data since the last successful run. This requires: (1) a reliable watermark or cursor (last processed partition date, last Kafka offset, last modified timestamp), (2) the ability to merge incremental results into the existing aggregate table (upsert, not just append), and (3) idempotent writes so a retry does not double-count.
+- Delta Lake or Iceberg makes incremental writes safe: use MERGE INTO to upsert new aggregates into the existing table. Partition the S3 data by date so Spark only reads the new date partitions (partition pruning eliminates the full table scan). Processing 20GB per day instead of 2TB is a 100x reduction in scan cost.
+- Full reprocessing is still necessary in these cases: (a) a bug is found in the aggregation logic that affected historical data, (b) a new dimension is added that requires recomputing all historical records, (c) late-arriving data older than the incremental window must be incorporated. Design a backfill mechanism that can reprocess date ranges in parallel: partition the historical range into chunks, run each chunk as a separate Spark job, and merge results.
+- Follow-up: How do you handle late-arriving events in incremental processing? If an event from 3 days ago arrives today, which partition does it land in, and how do you recompute the 3-day-old aggregate without reprocessing everything?
+
+---
+
+**Question 29 -- Data lineage tracking in batch pipelines**
+
+Your organization has 200 Spark batch jobs running across 15 pipelines. A data engineer changed a transformation in pipeline #4 two weeks ago. Now a finance report is showing wrong numbers. No one knows which pipeline feeds which report. Design a data lineage system for the organization.
+
+- Column-level lineage: for each Spark job, capture which input columns are read and which output columns are derived from them. Spark's query execution plan (the DAG of transformations) encodes this information. Tools like Apache Atlas, DataHub, or OpenLineage can instrument Spark to emit lineage events automatically with each job run.
+- Dataset-level lineage: emit an event for each job run that records: job ID, run timestamp, input datasets (S3 paths or table names + snapshot versions), output datasets, and row counts in/out. Store these events in a graph database or lineage store. This lets you traverse: "which jobs read from table X?" and "which reports depend on job Y's output?"
+- Impact analysis: when a schema change or transformation change happens, the lineage graph lets you answer "what is downstream of this dataset?" before making the change. This is the key use case: the finance report is a node in the graph, and you can trace back through the lineage to find which upstream job introduced the bad transformation.
+- Follow-up: OpenLineage is an open standard for lineage events. How would you integrate it with Airflow (which has a built-in OpenLineage plugin) and with Spark (using the openlineage-spark listener jar)? What does a lineage event look like in JSON?
+
+---
+
+**Question 30 -- Schema drift handling in batch pipelines**
+
+Your batch pipeline ingests JSON files from 12 upstream microservices into a Spark job that writes to a Parquet-based data warehouse. Three times in the past year, an upstream service added new fields or changed field types, breaking the Spark job. Design a schema drift handling strategy.
+
+- Schema drift happens when the actual data structure diverges from the expected schema. In Spark, if you specify an explicit schema (StructType) and the incoming JSON has extra fields, those fields are dropped silently. If a field changes type (string to integer), Spark throws a runtime error. Both outcomes are bad: silent data loss and crashes.
+- The correct approach has three layers: (1) Schema detection -- infer the schema of each incoming batch and compare it against the registered schema in a schema registry (or a stored StructType in your metastore). Alert on drift before processing begins. (2) Evolution rules -- allow additive changes (new nullable fields) automatically, require manual approval for breaking changes (field removals, type changes). (3) Schema versioning -- store the schema version alongside each Parquet partition so downstream consumers know which version to expect.
+- For additive drift specifically: use Spark's mergeSchema option when reading Parquet (spark.read.option("mergeSchema", "true")). This allows new columns to be added without breaking the job. New columns appear as nulls in partitions that do not have them. This is safe for additive-only drift.
+- Follow-up: How do you handle a non-additive change (a field renamed from user_id to userId)? You cannot use mergeSchema. You need a transformation layer that normalizes field names before writing to the warehouse. How do you make this transformation layer configurable rather than hardcoded?
+
+---
+
+### Section B: Cross-Chapter Integration (Q31-Q40)
+
+---
+
+**Question 31 -- Ch35 + Ch28: Separating batch reads from the production DB**
+
+Your nightly Spark batch job reads 500 million rows from a PostgreSQL production database using JDBC and writes the results to S3. The read alone takes 3 hours and causes CPU and I/O spikes on the production DB, degrading response times for live users between 2 AM and 5 AM. Design the architecture to separate batch reads from operational queries.
+
+- The root problem is that the batch job competes with the operational workload for the same DB resources. The cleanest fix is read replicas: PostgreSQL supports streaming replication to one or more standby replicas. Point the Spark JDBC connection at a dedicated read replica. This offloads all batch I/O from the primary.
+- Even on a read replica, a 500M-row JDBC read without partitioning is a single sequential scan. Spark's JDBC source can parallelize reads using partitionColumn, lowerBound, upperBound, and numPartitions. Partition by a monotonically increasing ID column and set numPartitions = 50. Each Spark executor reads a range of IDs in parallel, reducing wall clock time.
+- A better long-term architecture is CDC (Change Data Capture) using Debezium. Debezium streams every row change from PostgreSQL binlog to Kafka. The batch job reads from Kafka or from an S3 sink (Kafka Connect S3 sink). The production DB is never touched by batch jobs. The batch job always reads from the event stream, which is decoupled from DB load.
+- Follow-up: The read replica has a replication lag of 45 seconds. Does this matter for your nightly batch? At what point does replication lag become a problem for batch jobs, and how do you detect it?
+
+---
+
+**Question 32 -- Ch35 + Ch30: Schema evolution in Avro files from Kafka S3 sink**
+
+Your Spark batch pipeline reads Avro files from a Kafka S3 sink connector. The upstream service changed its schema: the field user_country was renamed to user_region and the type changed from a two-letter ISO code (string) to an enum. Avro schema resolution rules apply. Design how Spark handles this without a full pipeline rewrite.
+
+- Avro schema resolution compares the writer schema (the schema used when the file was written) against the reader schema (the schema the consumer expects). Renaming a field is not backward compatible by default, but Avro supports aliases: if you add user_country as an alias for user_region in the new schema, the Avro reader can map the old field name to the new one during deserialization.
+- The schema registry is critical here. Confluent Schema Registry (or AWS Glue Schema Registry) stores every version of the schema. Each Avro file written by the Kafka S3 sink includes the schema ID in its header. When Spark reads the file, it fetches the writer schema by ID from the registry and applies schema resolution rules against the current reader schema.
+- The type change from string to enum is a separate problem. Avro allows promotion (int to long, float to double) but string-to-enum is not a standard promotion. You need a transformation step: read the raw string value, map it to the new enum values, and write the result. This transformation layer is isolated in a Spark UDF or a map transformation that is versioned alongside the schema change.
+- Follow-up: What is the difference between backward compatibility (new reader can read old data) and forward compatibility (old reader can read new data) in Avro? Which one does a Kafka consumer need, and why?
+
+---
+
+**Question 33 -- Ch35 + Ch33: Reprocessing after a streaming bug corrupted 3 days of data**
+
+You have a Lambda architecture: Kafka + Flink for near-real-time aggregations, and Spark for nightly full reprocessing. A bug in the Flink stream layer caused incorrect aggregations for the past 3 days. The Flink output tables are wrong. Spark's batch job runs nightly and overwrites the same output tables. Design the reprocessing strategy and explain how users see accurate data while reprocessing is in progress.
+
+- The Spark batch job is the source of truth in Lambda architecture. The fix is to trigger an out-of-schedule Spark reprocess job that covers the 3 affected days. Spark reads the raw events from Kafka (which retains events for 7 days by default) or from the S3 raw event archive, recomputes the correct aggregations, and overwrites the output tables.
+- During reprocessing (which may take 4-6 hours), users querying the output tables see stale or incorrect data. To avoid this, use a blue/green table approach: the Spark reprocess job writes to a shadow table (_reprocess suffix). Once validation passes, atomically swap the shadow table to become the live table (rename in the metastore). Users see either the old (incorrect) data or the new (correct) data, never a mix.
+- The Flink bug must be fixed before reprocessing begins, otherwise Flink will overwrite the corrected batch output with fresh incorrect streaming aggregations. Options: (a) pause Flink during reprocessing and restart from the latest Kafka offset after Spark finishes, (b) switch to serving only from the batch layer (batch-only mode) while the fix is validated, then re-enable Flink.
+- Follow-up: Kafka retains data for 7 days. The bug was introduced 3 days ago, so you have the raw events. What if the bug had been running for 10 days and Kafka retention had expired? How do you recover?
+
+---
+
+**Question 34 -- Ch35 + Ch36: Regional Spark processing with global report merging**
+
+Your Spark batch job processes global user events stored in S3 in us-east-1. EU regulations require that EU user events be processed only within EU infrastructure. Redesign the pipeline with regional processing. Explain how you merge EU and US results for global reports without EU data crossing the Atlantic.
+
+- Deploy two independent Spark clusters: one in AWS eu-west-1 and one in aws us-east-1. Each cluster has its own S3 bucket in its region. EU user events are written to the eu-west-1 S3 bucket and processed by the EU Spark cluster. US (and other non-EU) user events are written to the us-east-1 bucket and processed by the US cluster. No EU raw event data ever leaves the EU region.
+- Each regional cluster produces aggregated outputs. Aggregates (daily active users by country, revenue by SKU, conversion rates) are not personally identifiable information if constructed correctly. These aggregate outputs can cross regions without violating GDPR. The EU cluster writes its aggregate results to a cross-region S3 bucket accessible from us-east-1.
+- A global merge job (runs in us-east-1 or in a neutral region) reads the US aggregates and the EU aggregates, combines them using union or join depending on the report structure, and writes the final global report. The global report contains no EU PII -- only aggregate numbers.
+- Follow-up: Some global reports require user-level joins (e.g., find users who were active in both EU and US). You cannot send EU user_ids to the US for the join. What privacy-preserving technique allows cross-region user matching without transferring raw IDs? (Hash-based matching, PPRL -- Privacy Preserving Record Linkage.)
+
+---
+
+**Question 35 -- Ch35 + Ch37: Federated learning for recommendation model training under GDPR**
+
+Your batch ML pipeline trains a recommendation model nightly on global user behavioral data stored in S3. A GDPR audit concludes that EU user behavioral data cannot be sent to the US for model training. Your current architecture centralizes all data in us-east-1 before training. Design a federated learning approach where training happens locally in each region and only gradient updates cross borders.
+
+- Federated learning: instead of sending raw data to a central trainer, each regional node trains on its local data and sends only model gradient updates (not raw data) to a central aggregator. The central aggregator combines gradients using Federated Averaging (FedAvg) and distributes the updated global model back to each regional node.
+- The EU Spark cluster trains on EU behavioral data locally in eu-west-1. It computes gradients and sends them to the US aggregator. The gradients are vectors of floating-point numbers (model weight updates) -- they contain no raw user data. The GDPR question is whether gradients are "personal data." Legal consensus: model gradients in aggregate are not personal data, but gradients from a single user's data could theoretically allow reconstruction of that user's data (gradient inversion attacks). Mitigate with differential privacy: add calibrated noise to gradients before sending them.
+- Engineering: implement federated training using PySpark + custom gradient computation, or use a dedicated federated learning framework (TensorFlow Federated, PySpark with MLlib for gradient computation). The aggregator runs in us-east-1 or in a neutral region. Training rounds: each region does one epoch locally, sends gradients, receives updated weights, repeats.
+- Follow-up: Federated learning typically produces a model with 2-5% lower accuracy than centralized training (non-IID data problem -- each region's data distribution is different). Is this acceptable for recommendation? What if EU users make up 40% of your training data -- how much accuracy loss do you expect?
+
+---
+
+**Question 36 -- Ch35 + Ch38: Spot instance checkpoint strategy for Spark on EMR**
+
+Your weekly Spark batch job runs 200 spot instances (r5.2xlarge) for 6 hours. The spot interruption rate for r5.2xlarge in us-east-1 is approximately 10% per instance per hour. Calculate the expected cost, expected completion time with retries, and the expected number of interruptions. Then design the checkpoint strategy to minimize wasted work on interruption.
+
+- Cost calculation: r5.2xlarge spot price ~$0.14/hr. 200 instances x $0.14/hr x 6 hours = $168. On-demand price: $0.504/hr. 200 x $0.504 x 6 = $604.80. Spot savings: ~72%. Expected interruptions: 10% per instance per hour x 200 instances x 6 hours = 120 expected interruption events across the job. Not all interruptions kill the job -- EMR task nodes can be replaced. Core nodes hold HDFS data and should use on-demand.
+- Checkpointing strategy: Spark checkpoints RDD/DataFrame lineage and state to HDFS or S3. Set checkpoint interval to every 30 minutes of processing. On interruption, the job resumes from the last checkpoint, losing at most 30 minutes of work. Without checkpointing, the entire job restarts from scratch on any failure, wasting potentially 5 hours of work.
+- Checkpoint location should be S3 (not HDFS on instance storage) because S3 survives instance terminations. Use S3 with server-side encryption. Set spark.checkpoint.dir to an S3 path. For structured streaming, checkpointing is built-in. For batch jobs, use RDD.checkpoint() at stage boundaries, or design jobs as sequential stages where each stage writes its output to S3 before the next stage reads it (natural checkpointing via stage outputs).
+- Follow-up: EMR Graceful Decommission allows spot nodes to finish their current task before being terminated (Spark tasks drain before the instance is removed). How does this interact with the 2-minute spot interruption warning? Is 2 minutes enough to finish a typical Spark task?
+
+---
+
+**Question 37 -- Ch35 design synthesis: building a fault-tolerant global batch platform**
+
+You are the lead architect for a company processing 50TB of event data daily. You have batch jobs for ML training, business intelligence aggregates, and data quality checks. Jobs run on AWS EMR in us-east-1, eu-west-1, and ap-southeast-1. Design the full batch platform: orchestration, compute, storage, data quality, lineage, and cost controls.
+
+- Orchestration: Airflow deployed on managed MWAA (AWS Managed Workflows for Apache Airflow) in each region with a cross-region DAG hierarchy. Global DAGs coordinate regional DAGs. Each regional Airflow instance manages jobs in its region. Cross-region dependencies are handled via S3 sentinel files: a job in eu-west-1 polls for a success marker from us-east-1 before starting.
+- Compute: EMR with mixed fleets (spot task nodes, on-demand core nodes). Auto-scaling based on job queue depth. Instance fleet with multiple instance types (r5.2xlarge, r5.4xlarge, m5.4xlarge) to maximize spot availability. Use EMR Serverless for ad-hoc jobs to eliminate cluster management overhead.
+- Storage: S3 as the primary store, partitioned by region, date, and event type. Delta Lake for transactional write semantics. Cross-region replication of aggregates only (not raw events) to a global reporting bucket.
+- Follow-up: How do you set a hard cost cap per job? If a job is projected to exceed $500 in EMR compute, it should alert and optionally stop. What Airflow mechanism or AWS service enables this?
+
+---
+
+**Question 38 -- Ch35 data quality synthesis: the end-to-end bad data scenario**
+
+A downstream data science team builds a churn prediction model on data produced by your batch pipeline. After deploying the model, churn predictions are garbage. Investigation reveals that 40 days ago, your pipeline silently ingested a file where the event_type field values were corrupted (all values became "unknown"). This lasted for 3 days. The model trained on this corrupted data. Design the detection, correction, and prevention system.
+
+- Detection failure analysis: the pipeline had no statistical validation on the event_type column. A correct validation would have checked: (a) the distribution of event_type values -- "unknown" appearing at 100% instead of the normal 0.1% is a 1000-sigma anomaly, (b) the cardinality of event_type -- normally 12 distinct values, now 1. Either check would have caught this on day 1.
+- Correction: use Delta Lake time travel to restore the 3 affected partitions to their state before the bad data was ingested. If the raw source files still exist, re-ingest them. Retrain the model on the corrected data. Mark the model trained on corrupted data as deprecated in the ML model registry and roll back to the last clean version.
+- Prevention: add a mandatory data quality gate task to the Airflow DAG. This task runs Great Expectations checks: event_type must appear in a fixed allowed list, the null rate for event_type must be less than 1%, the "unknown" rate must be less than 0.5%. If the gate fails, the job stops and alerts. No downstream tasks run. The gate is not optional.
+- Follow-up: The 3-day corruption window was 40 days ago. Your ML model was trained 2 weeks ago using the already-corrupted data. How do you audit every model trained in the past 60 days for data quality issues? What does your model training lineage system need to support this?
+
+---
+
+**Question 39 -- Ch35 + Ch33 synthesis: unified Lambda architecture with quality guarantees**
+
+You are serving a real-time dashboard (Flink aggregates) and a historical analytics page (Spark batch aggregates) from the same data. The Lambda architecture means users sometimes see different numbers on the real-time vs historical views for the same time window. Design the reconciliation mechanism and the user experience for the "eventual consistency" of these two views.
+
+- The discrepancy comes from two sources: (1) late-arriving events that Flink has not yet processed but Spark's nightly reprocess has incorporated, (2) different aggregation logic between the Flink job and the Spark job (a bug or intentional difference). Reconciliation requires: identical aggregation logic enforced by a shared library (the same UDF code runs in both Flink and Spark), and a serving layer that knows which view to serve for which time window.
+- Serving strategy: for time windows within the last 2 hours, serve Flink aggregates (most current). For time windows older than 24 hours, serve Spark batch aggregates (reconciled, includes late arrivals). For the 2-24 hour window, serve Flink aggregates with a visual indicator ("approximate, updating") so users know the numbers may shift.
+- Kappa architecture alternative: eliminate the batch layer entirely. Run Flink over the full historical Kafka log to recompute any time window. This removes the dual-system complexity. The trade-off is that historical reprocessing in Flink is slower than Spark and requires Kafka to retain data indefinitely (which is expensive -- use tiered storage).
+- Follow-up: A user sees a revenue number of $1,247,382 on the real-time dashboard at 3 PM. At 9 AM the next day, the historical view shows $1,251,103 for the same day. The $3,721 difference represents late-arriving transactions. How do you explain this to a non-technical business stakeholder in a way that builds trust rather than confusion?
+
+---
+
+**Question 40 -- Ch35 synthesis: the 3 AM pipeline failure**
+
+Your nightly batch pipeline is supposed to finish by 4 AM so reports are ready for business users at 8 AM. At 3:15 AM, PagerDuty wakes you up: the pipeline has been running for 6 hours (started at 9 PM) and is stuck at 67% completion. The Airflow dashboard shows one task in "running" state for 4 hours with no progress. Walk through the diagnosis and the incident response.
+
+- Diagnosis step 1: check the Spark driver logs for the stuck task. Look for: executor heartbeat timeouts (indicates lost executors), shuffle fetch failures (network partition or spot interruption killed executor holding shuffle data), OOM errors in executor logs, and whether the task is actually running (producing output bytes) or blocked (zero output for 4 hours).
+- Diagnosis step 2: check the EMR cluster health. Are all executors alive? Did any spot instances get reclaimed? Check the Spark UI (available on port 18080 of the master node) for the stage/task breakdown. A single skewed partition (one partition with 10x more data than others) can cause one task to run for hours while all others finish in minutes. This is the most common "stuck at 67%" cause.
+- Response: if it is data skew, kill the job and restart with increased parallelism on the skewed stage (spark.sql.shuffle.partitions from 200 to 800, or use salting on the skew key). If it is a lost executor, the job should self-recover via Spark's task retry mechanism -- but if it does not, kill and restart from the last S3 stage checkpoint. Communicate an updated ETA to stakeholders.
+- Follow-up: The reports are not ready by 8 AM. Business users are waiting. What is the degraded-mode service you can provide? Can you serve yesterday's report with a "data as of yesterday" label? How do you automate this fallback?
+
+---
+
