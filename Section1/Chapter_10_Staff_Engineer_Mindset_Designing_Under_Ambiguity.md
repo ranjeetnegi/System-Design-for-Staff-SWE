@@ -1,4 +1,4 @@
-# Chapter 10: Staff Engineer Mindset — Designing Under Ambiguity
+# Chapter 10: Staff Engineer Mindset -- Designing Under Ambiguity
 
 ---
 
@@ -124,7 +124,7 @@ They want to see that you can operate as someone who will be trusted to go into 
 
 ---
 
-### Concept 3: The Mindset Shift — From "I Need Information" to "I Will Make Assumptions"
+### Concept 3: The Mindset Shift -- From "I Need Information" to "I Will Make Assumptions"
 
 **Why does this mindset shift matter?**
 
@@ -211,7 +211,7 @@ Type 1: Scope-defining questions. These clarify what you are solving and what yo
 
 Examples:
 - "When you say notification system, are we including user preference management and opt-out, or focusing on the delivery infrastructure?"
-- "Should I design the content generation side — what to notify — or the delivery side — how to notify — or both?"
+- "Should I design the content generation side -- what to notify -- or the delivery side -- how to notify -- or both?"
 - "Are we building a platform that multiple products will use, or a notification system for a single product?"
 
 Why these are good: They show you understand that systems have scope. They demonstrate that you know the difference between a point solution and a platform. They move the conversation forward rather than stalling it.
@@ -228,7 +228,7 @@ Why these are good: Each question reveals the reasoning behind it. You are not a
 Type 3: Priority-clarifying questions. These help you focus on what matters most.
 
 Examples:
-- "If I had to optimize for one property — reliability, latency, or cost — which matters most?"
+- "If I had to optimize for one property -- reliability, latency, or cost -- which matters most?"
 - "What is the most important user journey I should make sure works well, even if other things degrade?"
 - "What would constitute a working MVP versus the full vision?"
 
@@ -257,7 +257,7 @@ Right response: Make a decision. State your reasoning. Proceed.
 Example of the right response:
 
 Interviewer: "What scale should I design for?"
-You: "I will design for a mid-to-large scale — around ten million users and one hundred million events per day. This is large enough to require serious distributed systems thinking but not so extreme that we need exotic approaches. I will note where the design would change if we are ten times or one hundred times larger."
+You: "I will design for a mid-to-large scale -- around ten million users and one hundred million events per day. This is large enough to require serious distributed systems thinking but not so extreme that we need exotic approaches. I will note where the design would change if we are ten times or one hundred times larger."
 
 This single response shows more Staff-level judgment than any follow-up question could.
 
@@ -311,11 +311,11 @@ Without an assumption log, your design choices appear to come from nowhere. "I c
 
 At the start of your design, after your clarifying questions, state your key assumptions in a list:
 
-"Before I start designing, let me state the assumptions I am working with. First, I am assuming a large-scale system — one hundred million daily active users and one billion events per day. Second, I am assuming a mix of time-critical notifications, like two-factor authentication, and non-urgent ones, like marketing emails. Third, I am assuming this needs to be a platform that multiple teams will use, which means I need to think about multi-tenancy and isolation. Fourth, I am assuming reliability matters more than cost — occasional over-provisioning is acceptable but message loss is not. These assumptions will drive my design. Tell me if any of them are wrong."
+"Before I start designing, let me state the assumptions I am working with. First, I am assuming a large-scale system -- one hundred million daily active users and one billion events per day. Second, I am assuming a mix of time-critical notifications, like two-factor authentication, and non-urgent ones, like marketing emails. Third, I am assuming this needs to be a platform that multiple teams will use, which means I need to think about multi-tenancy and isolation. Fourth, I am assuming reliability matters more than cost -- occasional over-provisioning is acceptable but message loss is not. These assumptions will drive my design. Tell me if any of them are wrong."
 
 As you design, state new assumptions as they arise:
 
-"For the database tier, I am going to assume a read-heavy workload — probably ninety-to-one reads to writes. That drives me toward a read-optimized database with caching."
+"For the database tier, I am going to assume a read-heavy workload -- probably ninety-to-one reads to writes. That drives me toward a read-optimized database with caching."
 
 "I am assuming here that we have engineering capacity to operate a distributed cache. If the team is small, I would simplify to application-level caching."
 
@@ -351,7 +351,7 @@ Here are the resolutions available to us:
 
 Option A: Accept eventual consistency. We deliver sub-millisecond reads by serving from local cache, and accept that users in different regions may see slightly different data for a second or two. This is acceptable for a social feed but not for a financial transaction.
 
-Option B: Accept higher latency for writes. Strong consistency requires coordination between regions. We pay for that with write latency — maybe fifty to one hundred milliseconds per write. Reads can still be fast if we read from a local replica.
+Option B: Accept higher latency for writes. Strong consistency requires coordination between regions. We pay for that with write latency -- maybe fifty to one hundred milliseconds per write. Reads can still be fast if we read from a local replica.
 
 Option C: Define consistency regions. For data that must be consistent, route all operations through a single primary region and pay the latency cost. For data that can be eventually consistent, allow local reads and writes.
 
@@ -383,7 +383,7 @@ Second-order questions surface unknown unknowns by asking about the future and a
 
 - "Are there other teams or products that might use this system in the future that we are not currently thinking about?"
 - "Are there any regulatory or compliance considerations I should know about, even if they are not requirements yet?"
-- "What happens to this system during peak events — holiday shopping, major news events, product launches?"
+- "What happens to this system during peak events -- holiday shopping, major news events, product launches?"
 - "Are there any partnerships or integrations planned that might add load or new requirements?"
 - "What does this system need to look like in two to three years, even if we are only building a fraction of that today?"
 
@@ -393,7 +393,7 @@ These questions do not have specific technical implications until you hear the a
 
 Beyond asking questions, you design for unknown unknowns by building in explicit extensibility points:
 
-"I am designing this with a plugin architecture for notification channels. We currently support email, SMS, and push. But the abstraction means adding a new channel — say, WhatsApp or in-app notifications — does not require changing the core pipeline. This gives us flexibility for channels we have not thought of yet."
+"I am designing this with a plugin architecture for notification channels. We currently support email, SMS, and push. But the abstraction means adding a new channel -- say, WhatsApp or in-app notifications -- does not require changing the core pipeline. This gives us flexibility for channels we have not thought of yet."
 
 "I am keeping the ranking logic as a separate service that can be swapped out. Right now it is chronological. If we later want ML-based ranking, we replace the ranking service without changing anything else."
 
@@ -417,7 +417,7 @@ Pattern-matching approach: "This is a notification system. I have built these be
 
 First-principles approach: "What does a notification system fundamentally need to do? Receive events from producers. Decide which users to notify. Deliver notifications through channels. Ensure delivery is reliable. Handle failures and retries. Prevent duplicates. Scale independently from the producers.
 
-Given those requirements, what properties does the architecture need? Decoupling between event production and notification delivery — so a slow SMS provider does not block email delivery. Priority separation — so a critical two-factor authentication code does not wait behind a bulk marketing campaign. Idempotency — so retries do not cause duplicate notifications. Rate limiting — so a runaway producer cannot overwhelm the system.
+Given those requirements, what properties does the architecture need? Decoupling between event production and notification delivery -- so a slow SMS provider does not block email delivery. Priority separation -- so a critical two-factor authentication code does not wait behind a bulk marketing campaign. Idempotency -- so retries do not cause duplicate notifications. Rate limiting -- so a runaway producer cannot overwhelm the system.
 
 From those requirements and properties, here is the architecture that satisfies them..."
 
@@ -452,11 +452,11 @@ There is a difference between designing the system you know how to build and des
 
 Before recommending any specific technology or architecture, name the context-specific factors that are driving the recommendation:
 
-"For this team size and scale, I would recommend Postgres rather than a distributed database. The operational complexity of a distributed database is significant, and we are not yet at the scale where Postgres becomes a bottleneck. When we hit those limits — probably when our data exceeds a few terabytes or our write throughput exceeds tens of thousands per second — we have a clear migration path."
+"For this team size and scale, I would recommend Postgres rather than a distributed database. The operational complexity of a distributed database is significant, and we are not yet at the scale where Postgres becomes a bottleneck. When we hit those limits -- probably when our data exceeds a few terabytes or our write throughput exceeds tens of thousands per second -- we have a clear migration path."
 
 Notice: the recommendation is justified by context. "Small team" and "not at scale yet" are the reasons, not "I know Postgres."
 
-"If this were a ten-engineer startup, I would design differently — simpler, fewer components, easier to operate. But you have described a platform team at Google scale. In that context, the additional complexity of this tiered storage approach is justified because the operational tooling and engineering expertise to manage it exist."
+"If this were a ten-engineer startup, I would design differently -- simpler, fewer components, easier to operate. But you have described a platform team at Google scale. In that context, the additional complexity of this tiered storage approach is justified because the operational tooling and engineering expertise to manage it exist."
 
 ---
 
@@ -464,7 +464,7 @@ Notice: the recommendation is justified by context. "Small team" and "not at sca
 
 **Why does this exist?**
 
-Scale is one of the most common ambiguities in system design interviews. "Design a large-scale system" tells you nothing concrete. And even when you ask, the answer is often "hundreds of millions of users" or "large" — still vague.
+Scale is one of the most common ambiguities in system design interviews. "Design a large-scale system" tells you nothing concrete. And even when you ask, the answer is often "hundreds of millions of users" or "large" -- still vague.
 
 The mistake is to either wait for exact numbers or to use arbitrary numbers without reasoning. Staff Engineers derive approximate numbers from first principles, state their derivation, and use those derived numbers as the basis for design decisions.
 
@@ -472,7 +472,7 @@ The mistake is to either wait for exact numbers or to use arbitrary numbers with
 
 Step 1: Anchor on something you know or can estimate.
 
-"For a social media feed system, let me estimate the scale. Say five hundred million registered users. Twenty percent are daily active — that is one hundred million. Each active user checks their feed about ten times a day. That is one billion feed reads per day. If each feed request loads the top fifty posts, we are reading fifty billion post records per day."
+"For a social media feed system, let me estimate the scale. Say five hundred million registered users. Twenty percent are daily active -- that is one hundred million. Each active user checks their feed about ten times a day. That is one billion feed reads per day. If each feed request loads the top fifty posts, we are reading fifty billion post records per day."
 
 Step 2: Convert to operational rates.
 
@@ -480,7 +480,7 @@ Step 2: Convert to operational rates.
 
 Step 3: Derive implications.
 
-"At one hundred twenty thousand reads per second, a single database server cannot handle this. We need read replicas. Given that feeds are personalized and user-specific, caching individual feeds in Redis makes sense — we can cache the hot feeds in memory and serve most of the load from cache."
+"At one hundred twenty thousand reads per second, a single database server cannot handle this. We need read replicas. Given that feeds are personalized and user-specific, caching individual feeds in Redis makes sense -- we can cache the hot feeds in memory and serve most of the load from cache."
 
 This derivation demonstrates several important things. You can reason quantitatively. You understand the connection between scale numbers and architectural decisions. You are not guessing randomly.
 
@@ -510,7 +510,7 @@ Designing for change does not mean designing for every possible change. That lea
 
 Scale change: The system grows by ten times or one hundred times. Design the critical path so it can be horizontally scaled. Use stateless services where possible. Separate concerns so the write path and read path can scale independently.
 
-Feature change: New types of notifications, new channels, new rules for who gets notified. Use abstraction and pluggable components. "I am designing the channel abstraction so that adding a new channel only requires implementing a new plugin — the core pipeline does not change."
+Feature change: New types of notifications, new channels, new rules for who gets notified. Use abstraction and pluggable components. "I am designing the channel abstraction so that adding a new channel only requires implementing a new plugin -- the core pipeline does not change."
 
 Operational change: The team grows. The technology evolves. The company is acquired. Use standard interfaces (HTTP, gRPC) rather than proprietary protocols. Keep technology choices at the level of proven, well-supported options rather than experimental tools.
 
@@ -518,7 +518,7 @@ Operational change: The team grows. The technology evolves. The company is acqui
 
 "I am choosing to make the fan-out service a separate deployable component from the delivery service. They could be combined today, but separating them now means we can scale them independently later. Fan-out is CPU-intensive and write-heavy; delivery is I/O-intensive and read-heavy. They have different scaling profiles. Keeping them separate is a small upfront cost that pays off as we scale."
 
-"I am using an event-driven design here rather than direct RPC calls. This means when we add a new consumer — say, an analytics service that wants to know when notifications are sent — we just add a new subscriber. The notification service does not need to know about the analytics service. This is how we design for future integrations we cannot anticipate today."
+"I am using an event-driven design here rather than direct RPC calls. This means when we add a new consumer -- say, an analytics service that wants to know when notifications are sent -- we just add a new subscriber. The notification service does not need to know about the analytics service. This is how we design for future integrations we cannot anticipate today."
 
 ---
 
@@ -619,11 +619,11 @@ The two-paths technique shows that you understand the problem space well enough 
 
 "I see two valid approaches here, and the right choice depends on our consistency requirements.
 
-Path A: Fan-out on write. When a user posts, we immediately write a feed entry for every follower. Reads are fast because the feed is precomputed. The cost is write amplification — posting to a user with one million followers writes one million records.
+Path A: Fan-out on write. When a user posts, we immediately write a feed entry for every follower. Reads are fast because the feed is precomputed. The cost is write amplification -- posting to a user with one million followers writes one million records.
 
 Path B: Fan-out on read. When a user views their feed, we compute it on the fly by querying everyone they follow. Reads are slower but writes are cheap. The issue is that at scale, computing a feed from many follows in real time is expensive.
 
-At the scale we are discussing — five hundred million users with an average of five hundred follows each — fan-out on write is feasible for regular users but not for celebrity accounts with millions of followers. I will use a hybrid approach: fan-out on write for regular users, fan-out on read for accounts with more than one hundred thousand followers.
+At the scale we are discussing -- five hundred million users with an average of five hundred follows each -- fan-out on write is feasible for regular users but not for celebrity accounts with millions of followers. I will use a hybrid approach: fan-out on write for regular users, fan-out on read for accounts with more than one hundred thousand followers.
 
 This hybrid is what Twitter uses. I am choosing it not because Twitter uses it but because it is the right solution to this specific trade-off."
 
@@ -661,7 +661,7 @@ Staff Engineers under ambiguity are detectives. Available evidence is the proble
 
 An experienced chef given "make something with chicken and vegetables" does not ask for a recipe. They assess what they have, recall techniques that work with these ingredients, make assumptions about what the diner probably wants, and create a dish. A novice cook with the same ingredients is paralyzed without a recipe.
 
-Staff Engineers are experienced chefs. They have enough domain knowledge to make reasonable assumptions and proceed. Junior engineers are novice cooks — they need a recipe (complete requirements) to function.
+Staff Engineers are experienced chefs. They have enough domain knowledge to make reasonable assumptions and proceed. Junior engineers are novice cooks -- they need a recipe (complete requirements) to function.
 
 ---
 
@@ -709,7 +709,7 @@ mindmap
 
 ## Section 5: Real-World Examples
 
-### Example 1: Google — News Feed (Fan-out at Scale)
+### Example 1: Google -- News Feed (Fan-out at Scale)
 
 **The situation:**
 
@@ -733,7 +733,7 @@ The scale numbers matter enormously here. For a creator with one thousand follow
 
 **The Staff-level assumption and resolution:**
 
-"I am assuming that the creator distribution follows a power law — a small number of creators have enormous follower counts and a large number have small follower counts. This is empirically true for every social platform. Given this, I will use a hybrid approach:
+"I am assuming that the creator distribution follows a power law -- a small number of creators have enormous follower counts and a large number have small follower counts. This is empirically true for every social platform. Given this, I will use a hybrid approach:
 
 For normal accounts (fewer than one hundred thousand followers), I will use fan-out on write. Most accounts fall into this category, and the write volume is manageable.
 
@@ -743,7 +743,7 @@ The threshold of one hundred thousand is an assumption. I would validate it by l
 
 This is the actual approach used in production at social scale platforms including Twitter and early Facebook.
 
-### Example 2: Amazon — Rate Limiting at Scale
+### Example 2: Amazon -- Rate Limiting at Scale
 
 **The situation:**
 
@@ -761,17 +761,17 @@ The ambiguity: "at scale" for Amazon means potentially millions of API keys, eac
 
 **The Staff-level assumption and resolution:**
 
-"I am assuming two competing requirements here. First, the rate limit check needs to be very fast — sub-millisecond — because it is in the critical path of every API call. Second, the rate limits need to be accurate enough to prevent abuse but do not need to be perfectly accurate to the millisecond.
+"I am assuming two competing requirements here. First, the rate limit check needs to be very fast -- sub-millisecond -- because it is in the critical path of every API call. Second, the rate limits need to be accurate enough to prevent abuse but do not need to be perfectly accurate to the millisecond.
 
 These two requirements together rule out approaches that require synchronous coordination. If I check a central Redis store on every request, the network round trip alone will add five to ten milliseconds at minimum. That violates the latency requirement.
 
-So I will use a local-first approach: each gateway node maintains an in-memory counter for each API key. Periodically — say every hundred milliseconds — it synchronizes with a central store. This means that in the worst case, a user can exceed their rate limit by the amount they send in one sync window. At a one-hundred-millisecond window, that might mean they get ten percent over their limit.
+So I will use a local-first approach: each gateway node maintains an in-memory counter for each API key. Periodically -- say every hundred milliseconds -- it synchronizes with a central store. This means that in the worst case, a user can exceed their rate limit by the amount they send in one sync window. At a one-hundred-millisecond window, that might mean they get ten percent over their limit.
 
 I am assuming that ten percent over-limit during a sync window is acceptable. If the business requirement is tighter accuracy, I would either shorten the sync window (more Redis load) or switch to a different algorithm that provides better accuracy at a higher computational cost."
 
 This is essentially how Amazon's actual API Gateway rate limiting works.
 
-### Example 3: Netflix — Video Delivery Under Ambiguity
+### Example 3: Netflix -- Video Delivery Under Ambiguity
 
 **The situation:**
 
@@ -785,13 +785,13 @@ Netflix needs to deliver video smoothly to users around the world, even though a
 
 What makes video buffer? The client's download speed is lower than the video bitrate. Either the content is too far from the user (high latency, low throughput), or the network is congested, or the server is overloaded.
 
-What do we control? We control where we place the content and at what bitrates we encode it. We can also control the delivery strategy — whether we push content proactively to edge nodes or wait for first request.
+What do we control? We control where we place the content and at what bitrates we encode it. We can also control the delivery strategy -- whether we push content proactively to edge nodes or wait for first request.
 
 **The Staff-level assumption and resolution:**
 
-"I am making a key assumption here: I do not know which content will be popular. Most content will rarely be watched. Some content will be watched by tens of millions of users simultaneously. I cannot store all content at every edge location — that would require enormous storage.
+"I am making a key assumption here: I do not know which content will be popular. Most content will rarely be watched. Some content will be watched by tens of millions of users simultaneously. I cannot store all content at every edge location -- that would require enormous storage.
 
-My assumption is that popularity follows a power law — a small percentage of content generates the vast majority of views. I will design for that distribution:
+My assumption is that popularity follows a power law -- a small percentage of content generates the vast majority of views. I will design for that distribution:
 
 For popular content: proactive caching at hundreds of edge locations close to users. When a new popular title releases, we push the content to edge nodes before users request it.
 
@@ -801,7 +801,7 @@ The threshold for 'popular enough to push to all edges' is an assumption I would
 
 This is close to Netflix's actual open connect CDN strategy.
 
-### Example 4: Uber — Matching Under Uncertainty
+### Example 4: Uber -- Matching Under Uncertainty
 
 **The situation:**
 
@@ -809,13 +809,13 @@ Uber needs to match riders with drivers in real time. The ambiguity: how do you 
 
 **The Staff-level design consideration:**
 
-"I am designing the matching system with a core assumption: the matching problem is fundamentally local. A rider in New York does not compete for drivers with a rider in Los Angeles. So the system should be regionally sharded — each geographic region operates as a semi-independent matching system.
+"I am designing the matching system with a core assumption: the matching problem is fundamentally local. A rider in New York does not compete for drivers with a rider in Los Angeles. So the system should be regionally sharded -- each geographic region operates as a semi-independent matching system.
 
-This assumption means: I do not need a single global matching service. I need a distributed regional service. This makes scaling straightforward — adding a new city means spinning up a new regional shard, not scaling a global database.
+This assumption means: I do not need a single global matching service. I need a distributed regional service. This makes scaling straightforward -- adding a new city means spinning up a new regional shard, not scaling a global database.
 
-My second assumption is that driver availability is highly dynamic. Drivers go online and offline every few minutes. A driver location update must propagate to the matching system in under a second. This rules out eventual consistency for location data — I need strong consistency on the hot path.
+My second assumption is that driver availability is highly dynamic. Drivers go online and offline every few minutes. A driver location update must propagate to the matching system in under a second. This rules out eventual consistency for location data -- I need strong consistency on the hot path.
 
-These two assumptions together — regional sharding and strong consistency for location — drive the entire storage and coordination architecture."
+These two assumptions together -- regional sharding and strong consistency for location -- drive the entire storage and coordination architecture."
 
 ---
 
@@ -867,8 +867,8 @@ quadrantChart
     title Trade-off Space: Complexity vs. Benefits
     x-axis Low Benefit --> High Benefit
     y-axis Low Complexity --> High Complexity
-    quadrant-1 Worth the cost — do it
-    quadrant-2 Overkill — simplify
+    quadrant-1 Worth the cost -- do it
+    quadrant-2 Overkill -- simplify
     quadrant-3 Default approach
     quadrant-4 Quick wins
     Single DB: [0.55, 0.15]
@@ -894,7 +894,7 @@ Ask many questions about specific notification types, databases to use, specific
 
 **L6 model answer:**
 
-"Before I dive in, let me understand the scope. When you say notification system, are we talking about user-facing notifications — email, push, SMS — or internal alerting for engineers? And is this for a single product or a platform that multiple products will send notifications through?
+"Before I dive in, let me understand the scope. When you say notification system, are we talking about user-facing notifications -- email, push, SMS -- or internal alerting for engineers? And is this for a single product or a platform that multiple products will send notifications through?
 
 [Answer: user-facing, platform for multiple products]
 
@@ -906,7 +906,7 @@ Second, are there time-critical notifications like two-factor authentication whe
 
 [Answer: billions per day, yes there are time-critical notifications]
 
-Let me state my assumptions before designing. I am assuming five billion notifications per day across all channels — email highest volume, SMS lowest volume but potentially highest priority. I am assuming a mix of critical notifications like two-factor authentication that must arrive in under ten seconds, and non-urgent notifications like marketing emails that can wait hours. I am assuming multiple producer teams who need isolation from each other so a runaway producer cannot overwhelm the platform or other tenants.
+Let me state my assumptions before designing. I am assuming five billion notifications per day across all channels -- email highest volume, SMS lowest volume but potentially highest priority. I am assuming a mix of critical notifications like two-factor authentication that must arrive in under ten seconds, and non-urgent notifications like marketing emails that can wait hours. I am assuming multiple producer teams who need isolation from each other so a runaway producer cannot overwhelm the platform or other tenants.
 
 High-level design: The core of this system is ingestion, prioritization, and per-channel delivery pipelines.
 
@@ -914,7 +914,7 @@ For ingestion: producer teams send events through a REST API or gRPC. The ingest
 
 For prioritization: I will have separate queues for critical notifications and non-critical notifications within each channel. Critical notifications get dedicated worker capacity that cannot be stolen by bulk sends.
 
-For delivery: separate workers per channel — email, SMS, push — because each channel has different throughput, latency, and reliability characteristics. SMS providers rate limit differently than email providers.
+For delivery: separate workers per channel -- email, SMS, push -- because each channel has different throughput, latency, and reliability characteristics. SMS providers rate limit differently than email providers.
 
 Key decisions and why:
 
@@ -932,7 +932,7 @@ Want me to deep-dive on any component?"
 
 **L6 model answer:**
 
-"Let me understand the context. Is this for abuse prevention — blocking bad actors — fairness among customers, or cost control with tiered API pricing? And does it sit at the API gateway level or in the application?
+"Let me understand the context. Is this for abuse prevention -- blocking bad actors -- fairness among customers, or cost control with tiered API pricing? And does it sit at the API gateway level or in the application?
 
 [Answer: all three, API gateway level]
 
@@ -940,7 +940,7 @@ What scale are we talking? Thousands or millions of requests per second?
 
 [Answer: millions per second, per API key with different tiers]
 
-My assumptions: ten million requests per second at peak, thousands of unique API keys, sub-millisecond latency requirement for the rate limit check since it is in the critical path of every API call, and tier-based limits — free, pro, and enterprise.
+My assumptions: ten million requests per second at peak, thousands of unique API keys, sub-millisecond latency requirement for the rate limit check since it is in the critical path of every API call, and tier-based limits -- free, pro, and enterprise.
 
 At ten million requests per second, the most important constraint is latency. We cannot synchronously hit a central store on every request. Network round trips add at minimum five milliseconds, and we need sub-millisecond.
 
@@ -948,11 +948,11 @@ I will use a distributed token bucket algorithm with local state and periodic gl
 
 Each API gateway node maintains in-memory token buckets for every API key it serves. Tokens replenish at the rate limit for that key's tier. Requests consume tokens. If tokens are depleted, the request is rejected.
 
-Every one hundred milliseconds, gateway nodes synchronize with a central Redis cluster. This sync reconciles differences — if node A has seen eight hundred requests and node B has seen six hundred requests for a key with a one-thousand-per-second limit, the sync ensures neither node allows more than the aggregate limit.
+Every one hundred milliseconds, gateway nodes synchronize with a central Redis cluster. This sync reconciles differences -- if node A has seen eight hundred requests and node B has seen six hundred requests for a key with a one-thousand-per-second limit, the sync ensures neither node allows more than the aggregate limit.
 
 The trade-off: a user can exceed their limit by up to about ten percent during a sync window. I am assuming this is acceptable for abuse prevention and fairness. If we need billing-accurate rate limiting, I would either tighten the sync window or use a different algorithm with synchronous coordination for the portion of requests above the limit.
 
-Failure mode: if Redis goes down, I will fall back to purely local rate limiting. Each node enforces its local view. Accuracy degrades but the service remains available. This is the right failure mode — degraded accuracy is better than a service outage.
+Failure mode: if Redis goes down, I will fall back to purely local rate limiting. Each node enforces its local view. Accuracy degrades but the service remains available. This is the right failure mode -- degraded accuracy is better than a service outage.
 
 For enterprise accounts that need guaranteed limits, I would offer a dedicated Redis instance with guaranteed SLA."
 
@@ -968,7 +968,7 @@ For example: if a product requirement is that users should see their changes imm
 
 My approach in practice: I bring both requirements to the table, explain the fundamental tension in plain terms, and propose a resolution that prioritizes based on the actual business impact.
 
-In that example, I would say: for users' own data — their own posts, their own profile — I will use strong consistency because seeing stale versions of your own data creates a confusing user experience. For other users' data — other people's feeds, follower counts — I will use eventual consistency because the user experience impact of a few seconds of staleness is minimal.
+In that example, I would say: for users' own data -- their own posts, their own profile -- I will use strong consistency because seeing stale versions of your own data creates a confusing user experience. For other users' data -- other people's feeds, follower counts -- I will use eventual consistency because the user experience impact of a few seconds of staleness is minimal.
 
 This is how Instagram actually works. Your own profile update is strongly consistent. Your follower count may be eventually consistent.
 
@@ -986,11 +986,11 @@ The key is making the trade-off explicit and justifying it by business impact. I
 
 So I make the decision, state why I made it, note what the key assumption is, and move forward. I do not ask a follow-up question trying to get a different answer.
 
-For example, if I ask 'What scale should I design for?' and the interviewer says 'you decide,' I say: 'I will design for ten million daily active users and one hundred million events per day. That scale is large enough to require distributed systems thinking — a single machine cannot handle this — but not so extreme that I need exotic approaches. If we are actually much smaller, the design simplifies easily. If we are much larger, here is where the bottleneck would move.' Then I keep going.
+For example, if I ask 'What scale should I design for?' and the interviewer says 'you decide,' I say: 'I will design for ten million daily active users and one hundred million events per day. That scale is large enough to require distributed systems thinking -- a single machine cannot handle this -- but not so extreme that I need exotic approaches. If we are actually much smaller, the design simplifies easily. If we are much larger, here is where the bottleneck would move.' Then I keep going.
 
 The key is that the decision comes with reasoning. Not just 'I will use X' but 'I will use X because Y, and if Y turns out to be wrong here is what changes.'
 
-That pattern — decision, reasoning, flexibility — is the Staff-level response to any 'you decide' situation."
+That pattern -- decision, reasoning, flexibility -- is the Staff-level response to any 'you decide' situation."
 
 ---
 
@@ -1018,9 +1018,9 @@ The real skill here is having stated the assumptions clearly enough that I can i
 
 For most systems, that is the data model. How you represent and store the data constrains almost every other decision. If you get the data model wrong, you end up rearchitecting later. So I start there.
 
-After the data model, I focus on the critical path — the sequence of operations that every request must go through. The critical path is where performance is most constrained and where failures are most impactful.
+After the data model, I focus on the critical path -- the sequence of operations that every request must go through. The critical path is where performance is most constrained and where failures are most impactful.
 
-If the problem involves a specific tricky component — say, fan-out at celebrity scale, or rate limiting at very high throughput — I will often jump to that component early because it is likely what the interviewer is most interested in discussing.
+If the problem involves a specific tricky component -- say, fan-out at celebrity scale, or rate limiting at very high throughput -- I will often jump to that component early because it is likely what the interviewer is most interested in discussing.
 
 I explicitly say what I am doing and why: 'I am going to start with the data model because it constrains everything else. Then I will walk through the critical write path, then the read path, and then we can dive into whichever component you find most interesting.'
 
@@ -1060,7 +1060,7 @@ I say: 'If our SMS provider goes down, our system will detect that within a few 
 
 I lead with the decision and the user or business impact. Technical mechanisms are supporting details for people who want to know more.
 
-I also make trade-offs concrete: 'Option A gives users a better experience but costs us twenty percent more to run. Option B is cheaper but users occasionally see their data update a few seconds later. Given our cost constraints, I recommend Option B — the user experience difference is not visible in practice.'
+I also make trade-offs concrete: 'Option A gives users a better experience but costs us twenty percent more to run. Option B is cheaper but users occasionally see their data update a few seconds later. Given our cost constraints, I recommend Option B -- the user experience difference is not visible in practice.'
 
 The goal is that a product manager or engineering director can understand the decision, understand the trade-off, and know whether to push back on it."
 
@@ -1078,13 +1078,13 @@ The decisions that are easy to change: service configuration, instance sizes, ca
 
 For the design itself, I will use extensibility patterns at the points where I know change is most likely:
 
-If the feature set will grow: I will use a plugin architecture so new features can be added without changing the core. For a notification system, I design the channel abstraction so adding a new channel — say WhatsApp — requires implementing one new plugin, not changing the delivery pipeline.
+If the feature set will grow: I will use a plugin architecture so new features can be added without changing the core. For a notification system, I design the channel abstraction so adding a new channel -- say WhatsApp -- requires implementing one new plugin, not changing the delivery pipeline.
 
 If the scale will grow: I will design the partitioning strategy so I can add more partitions without changing the data model. For a Cassandra-based system, I will choose partition keys that allow even distribution and can be sharded further.
 
 If the team will change: I will invest in documentation, monitoring, and clear service boundaries so that engineers unfamiliar with the system can understand and operate it.
 
-The phrase I find useful is: 'Make the easy things easy and the hard things possible.' Common operations should be simple to do. Uncommon operations — like adding a new channel or a new type of notification — should be possible without a major rewrite."
+The phrase I find useful is: 'Make the easy things easy and the hard things possible.' Common operations should be simple to do. Uncommon operations -- like adding a new channel or a new type of notification -- should be possible without a major rewrite."
 
 ---
 
@@ -1096,7 +1096,7 @@ The phrase I find useful is: 'Make the easy things easy and the hard things poss
 
 A Senior Engineer is excellent at solving well-defined problems. Give them a clear specification and they will build exactly what was specified, with good engineering practices, on time. Ambiguity slows them down because they need to resolve it before they can commit to an approach.
 
-A Staff Engineer's core skill is defining the problem, not just solving it. They receive ambiguous situations — 'the checkout is too slow,' 'we are worried about scale' — and turn them into concrete technical plans. They do this by making explicit assumptions, stating their reasoning, and proceeding even without complete information.
+A Staff Engineer's core skill is defining the problem, not just solving it. They receive ambiguous situations -- 'the checkout is too slow,' 'we are worried about scale' -- and turn them into concrete technical plans. They do this by making explicit assumptions, stating their reasoning, and proceeding even without complete information.
 
 In an interview, this shows up in several specific behaviors.
 
@@ -1106,7 +1106,7 @@ When told 'you decide,' a Senior Engineer will ask a different version of the sa
 
 A Senior Engineer's design will be optimized for the stated requirements. A Staff Engineer's design will have built-in flexibility: 'This design assumes X. If X changes, here is how I would adapt.'
 
-A Senior Engineer treats the interviewer as someone who has the right answer. A Staff Engineer treats the interviewer as a collaborator — someone to think with, not someone to extract information from.
+A Senior Engineer treats the interviewer as someone who has the right answer. A Staff Engineer treats the interviewer as a collaborator -- someone to think with, not someone to extract information from.
 
 The underlying mindset shift is: from 'I need requirements to design' to 'I will make my best judgment given available information, state my reasoning, and adjust as I learn more.'"
 
@@ -1126,7 +1126,7 @@ Two: I propose resolutions with explicit trade-offs. Usually there are a few opt
 
 Three: I escalate or defer based on who should make the call. If the conflict is technical and within my authority to decide, I make the call and explain my reasoning. If it involves prioritizing one team's needs over another's, or has significant business impact, I escalate to the right decision-maker with a clear framing: 'Here are your options, here are the trade-offs, and here is my recommendation.'
 
-What I avoid: trying to design a system that satisfies both incompatible requirements without acknowledging the trade-off. This produces systems that satisfy neither well. The honest framing — 'we must choose' — leads to better outcomes than the wishful framing — 'we can have everything.'"
+What I avoid: trying to design a system that satisfies both incompatible requirements without acknowledging the trade-off. This produces systems that satisfy neither well. The honest framing -- 'we must choose' -- leads to better outcomes than the wishful framing -- 'we can have everything.'"
 
 ---
 
@@ -1140,7 +1140,7 @@ Second, I do not start over from scratch unless I absolutely have to. I adapt th
 
 Third, I think about what else might be affected. 'If I was wrong about X, am I also wrong about the related assumption Z? Let me check that assumption explicitly now.'
 
-Fourth, I acknowledge it cleanly and move forward. 'I see — my assumption about X was wrong. Let me adjust the design. [Explain adjustment.] Does this new design make sense given the actual requirements?'
+Fourth, I acknowledge it cleanly and move forward. 'I see -- my assumption about X was wrong. Let me adjust the design. [Explain adjustment.] Does this new design make sense given the actual requirements?'
 
 What I do not do: get defensive, try to redefine the requirements to match my design, or pretend the assumption was fine when it was not. Getting an assumption wrong and adapting gracefully is a normal, expected part of engineering. It demonstrates the same skill in an interview: I can handle new information without losing my composure or my ability to reason clearly."
 
@@ -1160,7 +1160,7 @@ From that derivation, I know: a single server cannot handle this. I need horizon
 
 I state the derivation out loud rather than just stating the number. 'I am estimating seventy thousand requests per second at average based on [calculation]. My peak estimate is two hundred thousand requests per second with a three-to-one peak ratio.' This shows that the number is reasoned, not random.
 
-If I am wrong about a key input — say, users are actually active for three hours instead of one hour — I can trace the effect: write-through would triple the estimated load to six hundred thousand requests per second at peak, which changes the caching strategy.
+If I am wrong about a key input -- say, users are actually active for three hours instead of one hour -- I can trace the effect: write-through would triple the estimated load to six hundred thousand requests per second at peak, which changes the caching strategy.
 
 The key skill is not knowing exact numbers. It is being able to derive defensible estimates and trace their implications."
 
@@ -1178,7 +1178,7 @@ Strategy one: ask second-order questions that surface unknowns you did not know 
 
 'Are there any regulatory or compliance considerations that apply to this data, even if they are not current requirements?' This surfaces GDPR, HIPAA, SOX, and similar considerations.
 
-'What happens to this system during your biggest traffic events — holiday shopping, major product launches, viral moments?' This surfaces burst capacity requirements.
+'What happens to this system during your biggest traffic events -- holiday shopping, major product launches, viral moments?' This surfaces burst capacity requirements.
 
 'Where do you see this system needing to be in two years?' This surfaces scale and feature evolution.
 
@@ -1192,7 +1192,7 @@ The honest truth is: you cannot design for everything you do not know. But you c
 
 ---
 
-### Question 15: "Walk me through how you would navigate a completely ambiguous design prompt — from zero to a design."
+### Question 15: "Walk me through how you would navigate a completely ambiguous design prompt -- from zero to a design."
 
 **L6 model answer:**
 
@@ -1210,7 +1210,7 @@ Step three: Ask targeted questions for the critical unknowns. I ask: 'Are we des
 
 [Answers: hundreds of millions of users, real-time delivery matters, messages persistent permanently]
 
-Step four: State my assumptions explicitly. 'Let me state the assumptions I am working with. Five hundred million users, fifty million daily active. Fifty messages per active user per day — two and a half billion messages per day. Sub-five-hundred-millisecond delivery target for online users. Messages stored indefinitely but accessed mostly for recent history. I will focus on one-to-one messaging first and then discuss how groups differ. These assumptions drive my design. Tell me if any are wrong.'
+Step four: State my assumptions explicitly. 'Let me state the assumptions I am working with. Five hundred million users, fifty million daily active. Fifty messages per active user per day -- two and a half billion messages per day. Sub-five-hundred-millisecond delivery target for online users. Messages stored indefinitely but accessed mostly for recent history. I will focus on one-to-one messaging first and then discuss how groups differ. These assumptions drive my design. Tell me if any are wrong.'
 
 Step five: Design with flexibility. I walk through the architecture, noting at each decision: 'This choice follows from assumption X. If X changes, here is what I would adjust.' For the database choice: 'I chose Cassandra's time-series model because I assumed a high write volume and a primary access pattern of recent messages. If the access pattern is actually random-access across the entire history, a different storage model might be better.'
 
@@ -1246,13 +1246,13 @@ The key insight: being uncomfortable with uncertainty is normal. Acting paralyze
 
 **L6 model answer:**
 
-"Organizational ambiguity — who owns this, whose priority matters, who pays for it — affects technical design in ways that are not always obvious.
+"Organizational ambiguity -- who owns this, whose priority matters, who pays for it -- affects technical design in ways that are not always obvious.
 
 If the ownership is unclear, I optimize for independent operability. I design the system so the team that builds it can also own and operate it. I avoid dependencies that require another team to be on-call for my system.
 
-If the system will span multiple teams, I pay extra attention to API design and interface contracts. The interface between teams is where ambiguity causes the most friction. I design interfaces that are versioned, well-documented, and additive — new features add new fields rather than changing existing ones.
+If the system will span multiple teams, I pay extra attention to API design and interface contracts. The interface between teams is where ambiguity causes the most friction. I design interfaces that are versioned, well-documented, and additive -- new features add new fields rather than changing existing ones.
 
-If the priority is unclear — meaning different teams want the system optimized for different things — I surface that explicitly and propose a resolution. 'Team A wants low latency. Team B wants high throughput. These are not always in conflict, but here is the design choice where they are: [specific decision]. I recommend optimizing for Team B's use case here because it is the more common access pattern, and I will note the impact on Team A's latency.' I do not silently choose one priority over another.
+If the priority is unclear -- meaning different teams want the system optimized for different things -- I surface that explicitly and propose a resolution. 'Team A wants low latency. Team B wants high throughput. These are not always in conflict, but here is the design choice where they are: [specific decision]. I recommend optimizing for Team B's use case here because it is the more common access pattern, and I will note the impact on Team A's latency.' I do not silently choose one priority over another.
 
 The organizational questions I ask in an interview: 'Who would own this system after we build it?' and 'Will multiple teams use this?' These questions surface organizational ambiguity that would otherwise show up as hidden constraints.
 
@@ -1280,9 +1280,9 @@ sequenceDiagram
 
     I->>L6: Design a notification system
     L6->>I: User-facing notifications or internal alerting?
-    I->>L6: User-facing — email, push, SMS
+    I->>L6: User-facing -- email, push, SMS
     L6->>I: Platform for multiple products or single product?
-    I->>L6: Platform — multiple teams will use it
+    I->>L6: Platform -- multiple teams will use it
     L6->>I: Time-critical notifications like 2FA, and rough scale?
     I->>L6: Yes to 2FA, billions per day
     L6->>I: I'll assume 5B/day, priority queues needed, multi-tenant isolation required. Here is the architecture...
@@ -1308,12 +1308,12 @@ sequenceDiagram
     C->>I: The trade-off is: feed write latency goes from 10ms to 100ms, and availability drops from 99.99% to 99.9%.
     C->>I: Is that trade-off acceptable, or should we reconsider whether strong consistency is actually needed?
     I->>C: Good analysis. Let's say it is needed for the user's own posts only.
-    C->>I: Perfect — that is actually a cleaner design. Strong consistency only for a user's own feed entries, eventual consistency for everyone else's. The critical path is much smaller.
+    C->>I: Perfect -- that is actually a cleaner design. Strong consistency only for a user's own feed entries, eventual consistency for everyone else's. The critical path is much smaller.
 ```
 
 ---
 
-## Section 8: Key Takeaways — L5 vs L6 for Every Dimension
+## Section 8: Key Takeaways -- L5 vs L6 for Every Dimension
 
 ### Dimension 1: Response to Ambiguity
 
@@ -1329,7 +1329,7 @@ sequenceDiagram
 
 **L5:** Asks many questions, including questions about implementation details that should be design decisions ("Should I use Kafka?"). Questions are asked to get information, not to demonstrate understanding.
 
-**L6:** Asks three to six targeted questions, each revealing understanding of the problem domain. Questions are phrased to show why they matter: "Consistency requirements will determine the storage architecture — do users need to see their changes immediately?"
+**L6:** Asks three to six targeted questions, each revealing understanding of the problem domain. Questions are phrased to show why they matter: "Consistency requirements will determine the storage architecture -- do users need to see their changes immediately?"
 
 **What to say at L6:** "I have a few questions that will shape the architecture significantly. After those, I will make assumptions for the rest."
 
@@ -1339,7 +1339,7 @@ sequenceDiagram
 
 **L5:** Assumptions are implicit. Design decisions appear without explanation. When assumptions are wrong, the design cannot adapt because the assumptions were never stated.
 
-**L6:** Assumptions are explicit, reasoned, and stated before they become relevant. "I am assuming a read-heavy workload — probably a hundred-to-one read-to-write ratio — because this is a social feed. That drives my choice of a read-optimized storage layer."
+**L6:** Assumptions are explicit, reasoned, and stated before they become relevant. "I am assuming a read-heavy workload -- probably a hundred-to-one read-to-write ratio -- because this is a social feed. That drives my choice of a read-optimized storage layer."
 
 **What to say at L6:** "Let me state my key assumptions before I start designing..."
 
@@ -1401,7 +1401,7 @@ sequenceDiagram
 
 **L6:** Addresses organizational dimensions proactively. "This system will be used by multiple teams. I need to design for multi-tenancy, define who owns it, and build governance for schema changes."
 
-**What to say at L6:** "Before I design the technical system, let me ask who would own this after we build it — that affects whether I optimize for simplicity or clear interfaces."
+**What to say at L6:** "Before I design the technical system, let me ask who would own this after we build it -- that affects whether I optimize for simplicity or clear interfaces."
 
 ---
 
@@ -1502,7 +1502,7 @@ flowchart LR
 **Showing flexibility:**
 - "This design assumes X. If X is different, here is how the design would change."
 - "I designed for the ninety-percent case. For the edge case where Y, I would handle it by..."
-- "This is a reversible decision — we can change it once we have production data."
+- "This is a reversible decision -- we can change it once we have production data."
 
 **When genuinely stuck:**
 - "This decision fundamentally changes the architecture. Before I proceed, I need to know: A or B?"
@@ -1522,7 +1522,7 @@ flowchart LR
 
 ---
 
-*"Ambiguity is not the obstacle. Ambiguity is the medium. Staff Engineers do not wait for it to clear — they navigate it."*
+*"Ambiguity is not the obstacle. Ambiguity is the medium. Staff Engineers do not wait for it to clear -- they navigate it."*
 
 *"A good decision now, stated clearly, with explicit reasoning, beats a perfect decision never."*
 
@@ -1586,16 +1586,16 @@ Verdict: Neither direction is clearly more survivable. This is a case where the 
 | Consistency strength | Data bugs, compliance violations, user confusion | Extra latency, complexity | Assume stronger |
 | Data durability | Data loss, user trust damage, compliance issues | Higher storage cost, lower write performance | Assume cannot lose |
 | Availability requirement | Users blocked, SLA violations | Over-engineering, higher cost | Assume higher |
-| Latency requirement | Product metrics impact, SLA violations | Premature optimization, complexity | Ask — neither direction clearly better |
+| Latency requirement | Product metrics impact, SLA violations | Premature optimization, complexity | Ask -- neither direction clearly better |
 | Security/compliance | Regulatory penalties, data breaches, lawsuits | Over-engineering, unnecessary complexity | Assume stricter |
 
 ### How to Use This Table in an Interview
 
 "I need to decide whether to assume eventual consistency or strong consistency for the user feed. Let me think about the asymmetric risk.
 
-If I assume eventual consistency and the actual requirement is strong consistency, I have a correctness problem — users see stale or inconsistent data. That is hard to fix without a redesign of the storage layer.
+If I assume eventual consistency and the actual requirement is strong consistency, I have a correctness problem -- users see stale or inconsistent data. That is hard to fix without a redesign of the storage layer.
 
-If I assume strong consistency and the actual requirement is only eventual consistency, I have an over-engineering problem — extra latency and complexity for coordination that is not needed. That is easy to fix by relaxing the consistency requirement.
+If I assume strong consistency and the actual requirement is only eventual consistency, I have an over-engineering problem -- extra latency and complexity for coordination that is not needed. That is easy to fix by relaxing the consistency requirement.
 
 The failure modes are not symmetric. So I will assume stronger consistency as my default and explicitly call it out as an assumption. If you tell me eventual consistency is acceptable, I can simplify the design."
 
@@ -1621,7 +1621,7 @@ If your own team owns it, you optimize for your team's operational capability. C
 
 If another team will own it, you optimize for handoff. Clear interfaces. Good documentation. Simple operational runbooks. Fewer esoteric technology choices.
 
-If ownership is unclear, you design for independent operability — any team should be able to pick this up and run it without deep context from you.
+If ownership is unclear, you design for independent operability -- any team should be able to pick this up and run it without deep context from you.
 
 Who pays for it determines your cost constraints.
 
@@ -1631,9 +1631,9 @@ If the cost is shared or unclear, you design conservatively on cost because you 
 
 Whose priorities take precedence determines how you resolve conflicts.
 
-If one team's requirements are more important than another's — say the payments team's latency requirements matter more than the analytics team's throughput requirements — you design the critical path for the payments team and accept that analytics gets a less optimized path.
+If one team's requirements are more important than another's -- say the payments team's latency requirements matter more than the analytics team's throughput requirements -- you design the critical path for the payments team and accept that analytics gets a less optimized path.
 
-If priorities are unclear, you design for configurability — each consumer can tune their own trade-offs within bounds you define.
+If priorities are unclear, you design for configurability -- each consumer can tune their own trade-offs within bounds you define.
 
 ### The Ownership Question in Practice
 
@@ -1669,7 +1669,7 @@ Who resolves capacity conflicts? When Team A wants to triple their notification 
 
 In an interview, you demonstrate organizational awareness by raising these questions:
 
-"For this shared platform, I would recommend: a formal onboarding process for new tenants that includes capacity review, a schema change process that requires migration guides for existing consumers, and a governance body — even if just a Slack channel — where platform changes are discussed before being deployed. These are not technical decisions but they prevent the organizational failures that cause technical incidents."
+"For this shared platform, I would recommend: a formal onboarding process for new tenants that includes capacity review, a schema change process that requires migration guides for existing consumers, and a governance body -- even if just a Slack channel -- where platform changes are discussed before being deployed. These are not technical decisions but they prevent the organizational failures that cause technical incidents."
 
 ---
 
@@ -1712,7 +1712,7 @@ Design for operational change by:
 - Building comprehensive monitoring and alerting. The system should tell you when it is unhealthy before users notice.
 - Designing for graceful degradation. When a component fails, the system should degrade in a controlled, understandable way, not crash unpredictably.
 
-### The V1 → V2 → V3 Evolution Pattern
+### The V1 -> V2 -> V3 Evolution Pattern
 
 One of the strongest L6 signals in a system design interview is explicitly describing how the design would evolve over time.
 
@@ -1730,7 +1730,7 @@ Example for a notification system:
 
 V1 is a simple implementation: a REST API that accepts notification events, a single Postgres queue table, and a worker process that polls the queue and sends notifications through provider SDKs. This works for millions of notifications per day. It is easy to build, debug, and operate. The team learns which notification types are most critical, which channels are most reliable, and what the real scale looks like.
 
-V2 addresses the first scaling pain: at tens of millions of notifications per day, the Postgres queue becomes a bottleneck. We replace it with a proper message queue — Kafka or SQS — and add multiple worker instances for each channel. We add basic monitoring: queue depth, processing latency, delivery success rate.
+V2 addresses the first scaling pain: at tens of millions of notifications per day, the Postgres queue becomes a bottleneck. We replace it with a proper message queue -- Kafka or SQS -- and add multiple worker instances for each channel. We add basic monitoring: queue depth, processing latency, delivery success rate.
 
 V3 adds the reliability features that high scale requires: priority queues so critical notifications (two-factor authentication, fraud alerts) never wait behind bulk marketing sends. Per-tenant rate limiting so one runaway producer cannot overwhelm other tenants. Dead letter queues for failed deliveries. Automatic retry with exponential backoff. Multi-provider failover for SMS.
 
@@ -1766,7 +1766,7 @@ At scale, infrastructure cost dwarfs most other engineering concerns. A storage 
 
 **How to design with cost awareness:**
 
-"I am making a cost assumption here: I am assuming we want to keep storage costs below X per million users. That means I cannot afford to store full message history in a hot cache. I will use a tiered storage approach — recent messages in Redis (high cost, low latency), older messages in Cassandra (low cost, higher latency). This reduces the Redis footprint by eighty percent compared to storing all messages in cache."
+"I am making a cost assumption here: I am assuming we want to keep storage costs below X per million users. That means I cannot afford to store full message history in a hot cache. I will use a tiered storage approach -- recent messages in Redis (high cost, low latency), older messages in Cassandra (low cost, higher latency). This reduces the Redis footprint by eighty percent compared to storing all messages in cache."
 
 "I need to flag a cost trade-off here. Full-text search on notifications would be very useful for user experience, but an Elasticsearch cluster to support it at this scale would cost approximately Y per month. If that is acceptable, I will add it. If not, I will defer it and design the data model to make adding it later feasible."
 
@@ -1782,7 +1782,7 @@ Using synchronous replication everywhere for consistency. Synchronous replicatio
 
 **The question to ask:**
 
-"What type of data does this system handle? Is it user PII, financial data, health data, or none of the above? Are there regulatory requirements — GDPR, HIPAA, PCI DSS — that apply?"
+"What type of data does this system handle? Is it user PII, financial data, health data, or none of the above? Are there regulatory requirements -- GDPR, HIPAA, PCI DSS -- that apply?"
 
 **Why this is irreversible:**
 
@@ -1794,7 +1794,7 @@ Adding data deletion support (for GDPR right to be forgotten) requires knowing w
 
 **How to design with security and compliance:**
 
-"I am assuming this system handles user PII — names, email addresses, phone numbers. That drives three design decisions. First, encryption at rest using AES-256 for the message store. Second, audit logs for all access to user data with user ID, accessor identity, and timestamp. Third, a deletion endpoint that scrubs all user data when a deletion request is received, plus a documented path to scrub data from all downstream systems."
+"I am assuming this system handles user PII -- names, email addresses, phone numbers. That drives three design decisions. First, encryption at rest using AES-256 for the message store. Second, audit logs for all access to user data with user ID, accessor identity, and timestamp. Third, a deletion endpoint that scrubs all user data when a deletion request is received, plus a documented path to scrub data from all downstream systems."
 
 "I need to clarify one question before I finalize the data model: will we ever store health-related information in this system? If yes, we are in HIPAA territory and I need to add compliance controls. If no, we are under standard GDPR requirements which are more straightforward. This changes the access control model significantly."
 
@@ -1806,7 +1806,7 @@ Adding data deletion support (for GDPR right to be forgotten) requires knowing w
 
 **Why you need it from day one:**
 
-When your system fails in production — and it will — your ability to diagnose and fix the failure depends entirely on the observability you built in. If you did not build it in, you are debugging blind.
+When your system fails in production -- and it will -- your ability to diagnose and fix the failure depends entirely on the observability you built in. If you did not build it in, you are debugging blind.
 
 More specifically: the signals you need to diagnose a failure are often data that you are not collecting unless you deliberately collect it. By the time a failure occurs, it is too late to add the collection you needed.
 
@@ -1834,13 +1834,13 @@ These are not nice-to-haves. They are the minimum required to operate this syste
 
 **The correlation ID pattern:**
 
-"I will generate a unique ID for every notification event at ingestion time. This ID flows through every step of the pipeline — queue, worker, delivery. Every log entry for that notification includes the correlation ID. This means when a user reports their two-factor authentication code did not arrive, I can search for their notification ID and see exactly what happened at every step."
+"I will generate a unique ID for every notification event at ingestion time. This ID flows through every step of the pipeline -- queue, worker, delivery. Every log entry for that notification includes the correlation ID. This means when a user reports their two-factor authentication code did not arrive, I can search for their notification ID and see exactly what happened at every step."
 
 ### Data Correctness as a First-Class Constraint
 
 **Why correctness invariants must be defined upfront:**
 
-Data correctness bugs are among the hardest to fix after the fact. If your system allows invalid states — duplicate notifications, missing notifications, notification counts that do not match reality — you discover these problems by seeing their effects, which is often much later than when they were introduced.
+Data correctness bugs are among the hardest to fix after the fact. If your system allows invalid states -- duplicate notifications, missing notifications, notification counts that do not match reality -- you discover these problems by seeing their effects, which is often much later than when they were introduced.
 
 Fixing data correctness bugs in production requires both a code fix and a data migration to repair the existing incorrect data. Data migrations at scale are risky and expensive.
 
@@ -1856,7 +1856,7 @@ An invariant is a condition that must always be true. For a notification system:
 
 Each invariant becomes a design requirement:
 
-"At-most-once delivery" requires deduplication — checking that a notification ID has not already been processed before processing it. This requires idempotency at the delivery layer.
+"At-most-once delivery" requires deduplication -- checking that a notification ID has not already been processed before processing it. This requires idempotency at the delivery layer.
 
 "Confirmed delivery must be actual delivery" requires delivery confirmation from the channel provider, not just confirmation that you sent the request.
 
@@ -1866,11 +1866,11 @@ Each invariant becomes a design requirement:
 
 "Before I finalize the design, I want to identify the invariants that must never be violated.
 
-First invariant: A notification must never be sent twice to the same user for the same event. This is especially critical for two-factor authentication codes and alerts. I will implement this by storing a processed-event-IDs set and checking it before processing any event. The set is idempotent — processing the same event ID twice is safe.
+First invariant: A notification must never be sent twice to the same user for the same event. This is especially critical for two-factor authentication codes and alerts. I will implement this by storing a processed-event-IDs set and checking it before processing any event. The set is idempotent -- processing the same event ID twice is safe.
 
 Second invariant: Notification delivery stats must accurately reflect actual deliveries. This is important for tenants who pay based on delivery volume. I will use a transactional update pattern: mark delivery as complete and increment stats in the same transaction. This prevents the stats from drifting from reality.
 
-Third invariant: Critical notifications must not be preempted by non-critical ones once they are in the processing pipeline. I will enforce this with strict priority queues and worker affinity — critical workers only process critical queues."
+Third invariant: Critical notifications must not be preempted by non-critical ones once they are in the processing pipeline. I will enforce this with strict priority queues and worker affinity -- critical workers only process critical queues."
 
 ---
 
@@ -1884,7 +1884,7 @@ This integration changes how you make and state assumptions:
 
 Old way (L5): "I am assuming one hundred thousand requests per second."
 
-New way (L6): "I am assuming one hundred thousand requests per second. If I am wrong in the higher direction — say the actual load is one million requests per second — the database write path becomes the bottleneck first, which I can detect via write latency increasing. I will add a monitoring alert specifically for write latency and a plan to shard the write path if that threshold is hit."
+New way (L6): "I am assuming one hundred thousand requests per second. If I am wrong in the higher direction -- say the actual load is one million requests per second -- the database write path becomes the bottleneck first, which I can detect via write latency increasing. I will add a monitoring alert specifically for write latency and a plan to shard the write path if that threshold is hit."
 
 The L6 way demonstrates: you have thought about what happens when the assumption is wrong. You have a detection mechanism. You have a response plan. This is what production readiness looks like.
 
@@ -1942,7 +1942,7 @@ Large blast radius design: All delivery services share a single worker pool. If 
 
 Designing for small blast radius means isolating failure domains:
 
-"I am using separate worker pools for each channel — email workers, SMS workers, push workers. If the SMS provider has an outage that causes SMS workers to back up and exhaust their resources, it does not affect the email or push workers. Users still receive email and push notifications. Only SMS is delayed."
+"I am using separate worker pools for each channel -- email workers, SMS workers, push workers. If the SMS provider has an outage that causes SMS workers to back up and exhaust their resources, it does not affect the email or push workers. Users still receive email and push notifications. Only SMS is delayed."
 
 "I am using per-tenant queues rather than a shared queue. If Tenant A sends a massive burst that fills their queue, it does not affect Tenant B's queue. Tenant A's notifications may be delayed; Tenant B's are not."
 
@@ -1978,11 +1978,11 @@ I also keep in mind that asking more questions after I have started is fine and 
 
 For example, if the interviewer first says 'availability is the top priority' and later says 'users must always see consistent data even during network partitions,' these are in direct tension. The CAP theorem tells us we cannot have both.
 
-I say: 'I want to make sure I understand the requirements correctly. Earlier you mentioned availability is the top priority, which suggests we should prefer availability over consistency during partitions. Now you are describing a use case where consistency must be preserved even during partitions. These are in tension — during a network partition, we must choose one. Which takes precedence: availability or consistency?'
+I say: 'I want to make sure I understand the requirements correctly. Earlier you mentioned availability is the top priority, which suggests we should prefer availability over consistency during partitions. Now you are describing a use case where consistency must be preserved even during partitions. These are in tension -- during a network partition, we must choose one. Which takes precedence: availability or consistency?'
 
 I do not try to design around the contradiction by ignoring one of the requirements. I surface it clearly and ask for a resolution.
 
-Sometimes the interviewer will clarify that one requirement was overstated or that there is a nuanced answer — maybe consistency matters for transactions but availability matters for reads. This nuance is exactly the kind of information that produces a better design. Surfacing the contradiction is how I get to it.
+Sometimes the interviewer will clarify that one requirement was overstated or that there is a nuanced answer -- maybe consistency matters for transactions but availability matters for reads. This nuance is exactly the kind of information that produces a better design. Surfacing the contradiction is how I get to it.
 
 Sometimes the interviewer is deliberately testing whether I can identify the tension. Naming it clearly is the correct response."
 
@@ -1996,7 +1996,7 @@ Sometimes the interviewer is deliberately testing whether I can identify the ten
 
 For example, suppose I have been optimizing for write throughput and midway through I learn that read latency is actually more critical.
 
-I say: 'That changes my approach. I was optimizing for write throughput, which led me to use an append-only log structure for the message store. For read latency, an append-only log is suboptimal — we need additional indexing. I would change the storage layer to use a read-optimized structure, possibly adding a separate read index alongside the write log. The write path does not need to change significantly, but the read path becomes the priority for optimization.'
+I say: 'That changes my approach. I was optimizing for write throughput, which led me to use an append-only log structure for the message store. For read latency, an append-only log is suboptimal -- we need additional indexing. I would change the storage layer to use a read-optimized structure, possibly adding a separate read index alongside the write log. The write path does not need to change significantly, but the read path becomes the priority for optimization.'
 
 I do not restart from scratch unless I need to. I trace the implications of the new information and make the minimum necessary changes.
 
@@ -2018,11 +2018,11 @@ For a skeptical stakeholder, the key is showing that you thought it through rath
 
 Showing the alternatives and your reasoning for the choice addresses that concern directly.
 
-For example, if I assumed eventual consistency for the user feed and a product manager is skeptical: 'I chose eventual consistency here because it allows us to scale reads much more cheaply — we can serve from any replica without coordination. The alternative was strong consistency, which requires all replicas to coordinate on every write. At the scale we discussed, strong consistency would add fifty to one hundred milliseconds to every write and significantly reduce throughput.
+For example, if I assumed eventual consistency for the user feed and a product manager is skeptical: 'I chose eventual consistency here because it allows us to scale reads much more cheaply -- we can serve from any replica without coordination. The alternative was strong consistency, which requires all replicas to coordinate on every write. At the scale we discussed, strong consistency would add fifty to one hundred milliseconds to every write and significantly reduce throughput.
 
 The risk of eventual consistency is that a user might see their feed update a second or two after a friend posts. In user testing for social feeds, this delay is generally not noticeable. If we see user complaints about feed staleness in production data, we can either tighten the replication lag target or introduce per-user consistency guarantees for the user's own posts.
 
-If you believe users will notice this delay, I can redesign for strong consistency — here is what changes in the architecture and here is the performance cost we would accept.'"
+If you believe users will notice this delay, I can redesign for strong consistency -- here is what changes in the architecture and here is the performance cost we would accept.'"
 
 ---
 
@@ -2078,7 +2078,7 @@ Then I explain why it does not work at the scale we are designing for: 'At one h
 
 Then I explain what my design does differently: 'By decoupling ingestion from delivery through a queue, we separate the two failure domains. The API accepts notifications at the rate clients send them. The delivery workers process the queue as fast as providers allow. If providers are slow, the queue grows but the API remains responsive. We get graceful degradation instead of a hard failure.'
 
-The key is being specific about which failure mode the naive approach cannot handle. Generic statements like 'the naive approach does not scale' are weak. 'The naive approach fails when the SMS provider is slow because the blocking threads exhaust the thread pool' is strong — it names the specific failure mechanism."
+The key is being specific about which failure mode the naive approach cannot handle. Generic statements like 'the naive approach does not scale' are weak. 'The naive approach fails when the SMS provider is slow because the blocking threads exhaust the thread pool' is strong -- it names the specific failure mechanism."
 
 ---
 
@@ -2098,7 +2098,7 @@ I also pair with them on ambiguous tasks early on. I model the behavior: 'I do n
 
 Over time, I give them progressively more ambiguous tasks. Start with tasks that have one or two unknowns and reasonable defaults. Progress to tasks with multiple unknowns and significant tradeoffs.
 
-The reflection component is important: after each ambiguous task, I ask them to review their assumption log. Which assumptions held? Which were wrong? What was the impact of being wrong? This builds their calibration over time — they develop a sense for which assumptions are safe and which carry risk.
+The reflection component is important: after each ambiguous task, I ask them to review their assumption log. Which assumptions held? Which were wrong? What was the impact of being wrong? This builds their calibration over time -- they develop a sense for which assumptions are safe and which carry risk.
 
 Most junior engineers can develop this skill in six to twelve months with intentional practice. The limiting factor is usually not intelligence; it is the confidence to make a call and own it."
 
@@ -2162,7 +2162,7 @@ flowchart TD
 
 ## L5 vs L6 Dialogue Gallery
 
-The following section shows the same scenario played out twice — once at L5 level and once at L6 level. Study the differences carefully.
+The following section shows the same scenario played out twice -- once at L5 level and once at L6 level. Study the differences carefully.
 
 ### Scenario A: Rate Limiter Design
 
@@ -2198,19 +2198,19 @@ Candidate: Let me understand the context first. Is this for abuse prevention, fa
 
 Interviewer: All three, actually.
 
-Candidate: Useful — so we need a system that can handle multiple dimensions of rate limiting. A few more questions: Is this at the gateway level or in the application? And what scale — thousands or millions of requests per second?
+Candidate: Useful -- so we need a system that can handle multiple dimensions of rate limiting. A few more questions: Is this at the gateway level or in the application? And what scale -- thousands or millions of requests per second?
 
 Interviewer: Gateway level. Millions per second.
 
-Candidate: Perfect. My assumptions before I start: I am designing for ten million requests per second at peak, which means the rate limit check needs to be sub-millisecond — it is in the critical path of every call. I am assuming thousands of unique API keys with three tiers: free, pro, and enterprise with custom limits. And I am assuming accurate-but-not-perfect rate limiting is acceptable — meaning up to about five to ten percent over the limit during brief windows is acceptable in exchange for lower latency.
+Candidate: Perfect. My assumptions before I start: I am designing for ten million requests per second at peak, which means the rate limit check needs to be sub-millisecond -- it is in the critical path of every call. I am assuming thousands of unique API keys with three tiers: free, pro, and enterprise with custom limits. And I am assuming accurate-but-not-perfect rate limiting is acceptable -- meaning up to about five to ten percent over the limit during brief windows is acceptable in exchange for lower latency.
 
-That last assumption is critical. At ten million requests per second, we cannot do synchronous coordination on every request — the network round trips alone would exceed our latency budget.
+That last assumption is critical. At ten million requests per second, we cannot do synchronous coordination on every request -- the network round trips alone would exceed our latency budget.
 
 My design: distributed token bucket with local state and periodic global synchronization.
 
 Each gateway node maintains in-memory token buckets per API key. Tokens replenish at the configured rate. This gives sub-millisecond limit checks since there is no network call. Every hundred milliseconds, nodes sync their state to a central Redis cluster. This reconciles distributed counters so we get roughly accurate global limits across the fleet.
 
-The trade-off I am accepting: during a one-hundred-millisecond sync window, a user can exceed their limit by the amount they send on one node. At typical traffic patterns, this is small — maybe five percent over the limit. If we need billing-accurate limits, I would tighten the sync window to ten milliseconds, accepting higher Redis load.
+The trade-off I am accepting: during a one-hundred-millisecond sync window, a user can exceed their limit by the amount they send on one node. At typical traffic patterns, this is small -- maybe five percent over the limit. If we need billing-accurate limits, I would tighten the sync window to ten milliseconds, accepting higher Redis load.
 
 Now, failure mode: if Redis goes down.
 
@@ -2251,14 +2251,14 @@ Secondary pattern: write a feed entry for every follower when a user posts. At a
 Given those patterns, I need:
 - Fast range queries by user and time
 - High write throughput (millions of writes per second at scale)
-- The data is not highly relational — I do not need cross-user joins
-- I do not need strong consistency — eventual consistency is acceptable for feeds
+- The data is not highly relational -- I do not need cross-user joins
+- I do not need strong consistency -- eventual consistency is acceptable for feeds
 
-This pattern strongly suggests a wide-column store like Cassandra or HBase. The partition key would be user ID. The clustering key would be timestamp. This allows efficient range queries by user with recency ordering. Horizontal scaling is straightforward — add nodes as data grows.
+This pattern strongly suggests a wide-column store like Cassandra or HBase. The partition key would be user ID. The clustering key would be timestamp. This allows efficient range queries by user with recency ordering. Horizontal scaling is straightforward -- add nodes as data grows.
 
 I would not use a relational database here because the write throughput requirements exceed what Postgres can handle without complex sharding, and the access pattern does not benefit from relational features.
 
-I would also add Redis as a cache layer for the hot feeds — users who are currently active have their recent feed pre-fetched and cached. This takes the most common access pattern off the database entirely.
+I would also add Redis as a cache layer for the hot feeds -- users who are currently active have their recent feed pre-fetched and cached. This takes the most common access pattern off the database entirely.
 
 [Analysis: The recommendation flows from the access pattern analysis. The technology choice is justified by specific properties required by the design, not by generic claims about scalability.]
 
@@ -2284,12 +2284,12 @@ Interviewer: What if the consistency requirement actually needs to be strong, no
 
 Candidate: That significantly changes the design. Let me trace the implications.
 
-Strong consistency for a social feed means every read must reflect every write at the time of the read. For a globally distributed system, strong consistency requires coordination — every write must be acknowledged by a majority of replicas before it is considered committed.
+Strong consistency for a social feed means every read must reflect every write at the time of the read. For a globally distributed system, strong consistency requires coordination -- every write must be acknowledged by a majority of replicas before it is considered committed.
 
 Specifically:
 - Write latency increases from roughly five milliseconds to fifty to one hundred milliseconds, because we need to wait for acknowledgment from multiple data centers
 - Read throughput decreases, because we can only serve reads from the primary replica, not any replica in the region
-- Availability during partitions decreases — in a CAP trade-off, we are now choosing consistency over availability
+- Availability during partitions decreases -- in a CAP trade-off, we are now choosing consistency over availability
 
 For a social feed, this trade-off is usually not worth it. Feed staleness by a few seconds is acceptable. But let me check whether strong consistency is actually required for the entire feed or just for specific operations.
 
@@ -2319,7 +2319,7 @@ Non-critical unknowns are the ones where you can make a reasonable assumption wi
 
 **Step 3: Ask targeted questions**
 
-Ask only about the critical unknowns. Phrase each question to show why you are asking. "Consistency requirements drive the storage architecture — do users need to see their changes immediately?" This question is better than "Do you need consistency?" because it shows you understand the implication.
+Ask only about the critical unknowns. Phrase each question to show why you are asking. "Consistency requirements drive the storage architecture -- do users need to see their changes immediately?" This question is better than "Do you need consistency?" because it shows you understand the implication.
 
 Ask three to six questions. Then stop asking.
 
@@ -2351,11 +2351,11 @@ This single habit is the clearest signal of Staff-level thinking in ambiguous de
 
 ---
 
-## Deep Dive: The Full Interview Walkthrough — News Feed Design
+## Deep Dive: The Full Interview Walkthrough -- News Feed Design
 
 This section walks through a complete forty-five minute Staff Engineer interview with narrated commentary. Every step is explained in detail. Read this as a model for how a real L6 interview should feel.
 
-### Minutes 0–5: Problem Understanding and Scoping
+### Minutes 0-5: Problem Understanding and Scoping
 
 **Interviewer:** "Design a news feed system."
 
@@ -2363,11 +2363,11 @@ The candidate hears "news feed" and knows this could mean many things. A social 
 
 **Candidate (internal thinking):** What kind of feed? Who generates content? Who consumes it? What does "news" mean in this context? What scale? What real-time requirements?
 
-**Candidate says:** "Let me make sure I understand what we are building. A news feed typically means a personalized stream of content for a user — content generated by people or entities they follow. Is that the right framing, or are we building something like a news aggregator that surfaces trending articles from external publishers?"
+**Candidate says:** "Let me make sure I understand what we are building. A news feed typically means a personalized stream of content for a user -- content generated by people or entities they follow. Is that the right framing, or are we building something like a news aggregator that surfaces trending articles from external publishers?"
 
-**Interviewer:** "Personalized feed — users follow other users and see their posts."
+**Interviewer:** "Personalized feed -- users follow other users and see their posts."
 
-**Candidate:** "Got it. And should I focus on the full end-to-end system — content ingestion, feed generation, and delivery — or a specific component?"
+**Candidate:** "Got it. And should I focus on the full end-to-end system -- content ingestion, feed generation, and delivery -- or a specific component?"
 
 **Interviewer:** "Full end-to-end."
 
@@ -2381,27 +2381,27 @@ Second, real-time expectations: When someone posts, how quickly must their follo
 
 Third, the read/write ratio: For most social feeds, reads heavily dominate. Is that expected here too?"
 
-**Interviewer:** "Large scale — hundreds of millions of users. Real-time is important, within a few seconds. Yes, reads dominate heavily."
+**Interviewer:** "Large scale -- hundreds of millions of users. Real-time is important, within a few seconds. Yes, reads dominate heavily."
 
 **Analysis of what just happened:** The candidate asked three questions and got concrete answers. They did not ask "What database should I use?" or "How should I handle pagination?" Those are design decisions, not clarifying questions.
 
 ---
 
-### Minutes 5–8: Assumption Setting
+### Minutes 5-8: Assumption Setting
 
 **Candidate:** "Perfect. Let me state my assumptions before I start designing.
 
-Scale: I will model five hundred million users with one hundred million daily active users. Average user follows five hundred others. That gives us fifty billion edges in the follow graph — significant but manageable.
+Scale: I will model five hundred million users with one hundred million daily active users. Average user follows five hundred others. That gives us fifty billion edges in the follow graph -- significant but manageable.
 
 Content: Ten posts per active user per day equals one billion posts per day. Each post fans out to all followers. Average fan-out is five hundred, so one billion posts times five hundred average followers equals five hundred billion feed write operations per day. That is about five million writes per second.
 
-Read traffic: Assuming each active user loads their feed ten times per day, that is one billion feed reads per day — about twelve thousand reads per second average, probably one hundred to two hundred thousand at peak.
+Read traffic: Assuming each active user loads their feed ten times per day, that is one billion feed reads per day -- about twelve thousand reads per second average, probably one hundred to two hundred thousand at peak.
 
 Real-time: Sub-five-second delivery target for online users.
 
-Reliability: A missed post is acceptable — eventually consistent feeds are fine. A duplicated post is mildly annoying but not a critical failure.
+Reliability: A missed post is acceptable -- eventually consistent feeds are fine. A duplicated post is mildly annoying but not a critical failure.
 
-These assumptions drive the design. The five-million-writes-per-second number is the key constraint — that is the fan-out problem, which is the most interesting challenge in feed systems.
+These assumptions drive the design. The five-million-writes-per-second number is the key constraint -- that is the fan-out problem, which is the most interesting challenge in feed systems.
 
 Do these assumptions look reasonable?"
 
@@ -2411,7 +2411,7 @@ Do these assumptions look reasonable?"
 
 ---
 
-### Minutes 8–20: High-Level Design
+### Minutes 8-20: High-Level Design
 
 **Candidate:** "Let me walk through the high-level architecture, then we can dive into any component.
 
@@ -2419,13 +2419,13 @@ Do these assumptions look reasonable?"
 
 The system has four major layers:
 
-Layer 1 — Content Ingestion: When a user creates a post, it goes through an API server that authenticates, validates, and writes to the post store (a database of all posts), then publishes an event to a fan-out queue.
+Layer 1 -- Content Ingestion: When a user creates a post, it goes through an API server that authenticates, validates, and writes to the post store (a database of all posts), then publishes an event to a fan-out queue.
 
-Layer 2 — Fan-out Service: Workers read from the fan-out queue. For each post event, they look up the author's followers in the social graph service and write feed entries — 'user X should see post Y' — to the feed store. This is where the five million writes per second happen.
+Layer 2 -- Fan-out Service: Workers read from the fan-out queue. For each post event, they look up the author's followers in the social graph service and write feed entries -- 'user X should see post Y' -- to the feed store. This is where the five million writes per second happen.
 
-Layer 3 — Feed Store: A per-user feed cache. When user A loads their feed, they read from their pre-computed feed in this store. It is optimized for the 'give me the most recent N posts for user A' access pattern.
+Layer 3 -- Feed Store: A per-user feed cache. When user A loads their feed, they read from their pre-computed feed in this store. It is optimized for the 'give me the most recent N posts for user A' access pattern.
 
-Layer 4 — Feed Delivery: API servers that handle feed read requests, pull from the feed store and cache, and return the personalized feed to the client.
+Layer 4 -- Feed Delivery: API servers that handle feed read requests, pull from the feed store and cache, and return the personalized feed to the client.
 
 Now let me explain the key design decisions.
 
@@ -2439,7 +2439,7 @@ At five hundred average follows per user, fan-out on write is feasible for most 
 
 My design: fan-out on write for normal users (fewer than one hundred thousand followers). Fan-out on read for celebrity accounts. When a user loads their feed, we merge the precomputed entries (from normal users they follow) with real-time queries (for celebrity accounts they follow).
 
-This is a hybrid approach. The threshold of one hundred thousand followers is a parameter I would tune based on production data — specifically, at what follower count does the write amplification become unacceptably expensive?
+This is a hybrid approach. The threshold of one hundred thousand followers is a parameter I would tune based on production data -- specifically, at what follower count does the write amplification become unacceptably expensive?
 
 Decision 2: Feed store technology.
 
@@ -2451,7 +2451,7 @@ Decision 3: The social graph service.
 
 The fan-out service needs to know who follows each user. This is the follow graph. At fifty billion edges, this is too large to hold in memory. I will use a dedicated social graph service backed by a distributed graph database or a custom adjacency list store partitioned by user ID.
 
-For fan-out, we only need the edge list (who are user X's followers). We do not need deep graph traversal. This access pattern is simple enough that we can use Cassandra for the graph too — partition by user ID, each row is a follower.
+For fan-out, we only need the edge list (who are user X's followers). We do not need deep graph traversal. This access pattern is simple enough that we can use Cassandra for the graph too -- partition by user ID, each row is a follower.
 
 Let me pause here. Are there components you would like to explore deeper?"
 
@@ -2459,17 +2459,17 @@ Let me pause here. Are there components you would like to explore deeper?"
 
 ---
 
-### Minutes 20–35: Deep Dive — Fan-out and Failure Modes
+### Minutes 20-35: Deep Dive -- Fan-out and Failure Modes
 
 **Interviewer:** "Let's go deeper on the fan-out service. What happens if it falls behind?"
 
-**Candidate:** "Good question — this is the most critical failure mode. Let me think through it systematically.
+**Candidate:** "Good question -- this is the most critical failure mode. Let me think through it systematically.
 
-The fan-out service falling behind means: posts are being created faster than the fan-out workers can process them. The fan-out queue depth grows. Users see stale feeds — their feeds do not include recent posts.
+The fan-out service falling behind means: posts are being created faster than the fan-out workers can process them. The fan-out queue depth grows. Users see stale feeds -- their feeds do not include recent posts.
 
-First, detection: I need a metric for fan-out lag — the time between a post being created and its fan-out completing. If this metric exceeds thirty seconds for the ninety-ninth percentile, I alert.
+First, detection: I need a metric for fan-out lag -- the time between a post being created and its fan-out completing. If this metric exceeds thirty seconds for the ninety-ninth percentile, I alert.
 
-Second, the failure is degradation, not outage. Users can still load their feeds. They just do not see the most recent posts. This is acceptable degradation — better than a hard failure.
+Second, the failure is degradation, not outage. Users can still load their feeds. They just do not see the most recent posts. This is acceptable degradation -- better than a hard failure.
 
 Third, containment: Which users are most affected? Celebrity fan-outs are the highest volume. If a celebrity with five million followers posts during a fan-out backlog, that one post generates five million write operations. Celebrity fan-outs are disproportionately expensive.
 
@@ -2477,7 +2477,7 @@ Response options:
 
 Option A: Auto-scale fan-out workers. This is the first line of defense. When queue depth exceeds a threshold, add more workers. This handles gradual increases but not sudden spikes.
 
-Option B: Prioritized fan-out. Process high-engagement posts first — posts from popular accounts or accounts with high recent engagement. This ensures the most-viewed content stays fresh even during backlog.
+Option B: Prioritized fan-out. Process high-engagement posts first -- posts from popular accounts or accounts with high recent engagement. This ensures the most-viewed content stays fresh even during backlog.
 
 Option C: Shed celebrity fan-outs. During backlog, temporarily pause fan-out for celebrity accounts. Their followers will not see their posts immediately, but they will see them via the fan-on-read fallback path when they load their feed.
 
@@ -2491,11 +2491,11 @@ The key insight is that feed staleness is better than feed unavailability. I des
 
 **Candidate:** "That is a significant feature addition. Let me think about how it fits.
 
-Search requires a full-text index over post content. The challenge is that posts are generated at one billion per day — the index must be highly write-efficient.
+Search requires a full-text index over post content. The challenge is that posts are generated at one billion per day -- the index must be highly write-efficient.
 
 The right technology here is Elasticsearch. It is purpose-built for full-text search, handles high write throughput with near-real-time indexing, and supports the complex query patterns that post search requires.
 
-The architecture change: add an indexing path from the content ingestion layer to Elasticsearch. This is an async path — the post is first written to the post store, then an event triggers indexing in Elasticsearch. The index may lag the post store by a few seconds, but search results do not need to be real-time.
+The architecture change: add an indexing path from the content ingestion layer to Elasticsearch. This is an async path -- the post is first written to the post store, then an event triggers indexing in Elasticsearch. The index may lag the post store by a few seconds, but search results do not need to be real-time.
 
 The trade-off: Elasticsearch adds operational complexity. It requires dedicated infrastructure, careful capacity planning, and a team that knows how to operate it. If search is a critical feature, this complexity is justified. If search is a nice-to-have, I would defer it and instead design the post store schema so that adding Elasticsearch later is straightforward.
 
@@ -2505,7 +2505,7 @@ The integration point is important: I would design the search API as a separate 
 
 ---
 
-### Minutes 35–42: Multi-Region and Evolution
+### Minutes 35-42: Multi-Region and Evolution
 
 **Interviewer:** "How would you extend this to multiple regions?"
 
@@ -2531,7 +2531,7 @@ New failure mode with multi-region: cross-region replication lag. If the global 
 
 ---
 
-### Minutes 42–45: Wrap-up and Summary
+### Minutes 42-45: Wrap-up and Summary
 
 **Candidate:** "Let me summarize the key decisions and tradeoffs in my design.
 
@@ -2545,7 +2545,7 @@ Multi-region: localized fan-out per region, globally replicated event stream, ev
 
 The three most important assumptions I made: five hundred average follows per user, sub-five-second delivery target, eventual consistency is acceptable for feed freshness.
 
-If any of those assumptions are wrong — particularly if consistency must be stronger — here is what I would change: strong consistency for the feed would require eliminating the fan-out-on-read path and using a coordination mechanism that is much more expensive. I would strongly push back on a strong consistency requirement for a social feed because the user experience benefit does not justify the cost.
+If any of those assumptions are wrong -- particularly if consistency must be stronger -- here is what I would change: strong consistency for the feed would require eliminating the fan-out-on-read path and using a coordination mechanism that is much more expensive. I would strongly push back on a strong consistency requirement for a social feed because the user experience benefit does not justify the cost.
 
 What else would you like to explore?"
 
@@ -2563,7 +2563,7 @@ A Staff Engineer's job is to distinguish symptoms from root causes. Designing a 
 
 **How to surface root causes:**
 
-Ask "why" questions: "When you say checkout is too slow, what exactly is slow? The page load? The payment processing? The order confirmation? And how slow is too slow — what is the target?"
+Ask "why" questions: "When you say checkout is too slow, what exactly is slow? The page load? The payment processing? The order confirmation? And how slow is too slow -- what is the target?"
 
 Ask about failure modes: "Is this slow all the time, or only during certain conditions? Only for certain users? Only during peak traffic?"
 
@@ -2673,9 +2673,9 @@ At the strong end: questions that reveal your understanding of the problem domai
 
 "Consistency requirements drive the entire storage architecture. Do users need to see their own posts immediately after posting, or is a few seconds acceptable? For social media, users almost always expect to see their own actions immediately, even if others' actions are eventually consistent."
 
-"The read/write ratio determines whether I optimize the storage layer for writes or reads. For a social feed, I would expect reads to dominate heavily — users scroll their feeds much more than they post. Is that correct for your use case, or is this a write-heavy platform like a logging or telemetry system?"
+"The read/write ratio determines whether I optimize the storage layer for writes or reads. For a social feed, I would expect reads to dominate heavily -- users scroll their feeds much more than they post. Is that correct for your use case, or is this a write-heavy platform like a logging or telemetry system?"
 
-These questions demonstrate that you understand the implications of the answers. The interviewer sees that you are not just gathering data — you are reasoning about the architecture in real time.
+These questions demonstrate that you understand the implications of the answers. The interviewer sees that you are not just gathering data -- you are reasoning about the architecture in real time.
 
 **The meta-principle:**
 
@@ -2685,7 +2685,7 @@ A good clarifying question contains a hypothesis. You are not asking "what is X?
 
 ### Expansion: When First-Principles Reasoning Reveals a Better Design
 
-Sometimes first-principles reasoning leads you away from the conventional answer for a type of system. This is a strong L6 signal — it shows you are deriving the design from the constraints, not copying a template.
+Sometimes first-principles reasoning leads you away from the conventional answer for a type of system. This is a strong L6 signal -- it shows you are deriving the design from the constraints, not copying a template.
 
 **Example: URL Shortener with unusual requirements**
 
@@ -2699,7 +2699,7 @@ First-principles reasoning: What do we need? A stable code that maps to a change
 
 This is a two-level indirection problem. The QR code encodes a URL that points to our service. Our service maps that URL to the current destination. We can change the current destination without changing the URL in the QR code.
 
-This is actually the standard design — but the insight is the two-level indirection that enables destination changeability, not just "use a key-value store." The reasoning from the constraint (printed QR codes cannot be updated) to the solution (two-level indirection) is what makes it Staff-level.
+This is actually the standard design -- but the insight is the two-level indirection that enables destination changeability, not just "use a key-value store." The reasoning from the constraint (printed QR codes cannot be updated) to the solution (two-level indirection) is what makes it Staff-level.
 
 **Example: Distributed lock with unusual failure tolerance**
 
@@ -2713,7 +2713,7 @@ First-principles reasoning: What do we need? A mechanism to prevent data modific
 
 This is not a Redis lock problem. This is a lease-with-heartbeat problem. The migration process holds a lease and periodically renews it. Other services check the lease before modifying data. If the migration process crashes, the lease expires and other services can proceed.
 
-But wait — for a multi-hour migration, we also need a manual override capability. If the migration fails midway, operations teams need to be able to cancel the lock without waiting for expiry.
+But wait -- for a multi-hour migration, we also need a manual override capability. If the migration fails midway, operations teams need to be able to cancel the lock without waiting for expiry.
 
 This leads to a completely different design than "use a Redis lock." The key insight came from reasoning about the specific failure modes of a multi-hour lock.
 
@@ -2721,7 +2721,7 @@ This leads to a completely different design than "use a Redis lock." The key ins
 
 ### Expansion: How to Detect Your Own Analysis Paralysis in Real Time
 
-Analysis paralysis is often invisible from the inside. You feel like you are being thorough. You feel like you need more information. You do not feel paralyzed — you feel like you are being careful.
+Analysis paralysis is often invisible from the inside. You feel like you are being thorough. You feel like you need more information. You do not feel paralyzed -- you feel like you are being careful.
 
 From the outside, it is obvious. The interviewer has been answering questions for ten minutes and you have not drawn a single box.
 
@@ -2749,7 +2749,7 @@ Then draw your first box. Once you start designing, the momentum usually builds.
 
 **Case 1: The Shared Library Problem**
 
-A team builds a shared utility library used by fifty other services across the organization. The library does not have a clear owner — it was built by engineers who have since moved to other teams.
+A team builds a shared utility library used by fifty other services across the organization. The library does not have a clear owner -- it was built by engineers who have since moved to other teams.
 
 When a security vulnerability is found in the library, who is responsible for fixing it? Who is responsible for making sure all fifty services update to the patched version?
 
@@ -2773,7 +2773,7 @@ Without a decision about whose needs take precedence, the system tries to serve 
 
 **The Staff Engineer approach:**
 
-"Before I design this service, I need to understand the priority hierarchy. Team A is payments — their requirements are more critical because a payment failure has direct revenue impact. Team B is recommendations — important, but less critical.
+"Before I design this service, I need to understand the priority hierarchy. Team A is payments -- their requirements are more critical because a payment failure has direct revenue impact. Team B is recommendations -- important, but less critical.
 
 I would design the service primarily for Team A's requirements: low latency, high availability, no batch operations on the critical path.
 
@@ -2792,7 +2792,7 @@ The following table covers every observable dimension of difference between L5 a
 | First action after receiving prompt | Starts asking questions immediately | Restates the problem in own words first |
 | Number of questions asked | Seven or more | Three to six |
 | Question types | Mix of clarifying and implementation detail questions | Only clarifying questions that reveal understanding |
-| Question phrasing | "What is the QPS?" | "Scale drives the architecture — are we in the millions or billions of events range?" |
+| Question phrasing | "What is the QPS?" | "Scale drives the architecture -- are we in the millions or billions of events range?" |
 | Response to "you decide" | Asks a different question | Makes a decision with explicit reasoning and proceeds |
 | Assumption handling | Implicit, not stated | Explicit, stated with reasoning and adjustment path |
 | Starting design | Waits until all questions are answered | Starts after assumptions are stated, even with uncertainty |
@@ -2818,15 +2818,15 @@ The following table covers every observable dimension of difference between L5 a
 
 **Background:**
 
-A large e-commerce company built a notification platform for transactional emails — order confirmations, shipping updates, password resets. The platform was designed by one team for their own products with an estimated volume of two million notifications per day.
+A large e-commerce company built a notification platform for transactional emails -- order confirmations, shipping updates, password resets. The platform was designed by one team for their own products with an estimated volume of two million notifications per day.
 
 **What happened:**
 
 Month 1: Platform launched. Two million notifications per day as expected.
 Month 3: Two other teams discovered the platform and integrated their services. Volume jumped to fifteen million notifications per day.
-Month 5: A marketing team integrated for promotional emails. They scheduled a campaign sending twenty million emails in a single day — ten times the previous daily maximum.
+Month 5: A marketing team integrated for promotional emails. They scheduled a campaign sending twenty million emails in a single day -- ten times the previous daily maximum.
 
-When the campaign launched, the notification queue went from one hundred thousand messages to forty million messages in under an hour. The single-worker-per-channel design could not process forty million messages at a reasonable rate. Critical notifications — order confirmations and password resets — were buried behind promotional emails in the same queue.
+When the campaign launched, the notification queue went from one hundred thousand messages to forty million messages in under an hour. The single-worker-per-channel design could not process forty million messages at a reasonable rate. Critical notifications -- order confirmations and password resets -- were buried behind promotional emails in the same queue.
 
 Users who tried to reset their passwords received their emails twelve to eighteen hours later. The support team was overwhelmed. The incident lasted four days.
 
@@ -2846,7 +2846,7 @@ All three had reasonable defaults the engineer could have assumed:
 
 **What a Staff Engineer would have designed:**
 
-Before designing, stated assumptions would include: "I am designing this as a shared platform because point solutions become shared. I am assuming any team can onboard without my involvement — which requires per-tenant rate limiting from the start. I am assuming there will be critical notifications (password resets, order confirmations) that must never be delayed behind marketing campaigns — which requires priority queue separation from day one."
+Before designing, stated assumptions would include: "I am designing this as a shared platform because point solutions become shared. I am assuming any team can onboard without my involvement -- which requires per-tenant rate limiting from the start. I am assuming there will be critical notifications (password resets, order confirmations) that must never be delayed behind marketing campaigns -- which requires priority queue separation from day one."
 
 The design would have included: dedicated high-priority queues with dedicated workers, per-tenant rate limiting at ingest, capacity reviews required before onboarding a new tenant, and monitoring for queue depth per priority tier.
 
@@ -2860,7 +2860,7 @@ The design would have included: dedicated high-priority queues with dedicated wo
 
 **Background:**
 
-A startup built a shared workspace tool where users could collaboratively edit documents. To improve performance, they chose eventual consistency for the document state — edits were propagated to other users with a delay of one to two seconds.
+A startup built a shared workspace tool where users could collaboratively edit documents. To improve performance, they chose eventual consistency for the document state -- edits were propagated to other users with a delay of one to two seconds.
 
 **What happened:**
 
@@ -2874,7 +2874,7 @@ This was a correctness bug caused by an inconsistency between the comment anchor
 
 **Root cause analysis from an ambiguity perspective:**
 
-The original design decision — eventual consistency for document state — was made with a specific use case in mind: collaborative editing of text. The decision was reasonable for that use case.
+The original design decision -- eventual consistency for document state -- was made with a specific use case in mind: collaborative editing of text. The decision was reasonable for that use case.
 
 The ambiguity that was not resolved: "Are there any data invariants that depend on consistency between document state and other data?" Comments anchored to text selections create exactly this kind of inter-object dependency. The comment's validity depends on the text it references existing unchanged.
 
@@ -2882,21 +2882,21 @@ A Staff Engineer at design time would have asked: "What data depends on the docu
 
 **The lesson:**
 
-When you choose a consistency model, explicitly think about all the data that might have invariants that depend on that consistency. "Which invariants must never be violated?" is not just a philosophical question — it has concrete implications for what operations need strong consistency even in an otherwise eventually consistent system.
+When you choose a consistency model, explicitly think about all the data that might have invariants that depend on that consistency. "Which invariants must never be violated?" is not just a philosophical question -- it has concrete implications for what operations need strong consistency even in an otherwise eventually consistent system.
 
 ---
 
-### Incident Study 3: The Unknown Unknown — GDPR
+### Incident Study 3: The Unknown Unknown -- GDPR
 
 **Background:**
 
-A B2B SaaS company built an analytics pipeline that processed customer usage data. The pipeline stored detailed event logs — which users clicked what buttons, how long they spent on each page, what search queries they ran.
+A B2B SaaS company built an analytics pipeline that processed customer usage data. The pipeline stored detailed event logs -- which users clicked what buttons, how long they spent on each page, what search queries they ran.
 
 The data was used for product analytics and customer success reporting. The team designed the pipeline as a pure data engineering problem: collect events, store them, make them queryable.
 
 **What happened:**
 
-Two years after launch, the European Union's GDPR took effect. The analytics pipeline contained personal data — user IDs, search queries, behavior patterns — all of which were regulated under GDPR.
+Two years after launch, the European Union's GDPR took effect. The analytics pipeline contained personal data -- user IDs, search queries, behavior patterns -- all of which were regulated under GDPR.
 
 GDPR required: the ability to delete a specific user's data upon request (right to erasure), the ability to export a specific user's data upon request (data portability), and the ability to demonstrate that data was not retained longer than necessary.
 
@@ -2924,7 +2924,7 @@ Even in 2016 (before GDPR was finalized but while it was being developed), this 
 
 **The lesson:**
 
-The compliance question — "What regulatory requirements apply to this data?" — is a universal question that should be asked for any system that processes user data. It is easy to answer early and very expensive to answer late.
+The compliance question -- "What regulatory requirements apply to this data?" -- is a universal question that should be asked for any system that processes user data. It is easy to answer early and very expensive to answer late.
 
 ---
 
@@ -2980,7 +2980,7 @@ The hard-to-change decisions are: the data model for the message store, the exte
 
 The easy-to-change decisions are: the specific timeout values, the cache TTL for recent messages, and the number of worker instances per queue.
 
-Let me spend more time on the hard-to-change ones. For the data model: I am choosing to store messages with a composite key of (user_id, conversation_id, timestamp). This choice affects both the access pattern — range queries by user and conversation are efficient — and the partition behavior. If I am wrong about this being the primary access pattern, migrating to a different schema is expensive.
+Let me spend more time on the hard-to-change ones. For the data model: I am choosing to store messages with a composite key of (user_id, conversation_id, timestamp). This choice affects both the access pattern -- range queries by user and conversation are efficient -- and the partition behavior. If I am wrong about this being the primary access pattern, migrating to a different schema is expensive.
 
 Let me think through all the access patterns I might need before committing to this schema..."
 
@@ -3016,7 +3016,7 @@ A decision is not good enough if:
 
 It is made by default. "I used Postgres because it is what I know." The reasoning is not from the constraints of the problem.
 
-It is made on a false dichotomy. "Either strong consistency or eventual consistency." Many problems have nuanced solutions — strong consistency for writes, eventual consistency for reads, strong consistency for critical operations, eventual for non-critical.
+It is made on a false dichotomy. "Either strong consistency or eventual consistency." Many problems have nuanced solutions -- strong consistency for writes, eventual consistency for reads, strong consistency for critical operations, eventual for non-critical.
 
 It is unmeasurable. You cannot tell if the decision was right because you have no monitoring, no metrics, and no feedback loop. A good decision includes a way to know if it was wrong.
 
@@ -3057,11 +3057,11 @@ Total notifications per day: 100 million users times 5.1 notifications = 510 mil
 Average per second: 510 million / 86,400 = 5,900 per second (call it 6,000)
 Peak per second: 6,000 times 5 (marketing campaigns often run at business hours, causing 5x peak): 30,000 per second
 
-This derivation takes thirty seconds. It tells you the design needs to handle thirty thousand notifications per second at peak. That is a medium-scale distributed system — not trivial, but not requiring exotic approaches.
+This derivation takes thirty seconds. It tells you the design needs to handle thirty thousand notifications per second at peak. That is a medium-scale distributed system -- not trivial, but not requiring exotic approaches.
 
 **The presentation format:**
 
-"Let me estimate the scale from first principles. I will start with users: I am assuming five hundred million registered users with twenty percent daily active, giving one hundred million daily active users. Each active user receives on average five notifications per day — mostly non-critical marketing, with some critical transactional notifications. That gives five hundred million notifications per day or about six thousand per second at average. Peak during marketing campaigns is probably five times average — around thirty thousand per second. My architecture needs to handle thirty thousand notifications per second with head room."
+"Let me estimate the scale from first principles. I will start with users: I am assuming five hundred million registered users with twenty percent daily active, giving one hundred million daily active users. Each active user receives on average five notifications per day -- mostly non-critical marketing, with some critical transactional notifications. That gives five hundred million notifications per day or about six thousand per second at average. Peak during marketing campaigns is probably five times average -- around thirty thousand per second. My architecture needs to handle thirty thousand notifications per second with head room."
 
 ---
 
@@ -3091,7 +3091,7 @@ If you have a design decision with no arrow from the left, ask: "Why am I making
 
 If you have an assumption with no arrow to the right, ask: "What design decision does this assumption drive? If none, why did I state it?"
 
-In an interview, you make this explicit: "This design decision — using separate worker pools per channel — comes from my earlier assumption that channels have different failure modes and I should not let one channel's failure affect another. Without the isolation assumption, I could use a single worker pool and simplify the design."
+In an interview, you make this explicit: "This design decision -- using separate worker pools per channel -- comes from my earlier assumption that channels have different failure modes and I should not let one channel's failure affect another. Without the isolation assumption, I could use a single worker pool and simplify the design."
 
 ---
 
@@ -3113,20 +3113,20 @@ What are the critical unknowns?
 
 What can I assume without asking?
 - Reads (redirects) will heavily dominate writes (link creation). This is typical for URL shorteners.
-- Latency should be low — a slow redirect degrades user experience.
+- Latency should be low -- a slow redirect degrades user experience.
 - Links created today will still need to work in five years.
 
 What should I ask?
 - "What scale are we targeting? Millions or billions of redirects per day?"
-- "Do we need per-link analytics — click counts, geographic distribution of clicks?"
+- "Do we need per-link analytics -- click counts, geographic distribution of clicks?"
 
 **L6 assumption log for this problem:**
 
 "I am assuming one billion redirects per day and ten million new links created per day. That is a one-hundred-to-one read-to-write ratio, which is typical for URL shorteners.
 
-I am assuming redirects need to be fast — sub-ten-millisecond — because a slow redirect is a poor user experience and defeats the purpose.
+I am assuming redirects need to be fast -- sub-ten-millisecond -- because a slow redirect is a poor user experience and defeats the purpose.
 
-I am assuming links are permanent — they do not expire. This means I need a storage system that can hold billions of entries indefinitely.
+I am assuming links are permanent -- they do not expire. This means I need a storage system that can hold billions of entries indefinitely.
 
 I am also assuming we need click analytics, because that is a major value proposition of URL shorteners. If analytics is not needed, the design simplifies significantly."
 
@@ -3142,7 +3142,7 @@ Did you address analytics, or did you only address the core redirect functionali
 
 ### Scenario 2: Design a Real-Time Collaboration Tool
 
-Prompt: "Design Google Docs — a real-time collaborative document editor."
+Prompt: "Design Google Docs -- a real-time collaborative document editor."
 
 **The critical unknowns:**
 
@@ -3154,7 +3154,7 @@ Persistence model: Are edits persisted immediately or batched? What is the confl
 
 **What to ask:**
 
-"What is the expected concurrency — how many users typically edit the same document simultaneously? This affects whether we need a sophisticated conflict resolution algorithm or whether simpler approaches work."
+"What is the expected concurrency -- how many users typically edit the same document simultaneously? This affects whether we need a sophisticated conflict resolution algorithm or whether simpler approaches work."
 
 "Do users need to see each other's edits in real time (character by character), or can we batch edits and sync every second or two?"
 
@@ -3162,9 +3162,9 @@ Persistence model: Are edits persisted immediately or batched? What is the confl
 
 "I am assuming up to fifty simultaneous editors on a single document, which is high concurrency. This rules out simple last-write-wins and requires a proper conflict resolution algorithm.
 
-I am assuming users need to see each other's edits in real time — character by character — because that is the expectation for a collaborative tool.
+I am assuming users need to see each other's edits in real time -- character by character -- because that is the expectation for a collaborative tool.
 
-I am choosing Operational Transformation over CRDTs for this design because OT is better understood and has proven implementations (like Google Wave's algorithm). CRDTs are emerging but have different trade-offs. I will note this as a decision point — if we are building for distributed multi-master operation, CRDTs might be preferred."
+I am choosing Operational Transformation over CRDTs for this design because OT is better understood and has proven implementations (like Google Wave's algorithm). CRDTs are emerging but have different trade-offs. I will note this as a decision point -- if we are building for distributed multi-master operation, CRDTs might be preferred."
 
 **The key design decisions to make:**
 
@@ -3198,11 +3198,11 @@ What is the scale? How many jobs per day, per second?
 
 "I am assuming a mix of cron-style recurring jobs and one-time delayed jobs. This is the most common pattern for job schedulers.
 
-I am assuming at-least-once execution is required — no job must be silently dropped. Exactly-once is desirable but I will treat it as a nice-to-have, designing for idempotent jobs that handle duplicate execution gracefully.
+I am assuming at-least-once execution is required -- no job must be silently dropped. Exactly-once is desirable but I will treat it as a nice-to-have, designing for idempotent jobs that handle duplicate execution gracefully.
 
-I am assuming scale of ten million jobs per day — about one hundred and fifteen per second average. This is manageable but requires a proper distributed design to avoid single points of failure.
+I am assuming scale of ten million jobs per day -- about one hundred and fifteen per second average. This is manageable but requires a proper distributed design to avoid single points of failure.
 
-I am assuming jobs have deadlines — if a job misses its scheduled time by more than N minutes, alert rather than running late."
+I am assuming jobs have deadlines -- if a job misses its scheduled time by more than N minutes, alert rather than running late."
 
 **The core architectural challenge:**
 
@@ -3224,17 +3224,17 @@ Interviewer responses to your questions and design choices contain information b
 
 **Signal: The interviewer says "interesting" or "tell me more about that"**
 
-This is positive — they want to go deeper on a component or decision. You have touched on something they find valuable. Spend more time here. Go deeper on the reasoning, the trade-offs, and the failure modes.
+This is positive -- they want to go deeper on a component or decision. You have touched on something they find valuable. Spend more time here. Go deeper on the reasoning, the trade-offs, and the failure modes.
 
 Do not interpret this as "I said something wrong." It almost always means "you said something interesting, keep going."
 
-**Signal: The interviewer redirects you — "Let's move on to X"**
+**Signal: The interviewer redirects you -- "Let's move on to X"**
 
 They are not interested in going deeper on what you were discussing. They want to cover something else. Move on without finishing every thought. The interviewer is running the interview and they have a coverage agenda.
 
 Do not take this as criticism. It usually means your coverage of the current topic is sufficient and they want to see you reason about something else.
 
-**Signal: The interviewer adds a constraint — "What if we need X?"**
+**Signal: The interviewer adds a constraint -- "What if we need X?"**
 
 They are testing how you adapt when assumptions change. This is a deliberate test of flexibility. Do not defend your original design. Trace the implications of the new constraint, adapt the design, and explain what changed.
 
@@ -3244,7 +3244,7 @@ The right response is not "That is hard" or "We would need to redesign everythin
 
 This could mean they are seeing what you do with limited information (intentional). It could mean they are evaluating whether you proceed confidently without hand-holding. In either case, the response is to proceed with stated assumptions rather than keep asking.
 
-**Signal: The interviewer pushes back on a choice — "Why did you choose X over Y?"**
+**Signal: The interviewer pushes back on a choice -- "Why did you choose X over Y?"**
 
 They are probing your reasoning. This is not necessarily criticism. They want to know if you understand the trade-offs or if you made the choice by default.
 
@@ -3368,7 +3368,7 @@ Did each question show why you were asking it?
 
 Did you state a formal assumption log before starting to design?
 Did each assumption include reasoning (not just the statement)?
-Did each assumption include a consequence — "if wrong, here is what changes"?
+Did each assumption include a consequence -- "if wrong, here is what changes"?
 Did you identify scale, consistency, latency, and ownership assumptions?
 Did you flag which assumptions were most critical to get right?
 
@@ -3414,11 +3414,11 @@ Did you address data correctness invariants?
 
 ### Scoring Interpretation
 
-60–75: Strong L6 signals. You are demonstrating the behaviors interviewers look for.
+60-75: Strong L6 signals. You are demonstrating the behaviors interviewers look for.
 
-45–59: L5+ signals. Good technical foundation. Focus practice on the categories where you scored lowest.
+45-59: L5+ signals. Good technical foundation. Focus practice on the categories where you scored lowest.
 
-30–44: Developing. The gaps are probably in assumption handling and flexibility. Practice the assumption log pattern explicitly.
+30-44: Developing. The gaps are probably in assumption handling and flexibility. Practice the assumption log pattern explicitly.
 
 Below 30: Needs significant work. Focus on the five-step framework first before optimizing for advanced signals.
 
@@ -3458,7 +3458,7 @@ Every time you receive an ambiguous task at work, before asking any clarifying q
 3. What is a reasonable assumption I could make for each uncertainty?
 4. Which uncertainties, if wrong, would require significant rework?
 
-Only after doing this exercise should you decide which questions to ask. Ask only about the fourth category — the ones where being wrong requires significant rework. For everything else, state your assumption and proceed.
+Only after doing this exercise should you decide which questions to ask. Ask only about the fourth category -- the ones where being wrong requires significant rework. For everything else, state your assumption and proceed.
 
 This practice trains two things simultaneously. It trains you to make assumptions (the skill). And it calibrates your judgment for which things are worth asking about versus assuming (the meta-skill).
 
@@ -3486,7 +3486,7 @@ For each unknown unknown you identify:
 - What question, asked at design time, would have surfaced it?
 - What checklist item would have caught it?
 
-Gradually build a personal "unknown unknowns checklist" — the questions you ask every time because they surface the kinds of things you would not think to ask about otherwise.
+Gradually build a personal "unknown unknowns checklist" -- the questions you ask every time because they surface the kinds of things you would not think to ask about otherwise.
 
 ---
 
@@ -3514,7 +3514,7 @@ Specific behaviors:
 
 Invite input on decisions: "I am leaning toward eventual consistency here. Do you see a reason that might not work?"
 
-Check alignment on priorities: "I want to make sure I am optimizing for the right thing. Based on what you have told me, latency is more important than consistency — is that right?"
+Check alignment on priorities: "I want to make sure I am optimizing for the right thing. Based on what you have told me, latency is more important than consistency -- is that right?"
 
 Surface unresolved questions for the group: "I am not sure whether to prioritize the write path or the read path for deep-dive. What is most interesting to you?"
 
@@ -3546,7 +3546,7 @@ These constraints are often not stated explicitly. They surface during design di
 
 First, make them explicit: "I want to make sure I understand the constraints I am working within. Are there technology choices already made that I should design around? Are there cost ceilings I should know about?"
 
-Second, acknowledge the constraint and its implications: "If we must use Postgres, I can work within that constraint. I would design the read path differently — specifically, I would add read replicas and a read cache rather than switching to Cassandra. The trade-off is somewhat higher complexity in the caching layer."
+Second, acknowledge the constraint and its implications: "If we must use Postgres, I can work within that constraint. I would design the read path differently -- specifically, I would add read replicas and a read cache rather than switching to Cassandra. The trade-off is somewhat higher complexity in the caching layer."
 
 Third, note if the constraint makes the requirements impossible: "If the latency requirement is sub-millisecond and we must use a relational database on shared infrastructure, I need to flag that this combination may not be achievable. Sub-millisecond relational database queries require dedicated hardware and specific indexing strategies. I can design toward it, but I want to be transparent about the challenge."
 
@@ -3556,7 +3556,7 @@ Fixed constraints are sometimes introduced by interviewers as challenge question
 
 The right response is to trace the implications of the constraint, identify where the constraint creates challenges, propose a design that works within it, and note if the constraint forces accepting a different trade-off than you would prefer.
 
-"If we can only use Lambda, the stateful components in my design become more complex. Lambda is stateless, so I cannot hold WebSocket connections there — I would need a separate connection manager service, like API Gateway WebSocket or a dedicated connection-handling service. The fan-out workers would work well as Lambda functions since they are naturally event-driven and stateless. The database choice does not change. The main implication is that the connection management component needs to be redesigned."
+"If we can only use Lambda, the stateful components in my design become more complex. Lambda is stateless, so I cannot hold WebSocket connections there -- I would need a separate connection manager service, like API Gateway WebSocket or a dedicated connection-handling service. The fan-out workers would work well as Lambda functions since they are naturally event-driven and stateless. The database choice does not change. The main implication is that the connection management component needs to be redesigned."
 
 ---
 
@@ -3605,53 +3605,53 @@ flowchart LR
 
 ## Appendix A: The 5-Step Mental Framework for Ambiguous Problems
 
-### Step 1 — Acknowledge the ambiguity explicitly
+### Step 1 -- Acknowledge the ambiguity explicitly
 
 Do not pretend the problem is clear when it is not. When you receive an ambiguous prompt, say out loud: "This prompt is intentionally open-ended. Let me identify what I know, what I need to know, and what I can safely assume."
 
 This one habit does two things. It prevents you from silently assuming things that should be stated. And it signals to the interviewer that you are treating ambiguity as a legitimate problem to navigate, not a mistake to ignore.
 
-Example: You are asked to "design a notification system." Instead of immediately drawing boxes, you say: "This is broad — let me figure out what I know, what I need to ask, and what I can reasonably assume. I know this involves delivering messages to users. I need to know who produces the notifications and what channels are involved. I can safely assume this is user-facing (email, push, SMS) unless told otherwise."
+Example: You are asked to "design a notification system." Instead of immediately drawing boxes, you say: "This is broad -- let me figure out what I know, what I need to ask, and what I can reasonably assume. I know this involves delivering messages to users. I need to know who produces the notifications and what channels are involved. I can safely assume this is user-facing (email, push, SMS) unless told otherwise."
 
-### Step 2 — Identify the one constraint that matters most
+### Step 2 -- Identify the one constraint that matters most
 
-Every design has a binding constraint — the single requirement that, if changed, would change the whole design. Finding this constraint before drawing anything is the most important step.
+Every design has a binding constraint -- the single requirement that, if changed, would change the whole design. Finding this constraint before drawing anything is the most important step.
 
 For a notification system, ask yourself: is the binding constraint delivery speed (real-time push) or delivery guarantee (no missed notifications)? These require completely different architectures. Real-time delivery optimizes for latency and uses persistent connections (WebSockets). Guaranteed delivery optimizes for durability and uses queue-backed retry systems.
 
 These are not the same system. Building the wrong one because you did not identify the binding constraint wastes all the design work that follows.
 
-How to find it: ask yourself, "If I change this one requirement, does the whole architecture change?" If yes — that is your binding constraint. Find it before drawing any boxes.
+How to find it: ask yourself, "If I change this one requirement, does the whole architecture change?" If yes -- that is your binding constraint. Find it before drawing any boxes.
 
-### Step 3 — Ask 3 to 5 targeted clarifying questions
+### Step 3 -- Ask 3 to 5 targeted clarifying questions
 
 Questions should reveal constraints, not just facts. There is a difference between gathering information and revealing what you understand about the design space.
 
-"How many users?" reveals scale — useful but mechanical.
+"How many users?" reveals scale -- useful but mechanical.
 
-"What happens if a notification is delayed by 5 minutes?" reveals whether real-time matters — this changes the architecture.
+"What happens if a notification is delayed by 5 minutes?" reveals whether real-time matters -- this changes the architecture.
 
-"Who are the producers?" reveals organizational coupling — a single internal team vs. multiple external teams changes the multi-tenancy model, the rate limiting strategy, and the API design.
+"Who are the producers?" reveals organizational coupling -- a single internal team vs. multiple external teams changes the multi-tenancy model, the rate limiting strategy, and the API design.
 
 Before asking any question, run this test: if the answer is A, does my design change? If the answer is B, does my design change? If both answers produce the same design, do not ask the question.
 
 Do not ask questions whose answers would not change your design. They waste time and make you look like you are stalling.
 
-### Step 4 — State your assumptions explicitly and confidently
+### Step 4 -- State your assumptions explicitly and confidently
 
 After asking your 3 to 5 questions, state your assumptions clearly before drawing anything. Do not wait to be asked. Do not hint at assumptions. State them directly.
 
 "Based on your answers, I will assume: 50M DAU, at-most-once delivery is acceptable, multiple producer teams, and peak load around 10K notifications per second."
 
-State them once, at the beginning. You do not need permission to make reasonable assumptions — you need to make them visible so the interviewer can correct them if they are wrong.
+State them once, at the beginning. You do not need permission to make reasonable assumptions -- you need to make them visible so the interviewer can correct them if they are wrong.
 
 If you do not state assumptions, you are hiding your reasoning. A correct design with hidden reasoning scores poorly. A slightly imperfect design with clear reasoning scores well. The reasoning is what the interviewer is evaluating.
 
-### Step 5 — Design with visible flexibility
+### Step 5 -- Design with visible flexibility
 
 As you design, call out the decisions that would change under different assumptions. Do not just draw a box and move on. Name what the box depends on.
 
-"If we needed exactly-once delivery instead of at-most-once, I would add an idempotency store here — a Redis set that tracks processed notification IDs. Before processing any notification, we check the set. This adds one network call per notification but guarantees no duplicates."
+"If we needed exactly-once delivery instead of at-most-once, I would add an idempotency store here -- a Redis set that tracks processed notification IDs. Before processing any notification, we check the set. This adds one network call per notification but guarantees no duplicates."
 
 This shows the interviewer two things at once: you understand your own design's constraints, and you have thought about what would change. This is the design thinking that distinguishes Staff-level candidates.
 
@@ -3664,7 +3664,7 @@ Not all assumptions carry the same risk. Categorize every assumption you make us
 | Category | What it means | Examples |
 |----------|---------------|---------|
 | Safe to assume | Industry standard; would not surprise anyone | "We use HTTPS." "Users have mobile devices." "We need 99.9% availability for user-facing flows." |
-| Ask first | Different answer changes the whole design | "Is delivery real-time or can it batch?" "Who are the producers — one team or many?" "Do we need cross-region?" |
+| Ask first | Different answer changes the whole design | "Is delivery real-time or can it batch?" "Who are the producers -- one team or many?" "Do we need cross-region?" |
 | Assume conservatively | Unknown, but erring wrong is costly | If unknown scale: assume higher. If unknown consistency requirement: assume stricter. |
 | Do not assume | High-stakes business decisions | "What is acceptable data loss?" "Can we show stale data to users?" Never assume answers to these. |
 
@@ -3672,43 +3672,43 @@ Not all assumptions carry the same risk. Categorize every assumption you make us
 
 For any large-scale system, these are almost always true and safe to assume without asking:
 
-"We serve global users" — this means you should consider CDN and latency from the start, not retrofit it later.
+"We serve global users" -- this means you should consider CDN and latency from the start, not retrofit it later.
 
-"Data must persist across restarts" — this means you need durable storage, not in-memory-only.
+"Data must persist across restarts" -- this means you need durable storage, not in-memory-only.
 
-"The system must handle traffic spikes" — this means horizontal scaling or queuing is always worth designing for.
+"The system must handle traffic spikes" -- this means horizontal scaling or queuing is always worth designing for.
 
 For user-facing systems, these are almost always true:
 
-"Users are on mobile with variable connectivity" — design for offline tolerance and retry.
+"Users are on mobile with variable connectivity" -- design for offline tolerance and retry.
 
-"p99 latency matters, not just p50" — the slow requests are the ones that lose users.
+"p99 latency matters, not just p50" -- the slow requests are the ones that lose users.
 
-"Users notice UI that is slow by more than 200ms" — design the critical path to stay under this.
+"Users notice UI that is slow by more than 200ms" -- design the critical path to stay under this.
 
 For data systems, these are almost always true:
 
-"Data grows over time and you need an archival strategy" — never assume data will stay small.
+"Data grows over time and you need an archival strategy" -- never assume data will stay small.
 
-"You need to query data both by time and by entity (user, order, etc.)" — this usually means needing more than one index or more than one storage layer.
+"You need to query data both by time and by entity (user, order, etc.)" -- this usually means needing more than one index or more than one storage layer.
 
-"Analytics and operational queries have different patterns and should use different stores" — never try to serve both from one database.
+"Analytics and operational queries have different patterns and should use different stores" -- never try to serve both from one database.
 
 ---
 
-## Appendix C: Question Quality — Weak vs Strong
+## Appendix C: Question Quality -- Weak vs Strong
 
 ### Weak clarifying questions
 
 These questions do not change the design regardless of the answer:
 
-"What programming language should we use?" — the language does not change the architecture.
+"What programming language should we use?" -- the language does not change the architecture.
 
-"Should we use microservices or monolith?" — this is a design decision you should make from requirements, not a question to ask.
+"Should we use microservices or monolith?" -- this is a design decision you should make from requirements, not a question to ask.
 
-"How many engineers are on the team?" — the team size does not change the system architecture.
+"How many engineers are on the team?" -- the team size does not change the system architecture.
 
-"Should we use AWS or GCP?" — the cloud provider changes some implementation details but not the fundamental design.
+"Should we use AWS or GCP?" -- the cloud provider changes some implementation details but not the fundamental design.
 
 Why these are weak: the interviewer cannot evaluate your design thinking from these questions. They tell the interviewer nothing about whether you understand the problem space. They also make you look like you need someone else to make your decisions.
 
@@ -3716,15 +3716,15 @@ Why these are weak: the interviewer cannot evaluate your design thinking from th
 
 These questions change the design based on the answer:
 
-"What is the expected read/write ratio? This determines whether we optimize for read replicas or write throughput." — read-heavy systems use replicas and caches; write-heavy systems use write buffers and sharding.
+"What is the expected read/write ratio? This determines whether we optimize for read replicas or write throughput." -- read-heavy systems use replicas and caches; write-heavy systems use write buffers and sharding.
 
-"How stale can the data be? 100ms changes the design completely from 5 minutes." — 100ms means synchronous replication; 5 minutes means async replication is fine.
+"How stale can the data be? 100ms changes the design completely from 5 minutes." -- 100ms means synchronous replication; 5 minutes means async replication is fine.
 
-"Are there compliance requirements — GDPR, HIPAA? This affects where we store PII." — HIPAA changes the encryption model, access logging, and data residency requirements.
+"Are there compliance requirements -- GDPR, HIPAA? This affects where we store PII." -- HIPAA changes the encryption model, access logging, and data residency requirements.
 
-"Should the system fail open or closed when a dependency is unavailable?" — fail open means allow requests through; fail closed means reject them. These produce different circuit breaker implementations.
+"Should the system fail open or closed when a dependency is unavailable?" -- fail open means allow requests through; fail closed means reject them. These produce different circuit breaker implementations.
 
-"Is this for a single region or global? Multi-region changes the consistency model." — single region can use synchronous replication; global deployment with low latency requires eventual consistency or sophisticated consensus protocols.
+"Is this for a single region or global? Multi-region changes the consistency model." -- single region can use synchronous replication; global deployment with low latency requires eventual consistency or sophisticated consensus protocols.
 
 ### How many questions is right
 
@@ -3756,13 +3756,13 @@ Interviewer: "What would you choose?"
 
 Wrong: "Um, I am not sure, it really depends on many factors and I would need to think more about it..."
 
-Right: "I would choose eventual consistency for the feed. A post appearing 200ms late is acceptable — users do not notice. Choosing eventual consistency lets me use read replicas for the feed query, which matters at this scale since reads dominate heavily. The exception: if there is a financial transaction in the feed — like a payment confirmation — I would route those to strong consistency. So: eventual by default, strong for safety-critical content."
+Right: "I would choose eventual consistency for the feed. A post appearing 200ms late is acceptable -- users do not notice. Choosing eventual consistency lets me use read replicas for the feed query, which matters at this scale since reads dominate heavily. The exception: if there is a financial transaction in the feed -- like a payment confirmation -- I would route those to strong consistency. So: eventual by default, strong for safety-critical content."
 
-What makes the right answer work: it names the decision, gives the reason in plain terms, and names the condition under which the choice would flip. This is exactly what Staff engineers do in production decisions. They do not wait for consensus — they make a call, explain it, and note when they would change it.
+What makes the right answer work: it names the decision, gives the reason in plain terms, and names the condition under which the choice would flip. This is exactly what Staff engineers do in production decisions. They do not wait for consensus -- they make a call, explain it, and note when they would change it.
 
 ---
 
-## Appendix E: Breaking Analysis Paralysis — Five Techniques
+## Appendix E: Breaking Analysis Paralysis -- Five Techniques
 
 ### Technique 1: Set a time limit
 
@@ -3772,7 +3772,7 @@ The benefit: it prevents the gradual drift into asking one more question, then o
 
 ### Technique 2: The "good enough" threshold
 
-You do not need certainty to begin. You need enough information to design confidently. The test is: "Do I know what the three most important design decisions are?" If yes, you have enough to start. If no, ask one more question — but only one.
+You do not need certainty to begin. You need enough information to design confidently. The test is: "Do I know what the three most important design decisions are?" If yes, you have enough to start. If no, ask one more question -- but only one.
 
 "Feel ready" is not the threshold. "Good enough to make meaningful progress" is the threshold. These are very different standards.
 
@@ -3784,15 +3784,15 @@ Under ambiguity, the reversible choice preserves optionality. You pay a small pr
 
 ### Technique 4: Verbalize the uncertainty
 
-"I am not sure whether we need real-time or batch delivery. I will design for real-time, which is a superset — it can handle both requirements. If batch turns out to be sufficient, we can simplify later by removing the WebSocket layer."
+"I am not sure whether we need real-time or batch delivery. I will design for real-time, which is a superset -- it can handle both requirements. If batch turns out to be sufficient, we can simplify later by removing the WebSocket layer."
 
-Saying the uncertainty out loud does something important: it transforms your uncertainty from a blocker into an acknowledged design decision. You are not stuck — you are making a deliberate choice to err toward the harder requirement and noting that you are doing so. This is awareness, not weakness.
+Saying the uncertainty out loud does something important: it transforms your uncertainty from a blocker into an acknowledged design decision. You are not stuck -- you are making a deliberate choice to err toward the harder requirement and noting that you are doing so. This is awareness, not weakness.
 
 ### Technique 5: Start with what you know
 
 Even under maximum ambiguity, there are always some things you know. You know the inputs (what goes in), the outputs (what comes out), and the core transformation (what the system does). Start there.
 
-Draw the data flow first. The data flow does not change much between design alternatives — a notification system always takes an event in and delivers a message out, regardless of whether it is real-time or batch. Draw that path first, then layer in the uncertain decisions.
+Draw the data flow first. The data flow does not change much between design alternatives -- a notification system always takes an event in and delivers a message out, regardless of whether it is real-time or batch. Draw that path first, then layer in the uncertain decisions.
 
 Starting creates momentum. Once you have drawn the first few boxes, the next decisions often become clearer because you can see what they connect to.
 
@@ -3812,29 +3812,29 @@ This framework gives you a structured way to make decisions when you do not have
 
 **Step 3: Name the impact of each unknown.**
 
-"Volume determines whether I need Kafka vs SQS — Kafka handles higher throughput and replay but has more operational overhead. Latency determines whether I need WebSockets vs polling. Delivery receipts determine whether I need to track each notification individually in a status store."
+"Volume determines whether I need Kafka vs SQS -- Kafka handles higher throughput and replay but has more operational overhead. Latency determines whether I need WebSockets vs polling. Delivery receipts determine whether I need to track each notification individually in a status store."
 
 **Step 4: Estimate or assume the unknown, with reasoning.**
 
-"I will estimate 5 notifications per user per day = 250M per day = roughly 3K per second at average. That is comfortably within SQS's capacity, so I will start there. I will assume delivery latency of less than 5 seconds — enough for a queue-based system, no WebSockets needed yet."
+"I will estimate 5 notifications per user per day = 250M per day = roughly 3K per second at average. That is comfortably within SQS's capacity, so I will start there. I will assume delivery latency of less than 5 seconds -- enough for a queue-based system, no WebSockets needed yet."
 
 **Step 5: Design using your assumptions.**
 
-"Given these assumptions, here is my design..." — then design the system.
+"Given these assumptions, here is my design..." -- then design the system.
 
 **Step 6: Mark the assumptions that would trigger a redesign.**
 
 "If notification volume is actually 50K per second instead of 3K, I would replace SQS with Kafka for the throughput and replay capability. If delivery latency must be under 500ms, I would add WebSockets for the push path."
 
-This last step is what separates L6 from L5. You are not just designing for your assumptions — you are marking the thresholds at which the design would change. This tells the interviewer you understand the design's constraints.
+This last step is what separates L6 from L5. You are not just designing for your assumptions -- you are marking the thresholds at which the design would change. This tells the interviewer you understand the design's constraints.
 
 ### Worked example: Database Choice Under Uncertainty
 
 Weak approach: "I will use PostgreSQL." This gives no reasoning and acknowledges no uncertainty.
 
-Strong approach: "I have two main candidates: PostgreSQL and DynamoDB. The binding question is the access pattern. If we primarily look up notifications by user_id to show a user's notification history, PostgreSQL with a composite index on (user_id, created_at) handles this perfectly. If we also need to look up notifications by type across all users — for example, how many password reset emails were sent today — DynamoDB makes this cross-user analytics query very hard because it requires a full scan or a secondary index with high read costs.
+Strong approach: "I have two main candidates: PostgreSQL and DynamoDB. The binding question is the access pattern. If we primarily look up notifications by user_id to show a user's notification history, PostgreSQL with a composite index on (user_id, created_at) handles this perfectly. If we also need to look up notifications by type across all users -- for example, how many password reset emails were sent today -- DynamoDB makes this cross-user analytics query very hard because it requires a full scan or a secondary index with high read costs.
 
-I will ask: do we need cross-user analytics queries on notifications? [Interviewer: not initially.] Then PostgreSQL works. I will note that if analytics requirements emerge, we would add a Kafka stream to a separate analytics store — that is a clean additive change, no migration needed."
+I will ask: do we need cross-user analytics queries on notifications? [Interviewer: not initially.] Then PostgreSQL works. I will note that if analytics requirements emerge, we would add a Kafka stream to a separate analytics store -- that is a clean additive change, no migration needed."
 
 ---
 
@@ -3844,35 +3844,35 @@ Not all decisions require the same level of certainty before committing. Use thi
 
 ### High confidence required before committing
 
-Database choice — migration at scale is expensive and risky. A bad initial choice can require weeks of migration work.
+Database choice -- migration at scale is expensive and risky. A bad initial choice can require weeks of migration work.
 
-API contract design — breaking changes hurt downstream consumers and require deprecation cycles that can take months.
+API contract design -- breaking changes hurt downstream consumers and require deprecation cycles that can take months.
 
-Data model and schema — hard to change with real data in production, especially the primary key, partition key, and normalization decisions.
+Data model and schema -- hard to change with real data in production, especially the primary key, partition key, and normalization decisions.
 
-Shard key selection — re-sharding a distributed database often requires writing all the data again.
+Shard key selection -- re-sharding a distributed database often requires writing all the data again.
 
 For these decisions: wait until you have enough information. Ask the clarifying questions that reveal these constraints before committing.
 
 ### Medium confidence acceptable
 
-Queue technology — migrating from SQS to Kafka is feasible but takes engineering effort and carries risk.
+Queue technology -- migrating from SQS to Kafka is feasible but takes engineering effort and carries risk.
 
-Caching strategy — changing TTL, eviction policy, or cache topology is relatively straightforward.
+Caching strategy -- changing TTL, eviction policy, or cache topology is relatively straightforward.
 
-Load balancer routing algorithm — usually changeable with configuration.
+Load balancer routing algorithm -- usually changeable with configuration.
 
 For these decisions: proceed with your best estimate, document the assumption, and plan for revisiting when you have production data.
 
 ### Low confidence acceptable
 
-Number of replicas — add or remove with a configuration change.
+Number of replicas -- add or remove with a configuration change.
 
-Instance size — scale up or down on demand.
+Instance size -- scale up or down on demand.
 
-Specific timeout values — tune in production based on observed latency distributions.
+Specific timeout values -- tune in production based on observed latency distributions.
 
-Logging verbosity — toggle with configuration, no code change needed.
+Logging verbosity -- toggle with configuration, no code change needed.
 
 For these decisions: pick something reasonable and note it is tunable. Do not spend interview time on these.
 
@@ -3886,19 +3886,19 @@ The pattern in plain terms: "I am going to defer the decision on [X] and design 
 
 Example in practice:
 
-"I am going to defer the question of whether we need cross-region support. I will design single-region for now. If we need cross-region, the change is: (1) add a Kafka mirror to replicate events cross-region, and (2) add regional routing at the CDN layer. The core design does not change — it is an additive change. I have noted this as an open question for after launch."
+"I am going to defer the question of whether we need cross-region support. I will design single-region for now. If we need cross-region, the change is: (1) add a Kafka mirror to replicate events cross-region, and (2) add regional routing at the CDN layer. The core design does not change -- it is an additive change. I have noted this as an open question for after launch."
 
-Why this works: you keep moving, you demonstrate awareness of the uncertainty, and you show that adding cross-region later is not a redesign — it is a defined migration. The interviewer can see you have thought through the path even though you have not built it yet.
+Why this works: you keep moving, you demonstrate awareness of the uncertainty, and you show that adding cross-region later is not a redesign -- it is a defined migration. The interviewer can see you have thought through the path even though you have not built it yet.
 
 This is exactly how Staff engineers handle uncertainty in production: defer the decision, document the trigger condition, keep shipping.
 
 ---
 
-## Appendix I: Full Interview Flow — 5 Phases with Dialogue
+## Appendix I: Full Interview Flow -- 5 Phases with Dialogue
 
 This is a model for how a 45-minute design interview should feel when you handle ambiguity at L6 level.
 
-### Phase 1: Initial Understanding (minutes 0–3)
+### Phase 1: Initial Understanding (minutes 0-3)
 
 Goal: understand the surface of the problem without going deep. Spend two to three minutes here.
 
@@ -3908,13 +3908,13 @@ Candidate: "Can you tell me more about the context? Is this a greenfield design 
 
 Interviewer: "Greenfield. New notification platform."
 
-Candidate: "And who are the primary consumers — mobile apps, web, both?"
+Candidate: "And who are the primary consumers -- mobile apps, web, both?"
 
 Interviewer: "Both."
 
 Candidate: "Alright, I have a sense of the problem. Let me ask a few targeted questions before I start designing."
 
-### Phase 2: Assumption Setting (minutes 3–7)
+### Phase 2: Assumption Setting (minutes 3-7)
 
 Goal: establish the binding constraints and make assumptions explicit.
 
@@ -3924,29 +3924,29 @@ Candidate asks three to four targeted questions that reveal binding constraints.
 
 This takes about four minutes and gives the rest of the interview a clear foundation.
 
-### Phase 3: High-Level Design (minutes 7–20)
+### Phase 3: High-Level Design (minutes 7-20)
 
 Goal: show the full system at the right altitude. Do not go deep on any one component yet.
 
-"Let me sketch the four main components: Producer API, Routing Service, Channel Workers, Delivery Providers. Here is the critical path: producer calls API, routing service looks up user preferences, enqueues to channel queue, worker picks up, calls provider, records status. The hardest part is the fan-out for marketing campaigns — I want to go deep on that. Does that sound like the right area to focus?"
+"Let me sketch the four main components: Producer API, Routing Service, Channel Workers, Delivery Providers. Here is the critical path: producer calls API, routing service looks up user preferences, enqueues to channel queue, worker picks up, calls provider, records status. The hardest part is the fan-out for marketing campaigns -- I want to go deep on that. Does that sound like the right area to focus?"
 
 Thirteen minutes for a full system sketch is the right pace. Do not spend forty minutes on one component.
 
-### Phase 4: Deep Dive with Flexibility (minutes 20–38)
+### Phase 4: Deep Dive with Flexibility (minutes 20-38)
 
 Goal: show technical depth and awareness of trade-offs on the most important component.
 
 Go deep on fan-out. State the options (fan-out on write, fan-out on read, hybrid). Make a choice with explicit reasoning. When the interviewer pushes back ("What if we need real-time delivery?"), adapt rather than defend:
 
-"Good catch — for real-time we would add a WebSocket path alongside the queue. The queue handles bulk marketing; WebSocket handles the critical path. Here is how they coexist: [explanation of the two-path architecture]."
+"Good catch -- for real-time we would add a WebSocket path alongside the queue. The queue handles bulk marketing; WebSocket handles the critical path. Here is how they coexist: [explanation of the two-path architecture]."
 
-### Phase 5: Handling Pushback (minutes 38–45)
+### Phase 5: Handling Pushback (minutes 38-45)
 
 Goal: demonstrate that you treat challenges as collaboration, not as criticism.
 
 Interviewer: "What if SendGrid goes down?"
 
-Candidate: "Good question — I should have mentioned this earlier. Circuit breaker at the email worker: after 50% error rate for 30 seconds, stop calling SendGrid and move failed jobs to a dead-letter queue. Alert on-call immediately. When SendGrid recovers, process the DLQ with exponential backoff. The user sees 'email delivery delayed' in their notification history — not a failure, just delayed. For critical emails like password resets, I would fall back to a secondary provider like Postmark instead of the DLQ."
+Candidate: "Good question -- I should have mentioned this earlier. Circuit breaker at the email worker: after 50% error rate for 30 seconds, stop calling SendGrid and move failed jobs to a dead-letter queue. Alert on-call immediately. When SendGrid recovers, process the DLQ with exponential backoff. The user sees 'email delivery delayed' in their notification history -- not a failure, just delayed. For critical emails like password resets, I would fall back to a secondary provider like Postmark instead of the DLQ."
 
 ---
 
@@ -3956,23 +3956,23 @@ Candidate: "Good question — I should have mentioned this earlier. Circuit brea
 
 Interviewer: "Design a notification system."
 
-Candidate: "Before I start, a few questions. First — what types of notifications? Transactional like password resets and order confirmations, or marketing like promotions? The scale and compliance requirements differ significantly."
+Candidate: "Before I start, a few questions. First -- what types of notifications? Transactional like password resets and order confirmations, or marketing like promotions? The scale and compliance requirements differ significantly."
 
 Interviewer: "Both."
 
-Candidate: "Second — scale? DAU and roughly how many notifications per user per day?"
+Candidate: "Second -- scale? DAU and roughly how many notifications per user per day?"
 
 Interviewer: "50 million DAU, 5 notifications per user per day on average."
 
-Candidate: "Third — delivery guarantee? Can we occasionally miss a notification, or is every notification critical?"
+Candidate: "Third -- delivery guarantee? Can we occasionally miss a notification, or is every notification critical?"
 
 Interviewer: "At-least-once. Duplicates are acceptable."
 
-Candidate: "Fourth — real-time requirement? How quickly must push notifications arrive?"
+Candidate: "Fourth -- real-time requirement? How quickly must push notifications arrive?"
 
 Interviewer: "Within 5 seconds is fine."
 
-Candidate: "Great. My assumptions: 50M DAU, 250M notifications per day — roughly 3K per second at average, 10K at peak. At-least-once delivery, under 5 second push latency, multiple producer teams. [Draws system.] Five components: Producer API, Routing Service, Channel Workers for email, push, and SMS, External Providers, Delivery DB. Critical path: [traces it]. I want to go deep on the fan-out problem first, because that is where the hard design decisions are..."
+Candidate: "Great. My assumptions: 50M DAU, 250M notifications per day -- roughly 3K per second at average, 10K at peak. At-least-once delivery, under 5 second push latency, multiple producer teams. [Draws system.] Five components: Producer API, Routing Service, Channel Workers for email, push, and SMS, External Providers, Delivery DB. Critical path: [traces it]. I want to go deep on the fan-out problem first, because that is where the hard design decisions are..."
 
 This dialogue shows the three-to-four question pattern, explicit assumption statement, and immediate identification of the hardest problem.
 
@@ -3980,23 +3980,23 @@ This dialogue shows the three-to-four question pattern, explicit assumption stat
 
 Interviewer: "Design a rate limiter."
 
-Candidate: "Let me clarify — who are we rate limiting? External API consumers, internal service-to-service calls, or both?"
+Candidate: "Let me clarify -- who are we rate limiting? External API consumers, internal service-to-service calls, or both?"
 
 Interviewer: "External API consumers."
 
-Candidate: "And what is the failure mode? If the rate limiter is unavailable, do we fail open — allow all traffic — or fail closed — block all traffic?"
+Candidate: "And what is the failure mode? If the rate limiter is unavailable, do we fail open -- allow all traffic -- or fail closed -- block all traffic?"
 
 Interviewer: "What would you recommend?"
 
-Candidate: "I would recommend fail open for most use cases. If our rate limiter goes down, blocking 100% of traffic is worse than allowing some excess requests through. The exception: if the API handles financial transactions where abuse is very costly, fail closed. I will assume fail open since you said external API consumers — likely a developer API where an outage is worse than temporary over-access. My assumptions: fail open on limiter unavailability, per-API-key limits rather than per-IP which is easy to circumvent, Redis for the counter store, sliding window algorithm. [Draws system.] Rate limit store, check middleware, API gateway layer. Key design question: where does the counter live? Redis is the standard, but what if Redis is slow?"
+Candidate: "I would recommend fail open for most use cases. If our rate limiter goes down, blocking 100% of traffic is worse than allowing some excess requests through. The exception: if the API handles financial transactions where abuse is very costly, fail closed. I will assume fail open since you said external API consumers -- likely a developer API where an outage is worse than temporary over-access. My assumptions: fail open on limiter unavailability, per-API-key limits rather than per-IP which is easy to circumvent, Redis for the counter store, sliding window algorithm. [Draws system.] Rate limit store, check middleware, API gateway layer. Key design question: where does the counter live? Redis is the standard, but what if Redis is slow?"
 
 Interviewer: "What happens if Redis goes down?"
 
-Candidate: "Circuit breaker on the Redis call. After 50% latency exceeds 50ms for 30 seconds: fail open, log all allowed requests for post-incident audit. Alert on-call immediately. When Redis recovers, counters reset — we missed a window, so some excess requests got through. We accept this trade-off: a 30-second Redis outage means some excess requests were allowed. This is better than blocking all legitimate traffic for 30 seconds."
+Candidate: "Circuit breaker on the Redis call. After 50% latency exceeds 50ms for 30 seconds: fail open, log all allowed requests for post-incident audit. Alert on-call immediately. When Redis recovers, counters reset -- we missed a window, so some excess requests got through. We accept this trade-off: a 30-second Redis outage means some excess requests were allowed. This is better than blocking all legitimate traffic for 30 seconds."
 
 ---
 
-## Appendix K: Five Common Mistakes — Full Detail
+## Appendix K: Five Common Mistakes -- Full Detail
 
 ### Mistake 1: Treating ambiguity as a problem to eliminate
 
@@ -4008,7 +4008,7 @@ Why it is problematic: real systems never have complete specifications. A Staff 
 
 How to avoid it: reframe ambiguity as a design input, not a problem. "I do not know the exact QPS" becomes "I will assume 10K QPS, which is the order of magnitude that changes the architecture."
 
-Better approach: "I will assume 10K QPS — that is the scale where caching becomes important. If the actual number is 1K, the design simplifies slightly. If it is 100K, we would need to add sharding. I will note both directions."
+Better approach: "I will assume 10K QPS -- that is the scale where caching becomes important. If the actual number is 1K, the design simplifies slightly. If it is 100K, we would need to add sharding. I will note both directions."
 
 ### Mistake 2: Asking questions that do not change the design
 
@@ -4018,7 +4018,7 @@ Why it happens: these feel like important questions because they matter for real
 
 Why it is problematic: they do not change the architecture. The interviewer cannot tell what constraint you are trying to reveal. You are consuming time without demonstrating understanding.
 
-How to avoid it: before asking any question, run this test: if the answer is X, does my design change? If the answer is Y, does my design change? If no — do not ask.
+How to avoid it: before asking any question, run this test: if the answer is X, does my design change? If the answer is Y, does my design change? If no -- do not ask.
 
 Better approach: only ask questions where different answers lead to different designs.
 
@@ -4028,7 +4028,7 @@ The behavior: designing exactly what was asked, nothing more.
 
 Why it happens: fear of overcomplicating, or not thinking about second-order effects.
 
-Why it is problematic: real systems have implicit requirements — operational ones, security ones, compliance ones, team ownership ones. Missing these signals L5 thinking.
+Why it is problematic: real systems have implicit requirements -- operational ones, security ones, compliance ones, team ownership ones. Missing these signals L5 thinking.
 
 How to avoid it: after understanding the stated requirements, ask yourself: "What else must be true for this system to work in production?" Add monitoring, alerting, failure modes, and a scaling strategy even if not explicitly asked.
 
@@ -4042,7 +4042,7 @@ Why it happens: nervousness, interpreting a challenge as "you are wrong."
 
 Why it is problematic: pushback in an interview is information, not criticism. Responding defensively signals poor collaboration skills. Abandoning the design entirely signals lack of conviction.
 
-How to avoid it: treat every challenge as new information. "Good point — let me think about that." Then either update the design if the pushback reveals a real problem, or defend it with reasoning if you believe the original choice still holds.
+How to avoid it: treat every challenge as new information. "Good point -- let me think about that." Then either update the design if the pushback reveals a real problem, or defend it with reasoning if you believe the original choice still holds.
 
 Better approach: "Good question. I chose X because [reason]. If the concern is [specific issue], I would change it to Y. But if we are still under [original assumption], X still makes sense. Which way is this constraint pointing?"
 
@@ -4054,27 +4054,27 @@ Why it happens: it feels faster, similar to writing code alone.
 
 Why it is problematic: the interviewer cannot evaluate reasoning they cannot see. A correct design with no visible reasoning scores poorly. An imperfect design with clear visible reasoning scores well.
 
-How to avoid it: narrate as you design. "I am placing the cache here because the DB query is expensive and the result changes rarely. I am using Redis because it supports TTL natively. TTL of 5 minutes — long enough to reduce DB load, short enough to keep data reasonably fresh."
+How to avoid it: narrate as you design. "I am placing the cache here because the DB query is expensive and the result changes rarely. I am using Redis because it supports TTL natively. TTL of 5 minutes -- long enough to reduce DB load, short enough to keep data reasonably fresh."
 
 Better approach: never draw something without explaining why you placed it there. The explanation is the evaluation signal.
 
 ---
 
-## Appendix L: Deep Dives — Asymmetric Risk, Real Incident, Organizational Ambiguity
+## Appendix L: Deep Dives -- Asymmetric Risk, Real Incident, Organizational Ambiguity
 
 ### Deep Dive 1: The Asymmetric Risk Framework
 
-Some assumptions are asymmetric — being wrong in one direction is much more costly than being wrong in the other. Recognize these and always assume in the direction where being wrong is less costly.
+Some assumptions are asymmetric -- being wrong in one direction is much more costly than being wrong in the other. Recognize these and always assume in the direction where being wrong is less costly.
 
-Example — estimating scale:
+Example -- estimating scale:
 
-If you assume 10K QPS when the actual load is 1K: you over-build slightly. The cost is a few extra Redis nodes — maybe $150 per month.
+If you assume 10K QPS when the actual load is 1K: you over-build slightly. The cost is a few extra Redis nodes -- maybe $150 per month.
 
 If you assume 1K QPS when the actual load is 10K: you under-build badly. The cost is a production outage, emergency scaling under live load, customer impact, and an incident review.
 
 The failure modes are not symmetric. Always assume higher scale when uncertain.
 
-Example — consistency model:
+Example -- consistency model:
 
 If you assume eventual consistency is acceptable when strong consistency is actually required: you get data correctness bugs. These are hard to detect, hard to fix, and potentially cause compliance violations. Very costly.
 
@@ -4084,11 +4084,11 @@ When uncertain about consistency, assume stricter.
 
 The general rule: for any assumption, ask "which direction of being wrong is survivable?" Assume in that direction.
 
-### Deep Dive 2: Real Incident — When Poor Ambiguity Handling Caused a Production Failure
+### Deep Dive 2: Real Incident -- When Poor Ambiguity Handling Caused a Production Failure
 
-A team was asked to build a "fast notification system." They assumed "fast" meant low latency — under 500ms per notification. They built a synchronous, in-process notification sender optimized for speed per individual notification.
+A team was asked to build a "fast notification system." They assumed "fast" meant low latency -- under 500ms per notification. They built a synchronous, in-process notification sender optimized for speed per individual notification.
 
-The actual requirement was different: "fast" meant high throughput — the team needed to send 10 million notifications in under 10 minutes for a marketing campaign. A synchronous in-process sender is good at low latency per notification but terrible at high total throughput.
+The actual requirement was different: "fast" meant high throughput -- the team needed to send 10 million notifications in under 10 minutes for a marketing campaign. A synchronous in-process sender is good at low latency per notification but terrible at high total throughput.
 
 When the marketing campaign ran, the system tried to send 10 million synchronous calls to the mail server. The mail server was overwhelmed. 90% of notifications failed. The campaign was cancelled.
 
@@ -4102,17 +4102,17 @@ Not all ambiguity is technical. Sometimes the ambiguity is about who owns what, 
 
 Three types of organizational ambiguity and how to handle each:
 
-Ownership ambiguity — "Who owns the notification service?" surfaces when you ask who will be on-call for it and which team's OKRs depend on its quality. The team with skin in the game should own it.
+Ownership ambiguity -- "Who owns the notification service?" surfaces when you ask who will be on-call for it and which team's OKRs depend on its quality. The team with skin in the game should own it.
 
-Priority ambiguity — "We need this feature AND reliability improvements" cannot both be done in the same sprint. The right move: ask the product owner to rank them explicitly. Do not accept both as equal priority — force a decision.
+Priority ambiguity -- "We need this feature AND reliability improvements" cannot both be done in the same sprint. The right move: ask the product owner to rank them explicitly. Do not accept both as equal priority -- force a decision.
 
-Technology ambiguity — pressure to use a "company-standard" tool that does not fit the use case. The right move: evaluate the standard tool against the specific requirements. If it fits, use it. If it does not fit, make the case in writing with data. "The standard tool solves problem X, but our problem is Y, and here is why they require different approaches."
+Technology ambiguity -- pressure to use a "company-standard" tool that does not fit the use case. The right move: evaluate the standard tool against the specific requirements. If it fits, use it. If it does not fit, make the case in writing with data. "The standard tool solves problem X, but our problem is Y, and here is why they require different approaches."
 
 ### Deep Dive 4: Ambiguity at Different Evolution Stages
 
 The nature of ambiguity changes as a system grows. Staff engineers design differently for each stage.
 
-V1 (new system, 0 to 10K users): Maximum technical and requirements ambiguity. Requirements will change. Design strategy: build reversible. Choose the simplest implementation for each component. Document every assumption. Avoid commitments that are expensive to change — especially shard key, API contract shape, and data model normalization level.
+V1 (new system, 0 to 10K users): Maximum technical and requirements ambiguity. Requirements will change. Design strategy: build reversible. Choose the simplest implementation for each component. Document every assumption. Avoid commitments that are expensive to change -- especially shard key, API contract shape, and data model normalization level.
 
 V2 to V5 (growing system, 10K to 1M users): Requirements clarifying but scaling ambiguities emerging. The question is "how do we scale this specific bottleneck?" Design strategy: isolate the scaling problem. Add read replicas before sharding. Add cache before adding replicas. Each step clarifies whether the next step is needed.
 
@@ -4120,7 +4120,7 @@ V10 and beyond (mature system, 1M+ users): Technical requirements are mostly cle
 
 ---
 
-## Appendix M: Interview Calibration — Signal Matrix and Feedback Examples
+## Appendix M: Interview Calibration -- Signal Matrix and Feedback Examples
 
 ### Signal Matrix
 
@@ -4129,7 +4129,7 @@ V10 and beyond (mature system, 1M+ users): Technical requirements are mostly cle
 | Response to ambiguous prompt | Pauses, asks many questions, seems uncomfortable | Asks 3 to 4 targeted questions, states assumptions, starts designing |
 | When interviewer says "you decide" | Asks another question or expresses uncertainty | Makes a clear choice with reasoning and names the condition that would change it |
 | When challenged on a decision | Defends rigidly or abandons the design entirely | Evaluates the challenge: updates if valid, defends if not, explains either way |
-| Handling unknown scale | "I need to know the exact numbers before I can proceed" | "I will estimate X — here is my reasoning. The architecture changes at Y." |
+| Handling unknown scale | "I need to know the exact numbers before I can proceed" | "I will estimate X -- here is my reasoning. The architecture changes at Y." |
 | Covering failure modes | Designs only the happy path | Proactively names failure modes nobody asked about |
 | Handling contradictory requirements | Gets stuck and asks for clarification repeatedly | Identifies the conflict, proposes a resolution, asks for confirmation |
 | Time management | Spends most time on the first component | Budgets time across the full system, goes deep on the highest-value component |
@@ -4137,7 +4137,7 @@ V10 and beyond (mature system, 1M+ users): Technical requirements are mostly cle
 
 ### What interviewers write in feedback
 
-L5 feedback — these are real patterns that show up in interview debrief notes:
+L5 feedback -- these are real patterns that show up in interview debrief notes:
 
 "Strong on implementation details but did not reason about scale or failure modes."
 
@@ -4145,11 +4145,11 @@ L5 feedback — these are real patterns that show up in interview debrief notes:
 
 "Correct design for the stated requirements but no discussion of edge cases or how the system would evolve."
 
-L6 feedback — these are the patterns that lead to hire decisions:
+L6 feedback -- these are the patterns that lead to hire decisions:
 
 "Identified the ambiguity in the prompt immediately. Asked three targeted questions that revealed the binding constraints."
 
-"Made assumptions confidently and explicitly. Design was flexible — showed awareness of how it would change under different assumptions."
+"Made assumptions confidently and explicitly. Design was flexible -- showed awareness of how it would change under different assumptions."
 
 "Treated my pushback as information, not criticism. Updated the design cleanly when I introduced a new constraint."
 
@@ -4157,37 +4157,37 @@ The difference between these two sets of feedback is not technical knowledge. Bo
 
 ---
 
-## Appendix N: Extended Example — Full News Feed Interview (3 Phases)
+## Appendix N: Extended Example -- Full News Feed Interview (3 Phases)
 
-### Phase 1 — Clarification (3 questions)
+### Phase 1 -- Clarification (3 questions)
 
 Interviewer: "Design a news feed system."
 
-Candidate: "A few clarifying questions. First — is this a social network feed showing posts from people I follow, or a curated news feed showing articles from publishers?"
+Candidate: "A few clarifying questions. First -- is this a social network feed showing posts from people I follow, or a curated news feed showing articles from publishers?"
 
 Interviewer: "Social network. Posts from followed users."
 
-Candidate: "Second — what scale? I am asking because the fan-out strategy changes significantly between 100K and 100M users."
+Candidate: "Second -- what scale? I am asking because the fan-out strategy changes significantly between 100K and 100M users."
 
 Interviewer: "Let's say 50 million DAU, and users follow on average 500 others."
 
-Candidate: "Third — is the feed ranked by an algorithm or chronological?"
+Candidate: "Third -- is the feed ranked by an algorithm or chronological?"
 
 Interviewer: "Start with chronological. We can discuss ranking later."
 
-### Phase 2 — Assumption Statement
+### Phase 2 -- Assumption Statement
 
-Candidate: "My assumptions: 50M DAU, roughly 500 follows per user, chronological feed, 10 posts per user per day on average — so 500M new posts per day. The feed shows the last 24 hours of posts from followed users, up to 100 posts. Read to write ratio: probably 100 to 1 — users read much more than they post. I will design read-optimized.
+Candidate: "My assumptions: 50M DAU, roughly 500 follows per user, chronological feed, 10 posts per user per day on average -- so 500M new posts per day. The feed shows the last 24 hours of posts from followed users, up to 100 posts. Read to write ratio: probably 100 to 1 -- users read much more than they post. I will design read-optimized.
 
 One key assumption I am stating explicitly: we can tolerate eventual consistency in the feed. A new post may take 1 to 2 seconds to appear in followers' feeds. This is standard for social feeds and is the trade-off that makes the fan-out problem tractable."
 
-### Phase 3 — Design with Running Commentary
+### Phase 3 -- Design with Running Commentary
 
 Candidate: "Two main approaches to fan-out:
 
-Fan-out on write: when User A posts, immediately write to each of their 500 followers' feed cache. So 1 post produces 500 writes. Pros: reads are trivial — just read the cache. Cons: a celebrity with 10M followers produces 10M writes per post.
+Fan-out on write: when User A posts, immediately write to each of their 500 followers' feed cache. So 1 post produces 500 writes. Pros: reads are trivial -- just read the cache. Cons: a celebrity with 10M followers produces 10M writes per post.
 
-Fan-out on read: when User B loads their feed, fetch the last N posts from each of the 500 users they follow, then merge and sort. Pros: simple write path. Cons: 500 DB queries per feed load — latency multiplies by 500.
+Fan-out on read: when User B loads their feed, fetch the last N posts from each of the 500 users they follow, then merge and sort. Pros: simple write path. Cons: 500 DB queries per feed load -- latency multiplies by 500.
 
 I will use a hybrid: fan-out on write for users with under 10K followers, fan-out on read for celebrities with over 10K followers. This caps write fan-out, handles celebrities gracefully, and requires a merge step at read time that combines precomputed entries with real-time celebrity queries."
 
@@ -4195,7 +4195,7 @@ Interviewer: "What if a celebrity follows another celebrity?"
 
 Candidate: "Good edge case. Say Celebrity A has 10M followers and Celebrity B has 5M followers. When A posts, their fan-out is on-read because they have over 10K followers. When B loads their feed, we fetch A's recent posts via on-read. B's own posts have been written to 5M follower caches via on-write.
 
-These two strategies compose cleanly — they operate at independent points in the pipeline. The only concern: B's feed load is slower because we are doing on-read lookups for some followed accounts. Cap the number of celebrity on-read lookups per feed load at around 50, and cache the merged result in Redis with a short TTL."
+These two strategies compose cleanly -- they operate at independent points in the pipeline. The only concern: B's feed load is slower because we are doing on-read lookups for some followed accounts. Cap the number of celebrity on-read lookups per feed load at around 50, and cache the merged result in Redis with a short TTL."
 
 ---
 
@@ -4205,19 +4205,19 @@ These are not questions to ask the interviewer. They are questions you should as
 
 ### On Ambiguity Recognition (Section A)
 
-Good thinking recognizes that the stated problem is often not the actual problem. When you hear "the checkout page is slow," the first question to ask yourself is: slow for whom? All users? Mobile users only? Users in Asia? Slow at what scale — 100 users or 100K? Slow in what way — time to first byte, or time to interactive? Each answer points to a different root cause and a different fix.
+Good thinking recognizes that the stated problem is often not the actual problem. When you hear "the checkout page is slow," the first question to ask yourself is: slow for whom? All users? Mobile users only? Users in Asia? Slow at what scale -- 100 users or 100K? Slow in what way -- time to first byte, or time to interactive? Each answer points to a different root cause and a different fix.
 
-Similarly, "design a notification system" is not a problem — it is a solution stated as a problem. The actual problem is: "users are missing important events in the product." Before designing notifications, ask whether notifications are the right solution. Sometimes a better in-product summary page eliminates the need for notifications entirely.
+Similarly, "design a notification system" is not a problem -- it is a solution stated as a problem. The actual problem is: "users are missing important events in the product." Before designing notifications, ask whether notifications are the right solution. Sometimes a better in-product summary page eliminates the need for notifications entirely.
 
 ### On Assumption Types (Section B)
 
-Not all assumptions carry equal risk. Scale assumptions — "we have 50M DAU" — are usually safe and can be revised cheaply. Consistency assumptions — "eventual is acceptable" — are higher risk. Getting them wrong causes data correctness bugs that are hard to find and expensive to fix. Security assumptions — "this data is not PII" — are the highest risk. Getting them wrong can cause compliance violations with legal consequences.
+Not all assumptions carry equal risk. Scale assumptions -- "we have 50M DAU" -- are usually safe and can be revised cheaply. Consistency assumptions -- "eventual is acceptable" -- are higher risk. Getting them wrong causes data correctness bugs that are hard to find and expensive to fix. Security assumptions -- "this data is not PII" -- are the highest risk. Getting them wrong can cause compliance violations with legal consequences.
 
-When making any assumption, ask: what is the cost of this assumption being wrong? If the cost is low — we add more servers — assume freely. If the cost is high — we have stored PII without proper controls — ask explicitly.
+When making any assumption, ask: what is the cost of this assumption being wrong? If the cost is low -- we add more servers -- assume freely. If the cost is high -- we have stored PII without proper controls -- ask explicitly.
 
 ### On Clarifying Question Quality (Section C)
 
-A clarifying question earns its place if and only if a different answer would change your design. "How many engineers are on the team?" rarely changes the architecture. "Do we need cross-region?" changes the architecture dramatically — it introduces async replication, global routing, and data residency considerations.
+A clarifying question earns its place if and only if a different answer would change your design. "How many engineers are on the team?" rarely changes the architecture. "Do we need cross-region?" changes the architecture dramatically -- it introduces async replication, global routing, and data residency considerations.
 
 Before any clarifying question, run this test mentally: if the answer is A, I design X. If the answer is B, I design Y. If X and Y are the same design, the question is not worth asking.
 
@@ -4229,19 +4229,292 @@ The signal that you have crossed from healthy deliberation into analysis paralys
 
 ### On Decision-Making Under Uncertainty (Section E)
 
-The best decisions under uncertainty are the ones that are easy to reverse. Choose PostgreSQL over a distributed NoSQL database when you are not sure about your access patterns — migrating from PostgreSQL to Cassandra is feasible, but migrating from Cassandra to PostgreSQL means giving up distributed write capability, which is nearly impossible at large scale.
+The best decisions under uncertainty are the ones that are easy to reverse. Choose PostgreSQL over a distributed NoSQL database when you are not sure about your access patterns -- migrating from PostgreSQL to Cassandra is feasible, but migrating from Cassandra to PostgreSQL means giving up distributed write capability, which is nearly impossible at large scale.
 
 This principle applies everywhere: start with a single region (adding a second region is additive). Start with a monolith (splitting into services is additive). Start with polling (adding WebSocket is additive). Start with synchronous calls (adding async is additive). Each of these "starts simple" choices preserves optionality. You pay for optionality with some immediate inefficiency; you earn it back when requirements change.
 
 ### On Flexibility in Design (Section F)
 
-A flexible design is not an over-engineered design. Flexibility means the design changes in well-defined places when requirements change, rather than requiring a full rewrite. The key technique: separate the parts that will change — business logic, storage strategy, delivery mechanism — from the parts that will not — the data model's core entities, the API contract's resource structure.
+A flexible design is not an over-engineered design. Flexibility means the design changes in well-defined places when requirements change, rather than requiring a full rewrite. The key technique: separate the parts that will change -- business logic, storage strategy, delivery mechanism -- from the parts that will not -- the data model's core entities, the API contract's resource structure.
 
-For a notification system: the producer API contract — POST /notifications with a payload — will not change for years. The delivery channel — email, push, SMS, WhatsApp — will change as new channels are added. Design the delivery channel as a pluggable interface, not a hardcoded implementation. Adding WhatsApp then means: add one new worker, wire it to the existing queue, no changes to the producer API or routing layer.
+For a notification system: the producer API contract -- POST /notifications with a payload -- will not change for years. The delivery channel -- email, push, SMS, WhatsApp -- will change as new channels are added. Design the delivery channel as a pluggable interface, not a hardcoded implementation. Adding WhatsApp then means: add one new worker, wire it to the existing queue, no changes to the producer API or routing layer.
 
 ### On L5 vs L6 Patterns (Section G)
 
-The most reliable signal of L6 thinking when working through an ambiguous problem is this: the candidate treats the ambiguity itself as information. "This prompt is ambiguous — that means the actual requirements are not settled. The most important thing I can do right now is identify the one assumption that, if wrong, changes the whole design."
+The most reliable signal of L6 thinking when working through an ambiguous problem is this: the candidate treats the ambiguity itself as information. "This prompt is ambiguous -- that means the actual requirements are not settled. The most important thing I can do right now is identify the one assumption that, if wrong, changes the whole design."
 
-An L5 candidate treats ambiguity as a problem to eliminate by asking questions. An L6 candidate treats ambiguity as a design input — making visible assumptions, designing for flexibility, and naming what would trigger a redesign. The L6 candidate spends less time asking and more time designing, because they are comfortable operating with incomplete information.
+An L5 candidate treats ambiguity as a problem to eliminate by asking questions. An L6 candidate treats ambiguity as a design input -- making visible assumptions, designing for flexibility, and naming what would trigger a redesign. The L6 candidate spends less time asking and more time designing, because they are comfortable operating with incomplete information.
 
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+*Same problem at four levels: a PM says "build a recommendation system." No other details.*
+
+### Intern Level: "Start building"
+
+The intern hears "recommendation system" and starts coding a collaborative filtering model. They've seen one before and know how to build it. Two weeks later they demo: "I built a recommendation system using collaborative filtering."
+
+Think of this like a chef who hears "make something" and starts cooking before asking: for how many people? What dietary restrictions? What budget? What occasion?
+
+The PM responds: "That's not what I meant. We need simple 'you might also like' rules based on purchase history. We don't have enough data for ML." Two weeks of work, wrong direction.
+
+### Mid-Level (L4): "Ask for requirements, then build"
+
+L4 asks: "What kind of recommendations? How many users do we have? What's the latency requirement?" They get answers, build the right thing, ship in 3 weeks.
+
+Better. But L4 asked for requirements as if they're fixed. They weren't. The PM's requirements were themselves uncertain: "you might also like" was their first idea, but they didn't know if that's the best approach. L4 executed a specification without questioning whether the specification would achieve the goal.
+
+### Senior (L5): "Clarify the goal, then propose options"
+
+L5 asks: "What business problem are we solving? Is it increasing basket size? Reducing churn? Surfacing hidden inventory?" The PM says: "We want to increase average order value."
+
+L5 responds: "There are 3 ways to approach that: (1) rule-based: users who bought X also bought Y, ships in 2 weeks; (2) collaborative filtering: users like you bought Z, ships in 6 weeks, needs 10K+ users of data; (3) ML model: personalized, ships in 4 months. Given we have 2K users, option 1 is the only viable one now. We can evolve to option 2 in Q3."
+
+L5 reframed from "build a recommendation system" to "which approach achieves the business goal given our constraints?"
+
+### Staff (L6): "Design for the unknown, not for the known"
+
+L6 does L5's framing, then asks: "What assumptions in our approach will be invalidated as we grow?"
+
+"Option 1 (rule-based) is correct now. But rule-based systems become unmaintainable at 1,000+ SKUs. We'll need to migrate to collaborative filtering when we hit 10K users. If we build option 1 in a way that's hard to migrate from (hard-coded rules in the service), that migration will cost 3 months. If we build option 1 with a recommendation engine abstraction (swappable strategy pattern), the migration costs 2 weeks."
+
+"I propose we ship option 1 in 2 weeks, but build it behind an abstraction that lets us swap the underlying strategy without changing the API. The abstraction costs 3 extra days now and saves 3 months later."
+
+```
+L6 AMBIGUITY NAVIGATION:
+  1. Identify the business goal (not the feature request)
+  2. Map the options (technical, timeline, data requirements)
+  3. Match option to current constraints (users, data, time)
+  4. Identify which assumptions will change at scale
+  5. Design for assumption change without over-engineering today
+
+  The wrong question: "How do I build a recommendation system?"
+  The right question: "What recommendation approach achieves the goal
+                       now AND doesn't trap us later?"
+```
+
+### The Pattern
+
+- **Intern**: builds first, discovers mismatch at demo
+- **L4**: asks for requirements, executes specification
+- **L5**: reframes to business goal, presents options with trade-offs
+- **L6**: designs for the unknown, adds strategic flexibility, manages future migration cost
+
+---
+
+## L5 vs L6 Calibration: Staff Engineer Mindset Under Ambiguity
+
+| Dimension | L5 (Senior) | L6 (Staff) |
+|-----------|-------------|------------|
+| Ambiguity response | Asks clarifying questions | Drives to alignment and proposes a framing |
+| Requirement source | Receives requirements from PM | Participates in shaping requirements before they are written |
+| Option presentation | Proposes one solution with trade-offs | Presents 3 options with explicit recommendation and reasoning |
+| Decision reversibility | Aware of reversible vs irreversible | Explicitly labels each decision: reversible/irreversible, cheap/expensive to change |
+| Business alignment | Understands the feature goal | Understands the business goal the feature serves |
+| Phased approach | Delivers in milestones | Designs phases so each phase is independently valuable |
+| Future-proofing | Avoids over-engineering | Designs for identified future changes, avoids speculative changes |
+| Stakeholder management | Updates stakeholders on progress | Manages stakeholder expectations before surprises occur |
+| Risk framing | Identifies technical risks | Frames risks in business terms for non-technical stakeholders |
+| Scope negotiation | Can say "no" to features | Can say "no" and propose an alternative that achieves the business goal |
+| Written communication | Design docs are clear | Design docs drive alignment across teams without a meeting |
+| Decision quality | Makes good decisions | Makes good decisions AND documents them for future teams |
+
+---
+
+## Exercises
+
+### Exercise 1: Ambiguity Triage
+
+For each vague request below, write 3 clarifying questions that would most efficiently resolve the ambiguity:
+
+a) "We need a faster checkout"
+b) "Build a search feature"
+c) "Make the app more secure"
+d) "We need real-time analytics"
+e) "Improve the recommendation algorithm"
+
+For each: identify what assumption you are trying to validate, and what technical direction changes based on the answer.
+
+---
+
+### Exercise 2: Reversibility Classification
+
+For each architectural decision below, classify as: (A) highly reversible -- change later with minimal cost, or (B) highly irreversible -- changing later requires major migration:
+
+a) Choice of REST vs GraphQL API
+b) Choice of SQL vs NoSQL database
+c) Choice of monolith vs microservices
+d) Shard key for a distributed database
+e) Event schema format in Kafka
+f) Authentication token format (JWT structure)
+g) Frontend framework (React vs Vue)
+h) Cloud provider (AWS vs GCP)
+
+For the irreversible ones: what is the minimum design investment that reduces the cost of changing later?
+
+---
+
+### Exercise 3: Phased Design Practice
+
+You need to build a real-time notification system. Full requirements: push notifications, email, SMS, in-app, 10M users, <1s delivery.
+
+Design 3 phases where each phase ships independently valuable functionality:
+- Phase 1: must be shippable in 2 weeks, serves 95% of immediate need
+- Phase 2: shippable in 6 weeks, extends coverage
+- Phase 3: full system, 3 months
+
+For each phase: what does it do, what does it not do, and what assumption must be true for Phase 2 to build on Phase 1 without rewriting?
+
+---
+
+### Exercise 4: Options Document
+
+Write a 1-page "options doc" for this decision: "Should we build our own search infrastructure (Elasticsearch cluster) or use a managed service (Algolia, Typesense Cloud)?"
+
+Include: 3 options (build, buy, hybrid), evaluation criteria (cost, latency, relevance, operational overhead, lock-in), recommendation with reasoning, and what would change your recommendation.
+
+---
+
+### Exercise 5: Ambiguous Incident Analysis
+
+During a production incident, your monitoring shows: p99 API latency increased from 100ms to 800ms at 2:15 PM. No deploys happened today. Write the next 15 minutes of your incident investigation as a decision tree:
+
+- What are your first 3 hypotheses?
+- What metric confirms/eliminates each?
+- What is your mitigation while you investigate (shed load? rollback? wait?)
+- At what point do you escalate, and to whom?
+
+---
+
+### Exercise 6: Staff-Level Design Review
+
+Review this one-line design decision: "We'll store user sessions in the database."
+
+Write a Staff-level design review response that:
+- Identifies the 3 most important questions to ask before approving
+- Names 2 alternatives and their trade-offs
+- States the conditions under which "sessions in the database" is the correct choice
+- States the conditions under which it is the wrong choice
+
+---
+
+## Named Production Incidents
+
+### Incident 1: Boeing 737 MAX MCAS -- Ambiguous Requirements Leading to Safety Issue
+
+**What happened:** The 737 MAX's MCAS system was designed to automatically push the plane nose down under certain conditions. The system's behavior was not clearly communicated to pilots. When MCAS activated incorrectly (due to a faulty sensor), pilots did not know how to override it. Two crashes resulted in 346 deaths.
+
+**Root cause (engineering framing):** A system with ambiguous operating requirements was deployed without user documentation or training. "Users" (pilots) were not consulted in the design of the interface. The feedback mechanism (what happens when MCAS activates) was not designed for the user's mental model.
+
+**ASCII diagram:**
+```
+  Faulty sensor -> MCAS activates -> nose pushes down
+       |
+  Pilot: "why is the nose going down?"
+       |
+  No clear signal that MCAS is active
+  No clear override procedure communicated to pilots
+       |
+  Pilot fights MCAS -> insufficient time -> crash
+```
+
+**Fix applied:** MCAS was redesigned with clear pilot notification (MCAS indicator on display), a clear override procedure (single switch), and pilot training requirements. The ambiguity in the system's operating model was eliminated.
+
+**Staff lesson:** "Ambiguous requirements" is not only a software problem. Unclear system behavior + untrained users = latent disaster. L6 engineers ask: who are the users of this system, and what happens when the system behaves unexpectedly? The answer must be designed for, not assumed.
+
+---
+
+### Incident 2: Knight Capital 2012 -- $440M in 45 Minutes from Ambiguous Code Flag
+
+**What happened:** Knight Capital deployed new trading software that used a code flag (`SMARTS`) to activate a new routing strategy. An old, unused trading strategy ("Power Peg") had previously used the same flag. When the new code was deployed to 7 of 8 servers (one server was not updated), the old server used the old SMARTS behavior (Power Peg), which bought and sold stocks at market rate repeatedly. In 45 minutes, Knight Capital lost $440 million and went bankrupt.
+
+**Root cause:** A code flag had ambiguous meaning because it was reused across two different strategies. One server running old code interpreted the flag differently. No canary deployment, no circuit breaker on trading volume.
+
+**ASCII diagram:**
+```
+  New code (7 servers): SMARTS flag = new routing strategy (correct)
+  Old code (1 server): SMARTS flag = Power Peg (buy/sell at market, repeatedly)
+       |
+  Power Peg executes 4 million transactions in 45 minutes
+  Each transaction loses a small amount
+  4M x small loss = $440M total loss
+       |
+  No circuit breaker on transaction volume -> runs until manual stop
+```
+
+**Fix applied:** Knight Capital was acquired. Industry adopted: feature flags must have unique names per feature, deployment must be atomic (all-or-nothing), trading systems must have hard circuit breakers on total transaction volume.
+
+**Staff lesson:** Ambiguous code flags are a time bomb. Code that reuses identifiers for different meanings creates silent incompatibilities. L6 engineers enforce: new features get new flag names, old flags are explicitly retired, and deployment procedures require all-or-nothing atomicity.
+
+---
+
+### Incident 3: Cloudflare 2019 -- WAF Rule Triggered by Regex Catastrophic Backtracking
+
+**What happened:** Cloudflare deployed a new WAF (Web Application Firewall) rule containing a regular expression that caused catastrophic backtracking on certain inputs. The regex was `.*.*=.*` which has exponential time complexity for certain inputs. A single matching request would spike one CPU core to 100% for several seconds. At Cloudflare's traffic volume, this caused 100% CPU on all cores, resulting in a global outage for 27 minutes.
+
+**Root cause:** The WAF rule was not performance-tested at scale before deployment. The regex had valid logic but invalid performance characteristics. The deployment had no gradual rollout and no automatic rollback trigger.
+
+**ASCII diagram:**
+```
+  New WAF rule deployed globally (no gradual rollout)
+  Rule contains regex: .*.*=.* (catastrophic backtracking)
+  At normal traffic: some requests trigger exponential backtracking
+  CPU: 100% on affected cores
+  At Cloudflare traffic scale: all cores affected
+  Result: global 27-minute outage
+```
+
+**Fix applied:** Cloudflare added: automated regex performance testing before WAF rule deployment (measures worst-case backtracking time), gradual rollout for all WAF rules (1% -> 10% -> 100%), and automatic rollback if error rate increases.
+
+**Staff lesson:** Performance testing must include adversarial inputs, not just happy-path inputs. A regex that works correctly but performs exponentially on crafted inputs is a production hazard. L6 engineers ask: what input would cause worst-case behavior, and how does that perform at our traffic scale?
+
+---
+
+### Incident 4: Heroku 2022 -- OAuth Token Leak from Ambiguous Access Scope
+
+**What happened:** Heroku suffered a security incident where GitHub OAuth integration tokens were leaked. The tokens had broader access scopes than required. When an attacker obtained the tokens, they had read access to GitHub repositories of Heroku customers who had connected their GitHub accounts, even for repositories that were not connected to Heroku deployments.
+
+**Root cause:** OAuth tokens were issued with maximum scope "repo" (all repos) instead of minimum required scope "specific_repo" (only connected repos). The broader scope was chosen for developer convenience, not security necessity.
+
+**ASCII diagram:**
+```
+  Heroku OAuth integration: requests scope="repo" (all repos)
+  Attacker obtains token
+  Attacker has read access to ALL customer repos
+  (not just repos deployed on Heroku)
+
+  Correct design: scope="specific_repo" + repo_id
+  Attacker obtains token -> access to ONE specific repo
+```
+
+**Fix applied:** Heroku and GitHub updated the integration to use minimum-necessary OAuth scopes. GitHub introduced repository-specific tokens (fine-grained personal access tokens) to allow exactly this kind of scope limitation.
+
+**Staff lesson:** Request the minimum access scope that your feature requires, not the maximum that is convenient. Ambiguous or broad permission grants are vulnerabilities waiting to be exploited. L6 engineers review access scopes the same way they review code: with a "minimum necessary" mindset.
+
+---
+
+### Incident 5: Facebook 2021 -- Configuration Change Without Rollback Plan
+
+**What happened:** Facebook's 6-hour global outage (October 4, 2021) was caused by a configuration change to the backbone routers that coordinate traffic between Facebook's data centers. The command withdrew BGP routes, making Facebook's DNS servers unreachable. Because the DNS servers were unreachable, engineers could not access internal tools to push a fix. Physical access to data centers was required.
+
+**Root cause:** A configuration change with global impact had no rollback plan for the scenario where the change makes remote access impossible. The change was treated as a routine operation without adversarial failure analysis.
+
+**ASCII diagram:**
+```
+  Config change: withdraw BGP routes (routine maintenance)
+  Unexpected effect: ALL Facebook backbone routes withdrawn
+       |
+  Facebook DNS unreachable from outside
+  Internal tools unreachable (they use DNS too)
+       |
+  Engineers cannot SSH to servers to push rollback
+  Cannot access internal ticketing to coordinate
+       |
+  6-hour outage: required physical access to data centers to restore
+```
+
+**Fix applied:** Facebook implemented: out-of-band management access (a separate network path that does not depend on the main backbone), automated configuration validation that simulates routing table effects before deployment, and a two-person requirement for backbone configuration changes.
+
+**Staff lesson:** For any infrastructure change, ask: "If this goes wrong, can we still fix it?" If the answer is "no" -- because the fix requires the same infrastructure that just broke -- you have designed a scenario where outage is permanent until physical intervention. L6 engineers require an out-of-band recovery path for every category of infrastructure change.
