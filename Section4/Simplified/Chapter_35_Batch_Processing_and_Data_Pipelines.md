@@ -4563,3 +4563,15 @@ Your nightly batch pipeline is supposed to finish by 4 AM so reports are ready f
 
 ---
 
+
+---
+
+### Cross-chapter from Ch27: Chaos engineering for a batch pipeline
+
+**Question 42 -- Ch27 + Ch35: chaos engineering for a batch pipeline**
+
+Chapter 35 covers batch processing (MapReduce, Spark, scheduled jobs). A batch pipeline processing financial data has different chaos engineering requirements than a real-time service. Failures in batch are less visible (no user-facing impact immediately) but potentially more dangerous (corrupted financial reports processed days later). Chaos engineering for batch requires different experiments and metrics.
+
+- Design three chaos experiments for a nightly financial batch pipeline: (a) kill a Spark executor mid-job, (b) introduce latency in the HDFS data read, (c) corrupt a small percentage of input records. For each: what is the expected system behavior? What is the blast radius?
+- For experiment (a): kill a Spark executor mid-job. Spark's resilience: tasks on the killed executor are rescheduled to other executors (at-least-once processing). If the job is not idempotent, some records may be double-processed. What metric tells you double-processing occurred? (Duplicate records in the output.)
+- Follow-up: Financial batch jobs often have reconciliation steps (output totals must match input totals). Design the chaos experiment that specifically tests the reconciliation logic: inject a failure after processing but before reconciliation runs. The reconciliation should detect the inconsistency and alert. Write the hypothesis, experiment design, and success criteria for this test.

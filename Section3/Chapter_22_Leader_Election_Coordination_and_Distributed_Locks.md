@@ -1,14 +1,14 @@
 # Chapter 22: Leader Election, Coordination, and Distributed Locks
 
-*(Note to reader: This chapter is about one of the hardest problems in distributed systems — getting a group of computers to agree on something. It sounds simple. It is not. In fact, computer scientists have proven mathematically that perfect agreement is impossible in certain conditions. But "impossible" does not mean "unsolvable." It means we need smart workarounds. This chapter explains those workarounds: how systems pick one computer to be "in charge," how they protect shared resources from being touched by two servers at the same time, and why every single layer of coordination you add makes your system more fragile. Every term is explained from scratch. No prior knowledge required beyond the basics of how computers talk over a network.)*
+*(Note to reader: This chapter is about one of the hardest problems in distributed systems -- getting a group of computers to agree on something. It sounds simple. It is not. In fact, computer scientists have proven mathematically that perfect agreement is impossible in certain conditions. But "impossible" does not mean "unsolvable." It means we need smart workarounds. This chapter explains those workarounds: how systems pick one computer to be "in charge," how they protect shared resources from being touched by two servers at the same time, and why every single layer of coordination you add makes your system more fragile. Every term is explained from scratch. No prior knowledge required beyond the basics of how computers talk over a network.)*
 
 ---
 
-## The Big Opening Story — When Machines Need to Agree
+## The Big Opening Story -- When Machines Need to Agree
 
 Here is a story. It starts with dinner.
 
-Five friends — let's call them Amy, Ben, Cleo, Dan, and Eve — are splitting a restaurant bill. The total is $100. They decide to handle it via text message instead of sorting it out at the table, because everyone is in a rush to catch different buses.
+Five friends -- let's call them Amy, Ben, Cleo, Dan, and Eve -- are splitting a restaurant bill. The total is $100. They decide to handle it via text message instead of sorting it out at the table, because everyone is in a rush to catch different buses.
 
 Amy texts the group: "I'll pay $40."
 
@@ -26,7 +26,7 @@ Eve, who was watching all of this unfold in horror, suggests a different approac
 
 They try it. It works perfectly.
 
-But then Eve — the treasurer — loses her phone during dessert. Nobody can pay. The restaurant holds them hostage. The friends are trapped in the restaurant for an hour waiting for Eve to find her phone or for someone to figure out an alternative. During that hour, nothing gets done.
+But then Eve -- the treasurer -- loses her phone during dessert. Nobody can pay. The restaurant holds them hostage. The friends are trapped in the restaurant for an hour waiting for Eve to find her phone or for someone to figure out an alternative. During that hour, nothing gets done.
 
 This little story contains the entire tension that this chapter is about.
 
@@ -34,13 +34,13 @@ This little story contains the entire tension that this chapter is about.
 
 **With coordinator = single point of failure.** When Eve is the treasurer, everything is perfectly coordinated. But Eve losing her phone stops the entire operation. One person's unavailability makes the whole group unable to function. The more central Eve's role, the bigger the damage when she is unavailable.
 
-This tension does not go away when you replace five friends with five thousand servers. In fact, it gets worse — because servers crash more often than people lose their phones, and the consequences of a banking system or a database going into a confused state are far more serious than a $200 restaurant bill.
+This tension does not go away when you replace five friends with five thousand servers. In fact, it gets worse -- because servers crash more often than people lose their phones, and the consequences of a banking system or a database going into a confused state are far more serious than a $200 restaurant bill.
 
 **The real-world version of this story:**
 
-When Google runs a cluster of thousands of database servers, exactly ONE of them must be the "master" — the single server that accepts all writes and keeps the authoritative copy of the data. If two servers both think they are the master and both accept writes, the database ends up with contradictory data that cannot be automatically reconciled. This is called a "split-brain" — and it is one of the worst things that can happen to a production database.
+When Google runs a cluster of thousands of database servers, exactly ONE of them must be the "master" -- the single server that accepts all writes and keeps the authoritative copy of the data. If two servers both think they are the master and both accept writes, the database ends up with contradictory data that cannot be automatically reconciled. This is called a "split-brain" -- and it is one of the worst things that can happen to a production database.
 
-When Amazon processes your payment, exactly ONE server must handle the charge. Not zero servers (charge never goes through — Amazon loses money and you get your item free). Not two servers (you get double-charged — you lose money and your trust in Amazon). Exactly one.
+When Amazon processes your payment, exactly ONE server must handle the charge. Not zero servers (charge never goes through -- Amazon loses money and you get your item free). Not two servers (you get double-charged -- you lose money and your trust in Amazon). Exactly one.
 
 Achieving "exactly one" is the fundamental problem this chapter solves. It is harder than it sounds.
 
@@ -48,76 +48,76 @@ Achieving "exactly one" is the fundamental problem this chapter solves. It is ha
 
 ## Chapter at a Glance
 
-Before diving in, here is the entire landscape of coordination techniques, from simplest to most expensive. Every term here will be fully explained. Think of this as a map — you will understand it much better after reading the chapter, but looking at it now helps you see where you are headed.
+Before diving in, here is the entire landscape of coordination techniques, from simplest to most expensive. Every term here will be fully explained. Think of this as a map -- you will understand it much better after reading the chapter, but looking at it now helps you see where you are headed.
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║          CHAPTER 22: COORDINATION — THE FULL SPECTRUM                       ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  THE COORDINATION SPECTRUM (Left = cheap, Right = expensive)                ║
-║  ─────────────────────────────────────────────────────────────────────────  ║
-║                                                                              ║
-║  NO              PARTITION-      LEADER         DISTRIBUTED    FULL          ║
-║  COORDINATION    ING             ELECTION       LOCKS          CONSENSUS     ║
-║  ~1ms            ~2ms            ~10ms          ~50ms          ~100ms+       ║
-║                                                                              ║
-║  (Best!)         (Great)         (Good)         (Costly)       (Most         ║
-║                                                                 expensive)   ║
-║                                                                              ║
-║  Each step to the right:                                                     ║
-║    - Adds latency                                                            ║
-║    - Adds a new failure mode                                                 ║
-║    - Adds operational complexity                                             ║
-║    - Reduces throughput                                                      ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  THE CARDINAL RULE                                                           ║
-║  ─────────────────────────────────────────────────────────────────────────  ║
-║  Coordination is a tax. Minimize it.                                        ║
-║                                                                              ║
-║  Every distributed lock is a potential outage.                              ║
-║  Every leader election is a potential 30-second downtime window.            ║
-║  Every consensus round is a potential bottleneck.                           ║
-║                                                                              ║
-║  THE GOLDEN QUESTION before adding ANY coordination:                        ║
-║  "Can I design this so no coordination is needed at all?"                   ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  WHAT EACH TECHNIQUE COSTS (per operation)                                  ║
-║  ─────────────────────────────────────────────────────────────────────────  ║
-║                                                                              ║
-║  No coordination    ~1ms    (just the operation itself)                     ║
-║  Partitioning       ~2ms    (route to correct partition + operation)        ║
-║  Leader election    ~10ms   (heartbeat check + leader lookup + operation)   ║
-║  Distributed lock   ~50ms   (lock acquire + operation + lock release)       ║
-║  Full consensus     ~100ms+ (multi-round voting + operation)                ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  PART A COVERS                                                               ║
-║  ─────────────────────────────────────────────────────────────────────────  ║
-║  Part 1: Why coordination is hard (Two Generals, FLP, clocks)               ║
-║  Part 2: Leader election (how one node becomes "the boss")                  ║
-║                                                                              ║
-║  PART B COVERS                                                               ║
-║  ─────────────────────────────────────────────────────────────────────────  ║
-║  Part 3: Distributed locks (protecting shared resources)                    ║
-║  Part 4: Consensus algorithms (Raft, Paxos)                                 ║
-║  Part 5: Full interview playbook                                             ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
++==============================================================================+
+|          CHAPTER 22: COORDINATION -- THE FULL SPECTRUM                       |
++==============================================================================+
+|                                                                              |
+|  THE COORDINATION SPECTRUM (Left = cheap, Right = expensive)                |
+|  -------------------------------------------------------------------------  |
+|                                                                              |
+|  NO              PARTITION-      LEADER         DISTRIBUTED    FULL          |
+|  COORDINATION    ING             ELECTION       LOCKS          CONSENSUS     |
+|  ~1ms            ~2ms            ~10ms          ~50ms          ~100ms+       |
+|                                                                              |
+|  (Best!)         (Great)         (Good)         (Costly)       (Most         |
+|                                                                 expensive)   |
+|                                                                              |
+|  Each step to the right:                                                     |
+|    - Adds latency                                                            |
+|    - Adds a new failure mode                                                 |
+|    - Adds operational complexity                                             |
+|    - Reduces throughput                                                      |
+|                                                                              |
++==============================================================================+
+|                                                                              |
+|  THE CARDINAL RULE                                                           |
+|  -------------------------------------------------------------------------  |
+|  Coordination is a tax. Minimize it.                                        |
+|                                                                              |
+|  Every distributed lock is a potential outage.                              |
+|  Every leader election is a potential 30-second downtime window.            |
+|  Every consensus round is a potential bottleneck.                           |
+|                                                                              |
+|  THE GOLDEN QUESTION before adding ANY coordination:                        |
+|  "Can I design this so no coordination is needed at all?"                   |
+|                                                                              |
++==============================================================================+
+|                                                                              |
+|  WHAT EACH TECHNIQUE COSTS (per operation)                                  |
+|  -------------------------------------------------------------------------  |
+|                                                                              |
+|  No coordination    ~1ms    (just the operation itself)                     |
+|  Partitioning       ~2ms    (route to correct partition + operation)        |
+|  Leader election    ~10ms   (heartbeat check + leader lookup + operation)   |
+|  Distributed lock   ~50ms   (lock acquire + operation + lock release)       |
+|  Full consensus     ~100ms+ (multi-round voting + operation)                |
+|                                                                              |
++==============================================================================+
+|                                                                              |
+|  PART A COVERS                                                               |
+|  -------------------------------------------------------------------------  |
+|  Part 1: Why coordination is hard (Two Generals, FLP, clocks)               |
+|  Part 2: Leader election (how one node becomes "the boss")                  |
+|                                                                              |
+|  PART B COVERS                                                               |
+|  -------------------------------------------------------------------------  |
+|  Part 3: Distributed locks (protecting shared resources)                    |
+|  Part 4: Consensus algorithms (Raft, Paxos)                                 |
+|  Part 5: Full interview playbook                                             |
+|                                                                              |
++==============================================================================+
 ```
 
 The most important insight in this entire chapter is the one in the middle of that box: **coordination is a tax**. Every technique to the right of "no coordination" makes your system slower, more fragile, and harder to operate. Senior engineers at the L6 level know this instinctively. Their first reaction to any coordination proposal is not "how do I implement that?" but "can I avoid it entirely?"
 
-Think of it this way. A city with no traffic lights (no coordination) would be chaos — cars crashing into each other at every intersection. But a city where every intersection requires a traffic light, and every traffic light requires a centralized computer to control it, and that centralized computer must be consulted before any car can proceed through any intersection — that city would also be chaos, just a different kind. Every intersection grinds to a halt the moment the central computer has problems.
+Think of it this way. A city with no traffic lights (no coordination) would be chaos -- cars crashing into each other at every intersection. But a city where every intersection requires a traffic light, and every traffic light requires a centralized computer to control it, and that centralized computer must be consulted before any car can proceed through any intersection -- that city would also be chaos, just a different kind. Every intersection grinds to a halt the moment the central computer has problems.
 
 The best cities find a middle ground. High-traffic intersections get traffic lights. Low-traffic intersections get stop signs (a simpler rule that does not require any central authority). Highways with no cross-traffic get no signals at all. The amount of coordination matches the actual need.
 
-Distributed systems work the same way. High-contention shared resources might need distributed locks. Global ordering requirements might need leader election. Most individual server operations do not need any coordination — and the best engineers design to keep it that way.
+Distributed systems work the same way. High-contention shared resources might need distributed locks. Global ordering requirements might need leader election. Most individual server operations do not need any coordination -- and the best engineers design to keep it that way.
 
 Now let us go one level deeper. Here is how L5 and L6 engineers differ in their instincts about coordination:
 
@@ -129,11 +129,11 @@ This table shows five common situations. The L5 response reaches for a coordinat
 
 | Situation | L5 Approach | L6 Approach |
 |-----------|-------------|-------------|
-| Job scheduler (assign tasks to workers) | Add a distributed lock so only one scheduler can assign at a time | Can workers pull tasks themselves? Use a queue — no central scheduler needed at all |
+| Job scheduler (assign tasks to workers) | Add a distributed lock so only one scheduler can assign at a time | Can workers pull tasks themselves? Use a queue -- no central scheduler needed at all |
 | Rate limiter (limit to 1,000 requests per user per minute) | Elect a "rate limit master" that all servers consult | Per-node approximate limits with no coordination. Exact global counts are rarely worth the coordination cost |
 | Config updates (push new config to all servers) | Distributed lock while each server reads config | Atomic compare-and-swap on a config version number. Each server reads independently |
-| Lock failure (distributed lock service goes down) | The system is broken — fix the lock service | Design the system so lock failure degrades gracefully, not catastrophically |
-| Duplicate prevention (prevent two servers from sending the same email) | Distributed lock before each send | Idempotency key in the database — insert a record BEFORE sending, use database unique constraint |
+| Lock failure (distributed lock service goes down) | The system is broken -- fix the lock service | Design the system so lock failure degrades gracefully, not catastrophically |
+| Duplicate prevention (prevent two servers from sending the same email) | Distributed lock before each send | Idempotency key in the database -- insert a record BEFORE sending, use database unique constraint |
 
 The pattern across all five rows is the same. L5 engineers reach for locking and coordination because those tools feel like they directly solve the problem of "two servers doing the same thing." L6 engineers have seen enough production outages caused by coordination services failing that their first instinct is to avoid coordination entirely.
 
@@ -141,58 +141,58 @@ The difference is not intelligence. It is experience. Specifically: experience w
 
 L6 engineers have learned to ask: "What is the actual cost of the thing I am trying to prevent? Is a rare duplicate action worse than a guaranteed outage when the lock service has problems?" Sometimes the answer is yes, coordination is worth it. But the question must be asked first.
 
-Every distributed lock is a potential outage waiting to happen. Every leader election is a window — sometimes 30 seconds, sometimes 5 minutes — where the system cannot do its most important work. These costs are real and they compound over time as systems grow. The discipline of minimizing coordination is what separates systems that scale gracefully from systems that become progressively more fragile as they grow.
+Every distributed lock is a potential outage waiting to happen. Every leader election is a window -- sometimes 30 seconds, sometimes 5 minutes -- where the system cannot do its most important work. These costs are real and they compound over time as systems grow. The discipline of minimizing coordination is what separates systems that scale gracefully from systems that become progressively more fragile as they grow.
 
 ---
 
-## The Coordination Tax — Making It Concrete With Numbers
+## The Coordination Tax -- Making It Concrete With Numbers
 
 Let us make this tangible. Forget theory for a moment. Here is what actually happens, in milliseconds, when your application acquires a distributed lock to protect a single operation.
 
 ```
 ACQUIRING AND RELEASING ONE DISTRIBUTED LOCK
-─────────────────────────────────────────────
+---------------------------------------------
 
 Time 0ms:     App server decides it needs the lock
-              │
-              ▼
-Time 0ms:     App sends lock request to Redis ──────────► [NETWORK TRAVEL]
-                                                                   │
-Time 2ms:     Lock request arrives at Redis ◄──────────────────────┘
+              |
+              v
+Time 0ms:     App sends lock request to Redis ----------> [NETWORK TRAVEL]
+                                                                   |
+Time 2ms:     Lock request arrives at Redis <----------------------+
               Redis processes request (is this key free?)
-              │
-              ▼
-Time 2.1ms:   Redis sends confirmation back ────────────► [NETWORK TRAVEL]
-                                                                   │
-Time 4.1ms:   App receives "you have the lock" ◄───────────────────┘
+              |
+              v
+Time 2.1ms:   Redis sends confirmation back ------------> [NETWORK TRAVEL]
+                                                                   |
+Time 4.1ms:   App receives "you have the lock" <-------------------+
               App checks if it got the lock
-              │
-              ▼
-Time 4.2ms:   App does its actual work ──────────────────► [VARIES: 1ms to 500ms]
+              |
+              v
+Time 4.2ms:   App does its actual work ------------------> [VARIES: 1ms to 500ms]
               (Let's say it takes 10ms)
-              │
-              ▼
-Time 14.2ms:  App sends lock release to Redis ──────────► [NETWORK TRAVEL]
-                                                                   │
-Time 16.2ms:  Lock release arrives at Redis ◄──────────────────────┘
+              |
+              v
+Time 14.2ms:  App sends lock release to Redis ----------> [NETWORK TRAVEL]
+                                                                   |
+Time 16.2ms:  Lock release arrives at Redis <----------------------+
               Redis releases the lock
-              │
-              ▼
-Time 16.3ms:  Redis sends release confirmation ─────────► [NETWORK TRAVEL]
-                                                                   │
-Time 18.3ms:  App receives confirmation ◄──────────────────────────┘
+              |
+              v
+Time 16.3ms:  Redis sends release confirmation ---------> [NETWORK TRAVEL]
+                                                                   |
+Time 18.3ms:  App receives confirmation <--------------------------+
               Operation complete.
 
 TOTAL OVERHEAD FROM THE LOCK ITSELF: ~8.3ms
-(4 network round trips × ~2ms each + Redis processing time)
+(4 network round trips x ~2ms each + Redis processing time)
 
 The actual work (10ms) is what you care about.
-The lock overhead (8.3ms) is pure tax — wasted time.
+The lock overhead (8.3ms) is pure tax -- wasted time.
 ```
 
 Eight milliseconds does not sound like much. But zoom out.
 
-If your application does 10,000 of these operations per second, the lock overhead alone adds up to 83,000 milliseconds — that is 83 seconds — of cumulative waiting per second of real time. Your application is spending 83% of its time just acquiring and releasing locks, not doing actual work.
+If your application does 10,000 of these operations per second, the lock overhead alone adds up to 83,000 milliseconds -- that is 83 seconds -- of cumulative waiting per second of real time. Your application is spending 83% of its time just acquiring and releasing locks, not doing actual work.
 
 At 100,000 operations per second, the math gets catastrophic. You are spending 830 seconds of waiting per second of real time. The locks are the bottleneck. The more load you add, the worse it gets.
 
@@ -202,17 +202,17 @@ Now think about what happens when the lock service goes down.
 WHAT HAPPENS WHEN THE LOCK SERVICE FAILS
 
 Normal state:
-App Server 1 ──────────────► Redis (lock service) ──── ✓ Lock acquired
-App Server 2 ──────────────► Redis (lock service) ──── ✓ Lock acquired
-App Server 3 ──────────────► Redis (lock service) ──── ✓ Lock acquired
+App Server 1 --------------> Redis (lock service) ---- Y Lock acquired
+App Server 2 --------------> Redis (lock service) ---- Y Lock acquired
+App Server 3 --------------> Redis (lock service) ---- Y Lock acquired
 
 Redis goes down (hardware failure, network partition, crash):
-App Server 1 ──────────────► Redis ──── ✗ TIMEOUT after 5s
-                                         ✗ Operation FAILS
-App Server 2 ──────────────► Redis ──── ✗ TIMEOUT after 5s
-                                         ✗ Operation FAILS
-App Server 3 ──────────────► Redis ──── ✗ TIMEOUT after 5s
-                                         ✗ Operation FAILS
+App Server 1 --------------> Redis ---- N TIMEOUT after 5s
+                                         N Operation FAILS
+App Server 2 --------------> Redis ---- N TIMEOUT after 5s
+                                         N Operation FAILS
+App Server 3 --------------> Redis ---- N TIMEOUT after 5s
+                                         N Operation FAILS
 
 RESULT: 100% failure rate for every operation that uses locks.
         If this feature is "process payment," payments are failing.
@@ -226,32 +226,32 @@ The bar chart below compares the total latency cost of each coordination approac
 LATENCY COST OF EACH COORDINATION APPROACH
 (per operation, typical production conditions)
 
-No coordination   │█ ~1ms
-                  │
-Partitioning      │██ ~2ms
-                  │
-Leader election   │██████████ ~10ms
-(operation via    │
- leader)          │
-Distributed lock  │████████████████████████████████████████████ ~50ms
-(acquire+op+rel)  │
-Full consensus    │████████████████████████████████████████████████████████████████ ~100ms+
-(Paxos/Raft)      │
-                  └──────────────────────────────────────────────────────────────────
+No coordination   |# ~1ms
+                  |
+Partitioning      |## ~2ms
+                  |
+Leader election   |########## ~10ms
+(operation via    |
+ leader)          |
+Distributed lock  |############################################ ~50ms
+(acquire+op+rel)  |
+Full consensus    |################################################################ ~100ms+
+(Paxos/Raft)      |
+                  +------------------------------------------------------------------
                      0ms       25ms      50ms      75ms     100ms     125ms+
 ```
 
-When you say "I'll use a distributed lock" in a system design interview, an L6 interviewer hears three things simultaneously. First: "I am adding approximately 50ms of latency to every operation that uses this lock." Second: "I am introducing a new single point of failure — if the lock service goes down, this feature goes down completely." Third: "I am adding a throughput ceiling — the lock service can only handle so many requests per second, which caps how much the system can scale."
+When you say "I'll use a distributed lock" in a system design interview, an L6 interviewer hears three things simultaneously. First: "I am adding approximately 50ms of latency to every operation that uses this lock." Second: "I am introducing a new single point of failure -- if the lock service goes down, this feature goes down completely." Third: "I am adding a throughput ceiling -- the lock service can only handle so many requests per second, which caps how much the system can scale."
 
-These are not hypothetical concerns. They are the actual consequences that show up in production. An L6 response is not "do not use distributed locks" — sometimes they are the right tool. The L6 response is: "I know what I am paying for this. Have I considered whether a different design eliminates the need?"
+These are not hypothetical concerns. They are the actual consequences that show up in production. An L6 response is not "do not use distributed locks" -- sometimes they are the right tool. The L6 response is: "I know what I am paying for this. Have I considered whether a different design eliminates the need?"
 
 ---
 
-# Part 1: Why Coordination Is Hard — The Fundamental Problems
+# Part 1: Why Coordination Is Hard -- The Fundamental Problems
 
 ## Why Can't Computers Just Talk to Each Other?
 
-Before we learn the solutions, we need to deeply understand the problems. The problems are not engineering failures — they are mathematical and physical constraints. Understanding this distinction is important. When a constraint is a physical law or a mathematical proof, you cannot engineer your way around it. You can only work with it.
+Before we learn the solutions, we need to deeply understand the problems. The problems are not engineering failures -- they are mathematical and physical constraints. Understanding this distinction is important. When a constraint is a physical law or a mathematical proof, you cannot engineer your way around it. You can only work with it.
 
 Here is the setup. Think of two computers that need to coordinate. To coordinate, they must communicate. To communicate, they send messages over a network. And here is where the trouble starts.
 
@@ -270,13 +270,13 @@ Now we will look at three specific manifestations of this problem, each one prov
 
 ---
 
-## Problem 1: The Two Generals Problem — You Can Never Be 100% Certain
+## Problem 1: The Two Generals Problem -- You Can Never Be 100% Certain
 
 Here is one of the most famous thought experiments in computer science. It was first studied in the 1970s, formally described in a 1975 paper, and has been taught in distributed systems courses ever since. It proves something uncomfortable: **in an unreliable network, you can never achieve absolute certainty that another party received your message.**
 
 **The story:**
 
-Two armies want to attack a fortified city. Call them Army A (camped on the east side of the city) and Army B (camped on the west side). The city is too strong for either army to defeat alone — both must attack simultaneously.
+Two armies want to attack a fortified city. Call them Army A (camped on the east side of the city) and Army B (camped on the west side). The city is too strong for either army to defeat alone -- both must attack simultaneously.
 
 The generals want to coordinate the attack time. Let us say they want to attack at dawn tomorrow.
 
@@ -286,7 +286,7 @@ The problem: the only way Army A and Army B can communicate is by sending messen
 
 Army A sends a messenger: "Let's attack at dawn tomorrow."
 
-Does Army A attack at dawn if they do not hear back? No — what if the messenger was captured and Army B never got the message? Army A attacks alone. Army A loses.
+Does Army A attack at dawn if they do not hear back? No -- what if the messenger was captured and Army B never got the message? Army A attacks alone. Army A loses.
 
 So Army A waits for confirmation.
 
@@ -294,7 +294,7 @@ So Army A waits for confirmation.
 
 Army B receives the message. Army B sends back a confirmation messenger: "Confirmed, we will attack at dawn tomorrow."
 
-Now Army B has a problem. Does Army B attack at dawn? Not yet — what if THEIR messenger was captured? Army A never received the confirmation. Army A will not attack because they are waiting for confirmation. Army B attacks alone. Army B loses.
+Now Army B has a problem. Does Army B attack at dawn? Not yet -- what if THEIR messenger was captured? Army A never received the confirmation. Army A will not attack because they are waiting for confirmation. Army B attacks alone. Army B loses.
 
 So Army B must wait for Army A to confirm that they received the confirmation.
 
@@ -314,18 +314,18 @@ THE TWO GENERALS PROBLEM
 Army A                    The City                    Army B
 (east side)          (messengers pass through)       (west side)
 
-   │                                                     │
-   │──── "Attack at dawn" ─────────────────────────────► │  ← maybe captured
-   │                                                     │
-   │◄─── "Confirmed, dawn" ──────────────────────────────│  ← maybe captured
-   │                                                     │
-   │──── "Got your confirm" ─────────────────────────── ►│  ← maybe captured
-   │                                                     │
-   │◄─── "Got your 'got'" ───────────────────────────────│  ← maybe captured
-   │                                                     │
-   │                   [continues forever]               │
-   │                                                     │
-   ▼                                                     ▼
+   |                                                     |
+   |---- "Attack at dawn" -----------------------------> |  <- maybe captured
+   |                                                     |
+   |<--- "Confirmed, dawn" ------------------------------|  <- maybe captured
+   |                                                     |
+   |---- "Got your confirm" --------------------------- >|  <- maybe captured
+   |                                                     |
+   |<--- "Got your 'got'" -------------------------------|  <- maybe captured
+   |                                                     |
+   |                   [continues forever]               |
+   |                                                     |
+   v                                                     v
 
 Neither army can EVER be 100% certain.
 Every confirmation requires another confirmation.
@@ -344,22 +344,22 @@ When Server A sends "commit this transaction," it does not know if Server B rece
 
 **Why this matters for practical engineering:**
 
-This is not a solvable problem — it is a fundamental limitation. No amount of engineering removes this uncertainty. What we can do is design systems that work correctly EVEN WITH this uncertainty.
+This is not a solvable problem -- it is a fundamental limitation. No amount of engineering removes this uncertainty. What we can do is design systems that work correctly EVEN WITH this uncertainty.
 
 The practical lesson is this: in distributed systems, we accept that communication can fail and design systems that can recover gracefully. Instead of trying to guarantee that a message was delivered exactly once with certainty, we build systems that handle the two common practical situations:
 
 - "At most once" delivery: I send the message and hope it arrives. If it does not, I do not retry. The operation either happens or it does not. No duplicates, but possible gaps.
 - "At least once" delivery: I keep retrying until I get a confirmation. The operation definitely happens, but might happen multiple times.
 
-The goal in well-designed systems is "effectively exactly once" — achieved not through perfect delivery guarantees but through **idempotency**. An operation is idempotent if doing it twice has the same result as doing it once. If charging a credit card for order #1234 is idempotent — the second charge attempt sees "order #1234 already charged, ignore this" — then "at least once" delivery becomes safe. You can retry without fear of duplicate charges.
+The goal in well-designed systems is "effectively exactly once" -- achieved not through perfect delivery guarantees but through **idempotency**. An operation is idempotent if doing it twice has the same result as doing it once. If charging a credit card for order #1234 is idempotent -- the second charge attempt sees "order #1234 already charged, ignore this" -- then "at least once" delivery becomes safe. You can retry without fear of duplicate charges.
 
 We will return to idempotency throughout this chapter. It is one of the most powerful design tools for taming the uncertainty that the Two Generals problem forces us to acknowledge.
 
-**Idempotency in Practice — A Concrete Example:**
+**Idempotency in Practice -- A Concrete Example:**
 
 Here is idempotency made completely concrete so the concept sticks.
 
-Scenario: your app sends an API request to a payment processor: "Charge $49.99 to card ending in 4242 for order #78901." The request is sent. The network between your server and the payment processor experiences a 30-second hiccup. The request arrived at the payment processor and the charge was processed — but the HTTP response confirming success never made it back to your server (lost in the hiccup).
+Scenario: your app sends an API request to a payment processor: "Charge $49.99 to card ending in 4242 for order #78901." The request is sent. The network between your server and the payment processor experiences a 30-second hiccup. The request arrived at the payment processor and the charge was processed -- but the HTTP response confirming success never made it back to your server (lost in the hiccup).
 
 Your server, not having received a response, has no idea whether the charge went through or not. The Two Generals problem in action: you sent a message, you did not receive confirmation, the state of the other side is unknown.
 
@@ -377,21 +377,21 @@ Stripe, PayPal, and essentially every payment API in production uses this patter
 IDEMPOTENCY KEY FLOW
 
 First request:
-  Your server ──── "Charge $49.99, idem-key: idem-78901-charge-1" ────► Payment API
+  Your server ---- "Charge $49.99, idem-key: idem-78901-charge-1" ----> Payment API
   Payment API: new key, never seen before. Process charge. Store result. Respond.
-  Your server ◄──── "Charge succeeded, txn #abc123" ──────────────────── Payment API
+  Your server <---- "Charge succeeded, txn #abc123" -------------------- Payment API
   
-  Network hiccup scenario — same first request, response lost:
-  Your server ──── "Charge $49.99, idem-key: idem-78901-charge-1" ────► Payment API
+  Network hiccup scenario -- same first request, response lost:
+  Your server ---- "Charge $49.99, idem-key: idem-78901-charge-1" ----> Payment API
   Payment API: new key, never seen before. Process charge. Store result. Respond.
-  Response lost ✗ ─────────────────────────────────────────────────────────────────
+  Response lost N -----------------------------------------------------------------
   Your server: "No response received. Did it work?"
 
 Retry (at-least-once delivery):
-  Your server ──── "Charge $49.99, idem-key: idem-78901-charge-1" ────► Payment API
-                    ↑ SAME idempotency key
+  Your server ---- "Charge $49.99, idem-key: idem-78901-charge-1" ----> Payment API
+                    ^ SAME idempotency key
   Payment API: this key exists! Return stored result. DO NOT charge again.
-  Your server ◄──── "Charge succeeded, txn #abc123" ──────────────────── Payment API
+  Your server <---- "Charge succeeded, txn #abc123" -------------------- Payment API
   
   Customer charged: exactly once. Correct.
 ```
@@ -400,9 +400,9 @@ This diagram shows the full flow. The idempotency key `idem-78901-charge-1` is w
 
 ---
 
-## Problem 2: FLP Impossibility — No Perfect Algorithm Exists
+## Problem 2: FLP Impossibility -- No Perfect Algorithm Exists
 
-This one requires a breath before diving in. It is a formal mathematical proof, and it has a somewhat depressing-sounding name: the FLP Impossibility Result. The name comes from the initials of the three researchers who proved it: Fischer, Lynch, and Paterson. They published their proof in 1985, and it won the Dijkstra Prize — one of the most prestigious awards in computer science — for its lasting influence on the field.
+This one requires a breath before diving in. It is a formal mathematical proof, and it has a somewhat depressing-sounding name: the FLP Impossibility Result. The name comes from the initials of the three researchers who proved it: Fischer, Lynch, and Paterson. They published their proof in 1985, and it won the Dijkstra Prize -- one of the most prestigious awards in computer science -- for its lasting influence on the field.
 
 Here is what FLP proved, stated gently:
 
@@ -410,9 +410,9 @@ Here is what FLP proved, stated gently:
 
 Let us unpack every word of that.
 
-"Asynchronous network" means a network where messages can take arbitrarily long to arrive. There is no clock that all nodes share. There is no guarantee that a message sent now will arrive within 1 second, or 10 seconds, or any specific time. Most real networks are asynchronous in this sense — your packet might arrive in 1ms or get queued for 500ms.
+"Asynchronous network" means a network where messages can take arbitrarily long to arrive. There is no clock that all nodes share. There is no guarantee that a message sent now will arrive within 1 second, or 10 seconds, or any specific time. Most real networks are asynchronous in this sense -- your packet might arrive in 1ms or get queued for 500ms.
 
-"Even ONE node can crash" means if there is any chance — any chance at all — that a node might fail silently (crash without sending a goodbye message), then the result applies.
+"Even ONE node can crash" means if there is any chance -- any chance at all -- that a node might fail silently (crash without sending a goodbye message), then the result applies.
 
 "Reach consensus" means: all surviving nodes agree on the same value.
 
@@ -420,20 +420,20 @@ Let us unpack every word of that.
 
 **The dinner order analogy:**
 
-Imagine you and four friends need to unanimously agree on what to order for dinner at a restaurant. But here is the rule: you can only write notes to each other. You cannot talk. And one of your friends has gone quiet — no notes coming from them.
+Imagine you and four friends need to unanimously agree on what to order for dinner at a restaurant. But here is the rule: you can only write notes to each other. You cannot talk. And one of your friends has gone quiet -- no notes coming from them.
 
 You wait. And wait. The restaurant is getting impatient.
 
 Now you face the fundamental problem FLP describes. You do not know if your quiet friend is:
-- Dead (their phone died — you should proceed without them)
-- Just slow (they are thinking hard — you should wait)
-- About to answer (they wrote a note but it has not arrived yet — you should definitely wait)
+- Dead (their phone died -- you should proceed without them)
+- Just slow (they are thinking hard -- you should wait)
+- About to answer (they wrote a note but it has not arrived yet -- you should definitely wait)
 
 There is no algorithm that always correctly distinguishes these three cases. Every approach either:
 
 A) Can get stuck waiting forever. (You keep waiting for the quiet friend. If they are dead, you wait infinitely.)
 
-B) Might decide too early. (You stop waiting and order pizza. Right as the pizza arrives, your friend's note shows up — "I wanted sushi!" Consensus broken.)
+B) Might decide too early. (You stop waiting and order pizza. Right as the pizza arrives, your friend's note shows up -- "I wanted sushi!" Consensus broken.)
 
 The fundamental reason this is impossible: in an asynchronous system, "slow response" and "failure" look identical from the outside. You simply cannot tell which it is with certainty.
 
@@ -441,18 +441,18 @@ The fundamental reason this is impossible: in an asynchronous system, "slow resp
 FLP: THE CORE IMPOSSIBILITY
 
          Node A    Node B    Node C    Node D    Node E (silent)
-            │         │         │         │          │
-            │                             X  Node E MIGHT be:
-            │                                - Crashed (dead forever)
-            │                                - Slow (will respond eventually)
-            │                                - Has message in transit
-            │
-            ▼
+            |         |         |         |          |
+            |                             X  Node E MIGHT be:
+            |                                - Crashed (dead forever)
+            |                                - Slow (will respond eventually)
+            |                                - Has message in transit
+            |
+            v
        Should we decide without Node E?
-            │
-            ├─── Wait for E ──► If E is dead: wait FOREVER. Bad!
-            │
-            └─── Decide now ──► If E was slow: E responds with different value.
+            |
+            +--- Wait for E --> If E is dead: wait FOREVER. Bad!
+            |
+            +--- Decide now --> If E was slow: E responds with different value.
                                  SPLIT! Two different "decided" values. Bad!
 
 No algorithm can always correctly choose which path to take.
@@ -463,11 +463,11 @@ After this diagram, three things need to be clear. First: what does this tell us
 
 For the first question: FLP tells us that any real consensus algorithm you might build will have at least one of two properties. Either it can sometimes fail to terminate (get stuck in an indeterminate state forever), or it can sometimes make incorrect decisions. There is no algorithm that is simultaneously always correct AND always terminates.
 
-For the second question: this is less catastrophic than it sounds because real systems do not need to satisfy the theoretical conditions FLP requires. FLP applies to "asynchronous" networks with zero timing guarantees. Real networks have practical timing properties — messages usually arrive within a few seconds. Real crashes are usually detectable within a timeout window.
+For the second question: this is less catastrophic than it sounds because real systems do not need to satisfy the theoretical conditions FLP requires. FLP applies to "asynchronous" networks with zero timing guarantees. Real networks have practical timing properties -- messages usually arrive within a few seconds. Real crashes are usually detectable within a timeout window.
 
-For the third question: real systems use TIMEOUTS. If we do not hear from Node E within 5 seconds, we assume it has crashed and proceed without it. This is a **heuristic** — a practical rule of thumb that works most of the time, even though it cannot be theoretically proven to always be correct. Timeouts let us escape the theoretical impossibility by accepting a small, practical risk: occasionally we will time out a node that was just slow, not dead. We design our systems to handle this gracefully.
+For the third question: real systems use TIMEOUTS. If we do not hear from Node E within 5 seconds, we assume it has crashed and proceed without it. This is a **heuristic** -- a practical rule of thumb that works most of the time, even though it cannot be theoretically proven to always be correct. Timeouts let us escape the theoretical impossibility by accepting a small, practical risk: occasionally we will time out a node that was just slow, not dead. We design our systems to handle this gracefully.
 
-FLP does not mean consensus is impossible. It means perfect, guaranteed, always-correct consensus is impossible. Real systems achieve "good enough" consensus using timeouts and probabilistic guarantees. "Good enough" turns out to be exactly what you need for production systems — not theoretical perfection, but reliable behavior under normal conditions and graceful degradation under failure conditions.
+FLP does not mean consensus is impossible. It means perfect, guaranteed, always-correct consensus is impossible. Real systems achieve "good enough" consensus using timeouts and probabilistic guarantees. "Good enough" turns out to be exactly what you need for production systems -- not theoretical perfection, but reliable behavior under normal conditions and graceful degradation under failure conditions.
 
 **How real systems escape FLP in practice:**
 
@@ -479,13 +479,13 @@ A system with a 10-second timeout rarely triggers false elections. But when a re
 
 The practical approach: set the timeout at roughly 3 to 5 times the typical 99th percentile message latency in your cluster. If typical P99 latency between nodes is 50ms, a 150-250ms timeout is reasonable. If P99 is 200ms due to a loaded system, use 600ms to 1 second.
 
-Some production systems use adaptive timeouts — dynamically adjusting based on observed latency patterns. If the cluster has been consistently responding within 20ms, use a tighter timeout. If recent latencies have been spiking, loosen the timeout temporarily to avoid unnecessary elections. Some Raft implementations use this approach, though it adds implementation complexity.
+Some production systems use adaptive timeouts -- dynamically adjusting based on observed latency patterns. If the cluster has been consistently responding within 20ms, use a tighter timeout. If recent latencies have been spiking, loosen the timeout temporarily to avoid unnecessary elections. Some Raft implementations use this approach, though it adds implementation complexity.
 
-The FLP result reminds us that the timeout is always a judgment call — not a problem with a perfect solution. It is an engineering trade-off between two bad outcomes: too-fast elections (false alarms that destabilize a healthy cluster) and too-slow elections (long outages when real failures occur). Every distributed system makes this trade-off. The skill is making it consciously with numbers appropriate for your workload, not copying defaults from a configuration example.
+The FLP result reminds us that the timeout is always a judgment call -- not a problem with a perfect solution. It is an engineering trade-off between two bad outcomes: too-fast elections (false alarms that destabilize a healthy cluster) and too-slow elections (long outages when real failures occur). Every distributed system makes this trade-off. The skill is making it consciously with numbers appropriate for your workload, not copying defaults from a configuration example.
 
 ---
 
-## Problem 3: Clocks Lie — You Can't Trust Time in Distributed Systems
+## Problem 3: Clocks Lie -- You Can't Trust Time in Distributed Systems
 
 Here is a question that sounds simple but has a surprisingly complex answer: what time is it?
 
@@ -501,19 +501,19 @@ Now imagine two computers instead of two people. Computer A is in a data center 
 
 **Why clocks drift:**
 
-Every computer has a hardware clock — a tiny oscillator that vibrates at a predictable frequency to keep time. But these oscillators are not perfect. They run slightly faster or slower than "true" time. A computer that has been running for a week without syncing its clock might be off by:
+Every computer has a hardware clock -- a tiny oscillator that vibrates at a predictable frequency to keep time. But these oscillators are not perfect. They run slightly faster or slower than "true" time. A computer that has been running for a week without syncing its clock might be off by:
 
 - 10 to 100 milliseconds (typical for servers that regularly synchronize)
 - Several seconds (if synchronization has been broken for a while)
 - Minutes or more (after a server restarts from a long downtime)
 
-This drift is not hypothetical. It happens in every data center, constantly. It is managed by a protocol called NTP — the Network Time Protocol. NTP is like everyone periodically checking their watch against the atomic clock broadcast from the US Naval Observatory. Servers using NTP stay within roughly 10–100ms of "true" time under normal conditions.
+This drift is not hypothetical. It happens in every data center, constantly. It is managed by a protocol called NTP -- the Network Time Protocol. NTP is like everyone periodically checking their watch against the atomic clock broadcast from the US Naval Observatory. Servers using NTP stay within roughly 10-100ms of "true" time under normal conditions.
 
 100ms sounds small. But many distributed coordination decisions happen on timescales of milliseconds. A 100ms clock difference can completely reverse the apparent order of events.
 
 **Why this destroys timestamp-based coordination:**
 
-Suppose Server A and Server B both try to become the leader of a database cluster at roughly the same moment. They use timestamps to determine who wins — "whoever attempted leadership first (lowest timestamp) wins."
+Suppose Server A and Server B both try to become the leader of a database cluster at roughly the same moment. They use timestamps to determine who wins -- "whoever attempted leadership first (lowest timestamp) wins."
 
 Server A makes its attempt and timestamps it: `10:00:00.050` (fifty milliseconds past 10 AM, by Server A's clock).
 
@@ -527,14 +527,14 @@ What if Server B's clock is 200ms fast? Server B THINKS it is 10:00:00.030, but 
 CLOCK SKEW CORRUPTS LEADER ELECTION
 
 Real timeline (what actually happened):
-──────────────────────────────────────────────────────────────────► time
-                │                    │
+------------------------------------------------------------------> time
+                |                    |
        Server A acts first    Server B acts second
        (A should win)         (B should lose)
 
 Timestamp timeline (what the clocks show):
-──────────────────────────────────────────────────────────────────► time
-                │                    │
+------------------------------------------------------------------> time
+                |                    |
        B's timestamp earlier   A's timestamp later
        (B looks like it won)   (A looks like it lost)
 
@@ -548,31 +548,31 @@ Result: Server B becomes "leader" even though Server A acted first.
 
 The diagram shows the core problem. Real time says A first, B second. The timestamps say B first, A second. Any rule that trusts timestamps as a proxy for "what actually happened first" is vulnerable to clock skew.
 
-NTP helps but does not solve this completely. NTP can synchronize clocks to within 10–100ms of each other. But some distributed coordination problems have events happening milliseconds apart. Within that margin, NTP-synchronized clocks cannot be trusted to give a reliable ordering.
+NTP helps but does not solve this completely. NTP can synchronize clocks to within 10-100ms of each other. But some distributed coordination problems have events happening milliseconds apart. Within that margin, NTP-synchronized clocks cannot be trusted to give a reliable ordering.
 
 **Practical NTP failures you should know about:**
 
 NTP synchronization is not always running smoothly. Here are the real ways clock skew becomes severe in production environments.
 
-The first common cause: **VM clock drift after live migration.** Cloud providers like AWS and Azure can transparently move a virtual machine from one physical host to another (called live migration). During and immediately after this migration, the VM's clock can be significantly off — sometimes by hundreds of milliseconds or even seconds — until NTP resynchronizes. If your application makes any coordination decisions based on timestamps in the seconds after a VM migration, those decisions might be based on incorrect clock readings.
+The first common cause: **VM clock drift after live migration.** Cloud providers like AWS and Azure can transparently move a virtual machine from one physical host to another (called live migration). During and immediately after this migration, the VM's clock can be significantly off -- sometimes by hundreds of milliseconds or even seconds -- until NTP resynchronizes. If your application makes any coordination decisions based on timestamps in the seconds after a VM migration, those decisions might be based on incorrect clock readings.
 
-The second cause: **NTP pool selection.** NTP servers are organized into "pools" — groups of servers distributed around the world that clients pick from. If a server happens to select a poorly-maintained NTP source, it can receive incorrect time corrections and drift significantly from true time. Production systems should configure NTP to use multiple trusted sources and perform sanity checks: if a proposed time correction would jump the clock by more than X milliseconds in one step, reject it and alert an operator.
+The second cause: **NTP pool selection.** NTP servers are organized into "pools" -- groups of servers distributed around the world that clients pick from. If a server happens to select a poorly-maintained NTP source, it can receive incorrect time corrections and drift significantly from true time. Production systems should configure NTP to use multiple trusted sources and perform sanity checks: if a proposed time correction would jump the clock by more than X milliseconds in one step, reject it and alert an operator.
 
-The third cause: **High-load clock slowdown.** On severely overloaded servers, the OS's time-keeping routines themselves can be starved of CPU time. The OS uses interrupts to maintain the clock — if the CPU is so busy that interrupts are delayed, the clock runs slow. A server under extreme CPU pressure can lose 1-5 milliseconds per second of real time. Over an hour of sustained overload, the clock can be off by 5-18 seconds.
+The third cause: **High-load clock slowdown.** On severely overloaded servers, the OS's time-keeping routines themselves can be starved of CPU time. The OS uses interrupts to maintain the clock -- if the CPU is so busy that interrupts are delayed, the clock runs slow. A server under extreme CPU pressure can lose 1-5 milliseconds per second of real time. Over an hour of sustained overload, the clock can be off by 5-18 seconds.
 
 These scenarios are not hypothetical corner cases. They happen in production data centers regularly enough that experienced engineers build clock-skew detection into their systems. A simple health check: periodically compare your server's reported time against multiple external NTP sources. If the divergence exceeds your system's coordination safety margin, raise an alert.
 
-This is why modern distributed systems do not rely primarily on wall-clock timestamps for coordination. Instead, they use logical clocks — a concept we will explain next. Logical clocks track the ORDER of events without needing to trust the accuracy of any physical clock.
+This is why modern distributed systems do not rely primarily on wall-clock timestamps for coordination. Instead, they use logical clocks -- a concept we will explain next. Logical clocks track the ORDER of events without needing to trust the accuracy of any physical clock.
 
 ---
 
-## Logical Clocks — Solving Time Without a Physical Clock
+## Logical Clocks -- Solving Time Without a Physical Clock
 
-The breakthrough insight is this: for coordination purposes, you usually do not care WHEN something happened in absolute clock time. You care about the RELATIONSHIP between events — did A happen before B, did B happen before A, or did they happen simultaneously with no causal relationship?
+The breakthrough insight is this: for coordination purposes, you usually do not care WHEN something happened in absolute clock time. You care about the RELATIONSHIP between events -- did A happen before B, did B happen before A, or did they happen simultaneously with no causal relationship?
 
 This is like version control in software. When you look at a Git commit history, you do not primarily care that commit #42 was made at 3:15 PM on a Tuesday. You care that commit #42 came after commit #41 and before commit #43. The sequence matters. The exact wall-clock time matters much less.
 
-**Lamport Clocks — the simple version:**
+**Lamport Clocks -- the simple version:**
 
 Leslie Lamport (one of the most celebrated computer scientists alive, who also invented LaTeX and co-invented Paxos) described logical clocks in a famous 1978 paper. The idea is elegant enough to explain in two paragraphs.
 
@@ -591,31 +591,31 @@ Three servers: Alpha, Beta, Gamma
 Each starts with counter = 0
 
 Event 1: Alpha does some local work.
-  Alpha counter: 0 → 1
+  Alpha counter: 0 -> 1
 
 Event 2: Alpha sends a message to Beta. Includes counter=1.
-                                    Alpha=1 ────────────────► Beta receives it
+                                    Alpha=1 ----------------> Beta receives it
   Alpha counter: still 1             Beta's counter = max(Beta's current 0, received 1) + 1
-                                     Beta counter: 0 → 2
+                                     Beta counter: 0 -> 2
 
 Event 3: Beta does some local work.
-  Beta counter: 2 → 3
+  Beta counter: 2 -> 3
 
 Event 4: Beta sends a message to Gamma. Includes counter=3.
-                                    Beta=3 ─────────────────► Gamma receives it
+                                    Beta=3 -----------------> Gamma receives it
   Beta counter: still 3              Gamma's counter = max(Gamma's current 0, received 3) + 1
-                                     Gamma counter: 0 → 4
+                                     Gamma counter: 0 -> 4
 
 Event 5: Gamma sends a message back to Alpha. Includes counter=4.
-                                    Gamma=4 ────────────────► Alpha receives it
+                                    Gamma=4 ----------------> Alpha receives it
   Gamma counter: still 4             Alpha's counter = max(Alpha's current 1, received 4) + 1
-                                     Alpha counter: 1 → 5
+                                     Alpha counter: 1 -> 5
 
 Timeline showing counter values:
           t1   t2   t3   t4   t5
-Alpha:    [1]──[1]──────────────[5]
-Beta:         [2]──[3]──[3]
-Gamma:                  [4]──[4]
+Alpha:    [1]--[1]--------------[5]
+Beta:         [2]--[3]--[3]
+Gamma:                  [4]--[4]
 
 Key property: if Alpha (counter 1) CAUSED something that eventually reached Gamma
 (counter 4), then Alpha's Lamport timestamp (1) is LESS than Gamma's timestamp (4).
@@ -623,11 +623,11 @@ Key property: if Alpha (counter 1) CAUSED something that eventually reached Gamm
 
 The key insight in this diagram is the "happened-before" relationship. If event X caused event Y (directly or through a chain of messages), then X's Lamport timestamp is always less than Y's Lamport timestamp. This gives us causal ordering without trusting any physical clock.
 
-But there is a limitation. Lamport clocks have a one-way guarantee: if X happened before Y, then X's timestamp is less than Y's. But the reverse is NOT guaranteed. If X has a smaller timestamp than Y, you cannot conclude X caused Y — they might have happened simultaneously with no causal connection.
+But there is a limitation. Lamport clocks have a one-way guarantee: if X happened before Y, then X's timestamp is less than Y's. But the reverse is NOT guaranteed. If X has a smaller timestamp than Y, you cannot conclude X caused Y -- they might have happened simultaneously with no causal connection.
 
 To track causal relationships precisely, you need vector clocks.
 
-**Vector Clocks — tracking who caused what:**
+**Vector Clocks -- tracking who caused what:**
 
 The problem with Lamport clocks is that you cannot tell whether two events with different timestamps are causally related or just happened to get different counters through coincidence.
 
@@ -637,10 +637,10 @@ Think of it as a group project update system. Each person in your four-person st
 
 Alice's vector clock might be: `[Alice: 3, Bob: 2, Carol: 1, Dave: 0]`. This means: "I have made 3 contributions. I have seen 2 of Bob's contributions. I have seen 1 of Carol's contribution. I have seen none of Dave's contributions yet."
 
-When Alice shares her work with Bob, Bob gets Alice's vector clock. Bob can compare it to his own: `[Alice: 2, Bob: 4, Carol: 1, Dave: 1]`. Bob can now see that he has seen 2 of Alice's contributions but Alice is on 3 — so he is missing Alice's most recent work. This tells him he needs to get Alice's latest before his work is fully up-to-date.
+When Alice shares her work with Bob, Bob gets Alice's vector clock. Bob can compare it to his own: `[Alice: 2, Bob: 4, Carol: 1, Dave: 1]`. Bob can now see that he has seen 2 of Alice's contributions but Alice is on 3 -- so he is missing Alice's most recent work. This tells him he needs to get Alice's latest before his work is fully up-to-date.
 
 ```
-VECTOR CLOCK EXAMPLE — 3 SERVERS
+VECTOR CLOCK EXAMPLE -- 3 SERVERS
 
 Each server tracks: [S1 counter, S2 counter, S3 counter]
 
@@ -650,7 +650,7 @@ Event A: S1 does local work.     S1 = [1, 0, 0]
 Event B: S2 does local work.     S2 = [0, 1, 0]
 Event C: S1 sends to S2.         S1 = [2, 0, 0]  (S1 increments own counter)
                                   S2 receives. S2 = [max(0,2)+0, max(1,0)+1, max(0,0)+0]
-                                             Wait — simpler rule: merge by taking max
+                                             Wait -- simpler rule: merge by taking max
                                              of each position, then increment receiver's own.
                                   S2 = [2, 2, 0]
 
@@ -667,35 +667,35 @@ Now: did Event E happen AFTER Event D?
   Compare: [2, 3, 0] vs [3, 0, 0]
   Position 1: 2 < 3  (E has seen more S1 events)
   Position 2: 3 > 0  (D has seen more S2 events)
-  Neither is fully ≥ the other.
+  Neither is fully >= the other.
 
-  CONCLUSION: E and D are CONCURRENT — neither caused the other.
+  CONCLUSION: E and D are CONCURRENT -- neither caused the other.
   They happened independently with no causal relationship.
 ```
 
-After this diagram, the two key rules for vector clocks become clear. Event X "happened before" event Y if X's vector clock is less-than-or-equal to Y's in EVERY position, and strictly less-than in at least one position. Two events are "concurrent" if neither's vector clock is less-than-or-equal to the other's — each has at least one position where it is larger. Concurrent events might conflict (think: two people editing the same document simultaneously with no knowledge of each other's changes).
+After this diagram, the two key rules for vector clocks become clear. Event X "happened before" event Y if X's vector clock is less-than-or-equal to Y's in EVERY position, and strictly less-than in at least one position. Two events are "concurrent" if neither's vector clock is less-than-or-equal to the other's -- each has at least one position where it is larger. Concurrent events might conflict (think: two people editing the same document simultaneously with no knowledge of each other's changes).
 
-In practice: Lamport clocks are used for distributed logging and basic event ordering where you need "roughly correct" ordering with low overhead. Vector clocks are used in systems where you need to detect concurrent conflicting updates — Amazon's DynamoDB originally used them for conflict detection in their shopping cart system (famously described in the 2007 Dynamo paper), and collaborative editing tools use them to detect when two people edited the same document without knowing about each other's changes.
+In practice: Lamport clocks are used for distributed logging and basic event ordering where you need "roughly correct" ordering with low overhead. Vector clocks are used in systems where you need to detect concurrent conflicting updates -- Amazon's DynamoDB originally used them for conflict detection in their shopping cart system (famously described in the 2007 Dynamo paper), and collaborative editing tools use them to detect when two people edited the same document without knowing about each other's changes.
 
 **The "shopping cart" problem that made vector clocks famous:**
 
 The 2007 Amazon Dynamo paper described a real problem: customers adding items to their shopping carts from multiple devices. You add "Running Shoes" from your laptop. Fifteen seconds later, before the update has fully propagated, you add "Water Bottle" from your phone. Both devices think they have the authoritative cart. When Dynamo tries to reconcile them, there are two conflicting carts: one with Running Shoes, one with Water Bottle.
 
-With vector clocks, Dynamo could detect that these two updates were concurrent — neither "happened before" the other. It could then surface BOTH versions to the customer and ask: "We detected a conflict — which cart is correct?" Or, for shopping carts specifically, it could apply a simple rule: take the union. The result: a cart with both Running Shoes and Water Bottle.
+With vector clocks, Dynamo could detect that these two updates were concurrent -- neither "happened before" the other. It could then surface BOTH versions to the customer and ask: "We detected a conflict -- which cart is correct?" Or, for shopping carts specifically, it could apply a simple rule: take the union. The result: a cart with both Running Shoes and Water Bottle.
 
-Without vector clocks, Dynamo would have to pick a winner arbitrarily (last-write-wins based on timestamp — which, as we know, is unreliable with clock skew) or refuse to handle the conflict at all. Vector clocks gave Dynamo the information to detect conflicts and make intelligent decisions about resolving them.
+Without vector clocks, Dynamo would have to pick a winner arbitrarily (last-write-wins based on timestamp -- which, as we know, is unreliable with clock skew) or refuse to handle the conflict at all. Vector clocks gave Dynamo the information to detect conflicts and make intelligent decisions about resolving them.
 
-This is why vector clocks appear in any distributed system where updates from multiple sources can affect the same data. The clock data is overhead — storing an array of counters instead of one number per event. But the information it provides — "these two events conflict, and here is the evidence" — is often worth that overhead.
+This is why vector clocks appear in any distributed system where updates from multiple sources can affect the same data. The clock data is overhead -- storing an array of counters instead of one number per event. But the information it provides -- "these two events conflict, and here is the evidence" -- is often worth that overhead.
 
 Note: Amazon later replaced vector clocks in DynamoDB with a simpler "last writer wins" approach for most use cases, after finding that the conflict resolution logic was rarely invoked and the operational complexity of vector clocks was not worth the benefit in their specific workloads. The lesson: even good tools have trade-offs. Vector clocks are the right choice when conflicts happen frequently and must be handled intelligently. They are overhead when conflicts are rare and last-writer-wins is acceptable.
 
 ---
 
-## Google's TrueTime — When You Have to Trust Physical Clocks
+## Google's TrueTime -- When You Have to Trust Physical Clocks
 
 Most distributed systems use logical clocks to avoid depending on physical clock accuracy. But what if you are Google, and you are building a globally distributed database called Spanner that needs to order financial transactions across data centers on four continents?
 
-Logical clocks have a problem: they require communication to establish ordering. To know that event A happened before event B, you need A and B to have exchanged messages (directly or indirectly) so their logical counters reflect the relationship. For a globally distributed database where you want to commit a transaction in Virginia and know it comes before a transaction committing in Singapore, you would need to exchange messages between Virginia and Singapore to establish ordering — and that message takes roughly 150ms (the speed-of-light delay across the Pacific Ocean). If you do this for every transaction, latency is painful.
+Logical clocks have a problem: they require communication to establish ordering. To know that event A happened before event B, you need A and B to have exchanged messages (directly or indirectly) so their logical counters reflect the relationship. For a globally distributed database where you want to commit a transaction in Virginia and know it comes before a transaction committing in Singapore, you would need to exchange messages between Virginia and Singapore to establish ordering -- and that message takes roughly 150ms (the speed-of-light delay across the Pacific Ocean). If you do this for every transaction, latency is painful.
 
 Google's insight: what if you could make physical clocks accurate enough that you could trust them to give correct orderings, even without communication?
 
@@ -705,14 +705,14 @@ They built a system called TrueTime. TrueTime does not give you "the current tim
 TRUETIME: TIME AS AN INTERVAL
 
 Normal NTP clock (what most systems use):
-─────────────────────────────────────────────────────────► time
-                  │
+---------------------------------------------------------> time
+                  |
            "It is exactly 10:00:00.050"
-           (This is a lie — NTP can be off by up to 100ms)
+           (This is a lie -- NTP can be off by up to 100ms)
 
 TrueTime (what Google Spanner uses):
-─────────────────────────────────────────────────────────► time
-             ├──────────────────┤
+---------------------------------------------------------> time
+             +------------------+
          T_earliest          T_latest
          10:00:00.046       10:00:00.053
 
@@ -722,7 +722,7 @@ TrueTime (what Google Spanner uses):
 How Spanner uses TrueTime to order events A and B:
 
 Step 1: Commit event A. Record T_A_latest (the latest time A could have occurred).
-Step 2: WAIT until the clock reads T_A_latest + ε (a small safety buffer).
+Step 2: WAIT until the clock reads T_A_latest + e (a small safety buffer).
 Step 3: Now commit event B. Record T_B_earliest.
 
 Because we waited: T_B_earliest > T_A_latest.
@@ -735,15 +735,15 @@ The benefit: we know the ordering is correct without cross-datacenter communicat
 
 The diagram shows the key trick. TrueTime uses GPS receivers (which receive extremely accurate time signals from satellites) and atomic clocks in Google's data centers. These keep the uncertainty interval to roughly 7 milliseconds in normal operation.
 
-By waiting 7ms between committing event A and event B, Spanner guarantees that A's commit timestamp is genuinely earlier than B's commit timestamp — even without those two data centers exchanging a single message. The 7ms wait is small enough to be acceptable for many workloads, and it eliminates the 150ms cross-continent message round trip that logical clocks would require.
+By waiting 7ms between committing event A and event B, Spanner guarantees that A's commit timestamp is genuinely earlier than B's commit timestamp -- even without those two data centers exchanging a single message. The 7ms wait is small enough to be acceptable for many workloads, and it eliminates the 150ms cross-continent message round trip that logical clocks would require.
 
 Why cannot smaller companies use TrueTime? Because it requires GPS receivers and atomic clocks in your data center, plus the infrastructure to keep the uncertainty interval narrow. This is Google-level infrastructure investment.
 
-The accessible alternative for most companies: Hybrid Logical Clocks (HLC). HLC is a technique that combines physical clocks (for approximate real-time ordering) with logical clocks (for precise ordering of causally-related events). HLC gives you most of TrueTime's benefits — timestamps that are close to real time AND causally correct — without requiring GPS hardware. It is used in systems like CockroachDB (a distributed SQL database) and YugabyteDB.
+The accessible alternative for most companies: Hybrid Logical Clocks (HLC). HLC is a technique that combines physical clocks (for approximate real-time ordering) with logical clocks (for precise ordering of causally-related events). HLC gives you most of TrueTime's benefits -- timestamps that are close to real time AND causally correct -- without requiring GPS hardware. It is used in systems like CockroachDB (a distributed SQL database) and YugabyteDB.
 
 ---
 
-# Part 2: Leader Election — Picking Who's in Charge
+# Part 2: Leader Election -- Picking Who's in Charge
 
 ## What Problem Does Leader Election Solve?
 
@@ -751,7 +751,7 @@ Now we move from understanding WHY coordination is hard to understanding HOW we 
 
 **The ship captain analogy:**
 
-Imagine a ship with five sailors, all equally skilled and equally ranked. No captain — they are running a democratic ship. The ship hits a serious storm. Huge waves are coming from the northeast. Quick decisions are needed.
+Imagine a ship with five sailors, all equally skilled and equally ranked. No captain -- they are running a democratic ship. The ship hits a serious storm. Huge waves are coming from the northeast. Quick decisions are needed.
 
 Sailor 1: "Turn hard to port (left)! We need to run with the waves!"
 
@@ -763,27 +763,27 @@ Sailor 4: "Full speed ahead! Power through it!"
 
 Sailor 5: "All hands abandon ship! It is too dangerous!"
 
-The helmsman is looking at five contradictory, equally-authoritative commands. While the five sailors debate, the ship drifts. The debate itself — the lack of a single decision-maker — is more dangerous than the storm.
+The helmsman is looking at five contradictory, equally-authoritative commands. While the five sailors debate, the ship drifts. The debate itself -- the lack of a single decision-maker -- is more dangerous than the storm.
 
 The solution is not to fire four of the sailors. They are all skilled and needed. The solution is: even if all five are equal in capability, ONE must be designated as captain for the duration of the crisis. The captain gives orders. Others execute. If the captain is swept overboard, the remaining four quickly choose a new captain from among themselves and continue.
 
-Leader election is this process for distributed systems. From N equal computers (nodes), exactly one becomes the leader — the single node that makes certain categories of decisions. The others follow the leader's decisions without argument. If the leader fails (crashes, loses network connectivity, becomes overloaded), the remaining nodes elect a new leader quickly.
+Leader election is this process for distributed systems. From N equal computers (nodes), exactly one becomes the leader -- the single node that makes certain categories of decisions. The others follow the leader's decisions without argument. If the leader fails (crashes, loses network connectivity, becomes overloaded), the remaining nodes elect a new leader quickly.
 
 **What the leader is responsible for (varies by system):**
 
 The specific responsibilities depend on what the system is built to do. Here are common examples:
 
-**Database primary:** In a replicated database (multiple copies of the same data on multiple servers), the leader is the only node that accepts writes. Other nodes receive copies of those writes from the leader. This ensures that all write operations are serialized — they happen in one place, in one defined order. Without a single primary accepting writes, two nodes might accept conflicting writes simultaneously.
+**Database primary:** In a replicated database (multiple copies of the same data on multiple servers), the leader is the only node that accepts writes. Other nodes receive copies of those writes from the leader. This ensures that all write operations are serialized -- they happen in one place, in one defined order. Without a single primary accepting writes, two nodes might accept conflicting writes simultaneously.
 
 **Job scheduler:** A job scheduling system (think: Kubernetes scheduling containers onto servers, or a batch processing system assigning video encoding jobs to workers) needs one node to decide which worker handles which job. If two scheduler instances both think they are in charge, they might assign the same job to two workers (job runs twice) or assign conflicting jobs (two jobs that need the same resource both get scheduled simultaneously).
 
-**Metadata manager:** In distributed storage systems (like HDFS — Hadoop's distributed file system, used by every major Hadoop installation), the leader knows where every piece of data lives. "Which server has the file `/data/sales/2024_q1.csv`?" Without a single authoritative metadata manager, two nodes might give different, contradictory answers.
+**Metadata manager:** In distributed storage systems (like HDFS -- Hadoop's distributed file system, used by every major Hadoop installation), the leader knows where every piece of data lives. "Which server has the file `/data/sales/2024_q1.csv`?" Without a single authoritative metadata manager, two nodes might give different, contradictory answers.
 
-**Kafka controller:** Apache Kafka is a distributed message queue used by essentially every large technology company for event streaming. Among Kafka's broker servers, one is elected as the "controller" — responsible for managing which broker is responsible for which partition of which topic. If two controllers existed simultaneously, partition assignments would conflict and messages would be routed incorrectly.
+**Kafka controller:** Apache Kafka is a distributed message queue used by essentially every large technology company for event streaming. Among Kafka's broker servers, one is elected as the "controller" -- responsible for managing which broker is responsible for which partition of which topic. If two controllers existed simultaneously, partition assignments would conflict and messages would be routed incorrectly.
 
-**The critical requirement:** at any given moment, the system should have at most one leader. Not zero leaders (work stops), and definitely not two leaders simultaneously — a situation called "split-brain."
+**The critical requirement:** at any given moment, the system should have at most one leader. Not zero leaders (work stops), and definitely not two leaders simultaneously -- a situation called "split-brain."
 
-**A real example — what the Kafka controller actually does:**
+**A real example -- what the Kafka controller actually does:**
 
 Apache Kafka is a message streaming system used by companies like LinkedIn (which built it), Netflix, Uber, and essentially every company handling large volumes of real-time events. Kafka organizes messages into "topics" (like channels), and each topic is split into "partitions" (numbered segments). Each partition is replicated across multiple brokers (Kafka servers).
 
@@ -791,13 +791,13 @@ Among all the Kafka brokers in a cluster, one is elected "controller." Here is w
 
 - When a new topic is created: decide which broker stores partition 0, which stores partition 1, which stores partition 2, and so on. Without a single decision-maker, two brokers might both try to claim "I store partition 0."
 
-- When a broker fails: the controller detects the failure, determines which partitions were on that broker, and reassigns leadership for those partitions to surviving brokers. Without a single controller, all surviving brokers might simultaneously try to claim leadership for the abandoned partitions — or none might, leaving the partitions unserved.
+- When a broker fails: the controller detects the failure, determines which partitions were on that broker, and reassigns leadership for those partitions to surviving brokers. Without a single controller, all surviving brokers might simultaneously try to claim leadership for the abandoned partitions -- or none might, leaving the partitions unserved.
 
 - When a new broker joins: the controller can optionally rebalance partition leadership to take advantage of the additional capacity.
 
 In Kafka's original design, ZooKeeper was used for controller election. A broker would create an ephemeral ZooKeeper node `/controller`. The first broker to create it became controller. When the controller crashed, its ZooKeeper session expired, the node was deleted, and a new election happened.
 
-In KRaft mode (Kafka's newer architecture, removing the ZooKeeper dependency): Kafka implements its own leader election using a Raft-like protocol. This is an example of a system moving away from an external coordination service toward self-contained coordination — reducing operational complexity at the cost of implementation complexity inside Kafka itself.
+In KRaft mode (Kafka's newer architecture, removing the ZooKeeper dependency): Kafka implements its own leader election using a Raft-like protocol. This is an example of a system moving away from an external coordination service toward self-contained coordination -- reducing operational complexity at the cost of implementation complexity inside Kafka itself.
 
 The lesson: even the most sophisticated systems use the same conceptual primitives (election, heartbeats, quorum) that we have covered here. The details vary, but the fundamentals are universal.
 
@@ -817,17 +817,17 @@ When the network partition heals and Server A and Server B try to reconcile, the
 
 Here is a simpler way to feel why split-brain is bad. Imagine a company that briefly ends up with two managers who both think they are in charge (maybe there was a promotion miscommunication). Manager A emails the team: "We are canceling the Johnson project. Everyone move to the Smith project." Manager B emails the team at the same time: "Johnson project is our top priority. Everyone put Smith on hold."
 
-Each employee gets two contradictory emails. Some follow Manager A. Others follow Manager B. Some work on Johnson. Others work on Smith. When the managers figure out the mix-up, the work done in those hours is a confused mess — some of it will need to be undone.
+Each employee gets two contradictory emails. Some follow Manager A. Others follow Manager B. Some work on Johnson. Others work on Smith. When the managers figure out the mix-up, the work done in those hours is a confused mess -- some of it will need to be undone.
 
 Split-brain in databases works exactly this way. Two "leaders" give contradictory instructions. The data follows both sets of instructions. When the split-brain is resolved, the data is a mess that cannot be automatically untangled.
 
-One leader acting slowly — even painfully slowly — is vastly better than two leaders acting simultaneously. This is why leader election algorithms are extremely conservative: they would rather have a period with NO leader (and have the system pause) than risk having two leaders simultaneously.
+One leader acting slowly -- even painfully slowly -- is vastly better than two leaders acting simultaneously. This is why leader election algorithms are extremely conservative: they would rather have a period with NO leader (and have the system pause) than risk having two leaders simultaneously.
 
 ---
 
-## How Leader Election Works — The Conceptual Model
+## How Leader Election Works -- The Conceptual Model
 
-Now let us look at how a group of computers actually runs an election. We will use the conceptual model first — understanding the logic — and then look at specific mechanisms.
+Now let us look at how a group of computers actually runs an election. We will use the conceptual model first -- understanding the logic -- and then look at specific mechanisms.
 
 **The class election analogy:**
 
@@ -835,69 +835,69 @@ Your high school class needs to elect a student council president. Every student
 
 Distributed leader election works almost exactly this way. Let us trace through the eight steps:
 
-**Step 1 — All nodes start as equals (candidates):**
+**Step 1 -- All nodes start as equals (candidates):**
 When a cluster of N servers first starts up, no one is the leader. All nodes know about each other. Any node could potentially become the leader.
 
-**Step 2 — A trigger causes the election:**
-An election happens in one of two situations: (a) the cluster is starting up for the first time and needs to pick an initial leader, or (b) the existing leader has been silent too long and followers suspect it has failed. The "too long" threshold is determined by the heartbeat timeout — more on this in a moment.
+**Step 2 -- A trigger causes the election:**
+An election happens in one of two situations: (a) the cluster is starting up for the first time and needs to pick an initial leader, or (b) the existing leader has been silent too long and followers suspect it has failed. The "too long" threshold is determined by the heartbeat timeout -- more on this in a moment.
 
-**Step 3 — Nodes campaign:**
+**Step 3 -- Nodes campaign:**
 A node that believes an election should happen declares itself a candidate. It sends a "vote for me" request to every other node in the cluster. This request includes information that helps other nodes decide whether to vote for this candidate.
 
-**Step 4 — Majority wins:**
+**Step 4 -- Majority wins:**
 Each node that receives a "vote for me" request decides whether to vote for that candidate. If the candidate gets votes from more than half of the total nodes (a majority, also called a quorum), it wins the election.
 
-**Step 5 — The winner announces itself:**
+**Step 5 -- The winner announces itself:**
 The winning node broadcasts to all other nodes: "I am the new leader."
 
-**Step 6 — Other nodes acknowledge:**
+**Step 6 -- Other nodes acknowledge:**
 Other nodes update their internal records: "Server X is the current leader." They route all leader-dependent requests to Server X.
 
-**Step 7 — Leader sends heartbeats:**
+**Step 7 -- Leader sends heartbeats:**
 The leader periodically sends small "I am alive" messages to all followers. These are called heartbeats, because like a biological heartbeat they are a regular signal that proves the sender is alive and functional. Typical heartbeat interval: 50 to 150 milliseconds.
 
-**Step 8 — If heartbeats stop, new election:**
-Each follower keeps a timer. Every time it receives a heartbeat, it resets the timer. If the timer expires (heartbeats have stopped for longer than the "election timeout" — typically 3 to 5 times the heartbeat interval, so roughly 150ms to 750ms), the follower concludes the leader may be dead and triggers a new election by going to Step 3.
+**Step 8 -- If heartbeats stop, new election:**
+Each follower keeps a timer. Every time it receives a heartbeat, it resets the timer. If the timer expires (heartbeats have stopped for longer than the "election timeout" -- typically 3 to 5 times the heartbeat interval, so roughly 150ms to 750ms), the follower concludes the leader may be dead and triggers a new election by going to Step 3.
 
 ```
 LEADER ELECTION: THE 8-STEP PROCESS
 
-Time ──────────────────────────────────────────────────────────────────────────►
+Time -------------------------------------------------------------------------->
 
 Phase 1: Cluster starts up
   All nodes: [candidate] [candidate] [candidate] [candidate] [candidate]
   All nodes: "We need a leader. Let's vote."
 
 Phase 2: Election
-  Node A: "Vote for me!" ──────────────────────────────────► Nodes B, C, D, E
+  Node A: "Vote for me!" ----------------------------------> Nodes B, C, D, E
   Node A: receives votes from B, C, D (3 votes out of 5 = majority)
   Node A: "I am the leader."
 
 Phase 3: Normal operation (heartbeats every 100ms)
-  Node A: ──heartbeat──heartbeat──heartbeat──heartbeat── [heartbeats stop!]
+  Node A: --heartbeat--heartbeat--heartbeat--heartbeat-- [heartbeats stop!]
   Nodes B,C,D,E: "Got it"   "Got it"   "Got it"   "Got it"  [timer starts...]
 
 Phase 4: Leader fails
-  Node A: CRASH ✗
+  Node A: CRASH N
   After timeout (say 500ms with no heartbeat):
   Node B: "I haven't heard from A in 500ms. Time to vote."
-  Node B: "Vote for me!" ──────────────────────────────────► Nodes C, D, E
+  Node B: "Vote for me!" ----------------------------------> Nodes C, D, E
   Node B: receives votes from C, D (2 votes + itself = 3 out of 4 remaining = majority)
   Node B: "I am the new leader."
 
 Phase 5: New leader operational
-  Node B: ──heartbeat──heartbeat──heartbeat──────────────────────────────────►
+  Node B: --heartbeat--heartbeat--heartbeat---------------------------------->
   Nodes C,D,E: "Got it"   "Got it"   "Got it"
 ```
 
 The visual shows the lifecycle. Clusters start with an election. Leaders run until they fail. When they fail, surviving nodes detect the silence, start a new election, and the winning node takes over.
 
-**The critical rule — majority (quorum):**
+**The critical rule -- majority (quorum):**
 
 Why does a leader need votes from MORE THAN HALF of the nodes? This is the single most important rule to understand, and it has a beautiful mathematical property.
 
 If you have 5 nodes and require a majority (3 votes) to win:
-- Can Candidate A get 3 votes and Candidate B also get 3 votes simultaneously? Let us check. If A has votes from nodes 1, 2, 3 — that is 3 nodes. For B to also have 3 votes, B needs votes from nodes including at least one of {1, 2, 3} (because there are only 5 nodes total). But nodes 1, 2, and 3 already voted for A. They cannot vote for both A and B in the same election. So B can get at most votes from nodes 4 and 5 — only 2 votes. B loses.
+- Can Candidate A get 3 votes and Candidate B also get 3 votes simultaneously? Let us check. If A has votes from nodes 1, 2, 3 -- that is 3 nodes. For B to also have 3 votes, B needs votes from nodes including at least one of {1, 2, 3} (because there are only 5 nodes total). But nodes 1, 2, and 3 already voted for A. They cannot vote for both A and B in the same election. So B can get at most votes from nodes 4 and 5 -- only 2 votes. B loses.
 
 The majority rule creates a mathematical impossibility for two candidates to both win simultaneously. The majority sets are guaranteed to OVERLAP. Any two majorities of 5 nodes must share at least one node, and that shared node can only vote for one candidate.
 
@@ -914,7 +914,7 @@ The only way both can have 3 votes is if they share nodes.
 But each node can only vote for one candidate per election.
 
 Attempt: A gets {1, 2, 3}. B gets {3, 4, 5}.
-         Node 3 voted for BOTH? Impossible — one vote per election.
+         Node 3 voted for BOTH? Impossible -- one vote per election.
 
 Attempt: A gets {1, 2, 3}. B gets {4, 5}.
          B only has 2 votes. B loses.
@@ -933,13 +933,13 @@ This diagram makes the guarantee concrete. The mathematical insight is called th
 
 ## Mechanism 1: Lease-Based Leadership
 
-Now we look at the two main mechanical approaches to implementing leader election. The first is lease-based leadership — simpler to understand and widely used.
+Now we look at the two main mechanical approaches to implementing leader election. The first is lease-based leadership -- simpler to understand and widely used.
 
 **The parking permit analogy:**
 
 A parking permit works like this: you pay for the permit, you get the right to park in a specific spot, but only for a specific time period (say, two hours). During those two hours, you can park there. No one else can take your spot while your permit is valid. When your two hours expire, you must renew your permit or someone else can take the spot. If you leave on vacation and forget to renew, your permit expires and another car takes your spot.
 
-A leadership lease works exactly the same way. A node is granted "the right to be leader" for a fixed time period — this is the "time to live" or TTL. During that period, the node IS the leader. Before the TTL expires, the leader must renew it (like renewing a parking permit). If the leader fails and stops renewing, the TTL expires and another node can claim leadership.
+A leadership lease works exactly the same way. A node is granted "the right to be leader" for a fixed time period -- this is the "time to live" or TTL. During that period, the node IS the leader. Before the TTL expires, the leader must renew it (like renewing a parking permit). If the leader fails and stops renewing, the TTL expires and another node can claim leadership.
 
 ```
 LEASE-BASED LEADERSHIP TIMELINE
@@ -959,44 +959,44 @@ T=14s:  Node A renews lease. New TTL = 10 seconds.
 T=16s:  Node A CRASHES. No more renewals.
 
 T=26s:  Lease expires (10 seconds after last renewal at T=16s).
-        [GAP: T=16s to T=26s — NO LEADER. 10-second window.]
+        [GAP: T=16s to T=26s -- NO LEADER. 10-second window.]
 
 T=26s:  Node B detects lease is available.
         Node B claims leadership lease.
         [B IS LEADER]
 
  0s    4s    8s    12s   16s   20s   24s   28s
-  │     │     │     │     │     │     │     │
-  ├─────────────────────────────────────────►
-  A  A  A  A  A  A  A  A  A  A  │     │  B  B
-  Leader    Leader    Leader  Crash  │  New
+  |     |     |     |     |     |     |     |
+  +----------------------------------------->
+  A  A  A  A  A  A  A  A  A  A  |     |  B  B
+  Leader    Leader    Leader  Crash  |  New
  claimed  renewed  renewed         No   leader
                                 leader
 ```
 
-The timeline diagram shows three phases. Phase one: normal operation, with Node A renewing its lease every few seconds, staying comfortably ahead of the expiry. Phase two: the crash and the gap — the 10-second window after the crash where no leader exists, because the lease has not expired yet. Phase three: the new leader claiming the expired lease.
+The timeline diagram shows three phases. Phase one: normal operation, with Node A renewing its lease every few seconds, staying comfortably ahead of the expiry. Phase two: the crash and the gap -- the 10-second window after the crash where no leader exists, because the lease has not expired yet. Phase three: the new leader claiming the expired lease.
 
 **Why the gap is intentional:**
 
 The 10-second gap between when Node A crashes (T=16s) and when Node B takes over (T=26s) might seem like a bug. Your instinct might be: "Why not let Node B take over immediately when Node A crashes?"
 
-The gap is intentional and necessary. Here is the problem it solves. Suppose there is a network partition — Node A is still alive and functioning, but cannot talk to Node B. From Node B's perspective, Node A has "crashed" (no heartbeats). From Node A's perspective, Node B is misbehaving (trying to steal the leadership).
+The gap is intentional and necessary. Here is the problem it solves. Suppose there is a network partition -- Node A is still alive and functioning, but cannot talk to Node B. From Node B's perspective, Node A has "crashed" (no heartbeats). From Node A's perspective, Node B is misbehaving (trying to steal the leadership).
 
-If Node B could take over immediately when it stops hearing from Node A, and if Node A is still running and serving requests, both A and B would be operating as leaders simultaneously — split-brain.
+If Node B could take over immediately when it stops hearing from Node A, and if Node A is still running and serving requests, both A and B would be operating as leaders simultaneously -- split-brain.
 
-The lease TTL prevents this. Node A's lease is valid for 10 seconds after the last renewal. Node A KNOWS its lease is valid until T=26s. Node A can continue operating as leader until T=26s with the certainty that no other node will take over before then. After T=26s, Node A's lease is expired — Node A must stop acting as leader, even if it has not crashed.
+The lease TTL prevents this. Node A's lease is valid for 10 seconds after the last renewal. Node A KNOWS its lease is valid until T=26s. Node A can continue operating as leader until T=26s with the certainty that no other node will take over before then. After T=26s, Node A's lease is expired -- Node A must stop acting as leader, even if it has not crashed.
 
 This creates a crucial contract: **during the lease window, the leaseholder is guaranteed to be the only leader.** After the window expires, a new leader can take over. The gap is the price you pay for this guarantee.
 
 **The clock skew problem revisited:**
 
-There is a subtle problem with leases and the clocks-lie issue we discussed earlier. Node A's lease expires "at T=26s, by Node A's clock." Node B checks its own clock and sees "it is T=26s — safe to take over!" But if Node B's clock is 5 seconds fast, Node B's clock reads T=26s when the real time is only T=21s — when Node A's lease still has 5 seconds remaining.
+There is a subtle problem with leases and the clocks-lie issue we discussed earlier. Node A's lease expires "at T=26s, by Node A's clock." Node B checks its own clock and sees "it is T=26s -- safe to take over!" But if Node B's clock is 5 seconds fast, Node B's clock reads T=26s when the real time is only T=21s -- when Node A's lease still has 5 seconds remaining.
 
 Both A and B would think they are the leader simultaneously.
 
 The practical solution: add a conservative buffer. Do not use the exact lease TTL as your takeover threshold. Use the lease TTL plus a safety margin that covers the maximum expected clock skew. If your lease is 10 seconds and your clocks can be off by at most 3 seconds, wait 13 seconds before claiming the expired lease.
 
-This makes the no-leader gap slightly longer — 13 seconds instead of 10 — but eliminates the risk of two simultaneous leaders due to clock disagreement.
+This makes the no-leader gap slightly longer -- 13 seconds instead of 10 -- but eliminates the risk of two simultaneous leaders due to clock disagreement.
 
 ---
 
@@ -1012,43 +1012,43 @@ If the chair becomes unavailable for two consecutive meetings, any member can ca
 
 Quorum-based election in distributed systems works almost identically:
 
-**Step 1 — Detecting the old leader:**
-Each follower has an "election timeout" — a timer that resets every time it receives a heartbeat from the leader. Typical timeout: 150ms to 750ms (3 to 5× the heartbeat interval of 50-150ms). If the timer fires (no heartbeat received within the timeout), the follower suspects the leader has failed.
+**Step 1 -- Detecting the old leader:**
+Each follower has an "election timeout" -- a timer that resets every time it receives a heartbeat from the leader. Typical timeout: 150ms to 750ms (3 to 5x the heartbeat interval of 50-150ms). If the timer fires (no heartbeat received within the timeout), the follower suspects the leader has failed.
 
-**Step 2 — Incrementing the term:**
-The node that wants to start an election increments the "election term" — a monotonically increasing number (always going up, never down) that labels each generation of leadership. Think of terms like episode numbers for a TV show: you are in Season 1 (term 1) until the leader changes, then Season 2 (term 2), and so on. Each season has exactly one leader.
+**Step 2 -- Incrementing the term:**
+The node that wants to start an election increments the "election term" -- a monotonically increasing number (always going up, never down) that labels each generation of leadership. Think of terms like episode numbers for a TV show: you are in Season 1 (term 1) until the leader changes, then Season 2 (term 2), and so on. Each season has exactly one leader.
 
-**Step 3 — Requesting votes:**
+**Step 3 -- Requesting votes:**
 The candidate sends a "RequestVote" message to all other nodes. The message includes the new term number and information about how up-to-date the candidate's data is.
 
-**Step 4 — Evaluating the vote request:**
+**Step 4 -- Evaluating the vote request:**
 Each node that receives a "RequestVote" checks two conditions:
-- Is this term number higher than any election I have participated in? (If you already voted in term 7, and someone is asking for votes in term 6, reject — that is an old election.)
+- Is this term number higher than any election I have participated in? (If you already voted in term 7, and someone is asking for votes in term 6, reject -- that is an old election.)
 - Is this candidate's data at least as up-to-date as mine? (A leader should not be elected if it has missed recent updates that other nodes have.)
 
-If both conditions pass: grant the vote. Update your own term number to the one in the request. You have now committed to this election term — you will reject any vote requests with a lower term.
+If both conditions pass: grant the vote. Update your own term number to the one in the request. You have now committed to this election term -- you will reject any vote requests with a lower term.
 
-**Step 5 — Winning:**
+**Step 5 -- Winning:**
 If the candidate receives votes from a majority (including its own vote for itself), it becomes the leader for this term. It immediately starts sending heartbeats to all followers to assert its leadership.
 
-**Step 6 — Other candidates give up:**
-As soon as any node receives a heartbeat from the new leader (which includes the new term number), it drops out of its own candidacy. A node that is still trying to run an election but receives a message with a higher term number immediately concedes — clearly a newer election has already been won.
+**Step 6 -- Other candidates give up:**
+As soon as any node receives a heartbeat from the new leader (which includes the new term number), it drops out of its own candidacy. A node that is still trying to run an election but receives a message with a higher term number immediately concedes -- clearly a newer election has already been won.
 
 ```
 QUORUM-BASED ELECTION: 5-NODE CLUSTER
 
 Normal operation (Term 1, Leader = Node A):
-[A-Leader] ──heartbeat──► [B] [C] [D] [E]
+[A-Leader] --heartbeat--> [B] [C] [D] [E]
 
 Node A crashes (T=0):
-                ✗
+                N
 [A-DEAD]        [B] [C] [D] [E]
-                 │   All four nodes' heartbeat timers start ticking...
+                 |   All four nodes' heartbeat timers start ticking...
 
-After 200ms (election timeout fires on Node C first — random timeout):
+After 200ms (election timeout fires on Node C first -- random timeout):
 [A-DEAD]        [B] [C-candidate] [D] [E]
-                     │
-                     └──── "RequestVote for Term 2" ──────────────────────► B, D, E
+                     |
+                     +---- "RequestVote for Term 2" ----------------------> B, D, E
 
 Nodes B, D, E receive RequestVote. All are in Term 1, all have not voted yet.
 All grant their votes.
@@ -1056,8 +1056,8 @@ All grant their votes.
 Node C receives 3 votes (B, D, E) + its own = 4 votes. Majority = 3. WINS!
 
 [A-DEAD]        [B] [C-Leader!] [D] [E]
-                     │
-                     └──── heartbeat (Term 2) ─────────────────────────────► B, D, E
+                     |
+                     +---- heartbeat (Term 2) -----------------------------> B, D, E
 
 All followers update: "Leader = C, Term = 2"
 
@@ -1078,7 +1078,7 @@ Different nodes wait 150ms to 300ms (random) before starting elections.
 The first to wake up usually wins before the others even start.
 ```
 
-The diagram shows two scenarios. The clean scenario: one node times out first, runs an election, wins before anyone else wakes up. The messier scenario: two nodes time out close together and both campaign. The resolution: term numbers ensure both candidates are trying to win the same election. The majority rule ensures at most one can succeed. If neither gets majority, the term expires with no winner, and a new term's election begins — with re-randomized timeouts that usually prevent another tie.
+The diagram shows two scenarios. The clean scenario: one node times out first, runs an election, wins before anyone else wakes up. The messier scenario: two nodes time out close together and both campaign. The resolution: term numbers ensure both candidates are trying to win the same election. The majority rule ensures at most one can succeed. If neither gets majority, the term expires with no winner, and a new term's election begins -- with re-randomized timeouts that usually prevent another tie.
 
 **Why this prevents split-brain with network partitions:**
 
@@ -1092,11 +1092,11 @@ Result: only the group of 3 can elect a leader. The group of 2 cannot. There is 
 
 ---
 
-## The Costs of Leader Election — What You're Actually Signing Up For
+## The Costs of Leader Election -- What You're Actually Signing Up For
 
 Understanding the mechanism is half the story. Understanding the costs is the other half. Senior engineers must clearly articulate both when proposing leader election in a design review.
 
-**Cost 1: The Failover Gap — Unavailability During Election**
+**Cost 1: The Failover Gap -- Unavailability During Election**
 
 Between when the old leader fails and the new leader is elected and begins serving requests, there is a window where the system cannot perform leader-dependent operations. The exact length of this window depends on:
 
@@ -1133,11 +1133,11 @@ Good systems implement backoff and jitter on client retries to spread this load.
 
 The diagram shows a 10-second gap is not just "10 seconds of downtime." It is 10 seconds of write queueing, followed by a burst of queued writes that can overwhelm the new leader. Experienced engineers think through the recovery storm, not just the failover duration.
 
-**Cost 2: Operational Complexity — The Coordination Service**
+**Cost 2: Operational Complexity -- The Coordination Service**
 
-Leader election does not happen in mid-air. It requires a coordination service — a separate distributed system that stores the current leader information, accepts and validates votes, and stores the lease state. Common choices: etcd, Apache ZooKeeper, or HashiCorp Consul.
+Leader election does not happen in mid-air. It requires a coordination service -- a separate distributed system that stores the current leader information, accepts and validates votes, and stores the lease state. Common choices: etcd, Apache ZooKeeper, or HashiCorp Consul.
 
-This coordination service is now a critical dependency. If it goes down, nothing can be elected leader. Kubernetes, which uses etcd for all its coordination, is completely non-functional if the etcd cluster is unavailable. Every new service, every pod scheduling decision, every configuration update — all blocked.
+This coordination service is now a critical dependency. If it goes down, nothing can be elected leader. Kubernetes, which uses etcd for all its coordination, is completely non-functional if the etcd cluster is unavailable. Every new service, every pod scheduling decision, every configuration update -- all blocked.
 
 You have traded one critical dependency (the leader) for another critical dependency (the coordination service). The difference: coordination services are designed to be highly available, usually run as a 3-node or 5-node cluster themselves, with their own replication and leader election. But they are still one more thing that can fail, one more system that needs monitoring, backup, and operational expertise.
 
@@ -1145,15 +1145,15 @@ You have traded one critical dependency (the leader) for another critical depend
 
 When the leader crashes, all followers detect it almost simultaneously. The leader's last heartbeat was sent to all followers at the same moment. All followers' heartbeat timers expire within milliseconds of each other. All of them begin election procedures at roughly the same time.
 
-This creates a "thundering herd" — a sudden burst of election traffic on the network at exactly the moment when the system is already stressed (the leader just crashed, and you are probably investigating why). Election messages, vote requests, vote replies, and leader announcements all fly simultaneously between all nodes.
+This creates a "thundering herd" -- a sudden burst of election traffic on the network at exactly the moment when the system is already stressed (the leader just crashed, and you are probably investigating why). Election messages, vote requests, vote replies, and leader announcements all fly simultaneously between all nodes.
 
 **The fix: randomized election timeouts.** Instead of all followers using the same election timeout (say, exactly 500ms), each follower uses a random timeout chosen from a range (say, randomly between 150ms and 300ms). The follower that happens to draw the smallest random number times out first, starts the election, and usually wins before anyone else has even started their own election campaign.
 
-Raft's original paper specifies this exact mechanism. The typical Raft election timeout range is 150ms to 300ms with a random value in that range chosen independently by each node. The probability of two nodes choosing such similar timeouts that they both start an election before one of them receives the other's heartbeat is low — and even in that case, the term-number mechanism resolves the conflict cleanly.
+Raft's original paper specifies this exact mechanism. The typical Raft election timeout range is 150ms to 300ms with a random value in that range chosen independently by each node. The probability of two nodes choosing such similar timeouts that they both start an election before one of them receives the other's heartbeat is low -- and even in that case, the term-number mechanism resolves the conflict cleanly.
 
 **Cost 4: The Stale Leader (Split-Brain via Network Partition)**
 
-This is the subtlest and most dangerous cost. A leader that was isolated by a network partition — cut off from the rest of the cluster — might not know it has been replaced. From its perspective, the network just got slow. It has not received any "you have been replaced" message, because all messages from the new leader are being blocked by the partition.
+This is the subtlest and most dangerous cost. A leader that was isolated by a network partition -- cut off from the rest of the cluster -- might not know it has been replaced. From its perspective, the network just got slow. It has not received any "you have been replaced" message, because all messages from the new leader are being blocked by the partition.
 
 This stale leader might continue accepting requests: write operations, state changes, API calls. It thinks it is doing its job. Meanwhile, the rest of the cluster has elected a new leader and is also processing requests. The two leaders diverge in state.
 
@@ -1161,9 +1161,9 @@ When the partition heals, the two states must be reconciled. If both leaders wer
 
 The fixes: two main approaches.
 
-Approach 1 — Fencing tokens: every lock or lease grant is issued with a monotonically increasing token number. Every operation performed under that authority must include the token. The storage system (database, file system) rejects operations with a token number lower than the highest it has seen. When the new leader is elected with token #7, any writes from the stale old leader (with token #5 or #6) are rejected. The stale leader is "fenced out" — its requests are ignored even if it is still trying to act as leader.
+Approach 1 -- Fencing tokens: every lock or lease grant is issued with a monotonically increasing token number. Every operation performed under that authority must include the token. The storage system (database, file system) rejects operations with a token number lower than the highest it has seen. When the new leader is elected with token #7, any writes from the stale old leader (with token #5 or #6) are rejected. The stale leader is "fenced out" -- its requests are ignored even if it is still trying to act as leader.
 
-Approach 2 — Epoch numbers: similar concept. Every leader is assigned an epoch number. All communications include the epoch. When a follower receives a message from a leader with an old epoch (lower than the current one), it rejects the message and informs the sender that a new leader has been elected. The old leader learns it has been replaced and shuts itself down.
+Approach 2 -- Epoch numbers: similar concept. Every leader is assigned an epoch number. All communications include the epoch. When a follower receives a message from a leader with an old epoch (lower than the current one), it rejects the message and informs the sender that a new leader has been elected. The old leader learns it has been replaced and shuts itself down.
 
 We will cover fencing tokens in full depth in Part B (distributed locks section). For now: just know that naively implementing leader election without fencing tokens is a trap. The stale leader problem is real and has caused production incidents at major technology companies.
 
@@ -1171,33 +1171,33 @@ We will cover fencing tokens in full depth in Part B (distributed locks section)
 
 ## Real-World Leader Election War Stories
 
-Theory is important. But the best way to understand why leader election costs matter is to look at what actually happens in production when leader election goes wrong. Here are three patterns that repeat themselves across the industry — the specific companies and exact details have been generalized, but the failure modes are real.
+Theory is important. But the best way to understand why leader election costs matter is to look at what actually happens in production when leader election goes wrong. Here are three patterns that repeat themselves across the industry -- the specific companies and exact details have been generalized, but the failure modes are real.
 
 **War Story 1: The "False Election" That Brought Down a Payment System**
 
-A payment processing company ran a five-node database cluster with leader election implemented using a heartbeat timeout of 100 milliseconds. Their heartbeat interval was 50 milliseconds — so if two consecutive heartbeats were missed, an election would start.
+A payment processing company ran a five-node database cluster with leader election implemented using a heartbeat timeout of 100 milliseconds. Their heartbeat interval was 50 milliseconds -- so if two consecutive heartbeats were missed, an election would start.
 
 One Tuesday afternoon, the network between the leader and two of the followers experienced a burst of congestion. The congestion lasted 120 milliseconds. During those 120 milliseconds, two heartbeats were missed. The two followers' timers fired. Both started elections simultaneously.
 
-The leader was not actually dead — it was just momentarily unreachable. But by the time connectivity restored, a new leader had been elected. The old leader received a "you have been replaced" message with a higher term number, stopped acting as leader, and began the process of becoming a follower.
+The leader was not actually dead -- it was just momentarily unreachable. But by the time connectivity restored, a new leader had been elected. The old leader received a "you have been replaced" message with a higher term number, stopped acting as leader, and began the process of becoming a follower.
 
-The problem: the "process of becoming a follower" involved replaying approximately 200ms worth of write operations that the new leader had already committed in a different order. This caused a 4-second outage — payments paused, then a burst of retries hit the new leader simultaneously, which slowed it enough that two more seconds of delays rippled through the client layer.
+The problem: the "process of becoming a follower" involved replaying approximately 200ms worth of write operations that the new leader had already committed in a different order. This caused a 4-second outage -- payments paused, then a burst of retries hit the new leader simultaneously, which slowed it enough that two more seconds of delays rippled through the client layer.
 
 Total customer-visible disruption: 6 seconds. Root cause: a 120ms network hiccup that triggered an unnecessary leader election with a too-short timeout.
 
-**The fix:** increase the heartbeat timeout from 2× heartbeat interval to 5× heartbeat interval. This means the election only triggers if 250 milliseconds of heartbeats are missed — much rarer due to network noise, but still fast enough to respond to actual node failures within a second or two.
+**The fix:** increase the heartbeat timeout from 2x heartbeat interval to 5x heartbeat interval. This means the election only triggers if 250 milliseconds of heartbeats are missed -- much rarer due to network noise, but still fast enough to respond to actual node failures within a second or two.
 
 **Lesson for interviews:** when someone proposes a "low" election timeout, ask: "How do we distinguish a dead leader from a temporarily unreachable leader? What is the cost of an unnecessary election during normal operating conditions?"
 
 ```
 FALSE ELECTION TIMELINE
 
-Normal ops:  Leader ──hb──hb──hb──hb──hb──hb──hb──hb──► Followers
+Normal ops:  Leader --hb--hb--hb--hb--hb--hb--hb--hb--> Followers
                      50ms 50ms 50ms 50ms 50ms...
 
 Network spike at T=0:
-             Leader ──hb──[120ms of congestion]──hb──hb──► Followers
-                     50ms  ↑ followers miss 2 heartbeats ↑  50ms
+             Leader --hb--[120ms of congestion]--hb--hb--> Followers
+                     50ms  ^ followers miss 2 heartbeats ^  50ms
 
 At T=100ms: Follower A: "Timer fired. Starting election."
 At T=100ms: Follower B: "Timer fired. Starting election." (simultaneously)
@@ -1217,7 +1217,7 @@ T=200ms to T=600ms: Write traffic paused while new leader stabilizes.
                     Customer-visible slowdown: 6 seconds.
 
 ROOT CAUSE: 120ms network hiccup + 100ms election timeout = unnecessary election.
-FIX: Raise timeout to 5× heartbeat interval (250ms). 
+FIX: Raise timeout to 5x heartbeat interval (250ms). 
      Network hiccup cleared at 120ms. 250ms timeout never fires. No election.
 ```
 
@@ -1225,7 +1225,7 @@ FIX: Raise timeout to 5× heartbeat interval (250ms).
 
 A distributed logging system used lease-based leader election with a 30-second TTL on the leadership lease. The leader would renew every 10 seconds to stay well ahead of the TTL.
 
-One leader node experienced a "partial failure" — a failure mode that is more dangerous than a clean crash. The node was still running. Its operating system was still scheduling processes. But the network interface card had entered a degraded state: it could receive packets but could not send them reliably. It could hear everyone else's messages, but its own messages were being silently dropped.
+One leader node experienced a "partial failure" -- a failure mode that is more dangerous than a clean crash. The node was still running. Its operating system was still scheduling processes. But the network interface card had entered a degraded state: it could receive packets but could not send them reliably. It could hear everyone else's messages, but its own messages were being silently dropped.
 
 This created a situation where the leader:
 - Could NOT send heartbeats to followers (packets dropped on send)
@@ -1237,9 +1237,9 @@ From the leader's perspective: it was receiving write requests and processing th
 
 The leadership lease expired after 30 seconds of failed renewals. A new leader was elected. The new leader began accepting writes.
 
-The old leader continued receiving writes from clients whose connections had not yet timed out. It continued processing them — but those writes were never replicated to followers, and the followers were not looking at the old leader anymore.
+The old leader continued receiving writes from clients whose connections had not yet timed out. It continued processing them -- but those writes were never replicated to followers, and the followers were not looking at the old leader anymore.
 
-For approximately 45 seconds: two "leaders" were accepting and processing writes. The old leader's writes went nowhere. The new leader's writes were properly replicated. When the old leader was finally isolated (network config forced a full reset), its 45-second window of writes was simply lost — as if those operations never happened.
+For approximately 45 seconds: two "leaders" were accepting and processing writes. The old leader's writes went nowhere. The new leader's writes were properly replicated. When the old leader was finally isolated (network config forced a full reset), its 45-second window of writes was simply lost -- as if those operations never happened.
 
 **Lesson for interviews:** fencing tokens and epoch numbers are not optional extras. They are essential protection against partial failure modes. In this case, if the coordination service had issued a fencing token with each lease grant, the downstream storage system could have rejected the stale leader's writes (because its token number was lower than the new leader's token number).
 
@@ -1247,7 +1247,7 @@ For approximately 45 seconds: two "leaders" were accepting and processing writes
 
 A company ran a three-node database cluster across three AWS Availability Zones (essentially three separate data centers within a region, designed to be independent failure domains). Node 1 in Zone A. Node 2 in Zone B. Node 3 in Zone C. Leader election required majority (2 of 3 votes).
 
-AWS experienced an Availability Zone A partial failure: Zone A could still communicate with Zone B, and Zone A could still communicate with Zone C — but Zone B and Zone C could not communicate with each other.
+AWS experienced an Availability Zone A partial failure: Zone A could still communicate with Zone B, and Zone A could still communicate with Zone C -- but Zone B and Zone C could not communicate with each other.
 
 This is called a "partial mesh partition" and it is nastier than a clean split. The topology:
 
@@ -1255,42 +1255,42 @@ This is called a "partial mesh partition" and it is nastier than a clean split. 
 - Node 2 (Zone B) can see: Node 1 (Zone A) only
 - Node 3 (Zone C) can see: Node 1 (Zone A) only
 
-Node 1 could reach majority (it could see both Node 2 and Node 3). So Node 1 was unambiguously the leader in this partition — it could communicate with both other nodes.
+Node 1 could reach majority (it could see both Node 2 and Node 3). So Node 1 was unambiguously the leader in this partition -- it could communicate with both other nodes.
 
 But there was a subtle problem. The application's load balancer was doing health checks to all three nodes. Node 2 and Node 3 appeared healthy (they were still running). But from the load balancer's perspective, it could not always distinguish "this node is a follower" from "this node is the leader" without complex logic.
 
-During the 8-minute AWS incident window, some write requests were routed to Node 2 (a follower). Node 2, properly configured, rejected them and redirected to Node 1 (the leader). This caused elevated error rates but not data corruption — the writes were rejected, not accepted in duplicate.
+During the 8-minute AWS incident window, some write requests were routed to Node 2 (a follower). Node 2, properly configured, rejected them and redirected to Node 1 (the leader). This caused elevated error rates but not data corruption -- the writes were rejected, not accepted in duplicate.
 
-The near-miss here was in the health check configuration. If the health check had been simpler ("is the port open?") rather than smarter ("is this node the leader?"), write requests to followers would have been silently rejected at the database level with cryptic errors rather than properly redirected. Some client libraries would have retried on a different node — but some would have given up and reported a write failure, causing data loss from the application's perspective.
+The near-miss here was in the health check configuration. If the health check had been simpler ("is the port open?") rather than smarter ("is this node the leader?"), write requests to followers would have been silently rejected at the database level with cryptic errors rather than properly redirected. Some client libraries would have retried on a different node -- but some would have given up and reported a write failure, causing data loss from the application's perspective.
 
 **Lesson for interviews:** how clients discover the leader is as important as how the leader is elected. A sophisticated election algorithm means nothing if clients cannot reliably route writes to the current leader. Health checks should expose leadership status, not just liveness. Client libraries should understand the difference between "server is down" (retry on another server) and "server is not the leader" (redirect to leader).
 
 ---
 
-## etcd and ZooKeeper — The Tools You'll Actually Use
+## etcd and ZooKeeper -- The Tools You'll Actually Use
 
 You now understand the theory. Let us talk about the actual tools that implement leader election in production systems.
 
 **The magic shared whiteboard analogy:**
 
-Imagine a magic whiteboard that has special properties: every computer in your network can read it and write to it simultaneously. When something is written on the whiteboard, all computers see the update within milliseconds. If two computers try to write different things to the same spot at the exact same time, only one of them succeeds — the whiteboard enforces that writes are atomic (one at a time, in a defined order). The whiteboard never lies and never loses data.
+Imagine a magic whiteboard that has special properties: every computer in your network can read it and write to it simultaneously. When something is written on the whiteboard, all computers see the update within milliseconds. If two computers try to write different things to the same spot at the exact same time, only one of them succeeds -- the whiteboard enforces that writes are atomic (one at a time, in a defined order). The whiteboard never lies and never loses data.
 
 This whiteboard would be incredibly useful for coordination. To implement leader election: write "SERVER_A is leader" on the whiteboard. Every other server can read the whiteboard to find the current leader. Only one server can write to any particular spot at once. If SERVER_A crashes, its entry expires (like a lease) and another server can write its own name.
 
-This is exactly what etcd and ZooKeeper provide. They are not databases for your application data — they store small amounts of coordination metadata: who is the current leader, what is the current configuration, which locks are held.
+This is exactly what etcd and ZooKeeper provide. They are not databases for your application data -- they store small amounts of coordination metadata: who is the current leader, what is the current configuration, which locks are held.
 
 **etcd:**
 
-etcd (pronounced "et-see-dee") is the coordination service that runs all of Kubernetes. When Kubernetes needs to know which server is the scheduler leader, which nodes are available, what configuration exists, where pods are running — all of that is stored in etcd.
+etcd (pronounced "et-see-dee") is the coordination service that runs all of Kubernetes. When Kubernetes needs to know which server is the scheduler leader, which nodes are available, what configuration exists, where pods are running -- all of that is stored in etcd.
 
 etcd stores key-value pairs, like a simple dictionary. The keys are strings (like file paths: `/services/payment/leader`). The values are small blobs of data (like "server_a_192.168.1.1").
 
 The operations that make etcd useful for coordination:
 
-- **GET** — read the current value of a key
-- **SET** — write a value to a key
-- **WATCH** — subscribe to notifications: "tell me immediately whenever the value of this key changes"
-- **SET if not exists (compare-and-swap)** — atomically: "set this key to this value, but ONLY if the key does not currently exist (or has a specific expected value)"
+- **GET** -- read the current value of a key
+- **SET** -- write a value to a key
+- **WATCH** -- subscribe to notifications: "tell me immediately whenever the value of this key changes"
+- **SET if not exists (compare-and-swap)** -- atomically: "set this key to this value, but ONLY if the key does not currently exist (or has a specific expected value)"
 
 The compare-and-swap operation is the magic ingredient for leader election. Here is how it works:
 
@@ -1301,12 +1301,12 @@ All servers want to become leader. The key is "/cluster/leader".
 First server to write this key becomes leader.
 
 Server A: tries atomic SET "/cluster/leader" = "server_a" IF key does not exist
-          Result: ✓ SUCCESS. Key was empty. Server A wrote it.
+          Result: Y SUCCESS. Key was empty. Server A wrote it.
           Server A IS NOW LEADER.
           Server A: starts renewing lease (updating key's TTL every 5 seconds)
 
 Server B: tries atomic SET "/cluster/leader" = "server_b" IF key does not exist
-          Result: ✗ FAIL. Key already exists (Server A wrote it first).
+          Result: N FAIL. Key already exists (Server A wrote it first).
           Server B: enters follower mode. Watches the key for changes.
 
 Server C: same as Server B. FAIL. Watches key.
@@ -1322,11 +1322,11 @@ etcd notifies all WATCHERS: "the key /cluster/leader was deleted!"
 
 Server B and Server C both receive the notification immediately.
 Both try atomic SET "/cluster/leader" = "server_b/server_c" IF not exists.
-One of them wins (atomic — only one can succeed).
+One of them wins (atomic -- only one can succeed).
 That server becomes the new leader.
 ```
 
-The diagram shows the full lifecycle. The compare-and-swap atomicity is what prevents two servers from simultaneously becoming leader: even if both B and C receive the "key deleted" notification at exactly the same moment and both immediately try to write the key, only one of their writes can succeed — the other sees the key already exists and fails.
+The diagram shows the full lifecycle. The compare-and-swap atomicity is what prevents two servers from simultaneously becoming leader: even if both B and C receive the "key deleted" notification at exactly the same moment and both immediately try to write the key, only one of their writes can succeed -- the other sees the key already exists and fails.
 
 **ZooKeeper:**
 
@@ -1334,16 +1334,16 @@ ZooKeeper is older (created at Yahoo around 2007, open-sourced as part of Apache
 
 ZooKeeper introduces two special types of nodes:
 
-**Ephemeral nodes** — a node in ZooKeeper's tree structure that automatically disappears when the client that created it disconnects. This makes them perfect for leader election: a server creates an ephemeral node "/services/leader" when it becomes leader. If the server crashes, its ZooKeeper session expires (usually within 30 seconds), and the ephemeral node is automatically deleted. Other servers watching that node are immediately notified, and the election begins.
+**Ephemeral nodes** -- a node in ZooKeeper's tree structure that automatically disappears when the client that created it disconnects. This makes them perfect for leader election: a server creates an ephemeral node "/services/leader" when it becomes leader. If the server crashes, its ZooKeeper session expires (usually within 30 seconds), and the ephemeral node is automatically deleted. Other servers watching that node are immediately notified, and the election begins.
 
-**Sequence nodes** — when you create a node with the "sequential" flag, ZooKeeper automatically appends a monotonically increasing number to the node name. So if three servers each try to create "/locks/lock_", they get "/locks/lock_0000000001", "/locks/lock_0000000002", and "/locks/lock_0000000003". The server with the lowest sequence number is the leader. If the leader crashes and its ephemeral node disappears, the server with the next-lowest sequence number takes over.
+**Sequence nodes** -- when you create a node with the "sequential" flag, ZooKeeper automatically appends a monotonically increasing number to the node name. So if three servers each try to create "/locks/lock_", they get "/locks/lock_0000000001", "/locks/lock_0000000002", and "/locks/lock_0000000003". The server with the lowest sequence number is the leader. If the leader crashes and its ephemeral node disappears, the server with the next-lowest sequence number takes over.
 
 ```
 ZOOKEEPER LEADER ELECTION WITH SEQUENCE NODES
 
 Five servers each create ephemeral+sequential nodes under "/election/":
 
-Server A creates: /election/candidate_0000000001  ← WINS (lowest number)
+Server A creates: /election/candidate_0000000001  <- WINS (lowest number)
 Server B creates: /election/candidate_0000000002
 Server C creates: /election/candidate_0000000003
 Server D creates: /election/candidate_0000000004
@@ -1353,7 +1353,7 @@ Server A is leader (lowest sequence number).
 B, C, D, E watch the node with the next-lower sequence number than themselves.
 (B watches A, C watches B, D watches C, E watches D)
 
-Server A crashes → ephemeral node /election/candidate_0000000001 deleted.
+Server A crashes -> ephemeral node /election/candidate_0000000001 deleted.
 
 Server B's watch fires. B checks: am I now the lowest? YES.
 Server B announces itself as leader. 
@@ -1362,9 +1362,9 @@ Server C, D, E's watches did NOT fire (they were watching B, C, D respectively).
 No thundering herd. No simultaneous election storm.
 ```
 
-This ZooKeeper pattern is elegant. Each server only watches ONE other node, not all nodes. When a node disappears, only the next server in sequence gets a watch notification. This prevents the thundering herd problem at the ZooKeeper level — instead of all followers trying to become leader simultaneously when the leader fails, only the next-in-line follower is notified.
+This ZooKeeper pattern is elegant. Each server only watches ONE other node, not all nodes. When a node disappears, only the next server in sequence gets a watch notification. This prevents the thundering herd problem at the ZooKeeper level -- instead of all followers trying to become leader simultaneously when the leader fails, only the next-in-line follower is notified.
 
-**etcd vs ZooKeeper — which to use?**
+**etcd vs ZooKeeper -- which to use?**
 
 Both are battle-tested and widely used. The practical guidance:
 
@@ -1389,27 +1389,27 @@ Here are the situations where leader election seems like the answer but often is
 
 Naive thinking: "I need one scheduler to assign jobs to workers, so I need to elect a leader scheduler."
 
-Better design: Use a work queue. Workers pull tasks from the queue themselves. No central scheduler needed at all. The queue handles ordering, delivery guarantees, and "at most once" or "at least once" semantics. Kafka, RabbitMQ, SQS — these tools let workers independently consume work without any coordination between workers. You do not need a leader to tell workers what to do if the queue itself provides the work.
+Better design: Use a work queue. Workers pull tasks from the queue themselves. No central scheduler needed at all. The queue handles ordering, delivery guarantees, and "at most once" or "at least once" semantics. Kafka, RabbitMQ, SQS -- these tools let workers independently consume work without any coordination between workers. You do not need a leader to tell workers what to do if the queue itself provides the work.
 
 **Situation 2: Rate limiting**
 
 Naive thinking: "I need to globally rate limit users to 1,000 requests per minute. I need a single rate limit coordinator that all servers check."
 
-Better design: Use per-node approximate limits. Each of your 10 servers limits the user to 100 requests per minute (1,000 / 10 servers). The total is approximately 1,000 per minute globally. This is approximate — if all traffic happens to route to one server, that server might rate limit at 100 while other servers sit idle. But in most real-world cases, traffic is roughly distributed, and the approximation is close enough. The cost savings (no coordination service, no single point of failure, no 50ms latency per check) almost always outweigh the cost of occasional slight over-allowance.
+Better design: Use per-node approximate limits. Each of your 10 servers limits the user to 100 requests per minute (1,000 / 10 servers). The total is approximately 1,000 per minute globally. This is approximate -- if all traffic happens to route to one server, that server might rate limit at 100 while other servers sit idle. But in most real-world cases, traffic is roughly distributed, and the approximation is close enough. The cost savings (no coordination service, no single point of failure, no 50ms latency per check) almost always outweigh the cost of occasional slight over-allowance.
 
-If you genuinely need exact global rate limiting (rare), use a token bucket in Redis without leader election — just direct atomic operations on a shared counter.
+If you genuinely need exact global rate limiting (rare), use a token bucket in Redis without leader election -- just direct atomic operations on a shared counter.
 
 **Situation 3: Preventing duplicate operations**
 
 Naive thinking: "Two servers might send the same email. I need a leader to coordinate sends."
 
-Better design: Use idempotency. Before sending the email, write an idempotency record to the database: "Email for event XYZ has been sent" with a unique constraint on the event ID. If two servers both try to record "email for event XYZ sent," the database's unique constraint rejects the second insert. The server whose insert was rejected knows not to send the email. No leader election needed — the database itself provides coordination through unique constraints.
+Better design: Use idempotency. Before sending the email, write an idempotency record to the database: "Email for event XYZ has been sent" with a unique constraint on the event ID. If two servers both try to record "email for event XYZ sent," the database's unique constraint rejects the second insert. The server whose insert was rejected knows not to send the email. No leader election needed -- the database itself provides coordination through unique constraints.
 
 **Situation 4: Config updates**
 
 Naive thinking: "I need to push a new config to all servers simultaneously. I need a leader to coordinate the update."
 
-Better design: Version your configuration. Each server watches a configuration key (in etcd or a similar store). When the config is updated, the version number increments. Each server independently reads the new version. You do not need a leader to coordinate which server reads the config — each server does it independently when it detects the version has changed.
+Better design: Version your configuration. Each server watches a configuration key (in etcd or a similar store). When the config is updated, the version number increments. Each server independently reads the new version. You do not need a leader to coordinate which server reads the config -- each server does it independently when it detects the version has changed.
 
 **When you DO need leader election:**
 
@@ -1421,43 +1421,43 @@ The genuine use cases are narrower than they first appear:
 
 3. **Event log with total order guarantee.** If the business requires that all events be recorded in one globally-agreed-upon sequence (certain financial systems, audit logs, some messaging systems), you need a single authoritative sequencer. Leader election maintains that sequencer.
 
-4. **State machine replication.** When you need a group of servers to all apply the same sequence of operations to maintain identical state (used in highly available control planes, distributed databases), you need agreement on the order of operations — which is what consensus algorithms and leader election provide.
+4. **State machine replication.** When you need a group of servers to all apply the same sequence of operations to maintain identical state (used in highly available control planes, distributed databases), you need agreement on the order of operations -- which is what consensus algorithms and leader election provide.
 
 ```
 DECISION FLOWCHART: DO I NEED LEADER ELECTION?
 
 START: I'm considering adding leader election to my system.
-│
-▼
+|
+v
 Can I partition my data so each partition is handled independently?
 (User 12345 always goes to Shard 3, no cross-shard coordination needed)
-│
-├─ YES ──► Use partitioning instead. No leader election needed.
-│
-└─ NO
-    │
-    ▼
+|
++- YES --> Use partitioning instead. No leader election needed.
+|
++- NO
+    |
+    v
     Is eventual consistency acceptable?
     (Each server makes decisions independently, reconciles later)
-    │
-    ├─ YES ──► No coordination needed. Design for convergence.
-    │
-    └─ NO
-        │
-        ▼
+    |
+    +- YES --> No coordination needed. Design for convergence.
+    |
+    +- NO
+        |
+        v
         Can I make the operation idempotent?
         (Two servers doing the same thing has the same result as one)
-        │
-        ├─ YES ──► Use at-least-once delivery with idempotency. No leader needed.
-        │
-        └─ NO
-            │
-            ▼
+        |
+        +- YES --> Use at-least-once delivery with idempotency. No leader needed.
+        |
+        +- NO
+            |
+            v
             Do you need ONE node to be the single authoritative source for writes?
-            │
-            ├─ YES ──► Leader election is appropriate. Proceed, but understand the costs.
-            │
-            └─ NO ───► Reconsider. There may be a coordination-free design waiting.
+            |
+            +- YES --> Leader election is appropriate. Proceed, but understand the costs.
+            |
+            +- NO ---> Reconsider. There may be a coordination-free design waiting.
 ```
 
 The flowchart above is a practical heuristic for system design interviews. Walk through it before committing to leader election. An L6 interviewer will appreciate the discipline of asking "do I really need this?" before jumping to implementation.
@@ -1468,7 +1468,7 @@ The flowchart above is a practical heuristic for system design interviews. Walk 
 
 Let us walk through a concrete design exercise to make the "avoid coordination" principle feel real. This is the kind of thinking an L6 interviewer wants to see.
 
-**The problem:** Design a system that sends welcome emails when users register. There are 10 application servers. Each server might receive a registration event. We need to make sure exactly one email is sent — not zero (user never gets welcome), not two (user gets duplicate email and thinks something is broken).
+**The problem:** Design a system that sends welcome emails when users register. There are 10 application servers. Each server might receive a registration event. We need to make sure exactly one email is sent -- not zero (user never gets welcome), not two (user gets duplicate email and thinks something is broken).
 
 **The naive approach (L5):**
 
@@ -1483,7 +1483,7 @@ Let us count the costs of this approach:
 
 That is five costs added to solve a problem that has a much simpler solution.
 
-**The L6 approach — idempotency keys:**
+**The L6 approach -- idempotency keys:**
 
 "Instead of coordinating which server sends the email, I'll let any server send it, but prevent duplicates using the database."
 
@@ -1499,7 +1499,7 @@ email_sends table:
   sent_at:     TIMESTAMP
   server_id:   VARCHAR
 
-UNIQUE CONSTRAINT: (user_id, email_type) — only one record per user per email type
+UNIQUE CONSTRAINT: (user_id, email_type) -- only one record per user per email type
 ```
 
 Step 2: The server tries to INSERT into this table:
@@ -1512,7 +1512,7 @@ RETURNING id
 
 Step 3: If the INSERT succeeds (returns a row), this server is now responsible for sending the email. Send it.
 
-Step 4: If the INSERT fails (the record already existed — another server beat you to it), do nothing. The other server is handling it. Walk away.
+Step 4: If the INSERT fails (the record already existed -- another server beat you to it), do nothing. The other server is handling it. Walk away.
 
 ```
 IDEMPOTENCY KEY APPROACH: TWO SERVERS RACE
@@ -1545,13 +1545,13 @@ Result: Exactly ONE email sent. No coordination service needed.
 
 **The win:** the solution is simpler, faster, more reliable, and has fewer moving parts. It uses a property that the database ALREADY HAS (unique constraints and atomic inserts) rather than adding new infrastructure.
 
-This does not work for every problem. If two servers could both attempt the same email send and the database is unavailable, the unique constraint cannot be checked. The design assumes database availability — a reasonable assumption since the registration data itself is stored in the database. If the database is down, you cannot register users at all, so not sending emails is acceptable.
+This does not work for every problem. If two servers could both attempt the same email send and the database is unavailable, the unique constraint cannot be checked. The design assumes database availability -- a reasonable assumption since the registration data itself is stored in the database. If the database is down, you cannot register users at all, so not sending emails is acceptable.
 
-The broader lesson: before reaching for leader election, ask what properties your existing infrastructure already provides. Unique constraints, transactions, compare-and-swap operations — these are coordination primitives that are already built into your database. Use them first.
+The broader lesson: before reaching for leader election, ask what properties your existing infrastructure already provides. Unique constraints, transactions, compare-and-swap operations -- these are coordination primitives that are already built into your database. Use them first.
 
 ---
 
-## Sizing Leader Election Infrastructure — The Numbers That Matter in Interviews
+## Sizing Leader Election Infrastructure -- The Numbers That Matter in Interviews
 
 When you say "I'll use leader election" in a system design interview, an L6 interviewer expects you to immediately follow with sizing numbers. Here is the reference table.
 
@@ -1562,7 +1562,7 @@ Heartbeat interval:        50ms - 150ms typical
                            (Lower = faster failure detection, more network traffic)
                            (Higher = slower failure detection, less network traffic)
 
-Election timeout:          3× to 5× heartbeat interval
+Election timeout:          3x to 5x heartbeat interval
                            At 100ms heartbeat: timeout = 300ms to 500ms
                            (Lower = more false elections from network noise)
                            (Higher = longer wait before detecting dead leader)
@@ -1583,30 +1583,30 @@ Lease TTL:                 10s - 60s typical
                            (Too long: stale leader can act for too long after crash)
                            (Common choice: 30s lease, renewed every 10s)
 
-Clock skew buffer:         Add 2× NTP uncertainty (2× 100ms = 200ms minimum)
+Clock skew buffer:         Add 2x NTP uncertainty (2x 100ms = 200ms minimum)
                            to any time-based calculations
 
 etcd cluster size:         3 nodes minimum (tolerates 1 failure)
                            5 nodes recommended for production (tolerates 2 failures)
                            7 nodes if you need stronger fault tolerance (rarely needed)
-                           (Never run 2 or 4 nodes — even numbers cause tie votes)
+                           (Never run 2 or 4 nodes -- even numbers cause tie votes)
 
 ZooKeeper ensemble:        3 or 5 nodes (same reasoning as etcd)
 
-etcd data size limit:      1 GB total (by default — not for application data!)
+etcd data size limit:      1 GB total (by default -- not for application data!)
                            Individual key size: 1.5 MB default limit
                            Use etcd for metadata ONLY, not bulk data
 
-Heartbeat network usage:   N nodes × heartbeat_interval_hz × message_size
-                           5 nodes × 10 heartbeats/sec × 100 bytes = 5,000 bytes/sec
-                           (Negligible — heartbeats are tiny)
+Heartbeat network usage:   N nodes x heartbeat_interval_hz x message_size
+                           5 nodes x 10 heartbeats/sec x 100 bytes = 5,000 bytes/sec
+                           (Negligible -- heartbeats are tiny)
 
 Maximum cluster size for   Raft/ZAB performance degrades above ~7-9 nodes.
  leader election:          For large clusters: use hierarchical coordination
                            (zones elect local leaders, leaders elect global leader)
 ```
 
-The numbers in this table are ones you should know well enough to say fluently in an interview. Not memorized to the digit — understood well enough to reason about trade-offs. Why are 3 and 5 the right cluster sizes? Why are even numbers wrong? Why is 30 seconds the right lease TTL? Being able to answer those "why" questions — not just recite the numbers — is what makes an answer feel senior.
+The numbers in this table are ones you should know well enough to say fluently in an interview. Not memorized to the digit -- understood well enough to reason about trade-offs. Why are 3 and 5 the right cluster sizes? Why are even numbers wrong? Why is 30 seconds the right lease TTL? Being able to answer those "why" questions -- not just recite the numbers -- is what makes an answer feel senior.
 
 **Why odd cluster sizes:**
 
@@ -1620,11 +1620,11 @@ You could run a 9-node etcd cluster that tolerates 4 simultaneous failures. But 
 
 ---
 
-## How Clients Find the Leader — The Often-Forgotten Half
+## How Clients Find the Leader -- The Often-Forgotten Half
 
 Leader election discussions often focus on how nodes elect a leader. But there is a second problem that is just as important and often overlooked: how do CLIENTS find out who the leader is?
 
-When a new leader is elected, all the nodes in the cluster know about it immediately — the new leader sent a heartbeat announcing itself, and every follower updated their internal state. But the clients — the application servers making database requests, the API servers querying the job scheduler — are external to the cluster. They need to find out about the new leader too.
+When a new leader is elected, all the nodes in the cluster know about it immediately -- the new leader sent a heartbeat announcing itself, and every follower updated their internal state. But the clients -- the application servers making database requests, the API servers querying the job scheduler -- are external to the cluster. They need to find out about the new leader too.
 
 **Method 1: Try and redirect.**
 
@@ -1636,7 +1636,7 @@ This is how Raft-based systems typically work. The overhead: one extra round tri
 
 The coordination service maintains a DNS record like `leader.payments-db.internal` that always resolves to the current leader's IP address. When a new leader is elected, the DNS record is updated.
 
-The challenge: DNS TTL (Time To Live) — how long clients cache the DNS answer before re-asking. A TTL of 30 seconds means clients might use the old leader's address for up to 30 seconds after a leader change. During that 30 seconds, writes to the old (now dead) leader fail.
+The challenge: DNS TTL (Time To Live) -- how long clients cache the DNS answer before re-asking. A TTL of 30 seconds means clients might use the old leader's address for up to 30 seconds after a leader change. During that 30 seconds, writes to the old (now dead) leader fail.
 
 Solution: use very low DNS TTL (1-5 seconds) for leader discovery records. This means more DNS queries, but clients update quickly after leader changes. Low TTL is acceptable here because the DNS record changes infrequently (only on leader changes) and the query volume is low (one query per client per TTL, not per request).
 
@@ -1650,13 +1650,13 @@ After a leader change, the load balancer detects the old leader's health check f
 
 Application clients maintain a persistent connection to the coordination service. They WATCH the key that stores the current leader's address. When the key changes (new leader elected), they receive an immediate notification and update their routing.
 
-This gives clients near-real-time awareness of leader changes — typically within 100-500ms of the election completing. The trade-off: every client must maintain a persistent connection to the coordination service.
+This gives clients near-real-time awareness of leader changes -- typically within 100-500ms of the election completing. The trade-off: every client must maintain a persistent connection to the coordination service.
 
 ```
 CLIENT DISCOVERY COMPARISON
 
 Method          Update Latency     Complexity     Dependencies
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 Try & redirect  1 extra RTT        Low            None (built-in)
 DNS low-TTL     1-5 seconds        Low            DNS infrastructure
 LB health check 1-10 seconds       Medium         Load balancer
@@ -1678,16 +1678,16 @@ This client discovery question comes up frequently in system design interviews a
 
 ## L5 vs L6 on Leader Election
 
-To close Part 2, here is the most concrete version of the L5/L6 contrast — not abstract principles, but specific scenarios and how each level responds.
+To close Part 2, here is the most concrete version of the L5/L6 contrast -- not abstract principles, but specific scenarios and how each level responds.
 
 | Scenario | L5 Response | L6 Response |
 |----------|-------------|-------------|
 | Database primary crashes | "Start election, elect new primary, redirect traffic" | "How long is the election window? What happens to writes inflight during election? Do we have fencing tokens to prevent the stale leader problem? What is client retry behavior during failover?" |
 | "Add leader election to rate limiter" | "Use ZooKeeper to elect a rate limit coordinator that all servers check" | "Rate limits don't need a global coordinator. Approximate with per-node limits. Exact global limits are almost never worth adding a critical dependency and 50ms latency to every request" |
-| Choosing election timeout | "Set it low — faster failover is better" | "Election timeout = failover speed vs false-positive election rate. Too low (say, 50ms): a brief network hiccup causes unnecessary elections, destabilizing a healthy cluster. Too high (say, 60s): actual failures take too long to respond to. Typical sweet spot: 3-5× heartbeat interval, so 150-750ms" |
+| Choosing election timeout | "Set it low -- faster failover is better" | "Election timeout = failover speed vs false-positive election rate. Too low (say, 50ms): a brief network hiccup causes unnecessary elections, destabilizing a healthy cluster. Too high (say, 60s): actual failures take too long to respond to. Typical sweet spot: 3-5x heartbeat interval, so 150-750ms" |
 | Two candidates tie in a vote | "Retry the election" | "Randomized timeouts prevent ties in practice. Term numbers ensure only the latest election matters. Design explicitly for the split-vote case: term expires, increment term, re-randomize timeouts, try again" |
-| etcd cluster is unavailable | "etcd is down — fix etcd" | "What can the system do without etcd? Design a degraded mode: continue serving reads with cached leader info, queue writes until coordination is restored, alert on-call, surface clear error messages to clients rather than silent failures" |
-| Leader is slow but not dead | "Nothing — it is still the leader, it will catch up" | "A slow leader can be worse than a dead one — it is still blocking writes, just serving them slowly. Health checks should include latency metrics, not just liveness pings. Consider leader stepdown if P99 latency exceeds a threshold. Slow leaders cause cascading timeouts across all dependent systems" |
+| etcd cluster is unavailable | "etcd is down -- fix etcd" | "What can the system do without etcd? Design a degraded mode: continue serving reads with cached leader info, queue writes until coordination is restored, alert on-call, surface clear error messages to clients rather than silent failures" |
+| Leader is slow but not dead | "Nothing -- it is still the leader, it will catch up" | "A slow leader can be worse than a dead one -- it is still blocking writes, just serving them slowly. Health checks should include latency metrics, not just liveness pings. Consider leader stepdown if P99 latency exceeds a threshold. Slow leaders cause cascading timeouts across all dependent systems" |
 
 The pattern across all six rows: L5 treats leader election as a tool to deploy and then trust. L6 treats it as a trade-off to understand, design around, and handle gracefully when (not if) things go wrong.
 
@@ -1699,7 +1699,7 @@ The L6 engineer's question after proposing any coordination mechanism is always:
 
 Knowing the concepts is necessary but not sufficient. You also need to know how to PRESENT those concepts in a live interview setting. Here is a template for how a senior engineer sounds when discussing leader election.
 
-**The setup — the interviewer asks:**
+**The setup -- the interviewer asks:**
 
 "You've proposed a distributed database. How do you handle primary failures?"
 
@@ -1713,15 +1713,15 @@ This answer is technically accurate but says almost nothing. It is a Wikipedia s
 
 Talk through it in layers. Start with the mechanism, move to the failure modes, then the trade-offs.
 
-"When a primary fails, here's what happens. The replicas are each running a heartbeat timer — they expect a heartbeat from the primary every 100 milliseconds. If three consecutive heartbeats are missed — that's 300 milliseconds — each replica independently considers starting an election.
+"When a primary fails, here's what happens. The replicas are each running a heartbeat timer -- they expect a heartbeat from the primary every 100 milliseconds. If three consecutive heartbeats are missed -- that's 300 milliseconds -- each replica independently considers starting an election.
 
 To prevent the thundering herd of all replicas starting elections simultaneously, they each draw a random election timeout between 150ms and 300ms. The first one to fire sends RequestVote messages to the others with a new term number. Since we need majority for an election, and we run five replicas, the winner needs three votes including its own. In practice, the first candidate to wake up usually gets all four other votes before anyone else starts their own campaign.
 
-The election itself takes another 100-200ms. Then the new primary needs to sync any writes that were committed in the old leader's log but not yet applied — that's typically a few hundred milliseconds for a healthy cluster. Total expected failover time: 10 to 30 seconds, dominated by client DNS TTL and connection reset time, not the election itself.
+The election itself takes another 100-200ms. Then the new primary needs to sync any writes that were committed in the old leader's log but not yet applied -- that's typically a few hundred milliseconds for a healthy cluster. Total expected failover time: 10 to 30 seconds, dominated by client DNS TTL and connection reset time, not the election itself.
 
-During this window, writes fail. Reads from replicas continue working. We design our clients to retry writes with exponential backoff — first retry at 500ms, doubling up to 30 seconds, so we do not overwhelm the new primary the moment it comes online.
+During this window, writes fail. Reads from replicas continue working. We design our clients to retry writes with exponential backoff -- first retry at 500ms, doubling up to 30 seconds, so we do not overwhelm the new primary the moment it comes online.
 
-The main risk I worry about is the stale primary problem. If the old primary was partitioned (not truly dead, just unreachable), it might still think it is the primary for the duration of its lease. We handle this with fencing tokens — every write to our storage layer includes the current primary's epoch number, and the storage layer rejects writes with an epoch lower than the most recent one it has seen. That way even if the old primary is still running and receiving writes from stale clients, those writes are rejected at the storage level.
+The main risk I worry about is the stale primary problem. If the old primary was partitioned (not truly dead, just unreachable), it might still think it is the primary for the duration of its lease. We handle this with fencing tokens -- every write to our storage layer includes the current primary's epoch number, and the storage layer rejects writes with an epoch lower than the most recent one it has seen. That way even if the old primary is still running and receiving writes from stale clients, those writes are rejected at the storage level.
 
 The coordination service running the election is a 5-node etcd cluster. We run it on dedicated hardware, separate from the database nodes, because etcd going down would prevent any elections. We treat etcd as critical infrastructure with the same SLA as the database itself."
 
@@ -1731,21 +1731,21 @@ It demonstrates seven things simultaneously. First: you know the mechanism (hear
 
 An interviewer hearing this answer has no easy follow-up questions because you have preemptively answered all of them.
 
-**The three follow-ups every interviewer asks — and their answers:**
+**The three follow-ups every interviewer asks -- and their answers:**
 
 *"What if the election doesn't complete before the lease expires?"*
 
-The lease expiry and the election completion are independent events. The election might complete in 300ms. The old leader's lease might not expire for 30 seconds. During those 30 seconds, the new leader is operational — but the old leader might also still be processing requests if it has not detected its own replacement. This is precisely why fencing tokens matter more than lease timing. The storage layer rejects the old leader's writes regardless of when the lease expires.
+The lease expiry and the election completion are independent events. The election might complete in 300ms. The old leader's lease might not expire for 30 seconds. During those 30 seconds, the new leader is operational -- but the old leader might also still be processing requests if it has not detected its own replacement. This is precisely why fencing tokens matter more than lease timing. The storage layer rejects the old leader's writes regardless of when the lease expires.
 
 *"What's the minimum cluster size for this to work?"*
 
-Three nodes is the minimum. Three nodes can tolerate one failure (need two votes for majority, get them from the two survivors). The trade-off at three nodes: if any two nodes are in different network partitions, neither partition has majority, and neither can elect a leader — the system is entirely unavailable. Five nodes is the production minimum: tolerates two simultaneous failures and can still elect a leader even if partitioned 3-2.
+Three nodes is the minimum. Three nodes can tolerate one failure (need two votes for majority, get them from the two survivors). The trade-off at three nodes: if any two nodes are in different network partitions, neither partition has majority, and neither can elect a leader -- the system is entirely unavailable. Five nodes is the production minimum: tolerates two simultaneous failures and can still elect a leader even if partitioned 3-2.
 
 *"How do you handle a leader that's alive but slow?"*
 
-This is the question that separates engineers who have run production systems from those who have only read about them. A dead leader is easy — it stops responding, the election timer fires, done. A slow leader is insidious. It is still responding. The election timer does not fire. But it is responding slowly — maybe P99 latency has gone from 5ms to 2,000ms. Every client waiting for a response is blocked. The system is effectively down, but the election mechanism does not trigger because the leader is technically alive.
+This is the question that separates engineers who have run production systems from those who have only read about them. A dead leader is easy -- it stops responding, the election timer fires, done. A slow leader is insidious. It is still responding. The election timer does not fire. But it is responding slowly -- maybe P99 latency has gone from 5ms to 2,000ms. Every client waiting for a response is blocked. The system is effectively down, but the election mechanism does not trigger because the leader is technically alive.
 
-The solution: health checks should test LATENCY, not just liveness. A leader should voluntarily step down (remove itself from leadership) if its own latency metrics exceed a threshold. Some systems implement a "leader quality score" — a leader that is CPU-throttled, memory-swapping, or experiencing disk pressure can proactively yield leadership to a healthier replica. This is operationally complex but prevents the "slow leader is worse than a dead leader" failure mode.
+The solution: health checks should test LATENCY, not just liveness. A leader should voluntarily step down (remove itself from leadership) if its own latency metrics exceed a threshold. Some systems implement a "leader quality score" -- a leader that is CPU-throttled, memory-swapping, or experiencing disk pressure can proactively yield leadership to a healthier replica. This is operationally complex but prevents the "slow leader is worse than a dead leader" failure mode.
 
 ---
 
@@ -1770,7 +1770,7 @@ This is the halfway point of Chapter 22. Let us make sure the key ideas are soli
 
 **The L6 instinct:** ask "can I avoid coordination entirely?" before adding any. Use partitioning, idempotency, and eventual consistency as alternatives. When coordination IS needed, understand every failure mode of the coordination mechanism itself and design degraded modes for when it fails.
 
-Part B of this chapter covers distributed locks (protecting shared resources from concurrent access), consensus algorithms (Raft and Paxos — how groups of nodes formally agree on values), and the complete interview playbook with worked examples from real system design questions.
+Part B of this chapter covers distributed locks (protecting shared resources from concurrent access), consensus algorithms (Raft and Paxos -- how groups of nodes formally agree on values), and the complete interview playbook with worked examples from real system design questions.
 
 ---
 
@@ -1778,85 +1778,85 @@ Part B of this chapter covers distributed locks (protecting shared resources fro
 
 ---
 
-### Chapter 22 Part A — Complete Term Glossary
+### Chapter 22 Part A -- Complete Term Glossary
 
 Every technical term used in this part, defined in plain English:
 
-**Asynchronous network** — A network with no timing guarantees. Messages might arrive in 1 millisecond or 10 seconds. There is no shared clock. Most real networks are effectively asynchronous.
+**Asynchronous network** -- A network with no timing guarantees. Messages might arrive in 1 millisecond or 10 seconds. There is no shared clock. Most real networks are effectively asynchronous.
 
-**Atomic operation** — An operation that either completely succeeds or completely fails, with no halfway state visible to anyone else. Like a light switch — it is either fully on or fully off, never half-on.
+**Atomic operation** -- An operation that either completely succeeds or completely fails, with no halfway state visible to anyone else. Like a light switch -- it is either fully on or fully off, never half-on.
 
-**Candidate** — A node that is trying to become leader in an election.
+**Candidate** -- A node that is trying to become leader in an election.
 
-**Compare-and-swap (CAS)** — An atomic operation: "set this key to this new value, but ONLY if it currently equals this expected value." If the current value does not match, the operation fails safely.
+**Compare-and-swap (CAS)** -- An atomic operation: "set this key to this new value, but ONLY if it currently equals this expected value." If the current value does not match, the operation fails safely.
 
-**Consensus** — When a group of computers all agree on the same value or decision. Harder to achieve than it sounds in a distributed system.
+**Consensus** -- When a group of computers all agree on the same value or decision. Harder to achieve than it sounds in a distributed system.
 
-**Coordination service** — A specialized distributed system (etcd, ZooKeeper) that stores small amounts of coordination metadata and provides atomic operations. Think of it as the magic whiteboard.
+**Coordination service** -- A specialized distributed system (etcd, ZooKeeper) that stores small amounts of coordination metadata and provides atomic operations. Think of it as the magic whiteboard.
 
-**Distributed system** — A collection of computers (nodes) that work together over a network to appear as a single coherent system to users.
+**Distributed system** -- A collection of computers (nodes) that work together over a network to appear as a single coherent system to users.
 
-**Election term** — A monotonically increasing number that labels each generation of leadership. Term 1 is the first leader era, Term 2 is the second, and so on.
+**Election term** -- A monotonically increasing number that labels each generation of leadership. Term 1 is the first leader era, Term 2 is the second, and so on.
 
-**Ephemeral node (ZooKeeper)** — A node that automatically disappears when the client that created it disconnects or crashes.
+**Ephemeral node (ZooKeeper)** -- A node that automatically disappears when the client that created it disconnects or crashes.
 
-**etcd** — A distributed key-value store used for coordination, most famously as Kubernetes's brain. Uses Raft internally for its own replication.
+**etcd** -- A distributed key-value store used for coordination, most famously as Kubernetes's brain. Uses Raft internally for its own replication.
 
-**Fencing token** — A monotonically increasing number included with every lease or lock grant. Prevents stale leaders from taking action by having downstream services reject tokens lower than the highest they have seen.
+**Fencing token** -- A monotonically increasing number included with every lease or lock grant. Prevents stale leaders from taking action by having downstream services reject tokens lower than the highest they have seen.
 
-**FLP Impossibility** — The 1985 proof by Fischer, Lynch, and Paterson that no algorithm can always reach consensus in finite time in an asynchronous system where even one node can fail.
+**FLP Impossibility** -- The 1985 proof by Fischer, Lynch, and Paterson that no algorithm can always reach consensus in finite time in an asynchronous system where even one node can fail.
 
-**Heartbeat** — A small periodic "I am alive" message sent by a leader to its followers, typically every 50-150 milliseconds.
+**Heartbeat** -- A small periodic "I am alive" message sent by a leader to its followers, typically every 50-150 milliseconds.
 
-**Idempotent** — Doing the same operation twice has exactly the same effect as doing it once. Crucial for making "at least once" delivery safe.
+**Idempotent** -- Doing the same operation twice has exactly the same effect as doing it once. Crucial for making "at least once" delivery safe.
 
-**Lamport clock** — A logical clock invented by Leslie Lamport. A single counter per server that tracks causal ordering without requiring any physical clock.
+**Lamport clock** -- A logical clock invented by Leslie Lamport. A single counter per server that tracks causal ordering without requiring any physical clock.
 
-**Latency** — How long an operation takes, measured in milliseconds.
+**Latency** -- How long an operation takes, measured in milliseconds.
 
-**Leader** — The single authoritative node in a distributed system for a particular category of decisions (writes, job assignments, etc.).
+**Leader** -- The single authoritative node in a distributed system for a particular category of decisions (writes, job assignments, etc.).
 
-**Leader election** — The process by which a group of equal nodes picks one of themselves to be the leader.
+**Leader election** -- The process by which a group of equal nodes picks one of themselves to be the leader.
 
-**Lease** — A time-limited grant of exclusive rights (like a leadership lease: "you are the leader for the next 10 seconds"). Must be renewed before expiry or rights are lost.
+**Lease** -- A time-limited grant of exclusive rights (like a leadership lease: "you are the leader for the next 10 seconds"). Must be renewed before expiry or rights are lost.
 
-**Logical clock** — A way to track the ORDER of events across multiple computers without using physical clocks. Includes Lamport clocks and vector clocks.
+**Logical clock** -- A way to track the ORDER of events across multiple computers without using physical clocks. Includes Lamport clocks and vector clocks.
 
-**Majority / quorum** — More than half of the nodes in a cluster. Required for an election to be valid. Mathematically prevents two simultaneous winners.
+**Majority / quorum** -- More than half of the nodes in a cluster. Required for an election to be valid. Mathematically prevents two simultaneous winners.
 
-**Monotonically increasing** — Always going up, never going down. Term numbers, sequence numbers, and fencing tokens are all monotonically increasing.
+**Monotonically increasing** -- Always going up, never going down. Term numbers, sequence numbers, and fencing tokens are all monotonically increasing.
 
-**Network partition** — When network failure splits a cluster into two (or more) groups that cannot communicate with each other.
+**Network partition** -- When network failure splits a cluster into two (or more) groups that cannot communicate with each other.
 
-**Node** — An individual server or computer in a distributed system.
+**Node** -- An individual server or computer in a distributed system.
 
-**NTP (Network Time Protocol)** — The protocol by which computers synchronize their clocks over the internet. Achieves accuracy to within 10-100 milliseconds under normal conditions.
+**NTP (Network Time Protocol)** -- The protocol by which computers synchronize their clocks over the internet. Achieves accuracy to within 10-100 milliseconds under normal conditions.
 
-**Primary** — Another word for "leader" in database contexts. The primary is the single database server that accepts writes.
+**Primary** -- Another word for "leader" in database contexts. The primary is the single database server that accepts writes.
 
-**Quorum intersection property** — The mathematical property that any two majority sets in a cluster of N must share at least one node. This is why majority voting prevents two simultaneous leaders.
+**Quorum intersection property** -- The mathematical property that any two majority sets in a cluster of N must share at least one node. This is why majority voting prevents two simultaneous leaders.
 
-**Raft** — A consensus algorithm (and by extension, leader election mechanism) designed to be more understandable than Paxos. Used internally by etcd.
+**Raft** -- A consensus algorithm (and by extension, leader election mechanism) designed to be more understandable than Paxos. Used internally by etcd.
 
-**Replica** — A copy of data on a different server. Replicas receive updates from the primary.
+**Replica** -- A copy of data on a different server. Replicas receive updates from the primary.
 
-**Split-brain** — The dangerous state where two nodes both think they are the leader simultaneously and begin making conflicting decisions.
+**Split-brain** -- The dangerous state where two nodes both think they are the leader simultaneously and begin making conflicting decisions.
 
-**Term number** — See Election term.
+**Term number** -- See Election term.
 
-**Timeout** — The amount of time a node waits for a response before concluding the other node has failed. The practical workaround to FLP impossibility.
+**Timeout** -- The amount of time a node waits for a response before concluding the other node has failed. The practical workaround to FLP impossibility.
 
-**TrueTime** — Google's time service that provides time as an interval [earliest, latest] rather than a single value. Used by Spanner for globally correct event ordering.
+**TrueTime** -- Google's time service that provides time as an interval [earliest, latest] rather than a single value. Used by Spanner for globally correct event ordering.
 
-**TTL (Time To Live)** — How long a lease or cached value is valid before it expires.
+**TTL (Time To Live)** -- How long a lease or cached value is valid before it expires.
 
-**Vector clock** — A logical clock that tracks a counter for every server in the system, allowing precise detection of causal relationships and concurrent events.
+**Vector clock** -- A logical clock that tracks a counter for every server in the system, allowing precise detection of causal relationships and concurrent events.
 
-**ZooKeeper** — A distributed coordination service from the Apache Hadoop ecosystem. Uses ZAB (ZooKeeper Atomic Broadcast) internally. Supports ephemeral nodes and sequence nodes.
+**ZooKeeper** -- A distributed coordination service from the Apache Hadoop ecosystem. Uses ZAB (ZooKeeper Atomic Broadcast) internally. Supports ephemeral nodes and sequence nodes.
 
 ---
 
-*Next: Part B — Distributed Locks, Consensus Algorithms, and the Full Interview Playbook.*
+*Next: Part B -- Distributed Locks, Consensus Algorithms, and the Full Interview Playbook.*
 
 ---
 
@@ -1913,13 +1913,13 @@ Before moving to Part B, answer these questions from memory. If you cannot, re-r
 20. What is the latency cost of a distributed lock operation (approximate)?
 
 If you can answer all 20 questions fluently, you are ready for Part B and for real interview questions on this topic.
-# Chapter 22 — Part B: Distributed Locks, Fencing Tokens, and Raft Consensus
+# Chapter 22 -- Part B: Distributed Locks, Fencing Tokens, and Raft Consensus
 
-*(Note to reader: This is Part B of a four-part chapter on coordination in distributed systems. Part A covered why coordination is hard, how clocks lie, and how leader election works. This part covers distributed locks — one of the most commonly misused tools in distributed systems — and Raft, the consensus algorithm that powers Kubernetes, CockroachDB, and dozens of other systems you use every day. These topics are trickier than they look. We will go slowly, use lots of analogies, and be completely honest when something is genuinely hard. By the end of this part, you will understand why even expert engineers get distributed locks wrong, what fencing tokens are and why they are the real fix, and how Raft gets a cluster of servers to agree on things even when some of them fail.)*
+*(Note to reader: This is Part B of a four-part chapter on coordination in distributed systems. Part A covered why coordination is hard, how clocks lie, and how leader election works. This part covers distributed locks -- one of the most commonly misused tools in distributed systems -- and Raft, the consensus algorithm that powers Kubernetes, CockroachDB, and dozens of other systems you use every day. These topics are trickier than they look. We will go slowly, use lots of analogies, and be completely honest when something is genuinely hard. By the end of this part, you will understand why even expert engineers get distributed locks wrong, what fencing tokens are and why they are the real fix, and how Raft gets a cluster of servers to agree on things even when some of them fail.)*
 
 ---
 
-# Part 3: Distributed Locks — The Double-Edged Sword
+# Part 3: Distributed Locks -- The Double-Edged Sword
 
 ## What a Distributed Lock Promises
 
@@ -1931,32 +1931,32 @@ The office manager has a simple solution: a key hook mounted on the wall next to
 
 One key. One bathroom. One person at a time. No arguments. No collisions. Perfect.
 
-A **distributed lock** is the software version of this key hook. Instead of a physical hook on a wall, it is a record stored in a shared database that all your servers can see — usually Redis (a very fast in-memory database that engineers reach for when they need something quick and simple). Instead of a physical key, it is a flag that says "this resource is currently in use." Instead of your office colleagues, it is your 5 (or 50, or 500) servers.
+A **distributed lock** is the software version of this key hook. Instead of a physical hook on a wall, it is a record stored in a shared database that all your servers can see -- usually Redis (a very fast in-memory database that engineers reach for when they need something quick and simple). Instead of a physical key, it is a flag that says "this resource is currently in use." Instead of your office colleagues, it is your 5 (or 50, or 500) servers.
 
 Here is how it maps:
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║              THE BATHROOM ANALOGY → DISTRIBUTED LOCK                 ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  Real Life                    Software Equivalent                    ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  Bathroom                     Protected resource (a job, a file,     ║
-║                               a database row, an API call)           ║
-║                                                                      ║
-║  Key on the hook              Lock record in Redis                   ║
-║  (hook is empty = free)       ("lock_key" not present = free)        ║
-║                                                                      ║
-║  20 office colleagues         5+ servers all running the same code   ║
-║                                                                      ║
-║  Take the key                 SET lock_key "server_a" NX             ║
-║  (only works if key is there) (NX = only set if Not eXists)          ║
-║                                                                      ║
-║  Hang key back up             DEL lock_key                           ║
-║                                                                      ║
-║  Walk in and find no key      IF SET returns null → lock not         ║
-║  on hook → someone's in there acquired → wait and retry             ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|              THE BATHROOM ANALOGY -> DISTRIBUTED LOCK                 |
++======================================================================+
+|  Real Life                    Software Equivalent                    |
++======================================================================+
+|  Bathroom                     Protected resource (a job, a file,     |
+|                               a database row, an API call)           |
+|                                                                      |
+|  Key on the hook              Lock record in Redis                   |
+|  (hook is empty = free)       ("lock_key" not present = free)        |
+|                                                                      |
+|  20 office colleagues         5+ servers all running the same code   |
+|                                                                      |
+|  Take the key                 SET lock_key "server_a" NX             |
+|  (only works if key is there) (NX = only set if Not eXists)          |
+|                                                                      |
+|  Hang key back up             DEL lock_key                           |
+|                                                                      |
+|  Walk in and find no key      IF SET returns null -> lock not         |
+|  on hook -> someone's in there acquired -> wait and retry             |
++======================================================================+
 ```
 
 The core promise of a distributed lock: **only one server can hold it at a time.** Every other server that wants it must wait until the current holder releases it.
@@ -1973,26 +1973,26 @@ You run an e-commerce site. Every morning at 9 AM, you send a promotional email 
 
 At 9 AM, Job #1234 ("Send morning email campaign") appears in the queue. All 5 servers see it. Without a lock, all 5 servers might grab Job #1234 and start processing it simultaneously. Your 2 million subscribers each receive 5 copies of the same email. Your support inbox explodes with complaints. Your "unsubscribe" numbers spike. Your email reputation (the thing that determines whether email providers route your messages to spam folders) takes a serious hit.
 
-With a distributed lock: the first server to grab the lock "wins." It processes the job. The other 4 servers see the lock is taken and wait. When the first server finishes and releases the lock, one of the waiting servers picks it up — but by then, the job is already marked as complete, so there is nothing to do. Your subscribers get exactly one email. Your job is done.
+With a distributed lock: the first server to grab the lock "wins." It processes the job. The other 4 servers see the lock is taken and wait. When the first server finishes and releases the lock, one of the waiting servers picks it up -- but by then, the job is already marked as complete, so there is nothing to do. Your subscribers get exactly one email. Your job is done.
 
 **Scenario 2: The Last Concert Ticket**
 
-You run a concert ticketing site. Taylor Swift tickets go on sale. You have 1 remaining ticket for section A, row 1, seat 10. Two users — call them User Priya and User Marco — both click "Purchase" at almost exactly the same moment.
+You run a concert ticketing site. Taylor Swift tickets go on sale. You have 1 remaining ticket for section A, row 1, seat 10. Two users -- call them User Priya and User Marco -- both click "Purchase" at almost exactly the same moment.
 
 Without a distributed lock, here is what might happen:
 1. Server A receives Priya's request. It checks the database: "is ticket available?" Database says yes.
 2. Server B receives Marco's request. It checks the database: "is ticket available?" Database says yes. (Server A hasn't completed the purchase yet.)
 3. Server A sells the ticket to Priya. Marks it as sold.
 4. Server B sells the ticket to Marco. Marks it as sold.
-5. You have now sold one ticket to two people. Taylor Swift is not your problem — the angry customer calling for a refund is.
+5. You have now sold one ticket to two people. Taylor Swift is not your problem -- the angry customer calling for a refund is.
 
 With a distributed lock on the ticket resource: only one server holds the lock at a time. The other waits. No double-selling.
 
-(Note: in practice, databases have built-in mechanisms for this — transactions and row-level locks — but the concept is the same and distributed locks are sometimes needed when the operation spans multiple systems.)
+(Note: in practice, databases have built-in mechanisms for this -- transactions and row-level locks -- but the concept is the same and distributed locks are sometimes needed when the operation spans multiple systems.)
 
 **Scenario 3: The Daily Report**
 
-Your analytics system generates a "daily report" every night at midnight. The report takes 10 minutes to run, hammers the database, and you want it to run exactly once. You have 3 servers that could all trigger this job. Without a lock, all 3 generate the same report simultaneously. You use 3× the CPU and database resources for no reason. With a lock, only the first server generates it.
+Your analytics system generates a "daily report" every night at midnight. The report takes 10 minutes to run, hammers the database, and you want it to run exactly once. You have 3 servers that could all trigger this job. Without a lock, all 3 generate the same report simultaneously. You use 3x the CPU and database resources for no reason. With a lock, only the first server generates it.
 
 ---
 
@@ -2001,32 +2001,32 @@ Your analytics system generates a "daily report" every night at midnight. The re
 Here is what it looks like when 5 servers share one distributed lock:
 
 ```
-                    ┌─────────────────────────────────┐
-                    │         REDIS (shared)           │
-                    │                                  │
-                    │  lock:job_1234 → "server_3"     │
-                    │  (exists = LOCKED by server_3)   │
-                    └─────────────────────────────────┘
-                           ▲         ▲
-                     holds │         │ holds
-                     lock  │         │ lock
-                           │         │
-                    ┌──────┴──┐   ┌──┴──────┐
-                    │SERVER 3 │   │ (same   │
-                    │         │   │ server, │
-                    │ DOING   │   │ shown   │
-                    │ WORK    │   │ twice   │
-                    │         │   │ for     │
-                    └─────────┘   │ clarity)│
-                                  └─────────┘
+                    +---------------------------------+
+                    |         REDIS (shared)           |
+                    |                                  |
+                    |  lock:job_1234 -> "server_3"     |
+                    |  (exists = LOCKED by server_3)   |
+                    +---------------------------------+
+                           ^         ^
+                     holds |         | holds
+                     lock  |         | lock
+                           |         |
+                    +------+--+   +--+------+
+                    |SERVER 3 |   | (same   |
+                    |         |   | server, |
+                    | DOING   |   | shown   |
+                    | WORK    |   | twice   |
+                    |         |   | for     |
+                    +---------+   | clarity)|
+                                  +---------+
 
-  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
-  │SERVER 1 │   │SERVER 2 │   │SERVER 4 │   │SERVER 5 │
-  │         │   │         │   │         │   │         │
-  │ WAITING │   │ WAITING │   │ WAITING │   │ WAITING │
-  │ (lock   │   │ (lock   │   │ (lock   │   │ (lock   │
-  │  taken) │   │  taken) │   │  taken) │   │  taken) │
-  └─────────┘   └─────────┘   └─────────┘   └─────────┘
+  +---------+   +---------+   +---------+   +---------+
+  |SERVER 1 |   |SERVER 2 |   |SERVER 4 |   |SERVER 5 |
+  |         |   |         |   |         |   |         |
+  | WAITING |   | WAITING |   | WAITING |   | WAITING |
+  | (lock   |   | (lock   |   | (lock   |   | (lock   |
+  |  taken) |   |  taken) |   |  taken) |   |  taken) |
+  +---------+   +---------+   +---------+   +---------+
 
   Server 3 holds the lock and does the protected work.
   Servers 1, 2, 4, 5 periodically try to acquire the lock
@@ -2040,12 +2040,12 @@ Here is what it looks like when 5 servers share one distributed lock:
 Here is the simplest version of a distributed lock, written in a way that looks correct:
 
 ```python
-# Simple attempt — DO NOT USE IN PRODUCTION (we'll explain why)
+# Simple attempt -- DO NOT USE IN PRODUCTION (we'll explain why)
 
 # Try to acquire the lock:
-# SET lock_key "locked"     ← store the value "locked" at this key
-# NX                        ← only do this if the key does Not eXist
-# EX 30                     ← auto-expire in 30 seconds
+# SET lock_key "locked"     <- store the value "locked" at this key
+# NX                        <- only do this if the key does Not eXist
+# EX 30                     <- auto-expire in 30 seconds
 result = redis.SET("lock:job_1234", "locked", NX=True, EX=30)
 
 if result:
@@ -2068,7 +2068,7 @@ A lot, actually. Let us walk through exactly what can go wrong, one failure at a
 
 Back to the bathroom analogy.
 
-Picture this: you take the bathroom key from the hook. You go inside. You close the door. You sit down and immediately fall asleep — completely and deeply asleep, face down on the toilet, snoring. You are going to be there for a long time.
+Picture this: you take the bathroom key from the hook. You go inside. You close the door. You sit down and immediately fall asleep -- completely and deeply asleep, face down on the toilet, snoring. You are going to be there for a long time.
 
 Now the key is gone from the hook. It is with you, inside the locked bathroom. No one can get the key because it is behind a locked door. No one can use the bathroom. Your 19 colleagues are all stuck waiting in the hallway for a bathroom that will never be freed.
 
@@ -2078,7 +2078,7 @@ The equivalent in distributed systems: Server 3 acquires the lock. Server 3 cras
 
 The classic fix: **every lock has an expiry time**, called a TTL (Time To Live). It works like a parking meter.
 
-At a parking meter, you pay for 30 minutes. Your car is allowed to sit in that spot for 30 minutes. After 30 minutes, your right to the spot expires automatically — even if you are still sitting in your car, even if you just fell asleep. The city does not need to call you. The meter handles it.
+At a parking meter, you pay for 30 minutes. Your car is allowed to sit in that spot for 30 minutes. After 30 minutes, your right to the spot expires automatically -- even if you are still sitting in your car, even if you just fell asleep. The city does not need to call you. The meter handles it.
 
 In Redis:
 
@@ -2104,7 +2104,7 @@ T=30s   Lock TTL expires! Lock is gone from Redis.
 T=31s   Server 1 acquires the lock (it's free again!)
 T=31-35s  SERVER 3 AND SERVER 1 ARE BOTH "HOLDING THE LOCK"
         AND BOTH DOING THE "EXCLUSIVE" WORK SIMULTANEOUSLY
-T=35s   Server 3 finishes, tries to release the lock — but
+T=35s   Server 3 finishes, tries to release the lock -- but
         now it is releasing Server 1's lock by accident!
 ```
 
@@ -2114,19 +2114,19 @@ There are a few ways to handle this:
 
 **Option 1: Lock renewal.** While doing work, periodically reach out to Redis and say "I am still here, please extend my lock by another 30 seconds." This works but adds complexity. What if the renewal call fails? What if your process is paused and does not send the renewal in time?
 
-**Option 2: Make the TTL much larger than the work duration.** If work takes at most 1 minute, set TTL to 10 minutes. This just delays the problem — what if work takes 11 minutes? And now crashed servers hold the lock for 10 minutes before anyone can continue.
+**Option 2: Make the TTL much larger than the work duration.** If work takes at most 1 minute, set TTL to 10 minutes. This just delays the problem -- what if work takes 11 minutes? And now crashed servers hold the lock for 10 minutes before anyone can continue.
 
-**Option 3: Fencing tokens.** This is the real solution, and it is brilliant. We will get there shortly — it requires a new idea. Hold that thought.
+**Option 3: Fencing tokens.** This is the real solution, and it is brilliant. We will get there shortly -- it requires a new idea. Hold that thought.
 
 ---
 
-## The Redlock Controversy — This Is Harder Than It Looks
+## The Redlock Controversy -- This Is Harder Than It Looks
 
 In 2015, Salvatore Sanfilippo (the creator of Redis, known online as antirez) published a distributed lock algorithm called **Redlock**. It was meant to be a more robust version of the simple single-node Redis lock.
 
 The idea was clever: instead of one Redis instance, use five. Acquire the lock on at least 3 out of 5 (a majority). Even if 1 or 2 Redis instances go down, you still have a majority confirming your lock. You have eliminated the "single point of failure" problem.
 
-Martin Kleppmann — a Cambridge researcher and author of one of the most respected distributed systems books, "Designing Data-Intensive Applications" — published a detailed response. He showed that Redlock is not actually safe, even with 5 Redis nodes. The reason is subtle and important enough that we are going to spend some time on it.
+Martin Kleppmann -- a Cambridge researcher and author of one of the most respected distributed systems books, "Designing Data-Intensive Applications" -- published a detailed response. He showed that Redlock is not actually safe, even with 5 Redis nodes. The reason is subtle and important enough that we are going to spend some time on it.
 
 The problem is not Redis. It is not the algorithm. It is **timing assumptions**.
 
@@ -2141,7 +2141,7 @@ T=0-5s   Server A starts doing work. All is well.
 
 T=5s     Something happens to Server A's process.
          Maybe: the JVM (Java Virtual Machine) decides to
-         run garbage collection — it pauses ALL threads for
+         run garbage collection -- it pauses ALL threads for
          several seconds to clean up memory.
          Or: the operating system context-switches Server A
          out and does not give it CPU time for a while.
@@ -2156,7 +2156,7 @@ T=10s    The lock TTL expires. Redis deletes the lock record.
          Server A is still paused and does not know this.
 
 T=11s    Server B successfully acquires the lock.
-         (The lock was free — TTL expired.)
+         (The lock was free -- TTL expired.)
          Server B starts doing the protected work.
 
 T=15s    Server A's process resumes from its pause.
@@ -2166,7 +2166,7 @@ T=15s    Server A's process resumes from its pause.
 
 T=15s-?  SERVER A AND SERVER B ARE BOTH WRITING SIMULTANEOUSLY.
          Both believe they have an exclusive lock.
-         Neither is wrong from their own perspective —
+         Neither is wrong from their own perspective --
          they just cannot see each other.
          DATA CORRUPTION.
 ```
@@ -2174,21 +2174,21 @@ T=15s-?  SERVER A AND SERVER B ARE BOTH WRITING SIMULTANEOUSLY.
 Let us draw this as a timeline:
 
 ```
-Time ─────────────────────────────────────────────────────►
+Time ----------------------------------------------------->
 
      0    2    4    6    8    10   12   14   16   18   20
 
-A:   ├────────────────────│  PAUSED  │───────────────────►
+A:   +--------------------|  PAUSED  |------------------->
      A gets lock      A paused      A resumes, STILL WRITES
 
-B:                                  ├───────────────────►
+B:                                  +------------------->
                                B gets lock (TTL expired)
                                B writes
 
                          TTL
                         expires
-                          │
-                          ▼
+                          |
+                          v
 
 During 15-20s: A and B are BOTH writing to the same resource.
                Both believe they have exclusive access.
@@ -2197,7 +2197,7 @@ During 15-20s: A and B are BOTH writing to the same resource.
 
 Here is the uncomfortable truth Kleppmann was pointing to: **no distributed lock algorithm can fully prevent this scenario.** Here is why.
 
-For a lock to truly prevent two servers from acting simultaneously, the lock service would need to be able to reach into the paused server and stop it. But the paused server is not responding — that is what "paused" means. The lock service has no way to stop a server it cannot communicate with.
+For a lock to truly prevent two servers from acting simultaneously, the lock service would need to be able to reach into the paused server and stop it. But the paused server is not responding -- that is what "paused" means. The lock service has no way to stop a server it cannot communicate with.
 
 The process pause is not a hypothetical edge case. JVM garbage collection pauses are a documented, real phenomenon. Operating system scheduling pauses happen constantly. Virtual machine migration happens in cloud environments all the time. Any sufficiently long-running distributed system will eventually experience this.
 
@@ -2207,11 +2207,11 @@ That mechanism is fencing tokens. And now we are ready to understand them.
 
 ---
 
-## Fencing Tokens — The Real Solution
+## Fencing Tokens -- The Real Solution
 
 Picture yourself at a deli counter on a busy Saturday morning. You walk in and grab a paper ticket from a dispenser by the door. It says: **47**.
 
-You join the crowd milling around, waiting. The person behind the counter calls out: "Number 42!" Someone steps up. Then "43!" Then "44!" Then — distracting yourself on your phone — you miss "47!" The counter moves on: "48!" "49!" "50!"
+You join the crowd milling around, waiting. The person behind the counter calls out: "Number 42!" Someone steps up. Then "43!" Then "44!" Then -- distracting yourself on your phone -- you miss "47!" The counter moves on: "48!" "49!" "50!"
 
 You finally look up and realize you missed your number. You walk up anyway and hand your ticket to the person behind the counter. They look at it. "47? We're on 53 now. I'm sorry, your ticket is stale. You'll need to take a new number."
 
@@ -2219,9 +2219,9 @@ Your ticket is expired. Not because it has a time stamp on it. Because the count
 
 **Fencing tokens work exactly this way.**
 
-Every time a lock is granted to a server, it comes with a unique, incrementing number — the **fencing token**. Server A acquires the lock, gets token 42. Server A releases. Server B acquires the lock, gets token 43. Server B releases. Server A acquires again, gets token 44. And so on. Every grant is a new, higher number.
+Every time a lock is granted to a server, it comes with a unique, incrementing number -- the **fencing token**. Server A acquires the lock, gets token 42. Server A releases. Server B acquires the lock, gets token 43. Server B releases. Server A acquires again, gets token 44. And so on. Every grant is a new, higher number.
 
-When a server uses its lock to do something — write to a database, update a file, call an API — it includes the fencing token with the operation: "write X to the database, my fencing token is 42."
+When a server uses its lock to do something -- write to a database, update a file, call an API -- it includes the fencing token with the operation: "write X to the database, my fencing token is 42."
 
 The storage system (the database, the file system, whatever is being protected) keeps track of the highest token it has seen. If it receives an operation with a token lower than the highest it has seen, it rejects it: "42 is stale. The current highest token is 43. Your operation is rejected."
 
@@ -2256,37 +2256,37 @@ T=15s    Server A's write is rejected. Server B's writes are safe.
 Here is the diagram:
 
 ```
-                  ┌─────────────────────────────────────┐
-                  │           STORAGE SYSTEM             │
-                  │                                      │
-                  │  Highest token seen so far: 43       │
-                  │                                      │
-                  │  Rule: reject any write with token   │
-                  │  < highest seen                      │
-                  └──────────────────────────────────────┘
-                        ▲                    ▲
-                        │                   │
-           Token=42     │    REJECTED        │    Token=43
-           (stale!)     │    ────────────►   │    ACCEPTED
-                        │                   │
-                  ┌─────┴───┐         ┌─────┴───┐
-                  │SERVER A │         │SERVER B │
-                  │         │         │         │
-                  │ Woke up │         │ Holds   │
-                  │ from    │         │ current │
-                  │ pause.  │         │ lock.   │
-                  │ Token   │         │ Token   │
-                  │ is 42.  │         │ is 43.  │
-                  └─────────┘         └─────────┘
+                  +-------------------------------------+
+                  |           STORAGE SYSTEM             |
+                  |                                      |
+                  |  Highest token seen so far: 43       |
+                  |                                      |
+                  |  Rule: reject any write with token   |
+                  |  < highest seen                      |
+                  +--------------------------------------+
+                        ^                    ^
+                        |                   |
+           Token=42     |    REJECTED        |    Token=43
+           (stale!)     |    ------------>   |    ACCEPTED
+                        |                   |
+                  +-----+---+         +-----+---+
+                  |SERVER A |         |SERVER B |
+                  |         |         |         |
+                  | Woke up |         | Holds   |
+                  | from    |         | current |
+                  | pause.  |         | lock.   |
+                  | Token   |         | Token   |
+                  | is 42.  |         | is 43.  |
+                  +---------+         +---------+
 
 Server A's write is blocked at the storage layer.
 Server B's writes proceed safely.
-The storage is the enforcer — not the lock service.
+The storage is the enforcer -- not the lock service.
 ```
 
 This is the key insight: **the storage resource itself is the enforcer, not the lock service.** No matter what Server A believes about having the lock, no matter how confused it is about the passage of time, the storage will not let its stale operations go through.
 
-Why does this work? Because fencing tokens are **monotonically increasing** — each new grant is a strictly higher number than the previous one. So you can always tell if a token is stale: it is lower than the highest seen. This is a mathematical property that does not rely on clocks, network timing, or any of the unreliable things we discussed in Part A.
+Why does this work? Because fencing tokens are **monotonically increasing** -- each new grant is a strictly higher number than the previous one. So you can always tell if a token is stale: it is lower than the highest seen. This is a mathematical property that does not rely on clocks, network timing, or any of the unreliable things we discussed in Part A.
 
 The key insight, stated as simply as possible: **the lock is a hint. The fencing token is the enforcement.**
 
@@ -2296,7 +2296,7 @@ A distributed lock says "probably safe to proceed." A fencing token + storage-si
 
 ## Implementing Distributed Locks Correctly
 
-Now let us look at what a properly built distributed lock looks like. There are several subtle details here — each one exists to prevent a specific failure mode.
+Now let us look at what a properly built distributed lock looks like. There are several subtle details here -- each one exists to prevent a specific failure mode.
 
 ```python
 def acquire_lock(resource_name, ttl_seconds, server_id):
@@ -2333,7 +2333,7 @@ def acquire_lock(resource_name, ttl_seconds, server_id):
 
 def release_lock(resource_name, server_id, token):
     """
-    Release the lock — but ONLY if we are the one holding it.
+    Release the lock -- but ONLY if we are the one holding it.
     
     Why check? Because our lock TTL might have expired while we were working.
     Another server may have acquired the lock. If we blindly DELETE the key,
@@ -2368,7 +2368,7 @@ def release_lock(resource_name, server_id, token):
     )
 
 
-# ─── HOW TO USE IT ───────────────────────────────────────────────────────────
+# --- HOW TO USE IT -----------------------------------------------------------
 
 token = acquire_lock("job_1234", ttl_seconds=30, server_id="server_a")
 
@@ -2401,13 +2401,13 @@ By storing `server_id:token` as the value, and checking it before deleting, you 
 The check-then-delete needs to be atomic. Atomic means: all or nothing, no interruption in the middle. Here is the race condition without atomicity:
 
 ```
-Server A:  GET lock:job_1234  → returns "server_a:42" ✓ (it's ours!)
-                    ← at this exact moment, the TTL expires
-                    ← Server B runs SET lock:job_1234 "server_b:43" NX  → success
-Server A:  DEL lock:job_1234  ← deletes SERVER B'S lock!!! 
+Server A:  GET lock:job_1234  -> returns "server_a:42" Y (it's ours!)
+                    <- at this exact moment, the TTL expires
+                    <- Server B runs SET lock:job_1234 "server_b:43" NX  -> success
+Server A:  DEL lock:job_1234  <- deletes SERVER B'S lock!!! 
 ```
 
-The window between the GET and the DEL is a race condition. A Lua script closes that window by making both operations happen as one indivisible step inside Redis. Nothing can happen in between — Redis processes it as a single operation.
+The window between the GET and the DEL is a race condition. A Lua script closes that window by making both operations happen as one indivisible step inside Redis. Nothing can happen in between -- Redis processes it as a single operation.
 
 **Why pass the fencing token to do_work?**
 
@@ -2415,7 +2415,7 @@ Because `do_work` needs to include the token in every write it makes to the unde
 
 ---
 
-## Lock Anti-Patterns — What NOT to Do
+## Lock Anti-Patterns -- What NOT to Do
 
 Now let us talk about the ways engineers get distributed locks wrong in practice. These are real patterns you will see in production codebases.
 
@@ -2424,7 +2424,7 @@ Now let us talk about the ways engineers get distributed locks wrong in practice
 ### Anti-Pattern 1: Retry Forever Until the Lock Is Acquired
 
 ```python
-# BAD — The Hammering Pattern
+# BAD -- The Hammering Pattern
 while True:
     if acquire_lock("report_generator"):
         do_work()
@@ -2433,14 +2433,14 @@ while True:
     # Try again immediately with no delay
 ```
 
-Picture 100 servers all wanting the same lock. One gets it. The other 99 are in a tight `while True` loop, hammering Redis with requests every few milliseconds. If the lock is held for 10 seconds, that is 99 servers × maybe 50 requests/second = **4,950 requests per second to Redis just to acquire one lock.**
+Picture 100 servers all wanting the same lock. One gets it. The other 99 are in a tight `while True` loop, hammering Redis with requests every few milliseconds. If the lock is held for 10 seconds, that is 99 servers x maybe 50 requests/second = **4,950 requests per second to Redis just to acquire one lock.**
 
-This is called a **thundering herd** — a bunch of processes all stampeding toward the same resource simultaneously, each making things worse for the others.
+This is called a **thundering herd** -- a bunch of processes all stampeding toward the same resource simultaneously, each making things worse for the others.
 
 The fix: exponential backoff with jitter.
 
 ```python
-# GOOD — Exponential backoff with jitter
+# GOOD -- Exponential backoff with jitter
 wait = 0.1  # Start with 100ms
 while True:
     if acquire_lock("report_generator"):
@@ -2461,7 +2461,7 @@ Redis load drops from 4,950 requests/second to a handful per second. The single 
 ### Anti-Pattern 2: Locking at Too Fine a Granularity
 
 ```python
-# BAD — One lock per individual user
+# BAD -- One lock per individual user
 for user_id in list_of_10000_users:
     lock = acquire_lock(f"user_{user_id}")  # lock for each user
     update_user_stats(user_id)
@@ -2471,15 +2471,15 @@ for user_id in list_of_10000_users:
 If you are updating 10,000 users and each lock acquisition takes 8 milliseconds (a Redis round trip), that is:
 
 ```
-10,000 users × 8ms per lock = 80,000ms = 80 seconds of lock overhead
+10,000 users x 8ms per lock = 80,000ms = 80 seconds of lock overhead
 ```
 
-Even if `update_user_stats` takes only 1ms per user (10 seconds total), you have added 80 seconds of pure overhead. You turned a 10-second job into a 90-second job. The lock overhead is 8× the actual work.
+Even if `update_user_stats` takes only 1ms per user (10 seconds total), you have added 80 seconds of pure overhead. You turned a 10-second job into a 90-second job. The lock overhead is 8x the actual work.
 
 Better approach: if the operations are independent (updating User A's stats does not affect User B's stats), you do not need locks at all. Use database transactions or atomic operations. Or if you must lock, lock a batch:
 
 ```python
-# BETTER — Process in batches, lock the batch
+# BETTER -- Process in batches, lock the batch
 for batch in chunks(list_of_10000_users, size=100):
     lock = acquire_lock(f"user_batch_{batch_id}")
     update_users_batch(batch)  # 100 users at once
@@ -2492,21 +2492,21 @@ for batch in chunks(list_of_10000_users, size=100):
 ### Anti-Pattern 3: Locking at Too Coarse a Granularity
 
 ```python
-# BAD — One global lock for all user operations
+# BAD -- One global lock for all user operations
 def update_user(user_id, new_data):
     lock = acquire_lock("global_users_lock")  # ONE LOCK FOR EVERYTHING
     database.update(f"UPDATE users SET ... WHERE id = {user_id}")
     release_lock("global_users_lock")
 ```
 
-Now your entire system can only update one user at a time. You have 5 servers, 5 CPUs, 5 database connections — and you are using exactly 1 of each at any moment because everything is serialized behind one lock. You just threw away 80% of your capacity.
+Now your entire system can only update one user at a time. You have 5 servers, 5 CPUs, 5 database connections -- and you are using exactly 1 of each at any moment because everything is serialized behind one lock. You just threw away 80% of your capacity.
 
 This is like running a grocery store with 20 checkout lanes but insisting everyone use Lane 1, one person at a time, because you are afraid two cashiers might cause a problem.
 
 Better: shard the locks. Separate locks for separate data.
 
 ```python
-# BETTER — Lock per user or per user-id range
+# BETTER -- Lock per user or per user-id range
 def update_user(user_id, new_data):
     # Each user gets their own lock. Different users can update in parallel.
     lock = acquire_lock(f"user_{user_id}")
@@ -2521,7 +2521,7 @@ Now Server 1 can update User 101 while Server 2 updates User 202. No waiting. Fu
 ### Anti-Pattern 4: Long-Running Locks Without Checkpointing
 
 ```python
-# BAD — Long job, short lock TTL
+# BAD -- Long job, short lock TTL
 lock = acquire_lock("report_generator", ttl=300)  # 5-minute TTL
 generate_massive_report()  # Actually takes 8 minutes
 ```
@@ -2536,12 +2536,12 @@ Result:   Report generated twice. Double the CPU. Double the database load.
            The reports might even conflict if they write to the same output file.
 ```
 
-The obvious fix — make the TTL 10 minutes — just pushes the problem to the next time the job takes 11 minutes.
+The obvious fix -- make the TTL 10 minutes -- just pushes the problem to the next time the job takes 11 minutes.
 
 Better solution: **checkpointing**. Break the work into stages. After each stage, record your progress. Use a unique run ID to detect if another server has started the same work.
 
 ```python
-# BETTER — Checkpointed long job
+# BETTER -- Checkpointed long job
 run_id = generate_unique_id()  # e.g., "report_20240115_run_abc123"
 
 lock = acquire_lock("report_generator", ttl=60)  # 1-minute lock, renewed
@@ -2551,7 +2551,7 @@ if not lock:
     existing_run = database.get("current_report_run")
     if existing_run and existing_run.started_less_than(10, "minutes"):
         return "another server is handling it"
-    # Otherwise the previous run failed — take over
+    # Otherwise the previous run failed -- take over
 
 database.set("current_report_run", {"id": run_id, "started": now()})
 
@@ -2566,7 +2566,7 @@ release_lock(lock)
 
 ---
 
-## When Locks Break in Production — A Debugging Guide
+## When Locks Break in Production -- A Debugging Guide
 
 Theory is useful. What is even more useful: knowing what to look for when your distributed lock stops working in production at 2 AM. Here are the five most common symptoms and their causes.
 
@@ -2583,7 +2583,7 @@ Cause A: Lock TTL shorter than job duration.
   How to confirm: Check job processing time P95 vs. lock TTL.
                   If jobs sometimes take 35s and TTL is 30s, this is it.
   Fix: Implement lock renewal. Renew every TTL/2 seconds.
-       Or increase TTL to 3-5× the P99 job duration.
+       Or increase TTL to 3-5x the P99 job duration.
 
 Cause B: Release-before-done bug.
   How to confirm: Look for code paths where you release the lock
@@ -2598,13 +2598,13 @@ Cause C: Lock not acquired but code proceeds anyway.
   How to confirm: Look for missing null-check on the acquire return value.
   Example:
     token = acquire_lock("job_1234")
-    do_work()   ← no "if token:" check!
+    do_work()   <- no "if token:" check!
   Fix: Always check that acquire succeeded before proceeding.
 ```
 
 ---
 
-**Symptom 2: "The lock is never released — everything is stuck"**
+**Symptom 2: "The lock is never released -- everything is stuck"**
 
 Jobs stop processing. You check Redis and find lock keys that never expire, or find that the lock is re-acquired immediately after release and held forever.
 
@@ -2637,7 +2637,7 @@ Cause C: Releasing a lock you do not hold.
 
 ---
 
-**Symptom 3: "Lock acquisition is very slow — latency spikes"**
+**Symptom 3: "Lock acquisition is very slow -- latency spikes"**
 
 Normally, acquiring a lock takes 2-5ms. Suddenly it takes 200ms-2 seconds.
 
@@ -2650,7 +2650,7 @@ Cause A: Redis is overloaded.
   Fix: Reduce lock acquisition rate (exponential backoff).
        Consider Redis cluster. Reduce lock granularity (batch operations).
 
-Cause B: High lock contention — many servers fighting for one lock.
+Cause B: High lock contention -- many servers fighting for one lock.
   How to confirm: Look at the number of servers attempting the same lock.
                   If 50 servers are all retrying the same lock every 100ms,
                   that is 500 requests/second just for one lock key.
@@ -2661,7 +2661,7 @@ Cause B: High lock contention — many servers fighting for one lock.
 Cause C: Network partition or Redis primary failover in progress.
   How to confirm: Check Redis replication lag, Sentinel logs, or cluster status.
                   Lock acquisitions fail (return null) rather than being slow?
-                  That is a different issue — client is reconnecting.
+                  That is a different issue -- client is reconnecting.
   Fix: Configure Redis client's connection retry settings.
        Use Redis Sentinel or Cluster for automatic failover.
 ```
@@ -2705,13 +2705,13 @@ Cause B: Clock skew between servers.
 
 **Symptom 5: "Exponential increase in Redis lock operations under load"**
 
-Everything is fine at low traffic. At high traffic, Redis gets hammered with lock acquisition attempts and slows down, which makes acquisitions take longer, which means servers retry more, which hammers Redis further — a death spiral.
+Everything is fine at low traffic. At high traffic, Redis gets hammered with lock acquisition attempts and slows down, which makes acquisitions take longer, which means servers retry more, which hammers Redis further -- a death spiral.
 
 ```
 This is the thundering herd problem.
 
 How to confirm:
-  Redis ops/second vs. number of servers × request rate.
+  Redis ops/second vs. number of servers x request rate.
   If ops/second grows much faster than linearly with request count,
   you have contention amplification.
 
@@ -2732,33 +2732,33 @@ Fix: Exponential backoff with jitter (already discussed).
 The debugging guide in one table:
 
 ```
-╔════════════════════════════════╦════════════════════════════════════════╗
-║  Symptom                       ║  Most Likely Cause + Fix               ║
-╠════════════════════════════════╬════════════════════════════════════════╣
-║  Duplicate job processing      ║  TTL < job duration → lock renewal     ║
-║                                ║  or increase TTL                       ║
-╠════════════════════════════════╬════════════════════════════════════════╣
-║  Lock never released           ║  No TTL set, or missing finally block  ║
-╠════════════════════════════════╬════════════════════════════════════════╣
-║  Slow lock acquisition         ║  Thundering herd → backoff + jitter    ║
-╠════════════════════════════════╬════════════════════════════════════════╣
-║  Two servers both hold lock    ║  Process pause → use fencing tokens    ║
-╠════════════════════════════════╬════════════════════════════════════════╣
-║  Redis overwhelmed under load  ║  Contention → partition the work       ║
-╚════════════════════════════════╩════════════════════════════════════════╝
++================================+========================================+
+|  Symptom                       |  Most Likely Cause + Fix               |
++================================+========================================+
+|  Duplicate job processing      |  TTL < job duration -> lock renewal     |
+|                                |  or increase TTL                       |
++================================+========================================+
+|  Lock never released           |  No TTL set, or missing finally block  |
++================================+========================================+
+|  Slow lock acquisition         |  Thundering herd -> backoff + jitter    |
++================================+========================================+
+|  Two servers both hold lock    |  Process pause -> use fencing tokens    |
++================================+========================================+
+|  Redis overwhelmed under load  |  Contention -> partition the work       |
++================================+========================================+
 ```
 
 Keep this table somewhere handy. Every distributed systems engineer hits at least three of these five problems within their first year of running distributed locks in production.
 
 ---
 
-## Read-Write Locks — A Better Pattern for Read-Heavy Systems
+## Read-Write Locks -- A Better Pattern for Read-Heavy Systems
 
-Up to now we have been talking about exclusive locks: when one server holds the lock, nobody else gets in. This is like a bathroom key — one person at a time, period.
+Up to now we have been talking about exclusive locks: when one server holds the lock, nobody else gets in. This is like a bathroom key -- one person at a time, period.
 
-But consider a library. The library has copies of "Harry Potter and the Sorcerer's Stone." On a busy Saturday, 40 people might all be reading it simultaneously — some in the reading room, some who have checked out copies. This is fine. Reading is not destructive. You can read the same content simultaneously without messing each other up.
+But consider a library. The library has copies of "Harry Potter and the Sorcerer's Stone." On a busy Saturday, 40 people might all be reading it simultaneously -- some in the reading room, some who have checked out copies. This is fine. Reading is not destructive. You can read the same content simultaneously without messing each other up.
 
-But if a librarian needs to correct a typo on page 47, they need to take ALL the copies off shelves, make the correction to every copy, and return them. You cannot have people reading a book that is halfway through being corrected — they would see inconsistent text.
+But if a librarian needs to correct a typo on page 47, they need to take ALL the copies off shelves, make the correction to every copy, and return them. You cannot have people reading a book that is halfway through being corrected -- they would see inconsistent text.
 
 This is a **read-write lock**:
 - **Readers** can hold the lock simultaneously. Multiple readers = fine.
@@ -2768,40 +2768,40 @@ This is a **read-write lock**:
 READ-WRITE LOCK STATES:
 
 State 1: No lock held
-  ┌─────────────────────────────┐
-  │  Lock is free               │
-  │  Readers: 0                 │
-  │  Writer: none               │
-  └─────────────────────────────┘
+  +-----------------------------+
+  |  Lock is free               |
+  |  Readers: 0                 |
+  |  Writer: none               |
+  +-----------------------------+
 
 State 2: Two readers
-  ┌─────────────────────────────┐
-  │  Lock held by: READERS      │
-  │  Readers: 2 (Server A, B)   │
-  │  Writer: none               │
-  │  Can new reader join? YES   │
-  │  Can writer join? NO        │
-  └─────────────────────────────┘
+  +-----------------------------+
+  |  Lock held by: READERS      |
+  |  Readers: 2 (Server A, B)   |
+  |  Writer: none               |
+  |  Can new reader join? YES   |
+  |  Can writer join? NO        |
+  +-----------------------------+
 
 State 3: One writer (exclusive)
-  ┌─────────────────────────────┐
-  │  Lock held by: WRITER       │
-  │  Readers: 0                 │
-  │  Writer: Server C           │
-  │  Can new reader join? NO    │
-  │  Can writer join? NO        │
-  └─────────────────────────────┘
+  +-----------------------------+
+  |  Lock held by: WRITER       |
+  |  Readers: 0                 |
+  |  Writer: Server C           |
+  |  Can new reader join? NO    |
+  |  Can writer join? NO        |
+  +-----------------------------+
 ```
 
 In code, it looks like this:
 
 ```python
-# Many readers can proceed concurrently — no waiting between readers
+# Many readers can proceed concurrently -- no waiting between readers
 with read_write_lock.read():
     data = database.read("SELECT * FROM articles WHERE id = 42")
     render_page(data)
 
-# A writer gets exclusive access — waits for all current readers to finish
+# A writer gets exclusive access -- waits for all current readers to finish
 with read_write_lock.write():
     database.write("UPDATE articles SET content = '...' WHERE id = 42")
     # No readers or other writers can be active right now
@@ -2811,13 +2811,13 @@ with read_write_lock.write():
 
 When reads happen much more often than writes. The rule of thumb in practice: if reads outnumber writes by at least 10:1, a read-write lock will give you noticeably better throughput.
 
-Real example: Wikipedia's article content. Every second, thousands of people are reading articles. Edits happen maybe once per minute per article. With an exclusive lock, every read would have to wait for the previous read to "finish" — even though reads do not interfere with each other. Absurd. With a read-write lock, all those concurrent readers proceed simultaneously. Writes are rare and get exclusive access when they happen.
+Real example: Wikipedia's article content. Every second, thousands of people are reading articles. Edits happen maybe once per minute per article. With an exclusive lock, every read would have to wait for the previous read to "finish" -- even though reads do not interfere with each other. Absurd. With a read-write lock, all those concurrent readers proceed simultaneously. Writes are rare and get exclusive access when they happen.
 
-A second real example: a user profile cache. Your app reads user profiles on almost every page load. Profiles are updated when users change their settings — maybe once a week per user. Read-write lock: millions of reads per day can happen in parallel. The rare write gets exclusive access for the fraction of a second it needs.
+A second real example: a user profile cache. Your app reads user profiles on almost every page load. Profiles are updated when users change their settings -- maybe once a week per user. Read-write lock: millions of reads per day can happen in parallel. The rare write gets exclusive access for the fraction of a second it needs.
 
 ---
 
-## Deadlocks — When Locks Fight Each Other
+## Deadlocks -- When Locks Fight Each Other
 
 Here is a scenario that will break your brain the first time you encounter it in production.
 
@@ -2832,12 +2832,12 @@ Server A wants to transfer $100 from Alice to Bob.
 Server B wants to transfer $50 from Bob to Alice.
 
 Server A:                        Server B:
-─────────                        ─────────
+---------                        ---------
 acquire_lock("alice_account")    acquire_lock("bob_account")
-  → SUCCESS (A holds alice)        → SUCCESS (B holds bob)
+  -> SUCCESS (A holds alice)        -> SUCCESS (B holds bob)
 
 acquire_lock("bob_account")      acquire_lock("alice_account")
-  → WAITING (B holds bob)          → WAITING (A holds alice)
+  -> WAITING (B holds bob)          -> WAITING (A holds alice)
 
 
 Now:
@@ -2850,7 +2850,7 @@ Now:
 
 Deadlocks are nasty because:
 1. No error message. The servers just stop making progress silently.
-2. They are intermittent — they only happen when two operations overlap in just the wrong way.
+2. They are intermittent -- they only happen when two operations overlap in just the wrong way.
 3. They can happen in systems that ran fine for months and suddenly freeze under a specific load pattern.
 
 **Prevention Method 1: Lock Ordering**
@@ -2875,29 +2875,29 @@ Now Server A and Server B both try to acquire "alice" first. One of them gets it
 With lock ordering:
 
 Server A:                        Server B:
-─────────                        ─────────
+---------                        ---------
 acquire_lock("alice_account")    acquire_lock("alice_account")
-  → SUCCESS (A gets it)            → WAITING (A has it)
+  -> SUCCESS (A gets it)            -> WAITING (A has it)
 
 acquire_lock("bob_account")      
-  → SUCCESS (A gets it)
+  -> SUCCESS (A gets it)
 
-do_transfer(alice → bob)
+do_transfer(alice -> bob)
 
 release_lock("bob_account")
 release_lock("alice_account")
                                  acquire_lock("alice_account")
-                                   → SUCCESS (A released it)
+                                   -> SUCCESS (A released it)
                                  acquire_lock("bob_account")
-                                   → SUCCESS
-                                 do_transfer(bob → alice)
+                                   -> SUCCESS
+                                 do_transfer(bob -> alice)
 ```
 
 A completes, then B completes. No deadlock. Just sequential waiting.
 
 **Prevention Method 2: Timeout and Retry with Jitter**
 
-Sometimes you cannot enforce lock ordering — maybe you acquire locks in different parts of the codebase based on runtime conditions, or the ordering is not obvious. The backup strategy: every lock acquisition has a timeout.
+Sometimes you cannot enforce lock ordering -- maybe you acquire locks in different parts of the codebase based on runtime conditions, or the ordering is not obvious. The backup strategy: every lock acquisition has a timeout.
 
 ```python
 # If we cannot acquire all needed locks within 5 seconds, give up,
@@ -2925,85 +2925,85 @@ This is called **deadlock detection + retry**: you do not prevent the deadlock, 
 
 ---
 
-# Part 4: Consensus — The Foundation of Everything
+# Part 4: Consensus -- The Foundation of Everything
 
 ## What Consensus Actually Means
 
 We have been talking about leaders and locks, but there is a more fundamental question underneath all of it: **how do a group of servers agree on anything?**
 
-Consider 12 jurors in a criminal trial. They have just heard two weeks of testimony. They file into the jury deliberation room. The door closes. They debate, argue, present evidence, vote, revote, discuss more, until eventually — after hours or days — every single juror raises their hand and says "yes, this is our verdict." Or they declare a hung jury.
+Consider 12 jurors in a criminal trial. They have just heard two weeks of testimony. They file into the jury deliberation room. The door closes. They debate, argue, present evidence, vote, revote, discuss more, until eventually -- after hours or days -- every single juror raises their hand and says "yes, this is our verdict." Or they declare a hung jury.
 
 The final verdict they reach is called a **consensus**: everyone agrees on the same decision. More importantly, once they have agreed, no individual juror can go home and unilaterally change the verdict. The decision is final and permanent.
 
-In distributed systems, consensus means the same thing: given N servers, even if some of them fail, the ones that survive agree on ONE value — and they never change their minds after agreeing.
+In distributed systems, consensus means the same thing: given N servers, even if some of them fail, the ones that survive agree on ONE value -- and they never change their minds after agreeing.
 
-Why is this so hard? In a jury room, jurors can talk freely, see each other's facial expressions, confirm that everyone heard the same thing. Servers can only send messages over a network — and those messages can be lost, delayed, arrive out of order, or never arrive at all. Some servers might crash mid-process. The others have no way to know if the crashed server was about to vote "yes" or "no" before it died.
+Why is this so hard? In a jury room, jurors can talk freely, see each other's facial expressions, confirm that everyone heard the same thing. Servers can only send messages over a network -- and those messages can be lost, delayed, arrive out of order, or never arrive at all. Some servers might crash mid-process. The others have no way to know if the crashed server was about to vote "yes" or "no" before it died.
 
 **What consensus enables:**
 
 Once you have consensus, you can build almost everything else on top of it.
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║                  WHAT CONSENSUS UNLOCKS                              ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  Problem                     Consensus solution                      ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  "Who is the leader?"        All nodes agree on one leader.          ║
-║                              No split-brain. One leader per cluster. ║
-║                                                                      ║
-║  "What order do we apply     All nodes apply operations in the       ║
-║  these writes?"              same order → identical data everywhere. ║
-║                                                                      ║
-║  "Should we commit this      All nodes agree to commit, or all       ║
-║  transaction?"               agree to abort. Never partial.         ║
-║                                                                      ║
-║  "Is this server really      Majority agree it is down → declare     ║
-║  down or just slow?"         it down. Not just one server's opinion. ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|                  WHAT CONSENSUS UNLOCKS                              |
++======================================================================+
+|  Problem                     Consensus solution                      |
++======================================================================+
+|  "Who is the leader?"        All nodes agree on one leader.          |
+|                              No split-brain. One leader per cluster. |
+|                                                                      |
+|  "What order do we apply     All nodes apply operations in the       |
+|  these writes?"              same order -> identical data everywhere. |
+|                                                                      |
+|  "Should we commit this      All nodes agree to commit, or all       |
+|  transaction?"               agree to abort. Never partial.         |
+|                                                                      |
+|  "Is this server really      Majority agree it is down -> declare     |
+|  down or just slow?"         it down. Not just one server's opinion. |
++======================================================================+
 ```
 
 ---
 
-## Raft — The Readable Consensus Algorithm
+## Raft -- The Readable Consensus Algorithm
 
 Before 2013, the dominant consensus algorithm was one called **Paxos**, invented by computer scientist Leslie Lamport. Paxos is correct. It works. It has been proven mathematically. There is just one small problem: almost no one can understand it.
 
-Lamport himself wrote a paper introducing Paxos titled "The Part-Time Parliament" — a somewhat playful paper about a fictional Greek parliament. The paper was so confusing that it was initially rejected by the journal where he submitted it. When he rewrote it more clearly as "Paxos Made Simple," the title itself was an admission that the original was not simple. Researchers who tried to implement Paxos found that the algorithm had so many subtle edge cases that nearly every independent implementation had bugs.
+Lamport himself wrote a paper introducing Paxos titled "The Part-Time Parliament" -- a somewhat playful paper about a fictional Greek parliament. The paper was so confusing that it was initially rejected by the journal where he submitted it. When he rewrote it more clearly as "Paxos Made Simple," the title itself was an admission that the original was not simple. Researchers who tried to implement Paxos found that the algorithm had so many subtle edge cases that nearly every independent implementation had bugs.
 
-In 2013, two Stanford researchers — Diego Ongaro and John Ousterhout — decided to design a consensus algorithm specifically optimized for **understandability**. Their paper is literally titled "In Search of an Understandable Consensus Algorithm." They named the algorithm **Raft**, which is a playful nod to log-based data structures and also the opposite of Paxos (a raft is the simplest thing that floats, as opposed to something complex).
+In 2013, two Stanford researchers -- Diego Ongaro and John Ousterhout -- decided to design a consensus algorithm specifically optimized for **understandability**. Their paper is literally titled "In Search of an Understandable Consensus Algorithm." They named the algorithm **Raft**, which is a playful nod to log-based data structures and also the opposite of Paxos (a raft is the simplest thing that floats, as opposed to something complex).
 
 They conducted studies where they taught Paxos to a group of students and Raft to another group, then tested comprehension. Raft won by a significant margin. The engineering community responded enthusiastically: within a few years of publication, Raft had been implemented in dozens of major production systems.
 
 Raft solves consensus by breaking it into three clearly defined problems:
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║              RAFT: THREE SUB-PROBLEMS                                ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  1. LEADER ELECTION                                                   ║
-║     At any given time, exactly one server is the leader.             ║
-║     If the leader fails, a new one is elected.                       ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  2. LOG REPLICATION                                                   ║
-║     The leader receives client commands and replicates them          ║
-║     to all followers in the same order.                              ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  3. SAFETY                                                            ║
-║     A server elected as leader must have ALL committed entries.      ║
-║     Committed entries are never lost, even across failures.          ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|              RAFT: THREE SUB-PROBLEMS                                |
++======================================================================+
+|  1. LEADER ELECTION                                                   |
+|     At any given time, exactly one server is the leader.             |
+|     If the leader fails, a new one is elected.                       |
++======================================================================+
+|  2. LOG REPLICATION                                                   |
+|     The leader receives client commands and replicates them          |
+|     to all followers in the same order.                              |
++======================================================================+
+|  3. SAFETY                                                            |
+|     A server elected as leader must have ALL committed entries.      |
+|     Committed entries are never lost, even across failures.          |
++======================================================================+
 ```
 
 Let us understand each one.
 
 ---
 
-## The Replicated Log — The Central Abstraction
+## The Replicated Log -- The Central Abstraction
 
 Before getting into elections, we need to understand what Raft is actually replicating: a **log**.
 
-Imagine you are the head historian of your school. Your job is to maintain the official history book — a numbered list of entries recording everything significant that happened:
+Imagine you are the head historian of your school. Your job is to maintain the official history book -- a numbered list of entries recording everything significant that happened:
 
 ```
 Entry 1:  "School founded. September 3rd."
@@ -3021,26 +3021,26 @@ Every copy of the history book is identical. In the same order. Forever.
 This is a **replicated log**. Every command that changes the state of the system becomes an entry. Every server keeps the same log. Applying the log entries in order gives you the same final state on every server.
 
 ```
-5-Node Raft Cluster — Replicated Log
+5-Node Raft Cluster -- Replicated Log
 
   LEADER (Node 1)
-  ┌──────────────────────────────────────────────────────────┐
-  │ [1: set x=1] [2: set y=2] [3: del z] [4: set x=5] [5: ██│← new entry, uncommitted
-  └──────────────────────────────────────────────────────────┘
+  +----------------------------------------------------------+
+  | [1: set x=1] [2: set y=2] [3: del z] [4: set x=5] [5: ##|<- new entry, uncommitted
+  +----------------------------------------------------------+
   
   FOLLOWER (Node 2)           FOLLOWER (Node 3)
-  ┌─────────────────────┐    ┌─────────────────────┐
-  │ [1][2][3][4]        │    │ [1][2][3][4]        │
-  └─────────────────────┘    └─────────────────────┘
+  +---------------------+    +---------------------+
+  | [1][2][3][4]        |    | [1][2][3][4]        |
+  +---------------------+    +---------------------+
   (catching up)              (up to date, voted to commit 5)
 
   FOLLOWER (Node 4)           FOLLOWER (Node 5)
-  ┌─────────────────────┐    ┌─────────────────────┐
-  │ [1][2][3][4][5: ██] │    │ [1][2][3][4][5: ██] │
-  └─────────────────────┘    └─────────────────────┘
+  +---------------------+    +---------------------+
+  | [1][2][3][4][5: ##] |    | [1][2][3][4][5: ##] |
+  +---------------------+    +---------------------+
   (has entry 5, voted yes)   (has entry 5, voted yes)
 
-  Nodes 1, 4, 5 have entry 5 → majority of 5 → COMMITTED!
+  Nodes 1, 4, 5 have entry 5 -> majority of 5 -> COMMITTED!
   Nodes 2, 3 will receive entry 5 shortly and apply it.
 ```
 
@@ -3048,43 +3048,43 @@ Once an entry is **committed** (acknowledged by a majority of nodes), it is perm
 
 ---
 
-## Raft Leader Election — Step By Step
+## Raft Leader Election -- Step By Step
 
 Every server in a Raft cluster is always in one of three states:
 
 ```
-                    ┌──────────────┐
-           ┌───────►│  FOLLOWER    │◄──────────────┐
-           │        │              │               │
-           │ heartbeat from leader │ discovers leader
-           │        │   times out  │  or higher term
-           │        └──────┬───────┘
-           │               │
-           │         timeout!
-           │         no heartbeat
-           │               │
-           │               ▼
-  loses  ┌─┤        ┌──────────────┐
-  election│ │        │  CANDIDATE   │
-           │ │        │              │
-           │ └────────┤ votes for    │
-           │          │ self, asks   │
-           │          │ others to    │
-           │          │ vote         │
-           │          └──────┬───────┘
-           │                 │
-           │          receives
-           │          majority votes
-           │                 │
-           │                 ▼
-           └────────  ┌──────────────┐
-            (on next  │   LEADER     │
-             term)    │              │
-                      │ sends        │
-                      │ heartbeats   │
-                      │ replicates   │
-                      │ log entries  │
-                      └──────────────┘
+                    +--------------+
+           +------->|  FOLLOWER    |<--------------+
+           |        |              |               |
+           | heartbeat from leader | discovers leader
+           |        |   times out  |  or higher term
+           |        +------+-------+
+           |               |
+           |         timeout!
+           |         no heartbeat
+           |               |
+           |               v
+  loses  +-+        +--------------+
+  election| |        |  CANDIDATE   |
+           | |        |              |
+           | +--------+ votes for    |
+           |          | self, asks   |
+           |          | others to    |
+           |          | vote         |
+           |          +------+-------+
+           |                 |
+           |          receives
+           |          majority votes
+           |                 |
+           |                 v
+           +--------  +--------------+
+            (on next  |   LEADER     |
+             term)    |              |
+                      | sends        |
+                      | heartbeats   |
+                      | replicates   |
+                      | log entries  |
+                      +--------------+
 ```
 
 Now let us walk through a real election, step by step. We have a 5-node cluster. Everything is running smoothly, then the leader crashes.
@@ -3094,13 +3094,13 @@ Now let us walk through a real election, step by step. We have a 5-node cluster.
 **Phase 1: Normal Operation (Before the Crash)**
 
 ```
-TERM 1 — Normal operation
-─────────────────────────────────────────────────
+TERM 1 -- Normal operation
+-------------------------------------------------
 
-Node 1 (LEADER)  ──heartbeat──►  Node 2 (follower)
-                 ──heartbeat──►  Node 3 (follower)
-                 ──heartbeat──►  Node 4 (follower)
-                 ──heartbeat──►  Node 5 (follower)
+Node 1 (LEADER)  --heartbeat-->  Node 2 (follower)
+                 --heartbeat-->  Node 3 (follower)
+                 --heartbeat-->  Node 4 (follower)
+                 --heartbeat-->  Node 5 (follower)
 
 Every 50-150ms: Leader sends "I am alive" heartbeat to all followers.
 Every follower receives it and resets its election timer.
@@ -3109,13 +3109,13 @@ Timer reset = "ok, leader is alive, I will not start an election."
 
 The leader sends heartbeats constantly. Think of it like a heartbeat monitor in a hospital: as long as the signal is coming in, everything is fine. The moment the signal stops, alarms go off.
 
-Each follower has a timer — let us call it the **election timeout**. It is set to a random value between 150ms and 300ms. Every time a heartbeat arrives, the timer resets to its full value. If the timer ever counts down to zero without a heartbeat arriving, the follower starts an election.
+Each follower has a timer -- let us call it the **election timeout**. It is set to a random value between 150ms and 300ms. Every time a heartbeat arrives, the timer resets to its full value. If the timer ever counts down to zero without a heartbeat arriving, the follower starts an election.
 
 Why random? Because if all followers had the exact same timeout, they would all try to start an election at the exact same moment when the leader fails, all vote for themselves simultaneously, and potentially no one would get a majority. By randomizing, one follower almost always times out first.
 
 ---
 
-**Phase 2: Leader Crash — Failure Detected**
+**Phase 2: Leader Crash -- Failure Detected**
 
 ```
 T = 100ms: Node 1 (leader) crashes. Power failure.
@@ -3138,28 +3138,28 @@ T = 255ms: Node 2's timer hits zero first.
 **Phase 3: Election Begins**
 
 ```
-Node 2 transitions: FOLLOWER → CANDIDATE
+Node 2 transitions: FOLLOWER -> CANDIDATE
 
 Actions:
-  1. Increments current term: Term 1 → Term 2
+  1. Increments current term: Term 1 -> Term 2
   2. Votes for itself: "I vote for Node 2 in Term 2"
   3. Sends RequestVote to all other nodes:
 
-     ┌─────────────────────────────────────────────────────┐
-     │  RequestVote Message                                 │
-     │  from: Node 2                                       │
-     │  term: 2              (which election is this?)     │
-     │  candidate: Node 2    (vote for me!)                │
-     │  lastLogIndex: 47     (my log goes up to entry 47)  │
-     │  lastLogTerm: 1       (entry 47 was written in      │
-     │                         Term 1)                     │
-     └─────────────────────────────────────────────────────┘
+     +-----------------------------------------------------+
+     |  RequestVote Message                                 |
+     |  from: Node 2                                       |
+     |  term: 2              (which election is this?)     |
+     |  candidate: Node 2    (vote for me!)                |
+     |  lastLogIndex: 47     (my log goes up to entry 47)  |
+     |  lastLogTerm: 1       (entry 47 was written in      |
+     |                         Term 1)                     |
+     +-----------------------------------------------------+
 
 Node 2 sends this to Nodes 3, 4, and 5.
 (Node 1 is crashed and cannot receive.)
 ```
 
-The `lastLogIndex` and `lastLogTerm` are Node 2's credentials — "here is how current my log is." Other nodes use these to decide whether to vote for Node 2.
+The `lastLogIndex` and `lastLogTerm` are Node 2's credentials -- "here is how current my log is." Other nodes use these to decide whether to vote for Node 2.
 
 ---
 
@@ -3167,26 +3167,26 @@ The `lastLogIndex` and `lastLogTerm` are Node 2's credentials — "here is how c
 
 ```
 Node 3 receives RequestVote from Node 2:
-  Check 1: "Have I already voted in Term 2?" No. ✓
+  Check 1: "Have I already voted in Term 2?" No. Y
   Check 2: "Is candidate's log at least as current as mine?"
              Candidate says lastLogIndex=47, lastLogTerm=1.
-             My log: lastLogIndex=47, lastLogTerm=1. Same. ✓
+             My log: lastLogIndex=47, lastLogTerm=1. Same. Y
   Result:  Vote GRANTED to Node 2 for Term 2.
 
 Node 4 receives RequestVote from Node 2:
-  Check 1: "Have I already voted in Term 2?" No. ✓
-  Check 2: "Candidate's log: index 47, term 1. My log: index 47, term 1." ✓
+  Check 1: "Have I already voted in Term 2?" No. Y
+  Check 2: "Candidate's log: index 47, term 1. My log: index 47, term 1." Y
   Result:  Vote GRANTED.
 
 Node 5 receives RequestVote from Node 2:
-  Check 1: "Have I already voted in Term 2?" No. ✓
-  Check 2: Logs match. ✓
+  Check 1: "Have I already voted in Term 2?" No. Y
+  Check 2: Logs match. Y
   Result:  Vote GRANTED.
 
 Node 2 vote count:
   Self vote:      1
   Node 3 vote:    2
-  Node 4 vote:    3  ← MAJORITY OF 5 (3 out of 5) ✓
+  Node 4 vote:    3  <- MAJORITY OF 5 (3 out of 5) Y
 
 Node 2 becomes LEADER for Term 2!
 ```
@@ -3196,7 +3196,7 @@ Node 2 becomes LEADER for Term 2!
 **Phase 5: New Leader Announces**
 
 ```
-Node 2 transitions: CANDIDATE → LEADER
+Node 2 transitions: CANDIDATE -> LEADER
 
 Immediately sends heartbeat to Nodes 3, 4, 5:
   "I am the leader for Term 2. Reset your election timers."
@@ -3214,128 +3214,128 @@ under 500ms in a healthy network.
 Here is the full election visualized as a timeline:
 
 ```
-Time (ms) →
+Time (ms) ->
 0    50   100   150   200   250   300   350   400   450
 
 Node 1 (WAS leader):
-          █████▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-          running│CRASH (dead)
+          ######......................................
+          running|CRASH (dead)
 
 Node 2 (becomes leader):
-          ♥♥♥♥♥♥♥░░░░░░░░░░░░░■■■►  ✓✓✓ ★★★★★★★★★★★★
-          following│          │   │  wins │  LEADER
-                   │no hb     │   │  vote │  (heartbeats)
-                   │          │timeout  │
-                             candidate│
+          <3<3<3<3<3<3<3.............***>  YYY ************
+          following|          |   |  wins |  LEADER
+                   |no hb     |   |  vote |  (heartbeats)
+                   |          |timeout  |
+                             candidate|
 
 Node 3, 4, 5 (remain followers):
-          ♥♥♥♥♥♥♥░░░░░░░░░░░░░░░░░ vote → following Node 2
-                   │  no heartbeats │
+          <3<3<3<3<3<3<3................. vote -> following Node 2
+                   |  no heartbeats |
 
-♥ = heartbeat received from Node 1
-░ = no heartbeat (Node 1 crashed)
-■ = RequestVote message
-► = votes received
-★ = heartbeats from new leader (Node 2)
+<3 = heartbeat received from Node 1
+. = no heartbeat (Node 1 crashed)
+* = RequestVote message
+> = votes received
+* = heartbeats from new leader (Node 2)
 ```
 
 ---
 
-## The Term Number — The Election Calendar
+## The Term Number -- The Election Calendar
 
 The **term number** is one of the most important concepts in Raft, and it is also one of the easiest to understand.
 
-Think of it like an election year. In the US, presidential elections happen in years 2024, 2028, 2032, and so on. If you receive a letter that says "I am the President, please comply, signed: Candidate from the 2020 election" — and it is now 2024 with a new president — you would know that letter is from a stale authority. You would reject it.
+Think of it like an election year. In the US, presidential elections happen in years 2024, 2028, 2032, and so on. If you receive a letter that says "I am the President, please comply, signed: Candidate from the 2020 election" -- and it is now 2024 with a new president -- you would know that letter is from a stale authority. You would reject it.
 
-Raft terms work the same way. Each term has a number. When a new election is called, the term number increments. Every message includes the sender's term number. If you receive a message from a server claiming to be leader but with a lower term number than your current term — you know they are stale. You ignore them.
+Raft terms work the same way. Each term has a number. When a new election is called, the term number increments. Every message includes the sender's term number. If you receive a message from a server claiming to be leader but with a lower term number than your current term -- you know they are stale. You ignore them.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    RAFT TERMS                                 │
-├──────────────────────────────────────────────────────────────┤
-│                                                               │
-│  Term 1: Node 1 is leader. Normal operation.                 │
-│  ──────────────────────────────────────────                  │
-│  │election│─────── Node 1 leads ──────────────── │Node 1    │
-│                                                   │fails│    │
-│                                                              │
-│  Term 2: Node 2 wins election. Normal operation.            │
-│  ─────────────────────────────────────────────              │
-│  │election│────── Node 2 leads ────────────── │Node 2      │
-│                                               │fails│       │
-│                                                              │
-│  Term 3: Node 4 wins election.                              │
-│  ─────────────────────────────────────────────              │
-│  │election│──────── Node 4 leads ─────────────────────►    │
-│           (currently running)                               │
-│                                                              │
-│  If Node 2 comes back online after being crashed, it         │
-│  discovers it is in Term 2 while everyone else is in Term 3. │
-│  It immediately steps down and becomes a follower.           │
-│  It will NOT try to lead — its term is stale.               │
-└──────────────────────────────────────────────────────────────┘
++--------------------------------------------------------------+
+|                    RAFT TERMS                                 |
++--------------------------------------------------------------+
+|                                                               |
+|  Term 1: Node 1 is leader. Normal operation.                 |
+|  ------------------------------------------                  |
+|  |election|------- Node 1 leads ---------------- |Node 1    |
+|                                                   |fails|    |
+|                                                              |
+|  Term 2: Node 2 wins election. Normal operation.            |
+|  ---------------------------------------------              |
+|  |election|------ Node 2 leads -------------- |Node 2      |
+|                                               |fails|       |
+|                                                              |
+|  Term 3: Node 4 wins election.                              |
+|  ---------------------------------------------              |
+|  |election|-------- Node 4 leads --------------------->    |
+|           (currently running)                               |
+|                                                              |
+|  If Node 2 comes back online after being crashed, it         |
+|  discovers it is in Term 2 while everyone else is in Term 3. |
+|  It immediately steps down and becomes a follower.           |
+|  It will NOT try to lead -- its term is stale.               |
++--------------------------------------------------------------+
 ```
 
-The term number is a simple but powerful mechanism for resolving "ghost leader" scenarios. Old leaders that were isolated from the network, did not know they had been replaced, and come back online — they see the higher term number and immediately understand they are no longer the authority. No confusion, no split-brain.
+The term number is a simple but powerful mechanism for resolving "ghost leader" scenarios. Old leaders that were isolated from the network, did not know they had been replaced, and come back online -- they see the higher term number and immediately understand they are no longer the authority. No confusion, no split-brain.
 
 ---
 
-## Log Replication — How Commands Spread Through the Cluster
+## Log Replication -- How Commands Spread Through the Cluster
 
-Now let us watch what happens when a client sends a command to the leader. The client wants to do something — say, "set the username for user 47 to 'alice.chen'". We will track this operation from the client's request to the moment all 5 servers have it durably stored.
+Now let us watch what happens when a client sends a command to the leader. The client wants to do something -- say, "set the username for user 47 to 'alice.chen'". We will track this operation from the client's request to the moment all 5 servers have it durably stored.
 
 ```
 CLIENT                          LEADER (Node 2)      FOLLOWERS (Nodes 3-5)
-  │                                 │                      │
-  │  "Set user_47_name = alice.chen"│                      │
-  ├────────────────────────────────►│                      │
-  │                                 │                      │
-  │                         [Step 1]│                      │
-  │                    Append to own│                      │
-  │                    log at pos 5 │                      │
-  │                    (UNCOMMITTED)│                      │
-  │                                 │                      │
-  │                         [Step 2]│                      │
-  │                    AppendEntries│ AppendEntries msg    │
-  │                    (RPC call to │─────────────────────►│
-  │                    all followers│ "Please add entry 5: │
-  │                                 │  set user_47_name=   │
-  │                                 │  alice.chen, term 2" │
-  │                                 │                      │
-  │                                 │              [Step 3]│
-  │                                 │       Followers add  │
-  │                                 │       entry to their │
-  │                                 │       own logs       │
-  │                                 │                      │
-  │                                 │◄─────────────────────┤
-  │                         [Step 4]│  "Accepted!" (×3)    │
-  │                   3 of 5 accept │                      │
-  │                   = MAJORITY    │                      │
-  │                                 │                      │
-  │                         [Step 5]│                      │
-  │                    Mark entry 5 │                      │
-  │                    as COMMITTED │                      │
-  │                    Apply to     │                      │
-  │                    state machine│                      │
-  │                    (actually    │                      │
-  │                    set the name)│                      │
-  │                                 │                      │
-  │  "Success! Name updated."       │                      │
-  │◄────────────────────────────────┤                      │
-  │                                 │                      │
-  │                         [Step 6]│                      │
-  │                   Next heartbeat│ "Entry 5 is committed│
-  │                   tells followers─────────────────────►│
-  │                   to apply it   │  apply it please"    │
-  │                                 │                      │
-  │                                 │              [Step 7]│
-  │                                 │       Followers apply│
-  │                                 │       entry 5 to     │
-  │                                 │       their state    │
-  │                                 │       machines       │
+  |                                 |                      |
+  |  "Set user_47_name = alice.chen"|                      |
+  +-------------------------------->|                      |
+  |                                 |                      |
+  |                         [Step 1]|                      |
+  |                    Append to own|                      |
+  |                    log at pos 5 |                      |
+  |                    (UNCOMMITTED)|                      |
+  |                                 |                      |
+  |                         [Step 2]|                      |
+  |                    AppendEntries| AppendEntries msg    |
+  |                    (RPC call to |--------------------->|
+  |                    all followers| "Please add entry 5: |
+  |                                 |  set user_47_name=   |
+  |                                 |  alice.chen, term 2" |
+  |                                 |                      |
+  |                                 |              [Step 3]|
+  |                                 |       Followers add  |
+  |                                 |       entry to their |
+  |                                 |       own logs       |
+  |                                 |                      |
+  |                                 |<---------------------+
+  |                         [Step 4]|  "Accepted!" (x3)    |
+  |                   3 of 5 accept |                      |
+  |                   = MAJORITY    |                      |
+  |                                 |                      |
+  |                         [Step 5]|                      |
+  |                    Mark entry 5 |                      |
+  |                    as COMMITTED |                      |
+  |                    Apply to     |                      |
+  |                    state machine|                      |
+  |                    (actually    |                      |
+  |                    set the name)|                      |
+  |                                 |                      |
+  |  "Success! Name updated."       |                      |
+  |<--------------------------------+                      |
+  |                                 |                      |
+  |                         [Step 6]|                      |
+  |                   Next heartbeat| "Entry 5 is committed|
+  |                   tells followers--------------------->|
+  |                   to apply it   |  apply it please"    |
+  |                                 |                      |
+  |                                 |              [Step 7]|
+  |                                 |       Followers apply|
+  |                                 |       entry 5 to     |
+  |                                 |       their state    |
+  |                                 |       machines       |
 ```
 
-**Step 5 details — why majority is enough:**
+**Step 5 details -- why majority is enough:**
 
 The leader does not wait for all 5 servers to confirm. It waits for 3 (a majority). Why is majority enough?
 
@@ -3353,11 +3353,11 @@ Same solution: the leader sends all 100 missing entries to the returning followe
 
 ---
 
-## Raft Safety — Why You Cannot Elect a Stale Leader
+## Raft Safety -- Why You Cannot Elect a Stale Leader
 
 The most important safety property in Raft: **any elected leader must have all committed entries.**
 
-Without this, a new leader could overwrite committed entries — entries that clients were already told "yes, done." That would be a lie. Clients would see data appear, disappear, and change arbitrarily. Chaos.
+Without this, a new leader could overwrite committed entries -- entries that clients were already told "yes, done." That would be a lie. Clients would see data appear, disappear, and change arbitrarily. Chaos.
 
 Raft ensures this through the **log completeness check** in voting.
 
@@ -3376,15 +3376,15 @@ When a candidate asks for a vote, it includes its log status: "my last log entry
 Examples:
   Candidate says: index=55, term=3
   You have:       index=52, term=3
-  → Candidate has MORE entries in same term → candidate wins → VOTE GRANTED
+  -> Candidate has MORE entries in same term -> candidate wins -> VOTE GRANTED
 
   Candidate says: index=55, term=2
   You have:       index=52, term=3  
-  → You have a HIGHER TERM entry → you are more up-to-date → VOTE DENIED
+  -> You have a HIGHER TERM entry -> you are more up-to-date -> VOTE DENIED
 
   Candidate says: index=55, term=3
   You have:       index=55, term=3  
-  → Identical → candidate is at least as up-to-date → VOTE GRANTED
+  -> Identical -> candidate is at least as up-to-date -> VOTE GRANTED
 ```
 
 Why does this guarantee the elected leader has all committed entries?
@@ -3393,45 +3393,45 @@ When an entry was committed, a majority of nodes acknowledged it. To win an elec
 
 ---
 
-## Raft vs. Paxos — Why Raft Won for Implementations
+## Raft vs. Paxos -- Why Raft Won for Implementations
 
 Let us compare the two algorithms directly:
 
 ```
-╔═════════════════════════════════════════════════════════════════════╗
-║                    RAFT vs. PAXOS COMPARISON                        ║
-╠═════════════════════════╦═══════════════════════╦═══════════════════╣
-║  Dimension              ║  Raft                 ║  Paxos            ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Designed for           ║  Understandability    ║  Correctness      ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Leadership model       ║  One stable leader    ║  Multiple         ║
-║                         ║  per term             ║  proposers        ║
-║                         ║                       ║  possible         ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Log structure          ║  Explicit, sequential,║  Log positions    ║
-║                         ║  append-only          ║  filled           ║
-║                         ║                       ║  independently,   ║
-║                         ║                       ║  gaps allowed     ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Membership changes     ║  Joint consensus —    ║  Varies by        ║
-║  (adding/removing nodes)║  single config change ║  implementation   ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Famous implementations ║  etcd, CockroachDB,   ║  Chubby (Google), ║
-║                         ║  TiKV, Consul,        ║  Zab (ZooKeeper), ║
-║                         ║  InfluxDB, Kafka 2.8+ ║  some internal    ║
-║                         ║                       ║  Google systems   ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Learning curve to      ║  Hours to understand  ║  Days/weeks to    ║
-║  implement correctly    ║  basics, days to      ║  fully understand ║
-║                         ║  implement            ║  all edge cases   ║
-╠═════════════════════════╬═══════════════════════╬═══════════════════╣
-║  Research activity      ║  Active, many         ║  Foundational,    ║
-║                         ║  variants (Multi-Raft)║  less new work    ║
-╚═════════════════════════╩═══════════════════════╩═══════════════════╝
++=====================================================================+
+|                    RAFT vs. PAXOS COMPARISON                        |
++=========================+=======================+===================+
+|  Dimension              |  Raft                 |  Paxos            |
++=========================+=======================+===================+
+|  Designed for           |  Understandability    |  Correctness      |
++=========================+=======================+===================+
+|  Leadership model       |  One stable leader    |  Multiple         |
+|                         |  per term             |  proposers        |
+|                         |                       |  possible         |
++=========================+=======================+===================+
+|  Log structure          |  Explicit, sequential,|  Log positions    |
+|                         |  append-only          |  filled           |
+|                         |                       |  independently,   |
+|                         |                       |  gaps allowed     |
++=========================+=======================+===================+
+|  Membership changes     |  Joint consensus --    |  Varies by        |
+|  (adding/removing nodes)|  single config change |  implementation   |
++=========================+=======================+===================+
+|  Famous implementations |  etcd, CockroachDB,   |  Chubby (Google), |
+|                         |  TiKV, Consul,        |  Zab (ZooKeeper), |
+|                         |  InfluxDB, Kafka 2.8+ |  some internal    |
+|                         |                       |  Google systems   |
++=========================+=======================+===================+
+|  Learning curve to      |  Hours to understand  |  Days/weeks to    |
+|  implement correctly    |  basics, days to      |  fully understand |
+|                         |  implement            |  all edge cases   |
++=========================+=======================+===================+
+|  Research activity      |  Active, many         |  Foundational,    |
+|                         |  variants (Multi-Raft)|  less new work    |
++=========================+=======================+===================+
 ```
 
-Notice that Paxos is not wrong or bad — it is mathematically correct, and several critical production systems run on Paxos or its variants. The difference is practical: Raft is easier to implement correctly because engineers can actually understand what they are building.
+Notice that Paxos is not wrong or bad -- it is mathematically correct, and several critical production systems run on Paxos or its variants. The difference is practical: Raft is easier to implement correctly because engineers can actually understand what they are building.
 
 An algorithm that is correct but incomprehensible is dangerous in practice. When you implement something you do not fully understand, you will make subtle mistakes in the edge cases. When you need to debug a production incident at 3 AM, you cannot reason about a system you do not understand. Raft's understandability advantage turns directly into fewer implementation bugs and faster debugging.
 
@@ -3444,47 +3444,47 @@ Ongaro (one of Raft's creators) put it well: Paxos requires Ph.D. committee meet
 Raft is not a theoretical curiosity. It is running the infrastructure your apps depend on right now.
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║                  RAFT IN PRODUCTION                                  ║
-╠════════════════╦═════════════════════════╦════════════════════════════╣
-║  System        ║  What Uses Raft         ║  Why It Matters           ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  etcd          ║  Core replication       ║  etcd is Kubernetes'       ║
-║                ║  engine                 ║  brain. Every config,      ║
-║                ║                         ║  pod assignment, and       ║
-║                ║                         ║  secret in your cluster    ║
-║                ║                         ║  is stored here. If        ║
-║                ║                         ║  etcd loses data, your     ║
-║                ║                         ║  cluster loses its mind.   ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  CockroachDB   ║  Per-shard replication  ║  Each data shard is its    ║
-║                ║  (one Raft group        ║  own Raft group. A table   ║
-║                ║  per range)             ║  with 1 billion rows       ║
-║                ║                         ║  might have 1,000+ Raft    ║
-║                ║                         ║  groups running in         ║
-║                ║                         ║  parallel.                 ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  TiKV / TiDB   ║  Storage layer          ║  Open-source distributed   ║
-║                ║  replication            ║  SQL database built on     ║
-║                ║                         ║  Raft. Used by Alibaba,    ║
-║                ║                         ║  Pingcap, and others at    ║
-║                ║                         ║  massive scale.            ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  Consul        ║  Service registry       ║  HashiCorp's service       ║
-║                ║  replication            ║  discovery tool. Uses      ║
-║                ║                         ║  Raft to agree on which    ║
-║                ║                         ║  services are healthy.     ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  InfluxDB      ║  Time-series data       ║  High-availability for      ║
-║                ║  replication            ║  metrics and monitoring    ║
-║                ║                         ║  data.                     ║
-╠════════════════╬═════════════════════════╬════════════════════════════╣
-║  Kafka 2.8+    ║  Controller election    ║  Replaced ZooKeeper        ║
-║  (KRaft mode)  ║  and metadata log       ║  dependency. Kafka now     ║
-║                ║                         ║  uses its own Raft         ║
-║                ║                         ║  implementation for        ║
-║                ║                         ║  cluster coordination.     ║
-╚════════════════╩═════════════════════════╩═══════════════════════════╝
++======================================================================+
+|                  RAFT IN PRODUCTION                                  |
++================+=========================+============================+
+|  System        |  What Uses Raft         |  Why It Matters           |
++================+=========================+============================+
+|  etcd          |  Core replication       |  etcd is Kubernetes'       |
+|                |  engine                 |  brain. Every config,      |
+|                |                         |  pod assignment, and       |
+|                |                         |  secret in your cluster    |
+|                |                         |  is stored here. If        |
+|                |                         |  etcd loses data, your     |
+|                |                         |  cluster loses its mind.   |
++================+=========================+============================+
+|  CockroachDB   |  Per-shard replication  |  Each data shard is its    |
+|                |  (one Raft group        |  own Raft group. A table   |
+|                |  per range)             |  with 1 billion rows       |
+|                |                         |  might have 1,000+ Raft    |
+|                |                         |  groups running in         |
+|                |                         |  parallel.                 |
++================+=========================+============================+
+|  TiKV / TiDB   |  Storage layer          |  Open-source distributed   |
+|                |  replication            |  SQL database built on     |
+|                |                         |  Raft. Used by Alibaba,    |
+|                |                         |  Pingcap, and others at    |
+|                |                         |  massive scale.            |
++================+=========================+============================+
+|  Consul        |  Service registry       |  HashiCorp's service       |
+|                |  replication            |  discovery tool. Uses      |
+|                |                         |  Raft to agree on which    |
+|                |                         |  services are healthy.     |
++================+=========================+============================+
+|  InfluxDB      |  Time-series data       |  High-availability for      |
+|                |  replication            |  metrics and monitoring    |
+|                |                         |  data.                     |
++================+=========================+============================+
+|  Kafka 2.8+    |  Controller election    |  Replaced ZooKeeper        |
+|  (KRaft mode)  |  and metadata log       |  dependency. Kafka now     |
+|                |                         |  uses its own Raft         |
+|                |                         |  implementation for        |
+|                |                         |  cluster coordination.     |
++================+=========================+===========================+
 ```
 
 Here is the thing about CockroachDB that blows most people's minds: it does not run one Raft group. It runs **thousands**.
@@ -3501,7 +3501,7 @@ This is the operational complexity of distributed consensus at scale. Managing t
 
 ---
 
-## Raft in Production — Tuning the Four Key Parameters
+## Raft in Production -- Tuning the Four Key Parameters
 
 Once you deploy a Raft-based system, you will eventually need to tune it. Here are the four parameters every engineer working with Raft systems needs to understand:
 
@@ -3511,11 +3511,11 @@ Once you deploy a Raft-based system, you will eventually need to tune it. Here a
 
 This is how long a follower waits without a heartbeat before concluding "the leader is gone, I need to start an election."
 
-Too low (say, 20ms): a brief network hiccup — a packet delayed by 25ms — looks like a leader failure. You start an unnecessary election, disrupting normal operation. Your cluster flaps: constant unnecessary elections under any network jitter. You will see performance degrade under normal load.
+Too low (say, 20ms): a brief network hiccup -- a packet delayed by 25ms -- looks like a leader failure. You start an unnecessary election, disrupting normal operation. Your cluster flaps: constant unnecessary elections under any network jitter. You will see performance degrade under normal load.
 
 Too high (say, 5 seconds): when the leader actually dies, your cluster sits useless for up to 5 seconds before starting recovery. For most services, 5 seconds of unavailability is unacceptable.
 
-Rule of thumb: set election timeout to 3-10× the heartbeat interval. If heartbeats are every 100ms, set election timeout to 300-1000ms. The randomization (150-300ms range, not a fixed value) is essential — do not remove it.
+Rule of thumb: set election timeout to 3-10x the heartbeat interval. If heartbeats are every 100ms, set election timeout to 300-1000ms. The randomization (150-300ms range, not a fixed value) is essential -- do not remove it.
 
 ---
 
@@ -3525,7 +3525,7 @@ How often the leader sends "I am alive" messages to followers.
 
 Too low (say, 5ms): the leader is spending significant CPU and network bandwidth just sending heartbeats. In a cluster with 100 nodes and 1,000 Raft groups per node, that is a lot of heartbeat messages per second.
 
-Too high (say, 1 second): follower election timeouts have to be even higher (3-10×), so failure detection takes 3-10 seconds. Slow recovery.
+Too high (say, 1 second): follower election timeouts have to be even higher (3-10x), so failure detection takes 3-10 seconds. Slow recovery.
 
 Most production Raft systems use heartbeat intervals in the 50-150ms range. This is short enough for fast failure detection but long enough not to overwhelm the network.
 
@@ -3536,7 +3536,7 @@ Most production Raft systems use heartbeat intervals in the 50-150ms range. This
 Raft logs grow forever. Every command ever issued is an entry in the log. If you run a database for 6 months with 1,000 writes per second, your Raft log has:
 
 ```
-6 months × 30 days × 24 hours × 3600 seconds × 1000 writes
+6 months x 30 days x 24 hours x 3600 seconds x 1000 writes
 = 15.6 BILLION log entries
 ```
 
@@ -3576,7 +3576,7 @@ Most OLTP applications: linearizable. Most analytics: follower reads fine.
 
 ---
 
-## Raft in a System Design Interview — What to Actually Say
+## Raft in a System Design Interview -- What to Actually Say
 
 Let us get practical. You are in a system design interview. The interviewer asks: "How would you ensure high availability for your database? What happens if the primary node fails?"
 
@@ -3589,60 +3589,60 @@ This raises more questions than it answers. How does the secondary "take over"? 
 
 **Strong answer (using what you now know):**
 
-"I would run the database with a consensus-based replication setup — specifically using something like Raft or a Raft-based system like etcd for leader election. Here is how it works:
+"I would run the database with a consensus-based replication setup -- specifically using something like Raft or a Raft-based system like etcd for leader election. Here is how it works:
 
-We have three database nodes — one leader, two followers. Writes go to the leader, which replicates to followers. An entry is committed (considered durable) once a majority of nodes acknowledge it, so we need at least 2 of 3 to confirm.
+We have three database nodes -- one leader, two followers. Writes go to the leader, which replicates to followers. An entry is committed (considered durable) once a majority of nodes acknowledge it, so we need at least 2 of 3 to confirm.
 
-If the leader fails, each follower has an election timeout — a random timer between 150 and 300 milliseconds. The first follower whose timer expires promotes itself to candidate, increments the term number, and requests votes from the other nodes. If it gets a majority, it becomes the new leader. The total failover time is typically under 500 milliseconds.
+If the leader fails, each follower has an election timeout -- a random timer between 150 and 300 milliseconds. The first follower whose timer expires promotes itself to candidate, increments the term number, and requests votes from the other nodes. If it gets a majority, it becomes the new leader. The total failover time is typically under 500 milliseconds.
 
 The term number is critical: it prevents the old leader from coming back online and confusing the cluster. If the old leader reconnects and tries to take writes, it sees the higher term number and immediately steps down to follower.
 
 For the log, a committed entry is permanent. Even if the new leader has slightly fewer entries than the old leader had buffered, it will always have everything that was acknowledged to clients. Nothing that was confirmed as written can be lost."
 
-That answer demonstrates actual understanding. The interviewer cannot poke holes in it by asking "but what if two nodes both think they are leader?" — because you already explained the term-number mechanism that prevents it.
+That answer demonstrates actual understanding. The interviewer cannot poke holes in it by asking "but what if two nodes both think they are leader?" -- because you already explained the term-number mechanism that prevents it.
 
 ---
 
 **The Interview Cheat Sheet for Raft Questions:**
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║         RAFT — INTERVIEW ANSWER BUILDING BLOCKS                      ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  "How do nodes agree on a leader?"                                   ║
-║  → Raft election: random timeouts, term increment, majority vote,    ║
-║    log-completeness check.                                           ║
-║                                                                      ║
-║  "How is failover time calculated?"                                  ║
-║  → election_timeout (150-300ms) + vote collection (~50ms)           ║
-║    + new leader announces (~50ms) = typically under 500ms total.    ║
-║                                                                      ║
-║  "What prevents split-brain?"                                        ║
-║  → Term numbers: old leaders see higher term and step down.         ║
-║  → Majority requirement: two "leaders" can't both get majority       ║
-║    votes in the same term.                                           ║
-║                                                                      ║
-║  "What if a write was confirmed but the leader crashed?"             ║
-║  → Committed = majority acknowledged. Any new leader got votes       ║
-║    from majority. Overlapping majority guarantees new leader         ║
-║    has committed entries.                                            ║
-║                                                                      ║
-║  "What about writes that were in-flight but not yet committed?"      ║
-║  → They may be lost. Clients need to retry and use idempotency      ║
-║    keys to avoid double-writes on retry.                            ║
-║                                                                      ║
-║  "How does a new node joining the cluster get the data?"            ║
-║  → Leader sends a snapshot of current state + log entries since     ║
-║    snapshot. Node catches up. Then participates in consensus.       ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|         RAFT -- INTERVIEW ANSWER BUILDING BLOCKS                      |
++======================================================================+
+|                                                                      |
+|  "How do nodes agree on a leader?"                                   |
+|  -> Raft election: random timeouts, term increment, majority vote,    |
+|    log-completeness check.                                           |
+|                                                                      |
+|  "How is failover time calculated?"                                  |
+|  -> election_timeout (150-300ms) + vote collection (~50ms)           |
+|    + new leader announces (~50ms) = typically under 500ms total.    |
+|                                                                      |
+|  "What prevents split-brain?"                                        |
+|  -> Term numbers: old leaders see higher term and step down.         |
+|  -> Majority requirement: two "leaders" can't both get majority       |
+|    votes in the same term.                                           |
+|                                                                      |
+|  "What if a write was confirmed but the leader crashed?"             |
+|  -> Committed = majority acknowledged. Any new leader got votes       |
+|    from majority. Overlapping majority guarantees new leader         |
+|    has committed entries.                                            |
+|                                                                      |
+|  "What about writes that were in-flight but not yet committed?"      |
+|  -> They may be lost. Clients need to retry and use idempotency      |
+|    keys to avoid double-writes on retry.                            |
+|                                                                      |
+|  "How does a new node joining the cluster get the data?"            |
+|  -> Leader sends a snapshot of current state + log entries since     |
+|    snapshot. Node catches up. Then participates in consensus.       |
++======================================================================+
 ```
 
-The interviewers asking these questions are typically senior engineers. They are not checking whether you memorized the Raft paper. They are checking whether you can reason about failure modes under pressure. If you can explain the term number's role in preventing stale leaders, the majority overlap argument for committed entry durability, and the election timeout randomization trick — you are demonstrating exactly the kind of thinking they want on their team.
+The interviewers asking these questions are typically senior engineers. They are not checking whether you memorized the Raft paper. They are checking whether you can reason about failure modes under pressure. If you can explain the term number's role in preventing stale leaders, the majority overlap argument for committed entry durability, and the election timeout randomization trick -- you are demonstrating exactly the kind of thinking they want on their team.
 
 ---
 
-## When You Do NOT Need Consensus — Design Around It
+## When You Do NOT Need Consensus -- Design Around It
 
 Here is some wisdom that separates senior engineers from junior ones: the best distributed systems engineer is not the one who knows how to implement consensus most efficiently. It is the one who identifies when consensus can be avoided entirely.
 
@@ -3666,18 +3666,18 @@ An operation is **idempotent** if applying it multiple times gives the same resu
 ```
 Idempotent:
   "Set user_47_name = alice.chen"
-  → Running this 5 times gives the same result: name is alice.chen
-  → Safe to retry without exactly-once consensus
+  -> Running this 5 times gives the same result: name is alice.chen
+  -> Safe to retry without exactly-once consensus
 
 NOT idempotent:
   "Add $100 to user_47_balance"
-  → Running this 5 times gives balance + $500, not balance + $100
-  → NEEDS exactly-once semantics → needs consensus
+  -> Running this 5 times gives balance + $500, not balance + $100
+  -> NEEDS exactly-once semantics -> needs consensus
 ```
 
 Design your operations to be idempotent wherever possible. Then at-least-once delivery is safe. You do not need the complex machinery of exactly-once consensus.
 
-Real example: Stripe's payment API uses idempotency keys. Each payment request includes a unique client-generated key. If the network times out and you are not sure if the payment went through, you retry with the same idempotency key. Stripe's server checks: "have I seen this key before? Yes → return the previous result without charging again." No double charges. No consensus required.
+Real example: Stripe's payment API uses idempotency keys. Each payment request includes a unique client-generated key. If the network times out and you are not sure if the payment went through, you retry with the same idempotency key. Stripe's server checks: "have I seen this key before? Yes -> return the previous result without charging again." No double charges. No consensus required.
 
 ---
 
@@ -3685,7 +3685,7 @@ Real example: Stripe's payment API uses idempotency keys. Each payment request i
 
 A CRDT is a data structure specifically designed so that all updates can be merged automatically and correctly, without any coordination.
 
-The classic example: a set of likes on a post. If Server A and Server B each receive a "like" from different users while they are briefly disconnected from each other, what happens when they reconnect? With a CRDT set, both likes are merged — the final set is the union of both servers' sets. No conflicts, no coordination needed.
+The classic example: a set of likes on a post. If Server A and Server B each receive a "like" from different users while they are briefly disconnected from each other, what happens when they reconnect? With a CRDT set, both likes are merged -- the final set is the union of both servers' sets. No conflicts, no coordination needed.
 
 ```
 Server A (received like from user 10):
@@ -3694,10 +3694,10 @@ Server A (received like from user 10):
 Server B (received like from user 12, same time):
   likes = {5, 7, 12}
 
-On reconnect: merge = {5, 7, 10, 12}  ← correct, no coordination
+On reconnect: merge = {5, 7, 10, 12}  <- correct, no coordination
 ```
 
-Not everything can be a CRDT. Removing an item from a set gets tricky. Counters need careful design. But wherever your data structure fits the CRDT pattern — eventual consistency with automatic merge — you can skip coordination entirely.
+Not everything can be a CRDT. Removing an item from a set gets tricky. Counters need careful design. But wherever your data structure fits the CRDT pattern -- eventual consistency with automatic merge -- you can skip coordination entirely.
 
 Used in production: Riak (database), Soundcloud, Bet365, and many others use CRDTs for features that need high availability and can tolerate eventual consistency.
 
@@ -3705,9 +3705,9 @@ Used in production: Riak (database), Soundcloud, Bet365, and many others use CRD
 
 **Strategy 3: Partitioning Ownership**
 
-Instead of having all servers share access to all data (requiring locks and consensus to coordinate), assign each piece of data to exactly one server — its owner. Only the owner can read and write that data. No coordination needed.
+Instead of having all servers share access to all data (requiring locks and consensus to coordinate), assign each piece of data to exactly one server -- its owner. Only the owner can read and write that data. No coordination needed.
 
-This is the principle behind consistent hashing and sharding. If all writes for user IDs 0-999 go to Server A, and all writes for user IDs 1000-1999 go to Server B — then Server A and Server B never need to coordinate at all for user writes. They never conflict because they own non-overlapping data.
+This is the principle behind consistent hashing and sharding. If all writes for user IDs 0-999 go to Server A, and all writes for user IDs 1000-1999 go to Server B -- then Server A and Server B never need to coordinate at all for user writes. They never conflict because they own non-overlapping data.
 
 The tradeoff: you sacrifice flexibility. What if Server A is overloaded and Server B is idle? You cannot just move a user to Server B without a coordination event (re-sharding). What if a transaction spans users from different shards? Now you need cross-shard consensus. But for operations that stay within one shard, coordination cost is zero.
 
@@ -3717,48 +3717,48 @@ The tradeoff: you sacrifice flexibility. What if Server A is overloaded and Serv
 
 For many real-world applications, slightly stale data is acceptable. Your Twitter feed does not need to show tweets posted in the last 100 milliseconds. Your product page does not need the inventory count updated to the last millisecond. Your friend list does not need to reflect a connection accepted 200ms ago.
 
-If you can accept slightly stale data, you do not need consensus for reads. Just read from any replica — no coordination, no leader overhead.
+If you can accept slightly stale data, you do not need consensus for reads. Just read from any replica -- no coordination, no leader overhead.
 
 The design skill: explicitly classifying each read in your system as "needs fresh" or "can be stale." Fresh reads pay the consensus tax. Stale reads are free. Most systems, when analyzed honestly, have far more "can be stale" reads than engineers initially assume.
 
 ---
 
-### The Design Principle — Minimize Consensus Operations
+### The Design Principle -- Minimize Consensus Operations
 
 Every operation that requires consensus has a minimum latency floor (usually 5-15ms for multi-datacenter clusters), fails when the consensus service is unavailable, and bottlenecks throughput at the leader's capacity.
 
-Every operation that avoids consensus is essentially free — it scales linearly with nodes, has minimal latency, and continues working even if the consensus service has a blip.
+Every operation that avoids consensus is essentially free -- it scales linearly with nodes, has minimal latency, and continues working even if the consensus service has a blip.
 
 Senior engineers ask: for each operation in my system, does it TRULY need consensus? Or have I defaulted to consensus because it is the safe choice?
 
 The answer shapes system design dramatically:
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║          DO YOU REALLY NEED CONSENSUS? DECISION TREE                ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  "Does this operation need to be exactly-once?"                      ║
-║       │                                                              ║
-║       ├─ NO → Can you make it idempotent?                            ║
-║       │         ├─ YES → Use at-least-once + idempotency. No         ║
-║       │         │         consensus needed.                          ║
-║       │         └─ NO → Can you use CRDTs or eventual consistency?  ║
-║       │                   ├─ YES → Use CRDTs. No consensus.         ║
-║       │                   └─ NO → Consider if the requirement        ║
-║       │                           is truly necessary.               ║
-║       │                                                              ║
-║       └─ YES → Does it span multiple shards/services?                ║
-║                  ├─ NO → Use single-node transactions.               ║
-║                  │       Single-node transactions do not need         ║
-║                  │       distributed consensus.                      ║
-║                  └─ YES → Consider redesigning to eliminate the      ║
-║                           cross-shard dependency if possible.       ║
-║                           If not: yes, use distributed consensus.   ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|          DO YOU REALLY NEED CONSENSUS? DECISION TREE                |
++======================================================================+
+|                                                                      |
+|  "Does this operation need to be exactly-once?"                      |
+|       |                                                              |
+|       +- NO -> Can you make it idempotent?                            |
+|       |         +- YES -> Use at-least-once + idempotency. No         |
+|       |         |         consensus needed.                          |
+|       |         +- NO -> Can you use CRDTs or eventual consistency?  |
+|       |                   +- YES -> Use CRDTs. No consensus.         |
+|       |                   +- NO -> Consider if the requirement        |
+|       |                           is truly necessary.               |
+|       |                                                              |
+|       +- YES -> Does it span multiple shards/services?                |
+|                  +- NO -> Use single-node transactions.               |
+|                  |       Single-node transactions do not need         |
+|                  |       distributed consensus.                      |
+|                  +- YES -> Consider redesigning to eliminate the      |
+|                           cross-shard dependency if possible.       |
+|                           If not: yes, use distributed consensus.   |
++======================================================================+
 ```
 
-The goal is never to avoid consensus at all costs — sometimes you genuinely need it. The goal is to need it as rarely as possible, and to make every consensus operation as efficient as possible when you do.
+The goal is never to avoid consensus at all costs -- sometimes you genuinely need it. The goal is to need it as rarely as possible, and to make every consensus operation as efficient as possible when you do.
 
 ---
 
@@ -3766,23 +3766,23 @@ The goal is never to avoid consensus at all costs — sometimes you genuinely ne
 
 Let us walk through a real design problem and see how the "avoid consensus where possible" principle plays out.
 
-**The problem:** You are building a social media platform. Every post has a "like" counter. Users can like or unlike posts. You need to display like counts. You have 200 servers. Like events are very frequent — your most popular posts get hundreds of likes per minute. You want high availability and good performance.
+**The problem:** You are building a social media platform. Every post has a "like" counter. Users can like or unlike posts. You need to display like counts. You have 200 servers. Like events are very frequent -- your most popular posts get hundreds of likes per minute. You want high availability and good performance.
 
 **Naive approach (too much consensus):**
 
 Every like event requires a distributed transaction: lock the post's like counter, increment it, unlock. This is a distributed lock on every single like operation.
 
 ```
-User A likes Post 42  → acquire_lock("post_42_likes") → increment → release
-User B likes Post 42  → waiting for lock...
-User C likes Post 42  → waiting for lock...
-User D likes Post 43  → acquire_lock("post_43_likes") → increment → release
+User A likes Post 42  -> acquire_lock("post_42_likes") -> increment -> release
+User B likes Post 42  -> waiting for lock...
+User C likes Post 42  -> waiting for lock...
+User D likes Post 43  -> acquire_lock("post_43_likes") -> increment -> release
 ...
 
 For a post getting 300 likes per minute:
-  300 lock acquisitions/minute × 8ms/acquisition = 2,400ms of lock time/minute
+  300 lock acquisitions/minute x 8ms/acquisition = 2,400ms of lock time/minute
   That means at any given moment, only ~8 likes can be processed per second per post.
-  A post going viral might get 100 likes/second. You are 12.5× under capacity.
+  A post going viral might get 100 likes/second. You are 12.5x under capacity.
 ```
 
 The system can barely handle its own success.
@@ -3791,7 +3791,7 @@ The system can barely handle its own success.
 
 First, ask: does a like counter need to be exactly correct at all times?
 
-Honestly — no. If a post has 50,247 likes and we show 50,245 for a few seconds, nobody notices. Nobody cares if the like count is off by a couple during a brief window.
+Honestly -- no. If a post has 50,247 likes and we show 50,245 for a few seconds, nobody notices. Nobody cares if the like count is off by a couple during a brief window.
 
 This is an "accepting stale reads" scenario.
 
@@ -3799,7 +3799,7 @@ Here is the redesigned approach:
 
 ```
 WRITES (likes/unlikes):
-  ─────────────────────────────────────────────────────────
+  ---------------------------------------------------------
   Each server keeps a local counter in memory.
   When User A likes Post 42 on Server 5:
     Server 5's local counter for Post 42: +1
@@ -3814,13 +3814,13 @@ WRITES (likes/unlikes):
   The write is idempotent if given a unique flush ID.
 
 READS (displaying the count):
-  ─────────────────────────────────────────────────────────
+  ---------------------------------------------------------
   Read from any replica (stale reads are fine).
   The count shown might be a few seconds behind.
   This is perfectly acceptable for a like counter.
 
 DEDUPLICATION (user can only like once):
-  ─────────────────────────────────────────────────────────
+  ---------------------------------------------------------
   This part DOES need coordination.
   Use a database unique index: (user_id, post_id) UNIQUE.
   The database enforces exactly-once per user per post.
@@ -3831,21 +3831,21 @@ DEDUPLICATION (user can only like once):
 The result:
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║         LIKE COUNTER: NAIVE vs OPTIMIZED                             ║
-╠═════════════════════════╦════════════════╦═══════════════════════════╣
-║  Property               ║  Naive         ║  Optimized               ║
-╠═════════════════════════╬════════════════╬═══════════════════════════╣
-║  Likes/second/post      ║  ~8            ║  Unlimited (local writes) ║
-║  Consensus operations   ║  1 per like    ║  1 per 5s per server     ║
-║  Count freshness        ║  Exact         ║  Within ~5 seconds        ║
-║  Availability if Redis  ║  Degraded      ║  Normal                  ║
-║  lock service down      ║                ║  (no Redis needed)       ║
-║  Deduplication          ║  Via lock      ║  Via DB unique index      ║
-╚═════════════════════════╩════════════════╩═══════════════════════════╝
++======================================================================+
+|         LIKE COUNTER: NAIVE vs OPTIMIZED                             |
++=========================+================+===========================+
+|  Property               |  Naive         |  Optimized               |
++=========================+================+===========================+
+|  Likes/second/post      |  ~8            |  Unlimited (local writes) |
+|  Consensus operations   |  1 per like    |  1 per 5s per server     |
+|  Count freshness        |  Exact         |  Within ~5 seconds        |
+|  Availability if Redis  |  Degraded      |  Normal                  |
+|  lock service down      |                |  (no Redis needed)       |
+|  Deduplication          |  Via lock      |  Via DB unique index      |
++=========================+================+===========================+
 ```
 
-The optimized approach handles 100× more likes per second, is more available, and only gives up something nobody cares about: exact real-time accuracy down to the millisecond.
+The optimized approach handles 100x more likes per second, is more available, and only gives up something nobody cares about: exact real-time accuracy down to the millisecond.
 
 This is how experienced engineers think. Not "how do I make my consensus faster?" but "for this specific requirement, does my design actually NEED consensus, or have I been assuming it does?"
 
@@ -3855,7 +3855,7 @@ This is how experienced engineers think. Not "how do I make my consensus faster?
 
 Here is a second worked example because this one comes up in interviews frequently.
 
-**Problem:** You want to rate limit API calls — each user can make at most 100 requests per minute. You have 20 servers. How do you track the request count?
+**Problem:** You want to rate limit API calls -- each user can make at most 100 requests per minute. You have 20 servers. How do you track the request count?
 
 **Approach 1: Central Redis counter (consensus-like)**
 
@@ -3869,7 +3869,7 @@ def allow_request(user_id):
 
 This works. Redis's INCR is atomic. No explicit lock needed (Redis single-threaded operations are atomic).
 
-But: every request hits Redis. 20 servers × 1,000 requests/second = 20,000 Redis operations/second. If Redis is slow or down, ALL API requests fail rate limit checks and your service either rejects everything (too strict) or lets everything through (too lenient).
+But: every request hits Redis. 20 servers x 1,000 requests/second = 20,000 Redis operations/second. If Redis is slow or down, ALL API requests fail rate limit checks and your service either rejects everything (too strict) or lets everything through (too lenient).
 
 **Approach 2: Local approximate counting (consensus-avoided)**
 
@@ -3884,17 +3884,17 @@ def allow_request(user_id):
     return local_count <= (100 / NUM_SERVERS)
 ```
 
-No Redis needed. Zero cross-server communication. But it is approximate — if all requests go to one server (due to uneven load), the limit is wrong.
+No Redis needed. Zero cross-server communication. But it is approximate -- if all requests go to one server (due to uneven load), the limit is wrong.
 
 **Approach 3: Token bucket with local enforcement + periodic sync**
 
 The real production answer: local enforcement with occasional synchronization. Most requests stay local (fast). Periodically, servers sync their actual counts and redistribute the remaining "budget." This is the approach used by Cloudflare, Stripe, and others.
 
-The point: even rate limiting — which feels like it needs precise coordination — can largely avoid consensus with the right design.
+The point: even rate limiting -- which feels like it needs precise coordination -- can largely avoid consensus with the right design.
 
 ---
 
-## Putting It All Together — Locks, Fencing, and Consensus
+## Putting It All Together -- Locks, Fencing, and Consensus
 
 Let us step back and see how everything in this part fits together.
 
@@ -3902,49 +3902,49 @@ Let us step back and see how everything in this part fits together.
 
 **Fencing tokens** solve what distributed locks cannot: they make the resource itself the enforcer. Even if a lock holder wakes up late from a process pause, its stale operations are rejected at the storage layer. Locks + fencing = both efficiency AND correctness.
 
-**Raft consensus** solves the deeper problem: how do a group of servers agree on shared facts — like who the leader is, or what order to apply writes — when any of them might fail? Raft provides a clean, understandable algorithm that is now running in the most important distributed infrastructure in the industry.
+**Raft consensus** solves the deeper problem: how do a group of servers agree on shared facts -- like who the leader is, or what order to apply writes -- when any of them might fail? Raft provides a clean, understandable algorithm that is now running in the most important distributed infrastructure in the industry.
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║             PART B SUMMARY — WHAT WE COVERED                        ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  DISTRIBUTED LOCKS                                                   ║
-║  ─────────────────                                                   ║
-║  ✓ One-at-a-time access using Redis NX + EX                         ║
-║  ✓ TTL prevents deadlocks from crashed holders                      ║
-║  ✓ Redlock controversy: timing anomalies can break any lock          ║
-║  ✓ Always check server_id before releasing (Lua script)              ║
-║  ✓ Exponential backoff to avoid thundering herd                     ║
-║  ✓ Lock granularity matters: not too fine, not too coarse           ║
-║  ✓ Read-write locks for read-heavy workloads                        ║
-║  ✓ Lock ordering prevents deadlocks                                  ║
-║                                                                      ║
-║  FENCING TOKENS                                                      ║
-║  ──────────────                                                      ║
-║  ✓ Monotonically increasing token issued on every lock grant        ║
-║  ✓ Storage layer rejects operations with stale (lower) tokens       ║
-║  ✓ Solves the "paused process wakes up and writes" problem          ║
-║  ✓ Lock = hint for efficiency. Token = enforcement for correctness  ║
-║                                                                      ║
-║  RAFT CONSENSUS                                                      ║
-║  ───────────────                                                     ║
-║  ✓ Three sub-problems: leader election, log replication, safety     ║
-║  ✓ Three node states: follower, candidate, leader                   ║
-║  ✓ Term numbers prevent stale leaders from causing confusion        ║
-║  ✓ Random election timeouts prevent simultaneous elections          ║
-║  ✓ Commits require majority acknowledgment → entries never lost     ║
-║  ✓ Log-completeness check prevents stale leaders from winning       ║
-║  ✓ Used in: etcd, CockroachDB, TiKV, Consul, Kafka                 ║
-║  ✓ 4 key tuning params: election timeout, heartbeat, snapshot, read ║
-║                                                                      ║
-║  AVOIDING CONSENSUS                                                  ║
-║  ──────────────────                                                  ║
-║  ✓ Idempotency → at-least-once delivery is enough                   ║
-║  ✓ CRDTs → automatic merge, no coordination                         ║
-║  ✓ Partitioning → each node owns its data exclusively               ║
-║  ✓ Stale reads → follower reads, no leader needed                   ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|             PART B SUMMARY -- WHAT WE COVERED                        |
++======================================================================+
+|                                                                      |
+|  DISTRIBUTED LOCKS                                                   |
+|  -----------------                                                   |
+|  Y One-at-a-time access using Redis NX + EX                         |
+|  Y TTL prevents deadlocks from crashed holders                      |
+|  Y Redlock controversy: timing anomalies can break any lock          |
+|  Y Always check server_id before releasing (Lua script)              |
+|  Y Exponential backoff to avoid thundering herd                     |
+|  Y Lock granularity matters: not too fine, not too coarse           |
+|  Y Read-write locks for read-heavy workloads                        |
+|  Y Lock ordering prevents deadlocks                                  |
+|                                                                      |
+|  FENCING TOKENS                                                      |
+|  --------------                                                      |
+|  Y Monotonically increasing token issued on every lock grant        |
+|  Y Storage layer rejects operations with stale (lower) tokens       |
+|  Y Solves the "paused process wakes up and writes" problem          |
+|  Y Lock = hint for efficiency. Token = enforcement for correctness  |
+|                                                                      |
+|  RAFT CONSENSUS                                                      |
+|  ---------------                                                     |
+|  Y Three sub-problems: leader election, log replication, safety     |
+|  Y Three node states: follower, candidate, leader                   |
+|  Y Term numbers prevent stale leaders from causing confusion        |
+|  Y Random election timeouts prevent simultaneous elections          |
+|  Y Commits require majority acknowledgment -> entries never lost     |
+|  Y Log-completeness check prevents stale leaders from winning       |
+|  Y Used in: etcd, CockroachDB, TiKV, Consul, Kafka                 |
+|  Y 4 key tuning params: election timeout, heartbeat, snapshot, read |
+|                                                                      |
+|  AVOIDING CONSENSUS                                                  |
+|  ------------------                                                  |
+|  Y Idempotency -> at-least-once delivery is enough                   |
+|  Y CRDTs -> automatic merge, no coordination                         |
+|  Y Partitioning -> each node owns its data exclusively               |
+|  Y Stale reads -> follower reads, no leader needed                   |
++======================================================================+
 ```
 
 ---
@@ -3953,25 +3953,25 @@ Let us step back and see how everything in this part fits together.
 
 Parts C and D of this chapter will cover:
 
-- **Part C:** ZooKeeper and etcd — the coordination services that teams use instead of building their own Raft. We will see exactly how Kubernetes uses etcd, what kinds of operations go through ZooKeeper in a Kafka cluster, and when you would reach for each one in a system design interview.
+- **Part C:** ZooKeeper and etcd -- the coordination services that teams use instead of building their own Raft. We will see exactly how Kubernetes uses etcd, what kinds of operations go through ZooKeeper in a Kafka cluster, and when you would reach for each one in a system design interview.
 
-- **Part D:** Practical coordination patterns — service discovery, distributed semaphores, leader election recipes, and the "2PC vs. Sagas" problem for distributed transactions. These are the building blocks you actually assemble in interview answers.
+- **Part D:** Practical coordination patterns -- service discovery, distributed semaphores, leader election recipes, and the "2PC vs. Sagas" problem for distributed transactions. These are the building blocks you actually assemble in interview answers.
 
-By the time you finish all four parts, you will be able to walk into a system design interview and explain — with genuine understanding, not memorized phrases — how your design handles leader election, prevents double-processing of jobs, and achieves consensus across data centers. That understanding is what separates a "passed the screen" answer from a "we want to hire this person" answer.
+By the time you finish all four parts, you will be able to walk into a system design interview and explain -- with genuine understanding, not memorized phrases -- how your design handles leader election, prevents double-processing of jobs, and achieves consensus across data centers. That understanding is what separates a "passed the screen" answer from a "we want to hire this person" answer.
 
 ---
 
 *End of Chapter 22, Part B.*
 # Chapter 22: Leader Election, Coordination, and Distributed Locks
-## Part C — Failure Scenarios, Case Studies, Anti-Patterns, and Graceful Degradation
+## Part C -- Failure Scenarios, Case Studies, Anti-Patterns, and Graceful Degradation
 
-*(Parts A and B covered why coordination exists, how leader election works, what distributed locks are, and how the Raft consensus algorithm keeps a cluster of machines agreeing on a single history of events. This part is about what happens when things go wrong — and how to design your system so that "wrong" does not mean "catastrophic." Every concept here is explained with everyday analogies. No math, no theorems, just clear thinking about failure.)*
+*(Parts A and B covered why coordination exists, how leader election works, what distributed locks are, and how the Raft consensus algorithm keeps a cluster of machines agreeing on a single history of events. This part is about what happens when things go wrong -- and how to design your system so that "wrong" does not mean "catastrophic." Every concept here is explained with everyday analogies. No math, no theorems, just clear thinking about failure.)*
 
 ---
 
 # Part 5: Failure Scenarios That Will Ruin Your Week
 
-Understanding how coordination fails is more important than understanding how it works. When everything works, any approach is fine. When things fail — and they will — your design either survives gracefully or catastrophically.
+Understanding how coordination fails is more important than understanding how it works. When everything works, any approach is fine. When things fail -- and they will -- your design either survives gracefully or catastrophically.
 
 This is not pessimism. It is engineering reality. The distributed systems engineers at Google, Amazon, and Netflix do not spend most of their time building new features. They spend most of their time asking: "What happens when this breaks? What happens when that breaks? What if both break at the same time?" They run drills called chaos engineering where they deliberately break production systems during business hours to see what happens. Netflix famously built a tool called Chaos Monkey that randomly terminates servers in production. The logic: better to find the weak spots yourself than have an angry customer find them at 3 AM on a holiday weekend.
 
@@ -3979,16 +3979,16 @@ So let us think like those engineers. Not "how does this work?" but "how does th
 
 ---
 
-## The Failure Decision Tree — Quick Diagnosis
+## The Failure Decision Tree -- Quick Diagnosis
 
-When your distributed coordination is misbehaving, you need to diagnose fast. The following table maps symptoms to likely causes and immediate first actions. Think of it like a doctor's checklist — you are narrowing down from "something is wrong" to "here is the specific thing to fix."
+When your distributed coordination is misbehaving, you need to diagnose fast. The following table maps symptoms to likely causes and immediate first actions. Think of it like a doctor's checklist -- you are narrowing down from "something is wrong" to "here is the specific thing to fix."
 
 ```
 SYMPTOM                          DIAGNOSIS                        FIRST ACTION
-─────────────────────────────────────────────────────────────────────────────────
+---------------------------------------------------------------------------------
 Leader election storm            Misconfigured timeouts OR         Check heartbeat/timeout ratio.
 (repeated elections, every       network instability.              Should be: election timeout =
-few minutes or seconds)          Nodes keep thinking the           3–10× heartbeat interval.
+few minutes or seconds)          Nodes keep thinking the           3-10x heartbeat interval.
                                  leader is dead when it            Check network packet loss rate.
                                  is not.                           Even 0.1% loss can cause this.
 
@@ -4016,105 +4016,105 @@ for a lock)                      the lock.                         Verify fencin
 
 Coordination service             etcd or ZooKeeper cluster         Check if you have quorum
 unresponsive                     is unhealthy.                     (majority of nodes up).
-                                                                   Check disk I/O — etcd is
+                                                                   Check disk I/O -- etcd is
                                                                    extremely disk-sensitive.
                                                                    Check network between the
                                                                    coordination nodes themselves.
 
 Election happens every           Leader is being falsely           Increase election timeout.
 few minutes, but leader          detected as dead due to          Check for JVM GC pauses on
-appears healthy                  GC (garbage collection)          the leader — a GC pause can
+appears healthy                  GC (garbage collection)          the leader -- a GC pause can
                                  pauses or CPU spikes             freeze a process for seconds,
                                  that make it briefly             causing missed heartbeats.
                                  unresponsive.                    Check CPU throttling (cloud).
-─────────────────────────────────────────────────────────────────────────────────
+---------------------------------------------------------------------------------
 ```
 
-**Priority order — when multiple things are wrong at once:**
+**Priority order -- when multiple things are wrong at once:**
 
 Split-brain is THE most dangerous situation. It means two parts of your system are both accepting writes and diverging. Every second that passes, the two halves become more different from each other, and reconciling them becomes harder or impossible. Fix this first, even if it means taking the system offline.
 
-Election storm is loud and scary — your monitoring will light up with alerts, your on-call engineer will be paged, engineers will start yelling in Slack — but it is usually self-correcting. The Raft algorithm will eventually settle on a leader. Your main job is to figure out WHY the elections keep happening (usually a tuning problem) so you can prevent the next storm.
+Election storm is loud and scary -- your monitoring will light up with alerts, your on-call engineer will be paged, engineers will start yelling in Slack -- but it is usually self-correcting. The Raft algorithm will eventually settle on a leader. Your main job is to figure out WHY the elections keep happening (usually a tuning problem) so you can prevent the next storm.
 
-Stale reads are the sneakiest problem. The system appears to be working. Writes succeed. Reads return results. But the results are slightly old. Users might not notice for hours, or ever. Internal processes might silently make wrong decisions based on stale data. Because nothing is visibly broken, stale reads often go undetected the longest — which is why they can cause the most business damage.
+Stale reads are the sneakiest problem. The system appears to be working. Writes succeed. Reads return results. But the results are slightly old. Users might not notice for hours, or ever. Internal processes might silently make wrong decisions based on stale data. Because nothing is visibly broken, stale reads often go undetected the longest -- which is why they can cause the most business damage.
 
 ---
 
-## Failure 1: Split-Brain — The Most Dangerous Scenario
+## Failure 1: Split-Brain -- The Most Dangerous Scenario
 
 ### The Two-Country Story
 
-Imagine a country goes through a civil war and splits into two halves. Both halves have identical copies of the same central bank records — every citizen's account balance, every transaction history, every loan record — because the records were copied when the split happened.
+Imagine a country goes through a civil war and splits into two halves. Both halves have identical copies of the same central bank records -- every citizen's account balance, every transaction history, every loan record -- because the records were copied when the split happened.
 
 Both halves now have a central bank. Both central banks start operating independently. Both start issuing new currency, processing new transactions, updating account balances.
 
 Two years pass. The war ends. The country reunites.
 
-Now what? You have two sets of records that have been independently updated for two years. Citizen #4521 deposited money in the northern half's bank. The southern half's bank never recorded that deposit. Which record is "correct"? Citizen #9902 took out a loan in the southern half. The northern half never recorded that loan. Is the citizen liable? Both halves issued new currency bills with serial numbers that now overlap — the same serial number appears on two different physical bills. Which one is real?
+Now what? You have two sets of records that have been independently updated for two years. Citizen #4521 deposited money in the northern half's bank. The southern half's bank never recorded that deposit. Which record is "correct"? Citizen #9902 took out a loan in the southern half. The northern half never recorded that loan. Is the citizen liable? Both halves issued new currency bills with serial numbers that now overlap -- the same serial number appears on two different physical bills. Which one is real?
 
-There is no clean answer. Reconciliation requires painstakingly going through every transaction from both sides and manually resolving conflicts. Some decisions are genuinely impossible to make — if the same account was debited in both halves simultaneously, you cannot determine which debit was "right" without external records.
+There is no clean answer. Reconciliation requires painstakingly going through every transaction from both sides and manually resolving conflicts. Some decisions are genuinely impossible to make -- if the same account was debited in both halves simultaneously, you cannot determine which debit was "right" without external records.
 
 Split-brain in a distributed system works exactly the same way. A network partition (a situation where some nodes can no longer communicate with other nodes) divides your cluster into two groups. Both groups elect a leader. Both leaders start accepting writes. For the duration of the partition, the two halves of your database diverge. When the partition heals, you have two versions of "the truth." Reconciling them is extremely complex or impossible depending on what changed.
 
-### How Split-Brain Happens — Step by Step
+### How Split-Brain Happens -- Step by Step
 
 Start with a healthy 5-node cluster. You have one leader and four followers.
 
 ```
-BEFORE PARTITION — Healthy Cluster
-─────────────────────────────────────────────────────────
-                    ┌──────────┐
-                    │  NODE 1  │  ← LEADER (Term 1)
-                    │  Leader  │
-                    └────┬─────┘
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-    ┌──────────┐   ┌──────────┐   ┌──────────┐
-    │  NODE 2  │   │  NODE 3  │   │  NODE 4  │
-    │ Follower │   │ Follower │   │ Follower │
-    └──────────┘   └──────────┘   └──────────┘
-                         ▲
-                   ┌─────┘
-             ┌──────────┐
-             │  NODE 5  │
-             │ Follower │
-             └──────────┘
+BEFORE PARTITION -- Healthy Cluster
+---------------------------------------------------------
+                    +----------+
+                    |  NODE 1  |  <- LEADER (Term 1)
+                    |  Leader  |
+                    +----+-----+
+          +--------------+--------------+
+          v              v              v
+    +----------+   +----------+   +----------+
+    |  NODE 2  |   |  NODE 3  |   |  NODE 4  |
+    | Follower |   | Follower |   | Follower |
+    +----------+   +----------+   +----------+
+                         ^
+                   +-----+
+             +----------+
+             |  NODE 5  |
+             | Follower |
+             +----------+
 
 All nodes communicate. Leader sends heartbeats to all followers.
 All followers see leader as alive. System is healthy.
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 ```
 
 Now a network partition occurs. The network cable or switch between two groups of nodes fails. Nodes on each side can still talk to each other, but they cannot reach nodes on the other side.
 
 ```
-AFTER PARTITION — Two Isolated Groups
-─────────────────────────────────────────────────────────
+AFTER PARTITION -- Two Isolated Groups
+---------------------------------------------------------
 
-    GROUP A (Minority — 2 nodes)    GROUP B (Majority — 3 nodes)
-    ─────────────────────────────   ─────────────────────────────
-    ┌──────────┐  ┌──────────┐      ┌──────────┐  ┌──────────┐
-    │  NODE 1  │  │  NODE 2  │      │  NODE 3  │  │  NODE 4  │
-    │  Leader  │  │ Follower │      │ Follower │  │ Follower │
-    │ (Term 1) │  │          │      │          │  │          │
-    └──────────┘  └──────────┘      └──────────┘  └──────────┘
-                                          │
-                                    ┌─────┘
-                               ┌──────────┐
-                               │  NODE 5  │
-                               │ Follower │
-                               └──────────┘
+    GROUP A (Minority -- 2 nodes)    GROUP B (Majority -- 3 nodes)
+    -----------------------------   -----------------------------
+    +----------+  +----------+      +----------+  +----------+
+    |  NODE 1  |  |  NODE 2  |      |  NODE 3  |  |  NODE 4  |
+    |  Leader  |  | Follower |      | Follower |  | Follower |
+    | (Term 1) |  |          |      |          |  |          |
+    +----------+  +----------+      +----------+  +----------+
+                                          |
+                                    +-----+
+                               +----------+
+                               |  NODE 5  |
+                               | Follower |
+                               +----------+
 
-    ████████████████████████ NETWORK WALL ████████████████████████
+    ######################## NETWORK WALL ########################
            (Group A and Group B cannot see each other)
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 ```
 
 Here is what happens next, and this is where it gets dangerous:
 
 **Step 1:** Group B (Nodes 3, 4, 5) stops receiving heartbeats from Node 1 (the leader). Their election timers expire. Node 4's timer fires first.
 
-**Step 2:** Node 4 becomes a candidate. It asks Nodes 3 and 5 for votes. They grant votes. Node 4 now has 3 votes out of 5 total nodes — a majority. Node 4 declares itself leader for Term 2.
+**Step 2:** Node 4 becomes a candidate. It asks Nodes 3 and 5 for votes. They grant votes. Node 4 now has 3 votes out of 5 total nodes -- a majority. Node 4 declares itself leader for Term 2.
 
 **Step 3:** Node 1 (still the old leader in Group A) has no idea this happened. It cannot reach Group B. It still thinks it is the leader. It keeps accepting writes from clients.
 
@@ -4122,72 +4122,72 @@ Here is what happens next, and this is where it gets dangerous:
 
 **Step 5:** Clients on the Group B side: their writes go to Node 4. "Set account balance = $450."
 
-**Step 6:** Network heals. Both records exist. Both leaders immediately discover the other (via the term number — Node 1 sees Term 2 from Node 4 and knows it is stale). But the damage is done: two conflicting writes occurred for the same data. Which one wins? Nobody knows.
+**Step 6:** Network heals. Both records exist. Both leaders immediately discover the other (via the term number -- Node 1 sees Term 2 from Node 4 and knows it is stale). But the damage is done: two conflicting writes occurred for the same data. Which one wins? Nobody knows.
 
 ```
-DURING SPLIT-BRAIN — Diverging Writes
-─────────────────────────────────────────────────────────
+DURING SPLIT-BRAIN -- Diverging Writes
+---------------------------------------------------------
 
     GROUP A                           GROUP B
-    ───────────────────               ────────────────────
+    -------------------               --------------------
     Node 1 (Old Leader)               Node 4 (New Leader)
     Accepting writes!                 Accepting writes!
 
     Client writes:                    Client writes:
     "balance = $500"                  "balance = $450"
 
-                    ████ PARTITION ████
+                    #### PARTITION ####
 
     Both leaders serving clients simultaneously.
     Data diverging with every write.
     Neither knows the other exists.
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 ```
 
 ### The "Deposed King" Problem
 
-The old leader (Node 1) did not do anything wrong. It did not make a mistake. It did not violate any rules. It just got isolated. It kept doing its job — accepting writes, serving clients — because nobody told it to stop. It was the king in its territory. It just did not know a coup had happened on the other side of the partition.
+The old leader (Node 1) did not do anything wrong. It did not make a mistake. It did not violate any rules. It just got isolated. It kept doing its job -- accepting writes, serving clients -- because nobody told it to stop. It was the king in its territory. It just did not know a coup had happened on the other side of the partition.
 
-This is the fundamental problem with split-brain: the old leader is behaving correctly given what it knows. What it knows is simply incomplete. You cannot fix this by making the old leader "smarter" — there is no message it can receive to tell it to stop, because the messages cannot get through the partition.
+This is the fundamental problem with split-brain: the old leader is behaving correctly given what it knows. What it knows is simply incomplete. You cannot fix this by making the old leader "smarter" -- there is no message it can receive to tell it to stop, because the messages cannot get through the partition.
 
-### Prevention: STONITH — Shoot The Other Node In The Head
+### Prevention: STONITH -- Shoot The Other Node In The Head
 
 This is a real term, really used in production operations, really printed in documentation from serious enterprise companies. STONITH stands for "Shoot The Other Node In The Head." The name is deliberately dramatic because the action is dramatic.
 
-The idea: when you detect split-brain — when two nodes are both claiming leadership — one of them must be forcibly killed. Not gracefully shut down. Not politely told to resign. Killed. The system sends a signal to "shoot" the old node: power off the virtual machine, terminate the cloud instance, kill the process at the OS level, remotely cut power to the physical server.
+The idea: when you detect split-brain -- when two nodes are both claiming leadership -- one of them must be forcibly killed. Not gracefully shut down. Not politely told to resign. Killed. The system sends a signal to "shoot" the old node: power off the virtual machine, terminate the cloud instance, kill the process at the OS level, remotely cut power to the physical server.
 
 This sounds extreme. But consider the alternative: allow both to keep accepting writes and guarantee data corruption. The extreme action (killing a node) causes a brief outage for clients connected to that node. The alternative (letting split-brain continue) causes silent data corruption that might not be discovered for days and may be impossible to fix.
 
 **Modern STONITH approaches:**
 
-Fencing tokens — the most elegant solution. When a new leader is elected, it gets a higher "epoch" or "term" number (like a generation number). Storage systems are configured to reject any write from a node with a stale term number. The old leader tries to write with Term 1. Storage says: "I already heard from a Term 2 leader. Your Term 1 writes are rejected." The old leader is automatically "fenced out" without anyone killing it. It cannot do harm even if it keeps trying.
+Fencing tokens -- the most elegant solution. When a new leader is elected, it gets a higher "epoch" or "term" number (like a generation number). Storage systems are configured to reject any write from a node with a stale term number. The old leader tries to write with Term 1. Storage says: "I already heard from a Term 2 leader. Your Term 1 writes are rejected." The old leader is automatically "fenced out" without anyone killing it. It cannot do harm even if it keeps trying.
 
 ```
 FENCING TOKENS IN ACTION
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 
     Old Leader (Term 1)          New Leader (Term 2)
-    ────────────────────         ────────────────────
+    --------------------         --------------------
     "Write X, epoch=1"           "Write Y, epoch=2"
-           │                            │
-           ▼                            ▼
-    ┌───────────────────────────────────────────┐
-    │              STORAGE LAYER                │
-    │                                           │
-    │  Current accepted epoch: 2               │
-    │                                           │
-    │  Receives "epoch=1" write → REJECT        │
-    │  Receives "epoch=2" write → ACCEPT        │
-    └───────────────────────────────────────────┘
+           |                            |
+           v                            v
+    +-------------------------------------------+
+    |              STORAGE LAYER                |
+    |                                           |
+    |  Current accepted epoch: 2               |
+    |                                           |
+    |  Receives "epoch=1" write -> REJECT        |
+    |  Receives "epoch=2" write -> ACCEPT        |
+    +-------------------------------------------+
 
 Old leader cannot cause harm.
 Storage enforces the fencing automatically.
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 ```
 
-Cloud provider STONITH — on AWS, if you detect split-brain, you can call the AWS API to `TerminateInstance` the old leader. Your coordination system knows the instance ID of the old leader and kills it programmatically. This is STONITH via HTTP API.
+Cloud provider STONITH -- on AWS, if you detect split-brain, you can call the AWS API to `TerminateInstance` the old leader. Your coordination system knows the instance ID of the old leader and kills it programmatically. This is STONITH via HTTP API.
 
-Lease expiry — the old leader's "permission to lead" (its lease) has a time limit. If the old leader cannot renew the lease (because it cannot reach the coordination service through the partition), the lease eventually expires. The old leader is designed to stop accepting writes when its lease expires. This takes as long as the lease TTL — typically 10-30 seconds of window where the old leader might accept writes.
+Lease expiry -- the old leader's "permission to lead" (its lease) has a time limit. If the old leader cannot renew the lease (because it cannot reach the coordination service through the partition), the lease eventually expires. The old leader is designed to stop accepting writes when its lease expires. This takes as long as the lease TTL -- typically 10-30 seconds of window where the old leader might accept writes.
 
 ### What Raft Does About Split-Brain
 
@@ -4195,29 +4195,29 @@ Raft's design specifically prevents split-brain through the majority requirement
 
 In a partition of {2 nodes} and {3 nodes}:
 
-The {3 nodes} group can elect a leader (it can reach a majority of 5 total nodes — 3 is more than half of 5). It can commit log entries (needs votes from 3, has 3). It keeps working.
+The {3 nodes} group can elect a leader (it can reach a majority of 5 total nodes -- 3 is more than half of 5). It can commit log entries (needs votes from 3, has 3). It keeps working.
 
 The {2 nodes} group CANNOT elect a leader (it can only get 2 votes, which is not a majority of 5). The old leader in this group cannot commit new log entries (it needs 3 votes to commit, can only reach 2 nodes). It either goes read-only or returns errors to clients. 
 
-This is the key: in Raft, the minority partition is forced into a degraded state. It does not elect a second leader. There is always at most one leader at a time — the one in the majority partition.
+This is the key: in Raft, the minority partition is forced into a degraded state. It does not elect a second leader. There is always at most one leader at a time -- the one in the majority partition.
 
 After the partition heals:
 
 The 2 nodes from the minority partition reconnect. They receive heartbeats from the Term 2 leader (from the majority side). They immediately recognize that Term 2 is greater than Term 1 (which they were stuck on). They step down any leadership claims and accept the Term 2 leader as their leader. They ask for the log entries they missed during the partition and apply them. Within seconds, they are fully caught up.
 
-This is elegant: the healing is automatic, fast, and correct. The minority nodes do not need to do anything special — the Raft protocol handles the reconciliation automatically.
+This is elegant: the healing is automatic, fast, and correct. The minority nodes do not need to do anything special -- the Raft protocol handles the reconciliation automatically.
 
 ---
 
-## Failure 2: Partial Failure — When Some Things Work
+## Failure 2: Partial Failure -- When Some Things Work
 
 ### The One Lane Closed Analogy
 
-You are driving on a 4-lane highway. One lane is closed for construction. You do not stop — traffic does not halt. You merge into the remaining 3 lanes. Traffic still flows, but slower. Drivers who would have taken the closed lane have to wait longer to merge. On busy days, this creates a backup that stretches for miles. On quiet nights, you barely notice the lane is closed.
+You are driving on a 4-lane highway. One lane is closed for construction. You do not stop -- traffic does not halt. You merge into the remaining 3 lanes. Traffic still flows, but slower. Drivers who would have taken the closed lane have to wait longer to merge. On busy days, this creates a backup that stretches for miles. On quiet nights, you barely notice the lane is closed.
 
 This is partial failure: not everything is broken, just some things. The system is degraded, not dead.
 
-In distributed systems, partial failure is the normal operating mode. Not "normal" in the sense of healthy — normal in the sense of ordinary and expected. At any given moment in a large cluster, some node is running slower than usual, some network link is experiencing higher latency, some disk is doing a burst of I/O, some process is pausing for garbage collection. Your system must work through all of this without falling over.
+In distributed systems, partial failure is the normal operating mode. Not "normal" in the sense of healthy -- normal in the sense of ordinary and expected. At any given moment in a large cluster, some node is running slower than usual, some network link is experiencing higher latency, some disk is doing a burst of I/O, some process is pausing for garbage collection. Your system must work through all of this without falling over.
 
 ### The Partial Failure Spectrum
 
@@ -4225,94 +4225,94 @@ There is not one type of partial failure. There is a whole spectrum from "barely
 
 ```
 PARTIAL FAILURE SPECTRUM
-─────────────────────────────────────────────────────────────────────────────
-LEVEL 1 — SLOW NODE (Degraded but Functional)
+-----------------------------------------------------------------------------
+LEVEL 1 -- SLOW NODE (Degraded but Functional)
 
     Normal Node: responds in 5ms
     Slow Node:   responds in 500ms
 
     Cluster view:
-    ┌────────┐  ┌────────┐  ┌──────────┐  ┌────────┐  ┌────────┐
-    │  N1    │  │  N2    │  │   N3     │  │  N4    │  │  N5    │
-    │ Leader │  │ 5ms    │  │  500ms   │  │ 5ms    │  │ 5ms    │
-    └────────┘  └────────┘  └──────────┘  └────────┘  └────────┘
-                                 ▲
+    +--------+  +--------+  +----------+  +--------+  +--------+
+    |  N1    |  |  N2    |  |   N3     |  |  N4    |  |  N5    |
+    | Leader |  | 5ms    |  |  500ms   |  | 5ms    |  | 5ms    |
+    +--------+  +--------+  +----------+  +--------+  +--------+
+                                 ^
                             SLOW but alive
 
     Effect: Raft still has majority responding fast (N1, N2, N4, N5).
     Slow N3 just takes longer to apply log entries. Leader does not wait
     for N3 before committing (only needs majority). Minor impact.
 
-─────────────────────────────────────────────────────────────────────────────
-LEVEL 2 — PARTIAL PARTITION (Asymmetric Network)
+-----------------------------------------------------------------------------
+LEVEL 2 -- PARTIAL PARTITION (Asymmetric Network)
 
-    N1 ↔ N2: OK
-    N2 ↔ N3: OK
-    N1 ↔ N3: BROKEN  ← N1 and N3 cannot see each other!
+    N1 <-> N2: OK
+    N2 <-> N3: OK
+    N1 <-> N3: BROKEN  <- N1 and N3 cannot see each other!
 
-    ┌────────┐ ✓ ┌────────┐ ✓ ┌────────┐
-    │  N1    │───│  N2    │───│  N3    │
-    └────────┘   └────────┘   └────────┘
-         └──────────✗──────────┘
+    +--------+ Y +--------+ Y +--------+
+    |  N1    |---|  N2    |---|  N3    |
+    +--------+   +--------+   +--------+
+         +----------N----------+
               (direct path broken)
 
     Effect: Complex. N1 and N3 can communicate VIA N2.
     But Raft may not use indirect paths. N1 might see N3 as unreachable.
-    Creates tricky situations — cluster state depends on which node
+    Creates tricky situations -- cluster state depends on which node
     is leader and whose perspective we measure from.
 
-─────────────────────────────────────────────────────────────────────────────
-LEVEL 3 — MINORITY PARTITION (Some Nodes Isolated)
+-----------------------------------------------------------------------------
+LEVEL 3 -- MINORITY PARTITION (Some Nodes Isolated)
 
-    ┌────────┐  ┌────────┐  ████████  ┌────────┐  ┌────────┐  ┌────────┐
-    │  N4    │  │  N5    │  █ WALL █  │  N1    │  │  N2    │  │  N3    │
-    │        │  │        │  ████████  │ Leader │  │        │  │        │
-    └────────┘  └────────┘            └────────┘  └────────┘  └────────┘
-    (Minority — 2 nodes)              (Majority — 3 nodes, still working)
+    +--------+  +--------+  ########  +--------+  +--------+  +--------+
+    |  N4    |  |  N5    |  # WALL #  |  N1    |  |  N2    |  |  N3    |
+    |        |  |        |  ########  | Leader |  |        |  |        |
+    +--------+  +--------+            +--------+  +--------+  +--------+
+    (Minority -- 2 nodes)              (Majority -- 3 nodes, still working)
 
     Effect: Majority side continues normally.
     Minority side: no elections (cannot reach quorum), go read-only or error.
     Recovery: automatic when partition heals.
 
-─────────────────────────────────────────────────────────────────────────────
-LEVEL 4 — COMPLETE FAILURE (All Partitioned)
+-----------------------------------------------------------------------------
+LEVEL 4 -- COMPLETE FAILURE (All Partitioned)
 
     Every node isolated from every other node.
     Nothing works. This is extremely rare.
     Usually indicates a catastrophic infrastructure failure (datacenter down).
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 The impact on clients and recovery time at each level:
 
 ```
 LEVEL         RAFT BEHAVIOR           CLIENT IMPACT          RECOVERY TIME
-──────────────────────────────────────────────────────────────────────────────
-1 — Slow      Commits with fast       Slightly slower         When slow node
+------------------------------------------------------------------------------
+1 -- Slow      Commits with fast       Slightly slower         When slow node
 node          majority, slow node     replication lag.        speeds up or
               catches up later.       Reads from slow         is replaced.
                                       node may be stale.      Minutes to hours.
 
-2 — Partial   Depends on who is       Unpredictable —         When network
+2 -- Partial   Depends on who is       Unpredictable --         When network
 partition     leader and the          some requests work,     asymmetry is
               specific topology.      some fail. Confusing    fixed. Minutes.
                                       from client view.
 
-3 — Minority  Majority continues.     Majority-side           Automatic when
+3 -- Minority  Majority continues.     Majority-side           Automatic when
 partition     Minority cannot         clients: normal.        partition heals.
               commit, may read.       Minority-side           Seconds to
                                       clients: errors         minutes.
                                       or stale reads.
 
-4 — Complete  No commits possible.    All writes fail.        Full network
+4 -- Complete  No commits possible.    All writes fail.        Full network
 failure       No elections.           Reads may work          restoration.
               Cluster is frozen.      from local data.        Minutes to days.
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 ```
 
-### The Cascading Failure Timeline — A Real Story
+### The Cascading Failure Timeline -- A Real Story
 
-Here is a realistic failure scenario with specific timestamps. This is the kind of thing that keeps distributed systems engineers awake at night — not because it is dramatic, but because it is so ordinary. None of the individual events here are catastrophic. Each one, on its own, would be a minor blip. But together, in sequence, they create a genuine crisis.
+Here is a realistic failure scenario with specific timestamps. This is the kind of thing that keeps distributed systems engineers awake at night -- not because it is dramatic, but because it is so ordinary. None of the individual events here are catastrophic. Each one, on its own, would be a minor blip. But together, in sequence, they create a genuine crisis.
 
 Cluster setup: 5 nodes. N1 is the leader. N2, N3, N4, N5 are followers. Term 1.
 
@@ -4326,11 +4326,11 @@ Cluster setup: 5 nodes. N1 is the leader. N2, N3, N4, N5 are followers. Term 1.
 
 ---
 
-**T=20 seconds:** N3's slow disk I/O causes it to miss some heartbeat acknowledgment windows. N3 is still alive and reachable — it just takes 120ms to acknowledge heartbeats instead of the usual 5ms. The leader (N1) sends heartbeats and waits. N3 eventually responds, but barely in time. No election yet.
+**T=20 seconds:** N3's slow disk I/O causes it to miss some heartbeat acknowledgment windows. N3 is still alive and reachable -- it just takes 120ms to acknowledge heartbeats instead of the usual 5ms. The leader (N1) sends heartbeats and waits. N3 eventually responds, but barely in time. No election yet.
 
 ---
 
-**T=25 seconds:** The development team runs a planned schema migration. This is a pre-approved maintenance task. The migration generates a massive Raft log entry — 500 megabytes of data that must be replicated to all followers. For N2, N4, N5 (with fast SSDs): the replication takes 0.8 seconds. For N3 (with its now-struggling disk): the replication takes 12 seconds. N3 is now 11 seconds behind the leader on the log.
+**T=25 seconds:** The development team runs a planned schema migration. This is a pre-approved maintenance task. The migration generates a massive Raft log entry -- 500 megabytes of data that must be replicated to all followers. For N2, N4, N5 (with fast SSDs): the replication takes 0.8 seconds. For N3 (with its now-struggling disk): the replication takes 12 seconds. N3 is now 11 seconds behind the leader on the log.
 
 ---
 
@@ -4342,7 +4342,7 @@ Cluster setup: 5 nodes. N1 is the leader. N2, N3, N4, N5 are followers. Term 1.
 
 ---
 
-**T=40 seconds:** Black Friday begins. (Let us say this is a retail company.) Client request volume jumps 10× in under 30 seconds. N1 (the leader) is now processing 10 times as many write requests as it was designed for. Its CPU hits 95%. Most work still gets done, but some tasks get queued. Among the tasks that get queued: sending heartbeats to followers.
+**T=40 seconds:** Black Friday begins. (Let us say this is a retail company.) Client request volume jumps 10x in under 30 seconds. N1 (the leader) is now processing 10 times as many write requests as it was designed for. Its CPU hits 95%. Most work still gets done, but some tasks get queued. Among the tasks that get queued: sending heartbeats to followers.
 
 ---
 
@@ -4350,7 +4350,7 @@ Cluster setup: 5 nodes. N1 is the leader. N2, N3, N4, N5 are followers. Term 1.
 
 ---
 
-**T=41.2 seconds:** N2's timer fires first. (Raft uses randomized timeouts — N2 got a slightly shorter timeout than N5, by design.) N2 becomes a Candidate for Term 2. It sends RequestVote messages to N3, N4, and N5.
+**T=41.2 seconds:** N2's timer fires first. (Raft uses randomized timeouts -- N2 got a slightly shorter timeout than N5, by design.) N2 becomes a Candidate for Term 2. It sends RequestVote messages to N3, N4, and N5.
 
 ---
 
@@ -4359,7 +4359,7 @@ Cluster setup: 5 nodes. N1 is the leader. N2, N3, N4, N5 are followers. Term 1.
 - N3 receives N2's vote request. N3 is behind on the log due to its disk issues. But N2's log is more up-to-date than N3's, so Raft says N3 can vote for N2. N3 grants its vote.
 - N4 is still restarting. Does not respond in time.
 
-N2 now has votes from: N2 (itself), N5, N3. That is 3 votes out of 5 total nodes — a majority. N2 declares itself Leader for Term 2 and immediately starts sending heartbeats to all nodes.
+N2 now has votes from: N2 (itself), N5, N3. That is 3 votes out of 5 total nodes -- a majority. N2 declares itself Leader for Term 2 and immediately starts sending heartbeats to all nodes.
 
 ---
 
@@ -4367,7 +4367,7 @@ N2 now has votes from: N2 (itself), N5, N3. That is 3 votes out of 5 total nodes
 
 ---
 
-**T=41.5 seconds:** N2 is now the leader. It begins sending heartbeats to N1 (now a follower), N3, N4 (still restarting), N5. The cluster has a new leader. Clients who hit N1 briefly got errors and are retrying — most clients have automatic retry logic, so they reconnect to N2 within 1-2 seconds.
+**T=41.5 seconds:** N2 is now the leader. It begins sending heartbeats to N1 (now a follower), N3, N4 (still restarting), N5. The cluster has a new leader. Clients who hit N1 briefly got errors and are retrying -- most clients have automatic retry logic, so they reconnect to N2 within 1-2 seconds.
 
 ---
 
@@ -4380,31 +4380,31 @@ N2 now has votes from: N2 (itself), N5, N3. That is 3 votes out of 5 total nodes
 The system survived. Here is why:
 
 1. **Randomized timeouts** prevented N2 and N5 from both starting elections simultaneously (which would have split the votes and caused multiple election rounds).
-2. **Fencing tokens** — when N1 stepped down after seeing Term 2, it immediately stopped writing. It did not try to "finish what it started." The epoch number made it clear who the real leader was.
-3. **Log up-to-date check** — N2 could only become leader because its log was as up-to-date as any node that voted for it. This ensures the new leader has all committed data.
+2. **Fencing tokens** -- when N1 stepped down after seeing Term 2, it immediately stopped writing. It did not try to "finish what it started." The epoch number made it clear who the real leader was.
+3. **Log up-to-date check** -- N2 could only become leader because its log was as up-to-date as any node that voted for it. This ensures the new leader has all committed data.
 
-The failure that triggered the election was not a real failure — N1 never went down. It was just briefly CPU-overwhelmed for 0.3 seconds due to load. The election was a "false positive" — the system thought N1 was dead when it was just busy. The system self-corrected, which is the correct behavior.
+The failure that triggered the election was not a real failure -- N1 never went down. It was just briefly CPU-overwhelmed for 0.3 seconds due to load. The election was a "false positive" -- the system thought N1 was dead when it was just busy. The system self-corrected, which is the correct behavior.
 
 ```
 TIMELINE VISUALIZATION
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
                     T=0   T=10  T=20  T=25  T=35  T=40  T=41  T=45  T=50
-                    │     │     │     │     │     │     │     │     │
-N1 (Leader→Follow): ──────────────────────────────LEADER────│stepdown──follow──
-N2 (Follow→Leader): ──────follow──────────────────────────LEADER──────────────
-N3 (Slow disk):     ──────────────SLOW────────────────────────────────────────
-N4 (Restart):       ─────────────────────────────restart───────UP─────────────
-N5 (Follow):        ──────follow──────────────────────────────────────────────
+                    |     |     |     |     |     |     |     |     |
+N1 (Leader->Follow): ------------------------------LEADER----|stepdown--follow--
+N2 (Follow->Leader): ------follow--------------------------LEADER--------------
+N3 (Slow disk):     --------------SLOW----------------------------------------
+N4 (Restart):       -----------------------------restart-------UP-------------
+N5 (Follow):        ------follow----------------------------------------------
 
 Events:
-T=10: N3 disk fills                               │
-T=25: Schema migration (big log entry)        │
-T=35: N4 scheduled restart              │
-T=40: Black Friday load spike       │
-T=41: Election triggered, N2 wins   │
-T=45: N4 rejoins                                        │
-T=50: Normal                                                │
-─────────────────────────────────────────────────────────────────────────────
+T=10: N3 disk fills                               |
+T=25: Schema migration (big log entry)        |
+T=35: N4 scheduled restart              |
+T=40: Black Friday load spike       |
+T=41: Election triggered, N2 wins   |
+T=45: N4 rejoins                                        |
+T=50: Normal                                                |
+-----------------------------------------------------------------------------
 ```
 
 ---
@@ -4413,15 +4413,15 @@ T=50: Normal                                                │
 
 ### The Meeting Scheduled in Different Time Zones
 
-Your company has two offices — one in San Francisco and one in New York. An engineer in San Francisco types a calendar invite: "Team sync — 10:00 AM." In their mind and on their clock, the meeting is at 10:00 AM.
+Your company has two offices -- one in San Francisco and one in New York. An engineer in San Francisco types a calendar invite: "Team sync -- 10:00 AM." In their mind and on their clock, the meeting is at 10:00 AM.
 
-An engineer in New York accepts the invite and puts it on their calendar: "Team sync — 10:00 AM."
+An engineer in New York accepts the invite and puts it on their calendar: "Team sync -- 10:00 AM."
 
-But 10:00 AM in San Francisco is 1:00 PM in New York. Without a timezone specified, both engineers have different ideas of when the meeting happens. The San Francisco engineer shows up at 10:00 AM their time. The New York engineer shows up at 10:00 AM their time (which is 1:00 PM SF time). They are both "on time" — but the meeting happens three hours apart, or never.
+But 10:00 AM in San Francisco is 1:00 PM in New York. Without a timezone specified, both engineers have different ideas of when the meeting happens. The San Francisco engineer shows up at 10:00 AM their time. The New York engineer shows up at 10:00 AM their time (which is 1:00 PM SF time). They are both "on time" -- but the meeting happens three hours apart, or never.
 
 Clock skew in distributed systems is the same problem: when different servers have clocks that are slightly (or not so slightly) out of sync with each other, coordinating using timestamps leads to wrong decisions about ordering.
 
-A freshly deployed server might have its clock synchronized within 1 millisecond of "real" time. But over hours and days, clocks drift. Server A's clock might gain 200 milliseconds per day. Server B's might lose 50 milliseconds per day. Without active correction (via NTP — the Network Time Protocol, which periodically resets clocks by connecting to authoritative time servers), servers in the same datacenter can drift 100-500 milliseconds apart. Servers in different regions can drift even more.
+A freshly deployed server might have its clock synchronized within 1 millisecond of "real" time. But over hours and days, clocks drift. Server A's clock might gain 200 milliseconds per day. Server B's might lose 50 milliseconds per day. Without active correction (via NTP -- the Network Time Protocol, which periodically resets clocks by connecting to authoritative time servers), servers in the same datacenter can drift 100-500 milliseconds apart. Servers in different regions can drift even more.
 
 ### The Three Ways Clock Skew Ruins Coordination
 
@@ -4429,17 +4429,17 @@ A freshly deployed server might have its clock synchronized within 1 millisecond
 
 The leader's lease is supposed to be valid for exactly 30 seconds. The leader's clock says: "I got this lease at 10:00:00. It expires at 10:00:30." Simple enough.
 
-But the leader's clock is running 500 milliseconds fast compared to real time. So when the leader's clock says 10:00:30, actual real time is only 10:00:29.5 — the lease still has half a second left in real time.
+But the leader's clock is running 500 milliseconds fast compared to real time. So when the leader's clock says 10:00:30, actual real time is only 10:00:29.5 -- the lease still has half a second left in real time.
 
-Meanwhile, the node waiting to take over (the watcher) has an accurate clock. Its clock says 10:00:29.5 — close enough to 10:00:30 that it starts preparing to claim leadership, even starts a new election timer.
+Meanwhile, the node waiting to take over (the watcher) has an accurate clock. Its clock says 10:00:29.5 -- close enough to 10:00:30 that it starts preparing to claim leadership, even starts a new election timer.
 
 For 500 milliseconds of real time, there is a window where: the leader thinks its lease is still valid (its fast clock has not hit expiry yet), AND the watchers think the lease has expired (their accurate clocks are past the expected expiry). Brief, messy, potentially causes both to try to serve.
 
 **Way 2: Log ordering confusion**
 
-Event A: Server A commits a database record at timestamp "10:00:00.100" (Server A's clock is 50ms fast — so the actual real time is 10:00:00.050).
+Event A: Server A commits a database record at timestamp "10:00:00.100" (Server A's clock is 50ms fast -- so the actual real time is 10:00:00.050).
 
-Event B: Server B commits a conflicting record at timestamp "10:00:00.070" (Server B's clock is accurate — real time is 10:00:00.070).
+Event B: Server B commits a conflicting record at timestamp "10:00:00.070" (Server B's clock is accurate -- real time is 10:00:00.070).
 
 By timestamp: B happened at 10:00:00.070, A happened at 10:00:00.100. B came first.
 
@@ -4453,25 +4453,25 @@ This is the "timestamp is not truth" problem. A timestamp is only as reliable as
 
 A transaction spans multiple database nodes. The coordinator assigns a timestamp to the transaction to place it in the global order: "Transaction T-500 happened at 10:00:00.100. Transaction T-501 happened at 10:00:00.200. T-500 came first, so any conflict between them should resolve in T-500's favor."
 
-If the node that handled T-501 has a clock that is 150ms fast, it might actually have happened at real time 10:00:00.050 — BEFORE T-500. But its reported timestamp says 10:00:00.200. The coordinator puts T-501 after T-500. Wrong order.
+If the node that handled T-501 has a clock that is 150ms fast, it might actually have happened at real time 10:00:00.050 -- BEFORE T-500. But its reported timestamp says 10:00:00.200. The coordinator puts T-501 after T-500. Wrong order.
 
 The wrong ordering means wrong conflict resolution, which means wrong data.
 
 ### Practical Mitigations
 
-**Add safety buffers:** If a lease is 30 seconds, wait 32-35 seconds before taking over. The 2-5 second buffer covers typical clock skew. The rule of thumb: your safety buffer should be at least 2-3× the maximum expected clock skew on your systems.
+**Add safety buffers:** If a lease is 30 seconds, wait 32-35 seconds before taking over. The 2-5 second buffer covers typical clock skew. The rule of thumb: your safety buffer should be at least 2-3x the maximum expected clock skew on your systems.
 
 **Use logical clocks instead of wall clocks for ordering:** Lamport clocks and Vector clocks track "happens-before" relationships between events without relying on clock synchronization at all. Instead of "this happened at 10:00:00.050," you say "this happened after event #42 and before event #43." You give up the ability to know the real time, but you correctly track ordering.
 
 **Monitor clock skew as an operational metric:** The tools `chrony` and `ntpd` (Network Time Protocol daemon) synchronize clocks and report the offset from "true time." Set an alert if any server's clock is more than 50 milliseconds off. Page the on-call engineer if any server is more than 200 milliseconds off. A server with 500ms of clock skew is a disaster waiting to happen.
 
-**Use TrueTime if you are Google:** Google's Spanner database uses specialized GPS and atomic clock hardware in every datacenter to provide time with guaranteed uncertainty bounds. Instead of saying "the time is exactly 10:00:00.100," TrueTime says "the time is definitely between 10:00:00.097 and 10:00:00.103 — a 6-millisecond uncertainty window." Spanner uses this to wait out the uncertainty window before committing, which gives it global strong consistency. Most companies do not have access to TrueTime — it is a Google-specific advantage.
+**Use TrueTime if you are Google:** Google's Spanner database uses specialized GPS and atomic clock hardware in every datacenter to provide time with guaranteed uncertainty bounds. Instead of saying "the time is exactly 10:00:00.100," TrueTime says "the time is definitely between 10:00:00.097 and 10:00:00.103 -- a 6-millisecond uncertainty window." Spanner uses this to wait out the uncertainty window before committing, which gives it global strong consistency. Most companies do not have access to TrueTime -- it is a Google-specific advantage.
 
-**Use Precision Time Protocol (PTP) hardware clocks:** Modern datacenters can use PTP — a protocol that synchronizes server clocks to within microseconds using specialized network hardware. This dramatically reduces clock skew. Cloud providers offer high-precision time services built on this.
+**Use Precision Time Protocol (PTP) hardware clocks:** Modern datacenters can use PTP -- a protocol that synchronizes server clocks to within microseconds using specialized network hardware. This dramatically reduces clock skew. Cloud providers offer high-precision time services built on this.
 
 ---
 
-## Failure 4: Failure Detection — How Do You Know a Node Is Dead?
+## Failure 4: Failure Detection -- How Do You Know a Node Is Dead?
 
 ### The "Is My Friend Ignoring Me?" Problem
 
@@ -4495,8 +4495,8 @@ The right answer depends on context: how long do they normally take to respond? 
 This is exactly the problem in distributed failure detection. A distributed system cannot know if a silent node is:
 
 - **Dead:** should be immediately replaced, leader election needed
-- **Slow network:** should wait — it will respond eventually
-- **Partitioned:** alive and healthy, but isolated — handle differently than dead
+- **Slow network:** should wait -- it will respond eventually
+- **Partitioned:** alive and healthy, but isolated -- handle differently than dead
 - **JVM garbage collection pause:** temporarily frozen for 1-10 seconds, will come back on its own
 - **Overloaded:** CPU maxed out, cannot respond to heartbeats, but still processing client requests
 
@@ -4512,7 +4512,7 @@ There is no perfect solution. Failure detection is fundamentally uncertain. The 
 
 Most simple failure detectors are binary: "if I haven't heard from this node in X milliseconds, declare it dead." The problem is choosing X. Too small: you declare healthy-but-slow nodes dead constantly (false positives). Too large: you take forever to detect actual deaths (slow failover).
 
-The Phi Accrual Failure Detector (used by Apache Cassandra and Akka) takes a completely different approach. Instead of binary alive/dead, it gives each node a continuous suspicion score — the Greek letter phi (φ). Higher phi = more suspicious that the node is dead.
+The Phi Accrual Failure Detector (used by Apache Cassandra and Akka) takes a completely different approach. Instead of binary alive/dead, it gives each node a continuous suspicion score -- the Greek letter phi (phi). Higher phi = more suspicious that the node is dead.
 
 **The airline reliability score analogy:**
 
@@ -4520,105 +4520,105 @@ An airline does not look at a plane and say "this plane will crash or not crash.
 
 The score adapts to context: a plane that has flown 10,000 hours safely is still considered reliable even if it has one missed inspection. A plane that has had 3 recent mechanical issues needs a much better recent record to be trusted again.
 
-Phi works the same way. The detector tracks the history of heartbeat arrival times from each node. It builds a statistical model: "Historically, heartbeats from Node 3 arrive every 100ms, with a standard deviation of ±8ms." (Standard deviation is just a measure of how variable the timing is — small = very consistent, large = very variable.)
+Phi works the same way. The detector tracks the history of heartbeat arrival times from each node. It builds a statistical model: "Historically, heartbeats from Node 3 arrive every 100ms, with a standard deviation of +/-8ms." (Standard deviation is just a measure of how variable the timing is -- small = very consistent, large = very variable.)
 
 When the latest heartbeat is late, phi rises:
-- 10ms late: phi ≈ 0.1 (normal variation, nothing concerning)
-- 50ms late: phi ≈ 0.5 (slightly unusual, not alarming)
-- 200ms late: phi ≈ 2 (worth noticing)
-- 500ms late: phi ≈ 5 (concerned)
-- 2000ms late: phi ≈ 8+ (almost certainly dead)
+- 10ms late: phi ~= 0.1 (normal variation, nothing concerning)
+- 50ms late: phi ~= 0.5 (slightly unusual, not alarming)
+- 200ms late: phi ~= 2 (worth noticing)
+- 500ms late: phi ~= 5 (concerned)
+- 2000ms late: phi ~= 8+ (almost certainly dead)
 
 ```
-PHI SCORE OVER TIME — Node 3 Stops Responding at T=100ms
-─────────────────────────────────────────────────────────────────────────────
+PHI SCORE OVER TIME -- Node 3 Stops Responding at T=100ms
+-----------------------------------------------------------------------------
 
 Phi
 score
-  8 │                                         ┌─────────────────
-    │                                       ╱
-  6 │                                     ╱
-    │                                   ╱
-  4 │                                 ╱
-    │                               ╱
-  2 │                             ╱
-    │                           ╱
-  1 │ ╔════════════════════════╝
-    │ ║  (phi stays near 0 while
-    │ ║   heartbeats are arriving
-    │ ║   normally — just background
-    │ ║   noise from timing variation)
-    └─┴────────────────────────────────────────────────────
+  8 |                                         +-----------------
+    |                                       /
+  6 |                                     /
+    |                                   /
+  4 |                                 /
+    |                               /
+  2 |                             /
+    |                           /
+  1 | +========================+
+    | |  (phi stays near 0 while
+    | |   heartbeats are arriving
+    | |   normally -- just background
+    | |   noise from timing variation)
+    +-+----------------------------------------------------
       T=0                    T=100ms        T=300ms      T=600ms
                              (last heartbeat)
                                             phi=2        phi=5+
                                             (notice)    (act)
 
 Most systems trigger failover action at phi = 8 (very high confidence).
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
-The key advantage: phi adapts to network conditions. On a congested network, heartbeats regularly arrive late (say, 100-300ms for normal heartbeats). The detector learns this pattern and its phi threshold adjusts — a 200ms delay does not spike phi as high because late arrivals are normal here. On a normally fast network (5ms heartbeats), a 200ms delay is hugely suspicious and phi rises steeply.
+The key advantage: phi adapts to network conditions. On a congested network, heartbeats regularly arrive late (say, 100-300ms for normal heartbeats). The detector learns this pattern and its phi threshold adjusts -- a 200ms delay does not spike phi as high because late arrivals are normal here. On a normally fast network (5ms heartbeats), a 200ms delay is hugely suspicious and phi rises steeply.
 
 A fixed timeout does not adapt. A fixed "declare dead after 500ms" treats a normally-200ms network and a normally-5ms network identically, causing massive false positives on the congested network.
 
-### The SWIM Protocol — Gossip-Based Membership
+### The SWIM Protocol -- Gossip-Based Membership
 
-Phi accrual works well for relatively small clusters. But what if you have 10,000 nodes in your cluster? You cannot have every node pinging every other node — that would be 10,000 × 9,999 = ~100 million pings per second. That would consume more bandwidth than your applications.
+Phi accrual works well for relatively small clusters. But what if you have 10,000 nodes in your cluster? You cannot have every node pinging every other node -- that would be 10,000 x 9,999 = ~100 million pings per second. That would consume more bandwidth than your applications.
 
 SWIM (Scalable Weakly-consistent Infection-style Membership) solves this with gossip. Think of how news spreads in high school.
 
 **The high school gossip analogy:**
 
-On Monday morning, you hear a rumor. You tell your 3 closest friends. Those 3 friends each tell 3 of their friends. By Tuesday, 40 people know. By Wednesday, 400 people know. By Thursday, the whole school knows — without any single person telling everyone, and without any central "rumor broadcast system."
+On Monday morning, you hear a rumor. You tell your 3 closest friends. Those 3 friends each tell 3 of their friends. By Tuesday, 40 people know. By Wednesday, 400 people know. By Thursday, the whole school knows -- without any single person telling everyone, and without any central "rumor broadcast system."
 
 This is how information propagates in a gossip protocol: each node randomly tells a few other nodes, who tell a few other nodes, until eventually everyone has heard. The information spreads exponentially without requiring everyone to talk to everyone.
 
 SWIM applies this to failure detection:
 
-**Step 1 — Direct Ping:** Every node, every second, picks ONE random node from its membership list and sends it a ping. "Hey Node 47, you there?" If Node 47 responds: all good. Move on.
+**Step 1 -- Direct Ping:** Every node, every second, picks ONE random node from its membership list and sends it a ping. "Hey Node 47, you there?" If Node 47 responds: all good. Move on.
 
-**Step 2 — Indirect Ping (the clever part):** If Node 47 does NOT respond within a timeout, do not immediately declare it dead. Instead, pick k random OTHER nodes (say, k=3) and ask them to also try pinging Node 47. "Hey Nodes 12, 33, 71 — can each of you try pinging Node 47 for me?"
+**Step 2 -- Indirect Ping (the clever part):** If Node 47 does NOT respond within a timeout, do not immediately declare it dead. Instead, pick k random OTHER nodes (say, k=3) and ask them to also try pinging Node 47. "Hey Nodes 12, 33, 71 -- can each of you try pinging Node 47 for me?"
 
 Why indirect? Because maybe the direct path from you to Node 47 is broken, but the path from Node 12 to Node 47 is fine. If Node 12 can reach Node 47, the node is alive and it is just your direct link that is broken.
 
-**Step 3 — Declare Dead:** If you sent indirect ping requests to Nodes 12, 33, and 71, and NONE of them get a response from Node 47 within the timeout: now you have reasonable confidence Node 47 is dead. Mark it as "suspected dead" and gossip the news to a few random nodes.
+**Step 3 -- Declare Dead:** If you sent indirect ping requests to Nodes 12, 33, and 71, and NONE of them get a response from Node 47 within the timeout: now you have reasonable confidence Node 47 is dead. Mark it as "suspected dead" and gossip the news to a few random nodes.
 
-**Step 4 — Gossip:** You tell 3 random nodes: "I suspect Node 47 is dead." Each of those 3 nodes tells 3 random nodes. Within a few rounds (logarithmic time proportional to the log of cluster size), every node in the cluster knows.
+**Step 4 -- Gossip:** You tell 3 random nodes: "I suspect Node 47 is dead." Each of those 3 nodes tells 3 random nodes. Within a few rounds (logarithmic time proportional to the log of cluster size), every node in the cluster knows.
 
 ```
-SWIM INDIRECT PING — Node A Cannot Reach Node E
-─────────────────────────────────────────────────────────────────────────────
+SWIM INDIRECT PING -- Node A Cannot Reach Node E
+-----------------------------------------------------------------------------
 
     Step 1: A pings E directly.
-    ┌────┐    ping    ┌────┐
-    │  A │───────────X│  E │   (no response — timeout!)
-    └────┘            └────┘
+    +----+    ping    +----+
+    |  A |-----------X|  E |   (no response -- timeout!)
+    +----+            +----+
 
     Step 2: A asks B, C, D to try pinging E indirectly.
-    ┌────┐  "try E"  ┌────┐    ping    ┌────┐
-    │  A │──────────▶│  B │──────────X │  E │  (no response)
-    └────┘           └────┘            └────┘
-    ┌────┐  "try E"  ┌────┐    ping    ┌────┐
-    │  A │──────────▶│  C │──────────X │  E │  (no response)
-    └────┘           └────┘            └────┘
-    ┌────┐  "try E"  ┌────┐    ping    ┌────┐
-    │  A │──────────▶│  D │──────────X │  E │  (no response)
-    └────┘           └────┘            └────┘
+    +----+  "try E"  +----+    ping    +----+
+    |  A |---------->|  B |----------X |  E |  (no response)
+    +----+           +----+            +----+
+    +----+  "try E"  +----+    ping    +----+
+    |  A |---------->|  C |----------X |  E |  (no response)
+    +----+           +----+            +----+
+    +----+  "try E"  +----+    ping    +----+
+    |  A |---------->|  D |----------X |  E |  (no response)
+    +----+           +----+            +----+
 
     Step 3: All indirect pings fail. A declares E suspected-dead.
 
     Step 4: A gossips the news.
-    ┌────┐  "E dead"  ┌────┐  "E dead"  ┌────┐
-    │  A │──────────▶│  F │──────────▶ │  H │
-    └────┘            └────┘            └────┘
-                      "E dead"  ┌────┐
-                     ──────────▶│  G │  (spreading through the cluster)
-                                └────┘
+    +----+  "E dead"  +----+  "E dead"  +----+
+    |  A |---------->|  F |----------> |  H |
+    +----+            +----+            +----+
+                      "E dead"  +----+
+                     ---------->|  G |  (spreading through the cluster)
+                                +----+
 
     Result: Within log(N) gossip rounds, all N nodes know E is dead.
     For 1,000 nodes: ~10 rounds = ~10 seconds to full propagation.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 The advantages of SWIM:
@@ -4630,7 +4630,7 @@ Used by: Apache Cassandra, HashiCorp Consul, Kubernetes (via a variant called th
 
 ---
 
-# Part 6: Case Studies — Real Coordination Problems
+# Part 6: Case Studies -- Real Coordination Problems
 
 Three real design problems that companies actually face. Each one shows a specific coordination need, the naive approach that fails, and the correct approach that works.
 
@@ -4646,7 +4646,7 @@ You are building a service that runs scheduled jobs for your company:
 - "Archive logs older than 30 days, every hour"
 - "Check inventory levels and reorder when low, every 15 minutes"
 
-You need reliability — if the job scheduler crashes, the jobs must still run. So you deploy the scheduler on 3 servers. This is called a "redundant" or "highly available" deployment.
+You need reliability -- if the job scheduler crashes, the jobs must still run. So you deploy the scheduler on 3 servers. This is called a "redundant" or "highly available" deployment.
 
 Problem: how do you make sure each job runs exactly once? Not zero times (server was down), not three times (all three servers ran it)?
 
@@ -4677,7 +4677,7 @@ Seems to work! But what happens when the winning server crashes mid-job?
 
 ```
 CRASH SCENARIO WITH NAIVE LOCK
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
 T=6:00:00  Server 2 wins the lock. Inserts row into job_locks.
 T=6:00:01  Server 2 starts sending emails (job begins).
@@ -4687,20 +4687,20 @@ T=6:00:05  Server 2 crashes. Hard crash. Power failure or OOM kill.
 
 T=6:00:06  Server 1 checks: "Should I run the 6am email job?"
            Tries to INSERT into job_locks.
-           FAILS — row already exists, locked by "server-2"
+           FAILS -- row already exists, locked by "server-2"
            Server 1 skips the job.
 
 T=6:00:06  Server 3 checks: same result. Skips the job.
 
 Next day, T=6:00:00 (24 hours later):
-           Server 1 tries to INSERT. FAILS — "server-2" lock still there.
-           Server 3 tries to INSERT. FAILS — same.
+           Server 1 tries to INSERT. FAILS -- "server-2" lock still there.
+           Server 3 tries to INSERT. FAILS -- same.
            Nobody runs the email.
            Users never get their daily email again.
 
 The lock is permanent. The job is permanently broken.
 Until a human manually deletes the lock row.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 ### Naive Approach 3: Lock with Expiry (Better, But Still Flawed)
@@ -4717,45 +4717,45 @@ Other servers check: "Is there a lock that hasn't expired yet?" If expired: dele
 This is better. If Server 2 crashes at T=6:00:05, the lock expires at T=7:00:00 (one hour later). Server 1 then claims the lock at T=7:00:00 and runs the email job.
 
 The email goes out one hour late. For a daily marketing email, one hour late might be acceptable. But consider:
-- "Send payment confirmation within 10 seconds of purchase" — one hour late is completely unacceptable
-- "Restock inventory when a product goes below 10 units" — one hour delay causes stockouts
-- "Alert on-call engineer when error rate exceeds 1%" — one hour delay = one hour of undetected incident
+- "Send payment confirmation within 10 seconds of purchase" -- one hour late is completely unacceptable
+- "Restock inventory when a product goes below 10 units" -- one hour delay causes stockouts
+- "Alert on-call engineer when error rate exceeds 1%" -- one hour delay = one hour of undetected incident
 
 And there is another flaw: what if the job takes more than one hour to complete? A legitimate long-running job can have its lock expire WHILE it is still running, causing another server to also start running the same job. Back to duplicate execution.
 
 ### The Correct Approach: Leader-Based Scheduler
 
-**Design principle:** elect one leader among the three scheduler servers. Only the leader runs jobs. The other two are "hot standbys" — fully prepared to take over instantly, but idle until they need to.
+**Design principle:** elect one leader among the three scheduler servers. Only the leader runs jobs. The other two are "hot standbys" -- fully prepared to take over instantly, but idle until they need to.
 
 ```
 LEADER-BASED SCHEDULER ARCHITECTURE
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
-    ┌──────────────────────────────────────────────────┐
-    │                    etcd                          │
-    │  Key: /scheduler/leader                          │
-    │  Value: "server-1"                               │
-    │  TTL: 30 seconds (renewable)                     │
-    └────────────────────┬─────────────────────────────┘
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-   ┌─────────┐      ┌─────────┐      ┌─────────┐
-   │ Server 1│      │ Server 2│      │ Server 3│
-   │ LEADER  │      │ Standby │      │ Standby │
-   │         │      │watching │      │watching │
-   │ Running │      │for lead-│      │for lead-│
-   │  jobs   │      │er change│      │er change│
-   └─────────┘      └─────────┘      └─────────┘
-        │
-        ▼
-   ┌──────────────────────────┐
-   │      Job Scheduler       │
-   │ - daily email at 6am     │
-   │ - weekly report Mon      │
-   │ - hourly log archive     │
-   └──────────────────────────┘
-─────────────────────────────────────────────────────────────────────────────
+    +--------------------------------------------------+
+    |                    etcd                          |
+    |  Key: /scheduler/leader                          |
+    |  Value: "server-1"                               |
+    |  TTL: 30 seconds (renewable)                     |
+    +--------------------+-----------------------------+
+                         |
+        +----------------+----------------+
+        v                v                v
+   +---------+      +---------+      +---------+
+   | Server 1|      | Server 2|      | Server 3|
+   | LEADER  |      | Standby |      | Standby |
+   |         |      |watching |      |watching |
+   | Running |      |for lead-|      |for lead-|
+   |  jobs   |      |er change|      |er change|
+   +---------+      +---------+      +---------+
+        |
+        v
+   +--------------------------+
+   |      Job Scheduler       |
+   | - daily email at 6am     |
+   | - weekly report Mon      |
+   | - hourly log archive     |
+   +--------------------------+
+-----------------------------------------------------------------------------
 ```
 
 The leader election code (conceptual Python):
@@ -4781,7 +4781,7 @@ def try_become_leader():
 
 def renew_lease_loop():
     while is_healthy():
-        sleep(15)  # Sleep 15 seconds (half the TTL — plenty of margin)
+        sleep(15)  # Sleep 15 seconds (half the TTL -- plenty of margin)
         etcd.refresh_ttl("/scheduler/leader", ttl=30)  # Reset TTL to 30 more seconds
     # If I become unhealthy (crash), this loop stops, TTL is not renewed,
     # key expires after 30 seconds, standby servers claim leadership.
@@ -4795,7 +4795,7 @@ def watch_for_leader_change():
 
 ```
 LEADER FAILOVER TIMELINE
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
 T=0:     Server 1 holds the leader lease. Last renewed at T=0. TTL=30s.
          Lease expires at T=30 if not renewed.
@@ -4811,18 +4811,18 @@ T=45:    Lease expires (30 seconds after the last renewal at T=15).
          They both receive a notification: "key deleted."
          They both immediately call try_become_leader().
 
-T=45.001: Server 2 calls etcd.put_if_absent() — SUCCEEDS.
+T=45.001: Server 2 calls etcd.put_if_absent() -- SUCCEEDS.
           Server 2 is now the leader.
 
-T=45.002: Server 3 calls etcd.put_if_absent() — FAILS (key now exists, Server 2 has it).
+T=45.002: Server 3 calls etcd.put_if_absent() -- FAILS (key now exists, Server 2 has it).
           Server 3 goes back to standby mode.
 
 T=45.003: Server 2 starts the job scheduler.
           Any job that was scheduled to run between T=22 and T=45 was missed.
           Those jobs will need to catch up (or be re-scheduled immediately).
 
-T=45 → T=∞: Server 2 running normally. Renewing every 15 seconds.
-─────────────────────────────────────────────────────────────────────────────
+T=45 -> T=inf: Server 2 running normally. Renewing every 15 seconds.
+-----------------------------------------------------------------------------
 ```
 
 The worst-case gap between crash and failover: 30 seconds (the TTL). This is acceptable for "run jobs every hour" but not for "respond to payment alerts within 10 seconds." Choose your TTL based on your failover time requirement.
@@ -4870,84 +4870,84 @@ Your API is popular. You want to limit each user to 1,000 API requests per minut
 
 The challenge: how do you count to 1,000 accurately when the counting is spread across 10 different servers?
 
-### Option 1: Per-Server Limits — No Coordination
+### Option 1: Per-Server Limits -- No Coordination
 
-Each server independently maintains its own counter for each user. Each server allows up to 100 requests per minute per user (1,000 total ÷ 10 servers = 100 per server).
+Each server independently maintains its own counter for each user. Each server allows up to 100 requests per minute per user (1,000 total / 10 servers = 100 per server).
 
 ```
 PER-SERVER RATE LIMITING
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
     User X's requests are distributed across servers by load balancer.
 
-    Server 1: User X has sent 97 requests → allows 3 more
-    Server 2: User X has sent 94 requests → allows 6 more
+    Server 1: User X has sent 97 requests -> allows 3 more
+    Server 2: User X has sent 94 requests -> allows 6 more
     ...
-    Server 10: User X has sent 99 requests → allows 1 more
+    Server 10: User X has sent 99 requests -> allows 1 more
 
     If User X hits all 10 servers evenly:
-    100 per server × 10 servers = 1,000 total ✓
+    100 per server x 10 servers = 1,000 total Y
 
     But if User X has a clever client that routes to all servers:
-    100 per server × 10 servers = 1,000 per server possible
-    → User X could send 10,000 requests total!
-─────────────────────────────────────────────────────────────────────────────
+    100 per server x 10 servers = 1,000 per server possible
+    -> User X could send 10,000 requests total!
+-----------------------------------------------------------------------------
 ```
 
 Advantages: zero coordination. Sub-millisecond. Scales to any number of servers without additional infrastructure.
 
-Disadvantages: a motivated user who knows your architecture (or just happens to have their requests spread across servers) can exceed the limit by up to 10×. For anti-abuse purposes, this is often unacceptable. For "rough fairness" purposes, it might be perfectly fine.
+Disadvantages: a motivated user who knows your architecture (or just happens to have their requests spread across servers) can exceed the limit by up to 10x. For anti-abuse purposes, this is often unacceptable. For "rough fairness" purposes, it might be perfectly fine.
 
 **When to use this:** internal microservice rate limiting where the limit is a guideline, not a hard security control. Fine for "do not let this service accidentally DDoS that service."
 
-### Option 2: Centralized Redis Counter — Exact Global Count
+### Option 2: Centralized Redis Counter -- Exact Global Count
 
 All 10 servers share a single Redis instance for counting. Every API request increments the user's counter in Redis. Redis is used because it is extremely fast (in-memory), supports atomic increment operations, and can handle hundreds of thousands of operations per second.
 
 ```
 REDIS-BASED RATE LIMITING
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
     User X sends a request to Server 3:
 
     Server 3                         Redis
-    ──────────                       ─────────────────────────────
-    Request arrives     ────────────▶ INCR user:X:minute:1705123456
-                                     → Returns new count: 783
-    Count is 783        ◀────────────
+    ----------                       -----------------------------
+    Request arrives     ------------> INCR user:X:minute:1705123456
+                                     -> Returns new count: 783
+    Count is 783        <------------
     783 < 1000: ALLOW
     Process the request
 
     Next request from User X (to Server 7):
     Server 7                         Redis
-    ──────────                       ─────────────────────────────
-    Request arrives     ────────────▶ INCR user:X:minute:1705123456
-                                     → Returns new count: 784
+    ----------                       -----------------------------
+    Request arrives     ------------> INCR user:X:minute:1705123456
+                                     -> Returns new count: 784
     784 < 1000: ALLOW
 
     If count reaches 1000:
-    INCR → Returns 1001
-    1001 > 1000: RATE LIMIT — return HTTP 429 Too Many Requests.
-─────────────────────────────────────────────────────────────────────────────
+    INCR -> Returns 1001
+    1001 > 1000: RATE LIMIT -- return HTTP 429 Too Many Requests.
+-----------------------------------------------------------------------------
 ```
 
 Advantages: exact global counting. Every server sees the same number. User X cannot game the system by spreading requests across servers.
 
-Disadvantages: every API request requires a network roundtrip to Redis (typically 1-5ms extra latency). If Redis goes down, 100% of rate limit checks fail — you have to decide: "allow everything?" or "deny everything?" Neither is great. Redis becomes a critical single point of failure in your request path.
+Disadvantages: every API request requires a network roundtrip to Redis (typically 1-5ms extra latency). If Redis goes down, 100% of rate limit checks fail -- you have to decide: "allow everything?" or "deny everything?" Neither is great. Redis becomes a critical single point of failure in your request path.
 
 **When to use this:** rate limiting that is a hard security control, where exceeding the limit is a meaningful violation (API monetization, preventing credential stuffing attacks). The extra 2-5ms latency is acceptable given the importance.
 
-### Option 3: Token Bucket with Redis — Smooth Rate Limiting
+### Option 3: Token Bucket with Redis -- Smooth Rate Limiting
 
 The basic INCR approach has a problem: it counts per fixed time window. In minute 1:00, a user can send 1,000 requests in the first second. In minute 1:01 (new window), they get another 1,000. In 2 seconds, they effectively sent 2,000 requests. This "window edge attack" can temporarily exceed the intended rate.
 
 Token bucket solves this. Instead of counting requests in a window, track "tokens." Each user has a bucket that starts with 1,000 tokens. Each request costs 1 token. Tokens refill at a rate of 1,000 per minute (about 16.7 per second). The bucket never exceeds 1,000.
 
-If a user sends no requests for a minute, they accumulate 1,000 tokens (full bucket). If they then blast 1,000 requests in 1 second, the bucket empties — no more requests until tokens refill. No window-edge attack.
+If a user sends no requests for a minute, they accumulate 1,000 tokens (full bucket). If they then blast 1,000 requests in 1 second, the bucket empties -- no more requests until tokens refill. No window-edge attack.
 
 Redis storage for a user's token bucket: `{tokens: 847, last_refill_time: 1705123400}`.
 
-The check on each request (using a Lua script for atomicity — Lua scripts in Redis execute as a single atomic operation, preventing race conditions where two servers simultaneously read "1 token remaining" and both allow their requests):
+The check on each request (using a Lua script for atomicity -- Lua scripts in Redis execute as a single atomic operation, preventing race conditions where two servers simultaneously read "1 token remaining" and both allow their requests):
 
 ```lua
 -- This Lua script runs atomically in Redis (cannot be interrupted)
@@ -4979,77 +4979,77 @@ else
 end
 ```
 
-### Option 4: Hybrid Local + Redis — Recommended for Scale
+### Option 4: Hybrid Local + Redis -- Recommended for Scale
 
-The full Redis approach puts Redis on the critical path of every single API request. At 100,000 requests/second, that is 100,000 Redis operations/second — doable, but expensive and risky.
+The full Redis approach puts Redis on the critical path of every single API request. At 100,000 requests/second, that is 100,000 Redis operations/second -- doable, but expensive and risky.
 
 The hybrid approach: each server maintains a LOCAL token bucket for fast path. Every 500ms, synchronize with Redis.
 
 ```
 HYBRID RATE LIMITING ARCHITECTURE
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
     LOCAL (per server, in memory):         GLOBAL (Redis):
-    Fast path — sub-millisecond             Ground truth — reconciled every 500ms
+    Fast path -- sub-millisecond             Ground truth -- reconciled every 500ms
 
     Server 1:                              Redis:
-    ┌──────────────────┐                   ┌─────────────────────────────┐
-    │ User X local:    │                   │ User X global:              │
-    │ tokens = 85      │ ◀── sync ──────── │ tokens_used = 840           │
-    │ (of my 100 share)│ ──── sync ──────▶ │ (across all 10 servers)     │
-    └──────────────────┘    (every 500ms)  └─────────────────────────────┘
+    +------------------+                   +-----------------------------+
+    | User X local:    |                   | User X global:              |
+    | tokens = 85      | <-- sync -------- | tokens_used = 840           |
+    | (of my 100 share)| ---- sync ------> | (across all 10 servers)     |
+    +------------------+    (every 500ms)  +-----------------------------+
 
     Server 2:
-    ┌──────────────────┐
-    │ User X local:    │
-    │ tokens = 92      │ ◀── sync ──────── (same Redis key)
-    └──────────────────┘
+    +------------------+
+    | User X local:    |
+    | tokens = 92      | <-- sync -------- (same Redis key)
+    +------------------+
 
     During 500ms intervals: each server uses its local bucket.
-    At sync time: "I used 15 tokens in the last 500ms" → Redis adjusts.
+    At sync time: "I used 15 tokens in the last 500ms" -> Redis adjusts.
     If global total exceeds limit: all servers are told to throttle.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
-The trade-off: in the 500ms between syncs, a user COULD slightly exceed the rate limit (if all 10 servers each see their local bucket as non-empty simultaneously). The maximum overage is bounded: it is approximately `(rate_limit × sync_interval)` = 1,000 × 0.5 seconds = 500 extra requests in the worst case. For most use cases, this is acceptable. For strict security controls, use full Redis.
+The trade-off: in the 500ms between syncs, a user COULD slightly exceed the rate limit (if all 10 servers each see their local bucket as non-empty simultaneously). The maximum overage is bounded: it is approximately `(rate_limit x sync_interval)` = 1,000 x 0.5 seconds = 500 extra requests in the worst case. For most use cases, this is acceptable. For strict security controls, use full Redis.
 
 **Trade-off comparison:**
 
 ```
 APPROACH          LATENCY     ACCURACY    REDIS LOAD      FAILOVER
-─────────────────────────────────────────────────────────────────────────────
-Per-server        <0.1ms      ±10×        None            N/A (no dependency)
+-----------------------------------------------------------------------------
+Per-server        <0.1ms      +/-10x        None            N/A (no dependency)
 Redis INCR        +2-5ms      Exact        100% of reqs    Fatal if Redis down
 Token Bucket      +2-5ms      Near-exact   100% of reqs    Fatal if Redis down
-Hybrid            <0.1ms      ±small       2 reqs/sec      Graceful degradation
-─────────────────────────────────────────────────────────────────────────────
+Hybrid            <0.1ms      +/-small       2 reqs/sec      Graceful degradation
+-----------------------------------------------------------------------------
 ```
 
 ### Degraded Mode: Redis Is Down
 
 The rate limiter is supposed to protect your API. If Redis (the global counter) goes down, what do you do?
 
-**Option A — Allow all requests:** "Redis is down, so we cannot count. Allow everything." Zero rate limiting. Fine if rate limiting is a business feature (not a security necessity). Bad if you depend on it to prevent abuse.
+**Option A -- Allow all requests:** "Redis is down, so we cannot count. Allow everything." Zero rate limiting. Fine if rate limiting is a business feature (not a security necessity). Bad if you depend on it to prevent abuse.
 
-**Option B — Fall back to per-server limits:** Without Redis coordination, each server independently limits to `rate_limit / num_servers`. Approximate but better than nothing.
+**Option B -- Fall back to per-server limits:** Without Redis coordination, each server independently limits to `rate_limit / num_servers`. Approximate but better than nothing.
 
-**Option C — Serve from last-known state:** When Redis goes down, each server continues using its last-synchronized local bucket state. Counters drift but stay in the right ballpark for the duration of the Redis outage. When Redis recovers, re-sync immediately.
+**Option C -- Serve from last-known state:** When Redis goes down, each server continues using its last-synchronized local bucket state. Counters drift but stay in the right ballpark for the duration of the Redis outage. When Redis recovers, re-sync immediately.
 
 The correct choice depends on your use case. Design your fallback BEFORE Redis goes down, not after. Your 3 AM on-call engineer should not be making this decision during an incident.
 
 ---
 
-## Case Study 3: Metadata Service — Coordinating "Where Is Everything?"
+## Case Study 3: Metadata Service -- Coordinating "Where Is Everything?"
 
 ### The Scenario
 
-Your database has grown so large that it cannot fit on one machine. You have split it across 16 shards — 16 separate database servers, each holding a slice of the data. 
+Your database has grown so large that it cannot fit on one machine. You have split it across 16 shards -- 16 separate database servers, each holding a slice of the data. 
 
 User records are divided by user ID: User IDs 1-625,000 on Shard 1, User IDs 625,001-1,250,000 on Shard 2, and so on.
 
 When your application receives a request for User #99,999, it needs to know: which shard holds User #99,999's data? The answer is Shard 1 (because 99,999 falls in the range 1-625,000). But the application needs to LOOK UP this answer every time. It does not hard-code the ranges.
 
-This lookup is done by the metadata service — a small service that stores and answers the question "where does this data live?"
+This lookup is done by the metadata service -- a small service that stores and answers the question "where does this data live?"
 
 ### Why This Needs Coordination
 
@@ -5059,23 +5059,23 @@ But more importantly: what if two instances of the metadata service disagree?
 
 ```
 METADATA DISAGREEMENT DISASTER
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
     Metadata Instance A says:                Metadata Instance B says:
-    "User #99999 → Shard 1"                 "User #99999 → Shard 7"
+    "User #99999 -> Shard 1"                 "User #99999 -> Shard 7"
 
-    (This can happen during resharding — when data is being moved
+    (This can happen during resharding -- when data is being moved
      between shards, two metadata replicas might briefly see
      different shard assignments.)
 
     App Server 1 (asked Instance A):         App Server 2 (asked Instance B):
     Queries Shard 1 for User #99999.         Queries Shard 7 for User #99999.
-    User's data IS on Shard 1 → success.     User's data is NOT on Shard 7 → error!
+    User's data IS on Shard 1 -> success.     User's data is NOT on Shard 7 -> error!
 
     From the user's perspective:
     Some requests succeed. Some fail randomly.
     No visible reason why. Extremely confusing to debug.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 This is a case where eventual consistency is NOT acceptable. The metadata service must provide strong consistency: all queries must see the same (current) shard assignment.
@@ -5084,47 +5084,47 @@ This is a case where eventual consistency is NOT acceptable. The metadata servic
 
 ```
 METADATA SERVICE ARCHITECTURE
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
                     RAFT CONSENSUS GROUP
-    ┌──────────────────────────────────────────────────────┐
-    │                                                      │
-    │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐│
-    │  │  Metadata    │  │  Metadata    │  │  Metadata    ││
-    │  │  Leader      │  │  Follower 1  │  │  Follower 2  ││
-    │  │              │  │              │  │              ││
-    │  │ All WRITES   │  │  Replicated  │  │  Replicated  ││
-    │  │ go here.     │  │  read-only   │  │  read-only   ││
-    │  └──────┬───────┘  └──────────────┘  └──────────────┘│
-    │         │ Raft consensus (all writes committed here)  │
-    └─────────┼────────────────────────────────────────────┘
-              │
-              ▼ Shard Assignment Map (strongly consistent):
-    ┌──────────────────────────────────────┐
-    │ User IDs 1-625,000     → Shard 1     │
-    │ User IDs 625,001-...   → Shard 2     │
-    │ ...                                  │
-    │ User IDs 9.4M-10M      → Shard 16   │
-    └──────────────────────────────────────┘
-              │
-              │ Served to:
-    ┌─────────┴─────────────────────────────────┐
-    │                                           │
-    ▼                                           ▼
-┌─────────────────────────────┐  ┌─────────────────────────────┐
-│ App Server 1                │  │ App Server 2                │
-│ Local cache (30s TTL):      │  │ Local cache (30s TTL):      │
-│ "User #99999 → Shard 1"    │  │ "User #99999 → Shard 1"    │
-│ cached 12 seconds ago       │  │ cached 5 seconds ago        │
-└──────────────┬──────────────┘  └──────────────┬──────────────┘
-               │                                │
-               ▼                                ▼
+    +------------------------------------------------------+
+    |                                                      |
+    |  +--------------+  +--------------+  +--------------+|
+    |  |  Metadata    |  |  Metadata    |  |  Metadata    ||
+    |  |  Leader      |  |  Follower 1  |  |  Follower 2  ||
+    |  |              |  |              |  |              ||
+    |  | All WRITES   |  |  Replicated  |  |  Replicated  ||
+    |  | go here.     |  |  read-only   |  |  read-only   ||
+    |  +------+-------+  +--------------+  +--------------+|
+    |         | Raft consensus (all writes committed here)  |
+    +---------+--------------------------------------------+
+              |
+              v Shard Assignment Map (strongly consistent):
+    +--------------------------------------+
+    | User IDs 1-625,000     -> Shard 1     |
+    | User IDs 625,001-...   -> Shard 2     |
+    | ...                                  |
+    | User IDs 9.4M-10M      -> Shard 16   |
+    +--------------------------------------+
+              |
+              | Served to:
+    +---------+---------------------------------+
+    |                                           |
+    v                                           v
++-----------------------------+  +-----------------------------+
+| App Server 1                |  | App Server 2                |
+| Local cache (30s TTL):      |  | Local cache (30s TTL):      |
+| "User #99999 -> Shard 1"    |  | "User #99999 -> Shard 1"    |
+| cached 12 seconds ago       |  | cached 5 seconds ago        |
++--------------+--------------+  +--------------+--------------+
+               |                                |
+               v                                v
         Queries Shard 1               Queries Shard 1
         (correct)                     (correct)
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
-**Read strategy — two tiers:**
+**Read strategy -- two tiers:**
 
 For normal lookups (reading the shard assignment for a specific user): read from any replica, or better yet, from the local app server cache. The shard assignment for User #99999 almost never changes. Caching it for 30 seconds is safe. 99% of all metadata reads are served from the app server's local cache at sub-millisecond latency, without even hitting the metadata service.
 
@@ -5134,39 +5134,39 @@ For resharding operations (when you are actually moving data between shards): re
 
 When shard assignments change (during resharding), the metadata service increments a global version number. App servers compare their cached version to the current version. If they differ, invalidate the cache and re-fetch.
 
-This is much more efficient than polling every 30 seconds regardless of whether anything changed. App servers subscribe to version changes — they get a notification when assignments are updated and immediately refresh. Most of the time: no notification, no refresh needed.
+This is much more efficient than polling every 30 seconds regardless of whether anything changed. App servers subscribe to version changes -- they get a notification when assignments are updated and immediately refresh. Most of the time: no notification, no refresh needed.
 
-**Degraded mode — the metadata service is unreachable:**
+**Degraded mode -- the metadata service is unreachable:**
 
 The app server has a 30-second cached copy. Use it. If the metadata service is down for 30 seconds, cached assignments are still valid (resharding does not happen that fast).
 
-If the cache has expired and the metadata service is still unreachable: fall back to consistent hashing. Consistent hashing is an algorithm that can calculate which shard a given user ID belongs to using only the user ID itself — no lookup required. It is less precise than the metadata service (does not know about recent resharding events) but will be correct for users that have not been recently resharded. A reasonable fallback that keeps 90%+ of traffic working while the metadata service recovers.
+If the cache has expired and the metadata service is still unreachable: fall back to consistent hashing. Consistent hashing is an algorithm that can calculate which shard a given user ID belongs to using only the user ID itself -- no lookup required. It is less precise than the metadata service (does not know about recent resharding events) but will be correct for users that have not been recently resharded. A reasonable fallback that keeps 90%+ of traffic working while the metadata service recovers.
 
 ```
 DEGRADED MODE DECISION TREE
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
     Metadata service unreachable?
-              │
-              ▼
+              |
+              v
     Local cache still valid (< 30 seconds old)?
-         │                    │
+         |                    |
          YES                  NO
-         │                    │
-         ▼                    ▼
+         |                    |
+         v                    v
     Use cached           Fall back to consistent hash routing.
     assignment.          (Mostly correct, may miss recent resharding.)
     Log a warning.       Return response with header:
     Continue serving.    "X-Degraded-Mode: metadata-unavailable"
                          So downstream can decide if they trust the result.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 ---
 
-# Part 7: Anti-Patterns — How Good Intentions Go Wrong
+# Part 7: Anti-Patterns -- How Good Intentions Go Wrong
 
-Most distributed systems outages caused by coordination are not caused by the coordination failing — they are caused by over-using coordination and creating fragile dependencies. Engineers add coordination to solve a real problem, and it works. Then load increases, or the coordination service has a brief hiccup, and suddenly the over-coordination becomes the outage.
+Most distributed systems outages caused by coordination are not caused by the coordination failing -- they are caused by over-using coordination and creating fragile dependencies. Engineers add coordination to solve a real problem, and it works. Then load increases, or the coordination service has a brief hiccup, and suddenly the over-coordination becomes the outage.
 
 Here are the five most common patterns of well-intentioned but ultimately harmful coordination design.
 
@@ -5176,9 +5176,9 @@ Here are the five most common patterns of well-intentioned but ultimately harmfu
 
 ### The Story
 
-A team builds a user profile service. Two API requests can update the same user's profile simultaneously: request A changes the username, request B changes the email address. Without coordination, these could interfere with each other (if the update operation is read-modify-write: read profile → change field → write profile, two simultaneous operations can overwrite each other's change).
+A team builds a user profile service. Two API requests can update the same user's profile simultaneously: request A changes the username, request B changes the email address. Without coordination, these could interfere with each other (if the update operation is read-modify-write: read profile -> change field -> write profile, two simultaneous operations can overwrite each other's change).
 
-The engineer's solution: acquire a distributed lock on `user_{id}` for every update. Lock acquired → update profile → release lock. Race condition solved.
+The engineer's solution: acquire a distributed lock on `user_{id}` for every update. Lock acquired -> update profile -> release lock. Race condition solved.
 
 This works at 100 users/second. The team celebrates and moves on.
 
@@ -5188,7 +5188,7 @@ Six months later: the service handles 10,000 updates/second. Every update requir
 3. Do the update (5ms)
 4. Release lock (1ms)
 
-At 10,000/second with 8ms average overhead: 80 seconds of total locking overhead per second. That is impossible — you can only serve a fraction of the intended load, and wait times compound. The service slows to a crawl.
+At 10,000/second with 8ms average overhead: 80 seconds of total locking overhead per second. That is impossible -- you can only serve a fraction of the intended load, and wait times compound. The service slows to a crawl.
 
 ### Why Locks at This Granularity Are Wrong
 
@@ -5212,8 +5212,8 @@ new_email = "new@email.com"
 UPDATE profiles
 SET email = new_email, version = 43
 WHERE user_id = X AND version = 42;  -- This is the key condition!
--- If version changed since our read: 0 rows updated → retry
--- If version unchanged: 1 row updated → success
+-- If version changed since our read: 0 rows updated -> retry
+-- If version unchanged: 1 row updated -> success
 ```
 
 If two operations conflict (both read version 42, both try to write version 43): the second write will affect 0 rows (version is already 43 from the first write). Detect this and retry. Conflicts are rare, so retries are rare. No distributed lock needed at all.
@@ -5223,18 +5223,18 @@ If two operations conflict (both read version 42, both try to write version 43):
 If conflicts ARE common, use the database's built-in row-level locking. `SELECT FOR UPDATE` in PostgreSQL, MySQL, and most databases. This is orders of magnitude cheaper than a distributed lock because it happens entirely within the database, does not require a network roundtrip to a separate Redis instance, and is built to handle concurrent access efficiently.
 
 ```
-COMPARISON — Distributed Lock vs. Database Row Lock
-─────────────────────────────────────────────────────────────────────────────
+COMPARISON -- Distributed Lock vs. Database Row Lock
+-----------------------------------------------------------------------------
                     Distributed Lock          Database Row Lock
                     (Redis-based)             (SELECT FOR UPDATE)
-────────────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------------
 Latency             +4-8ms per operation      +0.1-0.5ms per operation
 Network hops        2 extra (to Redis         0 extra (within DB transaction)
                     and back)
 Failure modes       Redis down = deadlock     DB down = same as any DB issue
 Appropriate for     Cross-service locks.      Same-database row protection.
                     Spanning multiple DBs.    99% of "race condition" problems.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 **The rule:** use a distributed lock ONLY when the lock spans multiple systems (multiple databases, multiple services) and you genuinely need cross-system coordination. For race conditions within a single database, use the database's own concurrency mechanisms.
@@ -5251,11 +5251,11 @@ They are NOT designed for application data: user records, orders, product catalo
 
 ### The Story
 
-A team is building a microservices platform. They need to store feature flags — configuration that tells their services "is feature X enabled for user Y?" Simple enough. They put feature flags in etcd because they are already using etcd for service discovery and leader election.
+A team is building a microservices platform. They need to store feature flags -- configuration that tells their services "is feature X enabled for user Y?" Simple enough. They put feature flags in etcd because they are already using etcd for service discovery and leader election.
 
-Initially: 50 feature flags × small values = 10 kilobytes. No problem.
+Initially: 50 feature flags x small values = 10 kilobytes. No problem.
 
-After 6 months of growth: 5,000 feature flags × A/B test segments × regional variants = 500 megabytes in etcd. Performance starts degrading. etcd's write latency climbs. Snapshots (periodic backups of etcd state) start taking 3 minutes to complete, during which performance is degraded.
+After 6 months of growth: 5,000 feature flags x A/B test segments x regional variants = 500 megabytes in etcd. Performance starts degrading. etcd's write latency climbs. Snapshots (periodic backups of etcd state) start taking 3 minutes to complete, during which performance is degraded.
 
 After 12 months: 5 gigabytes. Kubernetes stops working. The Kubernetes control plane uses the same etcd cluster (as is common in many deployments). Kubernetes needs etcd to schedule pods, manage deployments, and store cluster state. But etcd is now spending most of its time handling feature flag queries. Kubernetes operations time out. Pods cannot be scheduled. Deployments fail. The engineering team has an all-hands incident: "Kubernetes is broken."
 
@@ -5279,9 +5279,9 @@ These are designed to handle millions of keys, large values, and complex queryin
 ### The Fire Drill Story
 
 Your team spent 6 months building a robust microservices system. You tested exhaustively:
-- "What if Service A goes down?" ✓ Tested. Service B handles it gracefully.
-- "What if the database goes down?" ✓ Tested. Errors are handled properly.
-- "What if there is a network partition between regions?" ✓ Tested. Traffic routes to the healthy region.
+- "What if Service A goes down?" Y Tested. Service B handles it gracefully.
+- "What if the database goes down?" Y Tested. Errors are handled properly.
+- "What if there is a network partition between regions?" Y Tested. Traffic routes to the healthy region.
 
 You have not tested: "What if etcd goes down?"
 
@@ -5291,7 +5291,7 @@ At 2 AM on Sunday: etcd upgrade begins. For 45 seconds, etcd is completely unava
 
 In those 45 seconds:
 - Service A cannot elect a new leader (etcd provides leader election)
-- Service A's current leader holds a lease it cannot renew — it stops accepting writes at T=30s
+- Service A's current leader holds a lease it cannot renew -- it stops accepting writes at T=30s
 - Service B cannot look up Service A's address (etcd is also the service registry)
 - Service B returns errors to all clients because it cannot reach Service A
 - Service C cannot acquire the distributed lock it needs to process payments
@@ -5326,20 +5326,20 @@ Test the "coordination service down" scenario explicitly. Run a drill. Kill your
 
 ### The Story
 
-An engineer is debugging a production bug. Two requests are somehow interfering with each other in a way they cannot fully understand. The code is complex — 2,000 lines of business logic, multiple database calls, some caching, some external API calls.
+An engineer is debugging a production bug. Two requests are somehow interfering with each other in a way they cannot fully understand. The code is complex -- 2,000 lines of business logic, multiple database calls, some caching, some external API calls.
 
 Rather than spending a week fully understanding the race condition, the engineer wraps the entire operation in a "global service lock." One request at a time. Race condition gone. Ship it.
 
 The code review approves it. "We'll come back and fix it properly later." (Famous last words in software engineering.)
 
-6 months later: the service handles 20× the original load. The "global service lock" is now acquired 8,000 times per second. But because it serializes ALL requests — one at a time — the service can only handle as many requests per second as it can complete while holding the lock. Maximum throughput: about 200 requests per second (if each request takes 5ms). Actual demand: 8,000 requests per second. The service is backed up. Latency climbs to seconds. Users complain.
+6 months later: the service handles 20x the original load. The "global service lock" is now acquired 8,000 times per second. But because it serializes ALL requests -- one at a time -- the service can only handle as many requests per second as it can complete while holding the lock. Maximum throughput: about 200 requests per second (if each request takes 5ms). Actual demand: 8,000 requests per second. The service is backed up. Latency climbs to seconds. Users complain.
 
 The engineer who originally added the lock has left the company. Nobody fully understands the original race condition. Removing the lock causes the original bug to resurface. The lock has become permanent infrastructure. It is now a fundamental architectural bottleneck that limits the service to 1/40th of its needed capacity.
 
 ### The Fix
 
 Fix race conditions with the minimum necessary coordination:
-1. Understand the exact race condition — which lines of code, which data, which operations conflict
+1. Understand the exact race condition -- which lines of code, which data, which operations conflict
 2. Use the narrowest possible lock scope (lock just the conflicting row, not the whole service)
 3. Consider whether a database transaction handles it (usually it does)
 4. Document why the coordination exists, so future engineers understand it
@@ -5353,15 +5353,15 @@ The "come back and fix it later" lock almost never gets fixed later. Treat it as
 
 ### The Cutting in Line Story
 
-Imagine a bank with one teller window and 10 customers waiting. The teller calls "next!" — but instead of going to the person who has been waiting longest, the teller just yells it into a room and whoever runs fastest gets served next. The person who arrived first 45 minutes ago keeps getting outrun by people who just walked in.
+Imagine a bank with one teller window and 10 customers waiting. The teller calls "next!" -- but instead of going to the person who has been waiting longest, the teller just yells it into a room and whoever runs fastest gets served next. The person who arrived first 45 minutes ago keeps getting outrun by people who just walked in.
 
 This is lock starvation: some requesters never get the lock because there is no fairness guarantee in the lock implementation.
 
 The concrete scenario:
 
-10 servers all want to process items from a shared work queue. They all compete for the same "queue processor" lock. When the lock is released, all 10 servers simultaneously try to acquire it — they all send a request to Redis at the same moment. Redis processes them in arbitrary order (based on network timing). Server 10, which just tried for the first time, might happen to have its packet arrive a microsecond earlier than Server 1, which has been waiting for 30 seconds.
+10 servers all want to process items from a shared work queue. They all compete for the same "queue processor" lock. When the lock is released, all 10 servers simultaneously try to acquire it -- they all send a request to Redis at the same moment. Redis processes them in arbitrary order (based on network timing). Server 10, which just tried for the first time, might happen to have its packet arrive a microsecond earlier than Server 1, which has been waiting for 30 seconds.
 
-Result: Server 10 gets the lock. Server 1 waits again. Next release: Server 7 gets it. Server 1 waits again. This can continue indefinitely — in theory, Server 1 could wait forever (in practice, usually it eventually gets lucky, but "eventually" might be minutes in a high-contention system).
+Result: Server 10 gets the lock. Server 1 waits again. Next release: Server 7 gets it. Server 1 waits again. This can continue indefinitely -- in theory, Server 1 could wait forever (in practice, usually it eventually gets lucky, but "eventually" might be minutes in a high-contention system).
 
 ### The Fixes
 
@@ -5375,48 +5375,48 @@ If 10 servers are all fighting for the same lock constantly, the real problem mi
 
 **Use lock-free algorithms:**
 
-For some problems (particularly queue processing), there are lock-free algorithms — ways to safely share work between many servers without any locking. Compare-and-swap (CAS) operations in databases and Redis allow "do this operation only if the current value is what I expect" without holding a lock. Many modern high-performance systems avoid locks entirely for their hot paths.
+For some problems (particularly queue processing), there are lock-free algorithms -- ways to safely share work between many servers without any locking. Compare-and-swap (CAS) operations in databases and Redis allow "do this operation only if the current value is what I expect" without holding a lock. Many modern high-performance systems avoid locks entirely for their hot paths.
 
 ---
 
-# Part 8: Graceful Degradation — When Coordination Fails
+# Part 8: Graceful Degradation -- When Coordination Fails
 
 Your system should degrade gracefully, not catastrophically. When the coordination service is unavailable, you should serve 80% of functionality, not 0%.
 
-This is not a nice-to-have. It is the difference between a 30-second monitoring blip and a full-scale customer-facing outage. The goal of graceful degradation is that your users see slightly slower, slightly less accurate, or slightly reduced service — not an error page.
+This is not a nice-to-have. It is the difference between a 30-second monitoring blip and a full-scale customer-facing outage. The goal of graceful degradation is that your users see slightly slower, slightly less accurate, or slightly reduced service -- not an error page.
 
-The analogy: a car with a flat tire should be able to limp to the next exit at low speed. It should not immediately catch fire and stop in the middle of the highway. Modern cars have run-flat tires for exactly this reason — they let you keep driving slowly on a flat. Your distributed system should have the equivalent of run-flat tires for coordination failures.
+The analogy: a car with a flat tire should be able to limp to the next exit at low speed. It should not immediately catch fire and stop in the middle of the highway. Modern cars have run-flat tires for exactly this reason -- they let you keep driving slowly on a flat. Your distributed system should have the equivalent of run-flat tires for coordination failures.
 
 ---
 
 ## The Degradation Ladder for Coordination
 
-Predefine your system's behavior at each level of coordination health. Do not decide during an incident — decide now, when you are calm.
+Predefine your system's behavior at each level of coordination health. Do not decide during an incident -- decide now, when you are calm.
 
 ```
 COORDINATION DEGRADATION LADDER
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
-TIER 0 — NORMAL OPERATION
+TIER 0 -- NORMAL OPERATION
   Coordination: Fully available and healthy.
   Features: All features work. Strong consistency on all coordinated operations.
   Writes: All writes go through full consensus.
   Reads: Fresh data (sub-second staleness).
   User experience: Normal. No degradation.
 
-────────────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------------
 
-TIER 1 — COORDINATION SLOW (latency increased, still available)
-  Coordination: Available but responding slowly (2-10× normal latency).
+TIER 1 -- COORDINATION SLOW (latency increased, still available)
+  Coordination: Available but responding slowly (2-10x normal latency).
   Features: All features still work, but with added latency.
   Writes: Succeed, but take longer than normal (waiting for slow consensus).
   Reads: Serve from cache. Accept up to 60-second staleness.
   User experience: Slightly slower. Some operations timeout and retry.
   Action: Page on-call. Investigate coordination layer performance.
 
-────────────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------------
 
-TIER 2 — COORDINATION UNAVAILABLE (completely unreachable)
+TIER 2 -- COORDINATION UNAVAILABLE (completely unreachable)
   Coordination: Not responding. Cannot reach quorum.
   Features: Core features work. Coordination-dependent features degrade.
   Writes: Writes that require coordination are queued or rejected with clear
@@ -5427,9 +5427,9 @@ TIER 2 — COORDINATION UNAVAILABLE (completely unreachable)
   User experience: Some actions unavailable. Most reads still work.
   Action: Page on-call immediately. Declare incident. Investigate etcd/ZK.
 
-────────────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------------
 
-TIER 3 — PARTIAL CLUSTER FAILURE (minority of coordination nodes down)
+TIER 3 -- PARTIAL CLUSTER FAILURE (minority of coordination nodes down)
   Coordination: Majority of nodes still healthy. Quorum achievable.
   Features: Nearly all features work (majority quorum is sufficient for Raft).
   Writes: Continue normally (majority available for consensus).
@@ -5437,9 +5437,9 @@ TIER 3 — PARTIAL CLUSTER FAILURE (minority of coordination nodes down)
   User experience: Largely normal. Brief blip during any election.
   Action: Investigate downed nodes. Repair or replace before more nodes fail.
 
-────────────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------------
 
-TIER 4 — MAJORITY UNAVAILABLE (catastrophic coordination failure)
+TIER 4 -- MAJORITY UNAVAILABLE (catastrophic coordination failure)
   Coordination: Fewer than majority of nodes reachable. No quorum.
   Features: Read-only mode from local replicas. No writes that require
             coordination. No new leader elections.
@@ -5449,7 +5449,7 @@ TIER 4 — MAJORITY UNAVAILABLE (catastrophic coordination failure)
   Action: All hands. Declare major incident. Focus on restoring quorum.
           Consider emergency failover to backup coordination cluster.
 
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 **The pre-decision matrix:**
@@ -5458,24 +5458,24 @@ For each major feature in your system, pre-decide what it does at each tier. Wri
 
 ```
 EXAMPLE RUNBOOK DECISION MATRIX (e-commerce platform)
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 FEATURE                  TIER 0     TIER 1     TIER 2     TIER 3     TIER 4
-─────────────────────────────────────────────────────────────────────────────
-Browse products          ✓ Full     ✓ Full     ✓ Cached   ✓ Full     ✓ Stale
-Product search           ✓ Full     ✓ Slow     ✓ Cached   ✓ Full     ✓ Cached
-View cart                ✓ Full     ✓ Full     ✓ Full     ✓ Full     ✓ Stale
-Add to cart              ✓ Full     ✓ Full     ✓ Full     ✓ Full     ✗ Error
-Place order              ✓ Full     ✓ Slow     ✗ Queue    ✓ Full     ✗ Error
-Payment processing       ✓ Full     ✓ Full     ✗ Queue    ✓ Full     ✗ Error
-Inventory check          ✓ Full     ✓ Cached   ✓ Cached   ✓ Full     ✓ Stale
-Flash sale pricing       ✓ Full     ✓ Full     ✗ Disable  ✓ Full     ✗ Disable
+-----------------------------------------------------------------------------
+Browse products          Y Full     Y Full     Y Cached   Y Full     Y Stale
+Product search           Y Full     Y Slow     Y Cached   Y Full     Y Cached
+View cart                Y Full     Y Full     Y Full     Y Full     Y Stale
+Add to cart              Y Full     Y Full     Y Full     Y Full     N Error
+Place order              Y Full     Y Slow     N Queue    Y Full     N Error
+Payment processing       Y Full     Y Full     N Queue    Y Full     N Error
+Inventory check          Y Full     Y Cached   Y Cached   Y Full     Y Stale
+Flash sale pricing       Y Full     Y Full     N Disable  Y Full     N Disable
 (requires exact lock)
-Order status lookup      ✓ Full     ✓ Full     ✓ Cached   ✓ Full     ✓ Stale
-─────────────────────────────────────────────────────────────────────────────
-✓ = works normally, ✓ Slow/Cached/Stale = works with degradation, ✗ = disabled
+Order status lookup      Y Full     Y Full     Y Cached   Y Full     Y Stale
+-----------------------------------------------------------------------------
+Y = works normally, Y Slow/Cached/Stale = works with degradation, N = disabled
 ```
 
-This matrix forces explicit decisions. You cannot decide "we'll figure it out during the incident" — by then, it is too late to think clearly. Make these decisions now.
+This matrix forces explicit decisions. You cannot decide "we'll figure it out during the incident" -- by then, it is too late to think clearly. Make these decisions now.
 
 ---
 
@@ -5497,11 +5497,11 @@ New elections were impossible. If any broker crashed while ZooKeeper was down, t
 
 Consumer group rebalancing was impossible. If a consumer application (the code reading from Kafka) added a new consumer or one consumer died, the group could not rebalance (redistribute which consumer reads from which partition). The surviving consumers kept reading their current partitions, but the dead consumer's partitions went unread. If a new consumer tried to join: it hung, waiting for ZooKeeper.
 
-**Net result:** Kafka could continue serving existing, stable workloads gracefully. It could not handle topology changes (broker failures, consumer group changes). This is a reasonable degradation — you lose fault tolerance for the duration of the ZooKeeper outage, but you do not lose service entirely.
+**Net result:** Kafka could continue serving existing, stable workloads gracefully. It could not handle topology changes (broker failures, consumer group changes). This is a reasonable degradation -- you lose fault tolerance for the duration of the ZooKeeper outage, but you do not lose service entirely.
 
 **The lesson that drove architectural change:**
 
-The Kafka engineering team and the broader community found this dependency unsatisfying. A messaging system that cannot survive its coordination service going down is fragile in exactly the wrong way. In 2021 and 2022, Kafka introduced KRaft (Kafka Raft) — Kafka's own implementation of the Raft consensus algorithm, built directly into Kafka itself. KRaft removes the ZooKeeper dependency entirely. The coordination is now handled by Kafka's own nodes using Raft.
+The Kafka engineering team and the broader community found this dependency unsatisfying. A messaging system that cannot survive its coordination service going down is fragile in exactly the wrong way. In 2021 and 2022, Kafka introduced KRaft (Kafka Raft) -- Kafka's own implementation of the Raft consensus algorithm, built directly into Kafka itself. KRaft removes the ZooKeeper dependency entirely. The coordination is now handled by Kafka's own nodes using Raft.
 
 ZooKeeper outages no longer affect Kafka. The lesson: if coordination is truly critical to your system's operation, owning that coordination (rather than depending on an external service) is sometimes the right architectural choice.
 
@@ -5519,7 +5519,7 @@ How many leader elections per hour?
 
 Normal: 0 to 1 per hour (an election might happen during planned maintenance, rolling restarts, or very occasionally due to legitimate network hiccups).
 
-Alert at: more than 3 elections per hour. This indicates instability — the leader keeps being falsely declared dead. Investigate timeout configuration and network stability.
+Alert at: more than 3 elections per hour. This indicates instability -- the leader keeps being falsely declared dead. Investigate timeout configuration and network stability.
 
 Emergency at: continuous elections (election storm). No stable leader is being established. The cluster may be unable to commit anything. Immediate investigation.
 
@@ -5531,7 +5531,7 @@ Normal: under 5 seconds. Raft elections are designed to be fast.
 
 Alert at: more than 30 seconds. A long election means the cluster was unavailable for that duration. Clients experienced errors or timeouts.
 
-Emergency at: more than 2 minutes. Something is seriously wrong — possibly a misconfiguration or a network issue preventing quorum.
+Emergency at: more than 2 minutes. Something is seriously wrong -- possibly a misconfiguration or a network issue preventing quorum.
 
 **Metric 3: Heartbeat Miss Rate**
 
@@ -5545,7 +5545,7 @@ Emergency at: more than 1%. Frequent misses will cause constant election storms.
 
 **Metric 4: Lock Acquisition Latency (P99)**
 
-P99 means "the 99th percentile" — the time that 99% of lock acquisitions are faster than. This tells you about the worst-case experience.
+P99 means "the 99th percentile" -- the time that 99% of lock acquisitions are faster than. This tells you about the worst-case experience.
 
 Normal: under 10 milliseconds. A lock acquisition should be fast.
 
@@ -5569,7 +5569,7 @@ How long does etcd or ZooKeeper take to respond to requests?
 
 Normal: under 5 milliseconds for reads, under 20 milliseconds for writes (writes require disk sync).
 
-Alert at: more than 20ms reads, more than 100ms writes. The coordination service is struggling — check disk I/O, CPU, and network.
+Alert at: more than 20ms reads, more than 100ms writes. The coordination service is struggling -- check disk I/O, CPU, and network.
 
 Emergency at: more than 200ms consistently. The coordination service is severely degraded. Escalate immediately.
 
@@ -5585,7 +5585,7 @@ This is the most important alert in your coordination monitoring. When it fires,
 
 **Metric 8: Fencing Token Sequence Gaps**
 
-When a distributed lock is acquired, a fencing token (a monotonically increasing number) is issued. When the lock is released normally, a corresponding "used" record is created. If there are gaps in the sequence (token #1003 was issued, but there is no "used" record and token #1004 was already issued), it means a lock holder crashed without releasing the lock — the lock TTL handled recovery, but the token was "wasted."
+When a distributed lock is acquired, a fencing token (a monotonically increasing number) is issued. When the lock is released normally, a corresponding "used" record is created. If there are gaps in the sequence (token #1003 was issued, but there is no "used" record and token #1004 was already issued), it means a lock holder crashed without releasing the lock -- the lock TTL handled recovery, but the token was "wasted."
 
 Normal: occasional single gaps (rare crashes).
 
@@ -5595,44 +5595,44 @@ Alert at: many gaps in a short time. Frequent crashes of lock holders. Investiga
 
 ```
 COORDINATION MONITORING DASHBOARD
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
-ROW 1 — CRITICAL STATUS (big numbers, visible from across the room)
-┌────────────────────────┬────────────────────────┬────────────────────────┐
-│   SPLIT BRAIN          │   ELECTIONS (last 1h)  │   LEADER               │
-│   DETECTED             │                        │   HEALTHY              │
-│                        │         1              │                        │
-│   ● NONE (GOOD)        │   ● NORMAL (< 3)       │   ● YES                │
-└────────────────────────┴────────────────────────┴────────────────────────┘
+ROW 1 -- CRITICAL STATUS (big numbers, visible from across the room)
++------------------------+------------------------+------------------------+
+|   SPLIT BRAIN          |   ELECTIONS (last 1h)  |   LEADER               |
+|   DETECTED             |                        |   HEALTHY              |
+|                        |         1              |                        |
+|   * NONE (GOOD)        |   * NORMAL (< 3)       |   * YES                |
++------------------------+------------------------+------------------------+
 
-ROW 2 — PERFORMANCE METRICS (time-series graphs, last 24 hours)
-┌──────────────────────────────┬──────────────────────────────────────────┐
-│  Lock Acquisition P99 (ms)   │  Coordination Service Latency (ms)       │
-│                              │                                          │
-│  50│                         │  20│                                     │
-│  40│          ╭──╮           │  15│    ╭─╮                             │
-│  30│     ╭────╯  ╰──╮        │  10│────╯ ╰────────────────────────    │
-│  20│─────╯           ╰───    │   5│                                     │
-│  10│                         │   0│                                     │
-│   0└────────────────────     │    └──────────────────────────────────   │
-│       0h      12h      24h   │        0h         12h         24h        │
-└──────────────────────────────┴──────────────────────────────────────────┘
+ROW 2 -- PERFORMANCE METRICS (time-series graphs, last 24 hours)
++------------------------------+------------------------------------------+
+|  Lock Acquisition P99 (ms)   |  Coordination Service Latency (ms)       |
+|                              |                                          |
+|  50|                         |  20|                                     |
+|  40|          +--+           |  15|    +-+                             |
+|  30|     +----+  +--+        |  10|----+ +------------------------    |
+|  20|-----+           +---    |   5|                                     |
+|  10|                         |   0|                                     |
+|   0+--------------------     |    +----------------------------------   |
+|       0h      12h      24h   |        0h         12h         24h        |
++------------------------------+------------------------------------------+
 
-ROW 3 — CONTENTION AND HEALTH (last 1 hour, real-time)
-┌──────────────────────┬──────────────────────┬────────────────────────────┐
-│ Lock Contention Rate │ Heartbeat Miss Rate  │ Fencing Token Gaps         │
-│         0.3%         │        0.00%         │         0 (last hour)      │
-│    ● NORMAL (<1%)    │    ● NORMAL (<0.1%)  │    ● NORMAL                │
-└──────────────────────┴──────────────────────┴────────────────────────────┘
+ROW 3 -- CONTENTION AND HEALTH (last 1 hour, real-time)
++----------------------+----------------------+----------------------------+
+| Lock Contention Rate | Heartbeat Miss Rate  | Fencing Token Gaps         |
+|         0.3%         |        0.00%         |         0 (last hour)      |
+|    * NORMAL (<1%)    |    * NORMAL (<0.1%)  |    * NORMAL                |
++----------------------+----------------------+----------------------------+
 
-ROW 4 — ELECTION HISTORY (table, last 7 days)
-┌──────────────────────────────────────────────────────────────────────────┐
-│ TIME              TERM   DURATION   OLD LEADER   NEW LEADER   REASON     │
-│ 2026-06-06 02:00  47     2.3s       N1           N2           Maintenance│
-│ 2026-06-04 14:22  46     3.1s       N3           N1           GC pause   │
-│ 2026-06-01 09:15  45     1.8s       N2           N3           Restart    │
-└──────────────────────────────────────────────────────────────────────────┘
-─────────────────────────────────────────────────────────────────────────────
+ROW 4 -- ELECTION HISTORY (table, last 7 days)
++--------------------------------------------------------------------------+
+| TIME              TERM   DURATION   OLD LEADER   NEW LEADER   REASON     |
+| 2026-06-06 02:00  47     2.3s       N1           N2           Maintenance|
+| 2026-06-04 14:22  46     3.1s       N3           N1           GC pause   |
+| 2026-06-01 09:15  45     1.8s       N2           N3           Restart    |
++--------------------------------------------------------------------------+
+-----------------------------------------------------------------------------
 ```
 
 The layout prioritizes: biggest emergency signals at the top (split-brain is row 1 because it demands immediate action), then performance trends (row 2 for spotting gradual degradation), then contention indicators (row 3 for design problems), then historical context (row 4 for pattern recognition).
@@ -5643,7 +5643,7 @@ The layout prioritizes: biggest emergency signals at the top (split-brain is row
 
 If you are running etcd (the most common coordination service for Kubernetes and modern distributed systems), these are the practices that separate "etcd that quietly keeps your system running" from "etcd that causes a 3 AM incident every other week."
 
-### Cluster Sizing — The Golden Rule
+### Cluster Sizing -- The Golden Rule
 
 **Always run an odd number of etcd nodes: 3 or 5.** Never 2, never 4.
 
@@ -5651,31 +5651,31 @@ Why? Because Raft requires a majority vote, and even numbers make majority ambig
 
 ```
 CLUSTER SIZE COMPARISON
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 Nodes    Quorum Needed    Can Survive    Notes
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 1        1 of 1           0 failures     Not HA at all. Dev only.
-2        2 of 2           0 failures     NEVER USE — any single failure
+2        2 of 2           0 failures     NEVER USE -- any single failure
                                          breaks quorum. Worse than 1 node
                                          (at least 1 node can still read).
 3        2 of 3           1 failure      Standard. Minimum for production.
 4        3 of 4           1 failure      Same fault tolerance as 3 nodes,
                                          but with more cost and latency.
-                                         DO NOT USE — no benefit over 3.
+                                         DO NOT USE -- no benefit over 3.
 5        3 of 5           2 failures     Recommended for critical systems.
                                          Can survive 2 simultaneous failures.
 7        4 of 7           3 failures     Only for very high-availability
                                          requirements. Write latency increases.
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 ```
 
 The reasoning for avoiding 2 nodes: you spend money on 2 nodes but have WORSE fault tolerance than 1 node. With 1 node: it either works or it does not. With 2 nodes: if either fails, you lose quorum and the whole cluster stops (because 1 of 2 is not a majority). You doubled your infrastructure cost and doubled your failure surface for zero increase in availability. This is a trap that many engineers fall into. Avoid it.
 
-### Disk — The Most Underappreciated Concern
+### Disk -- The Most Underappreciated Concern
 
 etcd is extraordinarily sensitive to disk I/O latency. More than almost any other software you will run.
 
-Here is why: every write to etcd must be persisted to disk (via fsync — a command that forces the OS to flush data to the physical disk) before being acknowledged. This is what gives etcd its durability guarantee. If etcd crashes after acknowledging a write, the data must be on disk.
+Here is why: every write to etcd must be persisted to disk (via fsync -- a command that forces the OS to flush data to the physical disk) before being acknowledged. This is what gives etcd its durability guarantee. If etcd crashes after acknowledging a write, the data must be on disk.
 
 fsync on a spinning hard drive: 5-10 milliseconds per operation.
 fsync on an SSD: 0.1-0.5 milliseconds per operation.
@@ -5685,25 +5685,25 @@ etcd's default heartbeat interval is 100ms. If disk fsync takes 8ms (typical spi
 
 ```
 DISK I/O IMPACT ON ETCD HEARTBEATS
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
 Normal operation (fast disk):
-etcd heartbeat ─────────────┐ send ─────────────────── ◀─ ack (2ms)
-                             └─ fsync (0.2ms)
+etcd heartbeat -------------+ send ------------------- <- ack (2ms)
+                             +- fsync (0.2ms)
 
 OK. 2ms total. Well within 100ms heartbeat interval.
 
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
 During backup burst (slow disk):
-etcd heartbeat ─────────────┐ send ─────────────────── ◀─ ack (80ms)
-                             └─ fsync (70ms!!!)
-                                     ████████████ OTHER SERVICE BACKUP WRITING
-                                                  TO SAME DISK ████████████
+etcd heartbeat -------------+ send ------------------- <- ack (80ms)
+                             +- fsync (70ms!!!)
+                                     ############ OTHER SERVICE BACKUP WRITING
+                                                  TO SAME DISK ############
 
 80ms. Approaching the 100ms heartbeat timeout.
-A brief additional delay → missed heartbeat → election.
-─────────────────────────────────────────────────────────────────────────────
+A brief additional delay -> missed heartbeat -> election.
+-----------------------------------------------------------------------------
 ```
 
 **The hard rules for etcd disk:**
@@ -5713,7 +5713,7 @@ A brief additional delay → missed heartbeat → election.
 3. Never put etcd on the same disk as: your application data, your database files, your log aggregator output, your backup target.
 4. Monitor disk write latency with a dedicated metric. Alert if etcd's fsync time exceeds 20ms.
 
-### Memory — Keeping It Manageable
+### Memory -- Keeping It Manageable
 
 etcd's MVCC (Multi-Version Concurrency Control) storage model keeps historical versions of data in memory for reading. Over time, without compaction (a process that removes old versions), memory usage grows.
 
@@ -5725,15 +5725,15 @@ auto-compaction-mode: periodic
 auto-compaction-retention: "1h"  # Keep 1 hour of history, compact the rest
 ```
 
-Keep total etcd database size under 8GB. The etcd team has stated that above 8GB, performance characteristics change: snapshots take longer (etcd periodically creates point-in-time snapshots for recovery — a 1GB snapshot takes seconds; a 10GB snapshot takes minutes, during which performance is impaired), recovery from crashes takes longer, and latency increases.
+Keep total etcd database size under 8GB. The etcd team has stated that above 8GB, performance characteristics change: snapshots take longer (etcd periodically creates point-in-time snapshots for recovery -- a 1GB snapshot takes seconds; a 10GB snapshot takes minutes, during which performance is impaired), recovery from crashes takes longer, and latency increases.
 
 If you are approaching 8GB: you are storing too much in etcd. Audit what is there. Move application data to proper databases. Only coordination state should remain.
 
-### Network — Latency Matters More Than Bandwidth
+### Network -- Latency Matters More Than Bandwidth
 
 etcd nodes exchange heartbeats and log entries constantly. The latency of this communication directly affects:
 - Heartbeat reliability (high latency = missed heartbeats = unnecessary elections)
-- Write latency (each write must be acknowledged by majority — write latency = 2× the round-trip time between leader and majority)
+- Write latency (each write must be acknowledged by majority -- write latency = 2x the round-trip time between leader and majority)
 - Election duration (election messages must travel to majority and back)
 
 **Within one datacenter or availability zone:** network latency is 0.1-2ms. Excellent. etcd works perfectly. Default configuration is appropriate.
@@ -5744,7 +5744,7 @@ etcd nodes exchange heartbeats and log entries constantly. The latency of this c
 
 If you need cross-region coordination: use purpose-built systems like Google Cloud Spanner or CockroachDB that are specifically engineered for cross-region latency. Or use a hub-and-spoke model where each region has its own etcd cluster and they coordinate at a higher level.
 
-### Backups — Your Safety Net
+### Backups -- Your Safety Net
 
 etcd backups are called snapshots. A snapshot is a point-in-time copy of all the data in etcd.
 
@@ -5763,7 +5763,7 @@ ETCDCTL_API=3 etcdctl snapshot save \
 etcdctl snapshot status /backups/etcd-2026-06-07-143000.db
 ```
 
-**Store snapshots off-cluster:** if all 5 etcd nodes fail simultaneously (rare but possible — datacenter power failure, cloud region outage), you need to restore from a snapshot stored elsewhere. S3, GCS, Azure Blob — any durable object store.
+**Store snapshots off-cluster:** if all 5 etcd nodes fail simultaneously (rare but possible -- datacenter power failure, cloud region outage), you need to restore from a snapshot stored elsewhere. S3, GCS, Azure Blob -- any durable object store.
 
 **Restoration procedure (the disaster scenario):**
 
@@ -5771,7 +5771,7 @@ Scenario: all 5 etcd nodes have catastrophically failed. The etcd cluster does n
 
 Step 1: Provision 5 new etcd nodes (or repair the existing ones).
 
-Step 2: On EACH of the 5 nodes, restore from the SAME snapshot file. This is critical — all 5 nodes must start from the same point in time. If you restore different nodes from different snapshots, they will have different data and immediately disagree with each other.
+Step 2: On EACH of the 5 nodes, restore from the SAME snapshot file. This is critical -- all 5 nodes must start from the same point in time. If you restore different nodes from different snapshots, they will have different data and immediately disagree with each other.
 
 ```bash
 # Run this on EACH of the 5 etcd nodes
@@ -5823,7 +5823,7 @@ Even with Raft, there are time windows around elections where temporary inconsis
 
 Do you have metrics for election frequency, lock contention, heartbeat miss rate? If not, you will find out about problems when users complain, not before.
 
-These questions do not have universal answers. The right answer depends on your system's requirements, your traffic patterns, and your failure tolerance. But asking the questions consistently — making coordination an explicit design concern rather than an afterthought — is the difference between a system that fails gracefully and one that fails catastrophically.
+These questions do not have universal answers. The right answer depends on your system's requirements, your traffic patterns, and your failure tolerance. But asking the questions consistently -- making coordination an explicit design concern rather than an afterthought -- is the difference between a system that fails gracefully and one that fails catastrophically.
 
 ---
 
@@ -5850,9 +5850,9 @@ These questions do not have universal answers. The right answer depends on your 
 | KRaft | Kafka's own Raft implementation. Removed the ZooKeeper dependency from Kafka. |
 | etcd snapshot | A point-in-time backup of all etcd data. Must be taken regularly. |
 # Chapter 22: Leader Election, Coordination, and Distributed Locks
-## Part D — Interview Preparation, Exercises, and Reference
+## Part D -- Interview Preparation, Exercises, and Reference
 
-*(Note to reader: This is the final part of Chapter 22. Parts A, B, and C covered all the core concepts — what leader election is, how distributed locks work, what Raft does, how split-brain happens, and how real companies use these tools. This part is pure preparation material: how to perform well in an interview on these topics, 30 brainstorming questions to test your depth, 10 homework exercises to build the muscle memory, and a quick reference card to review the night before an interview. You do not need to memorize everything here. Use it like a workout routine — do it, review it, come back to it.)*
+*(Note to reader: This is the final part of Chapter 22. Parts A, B, and C covered all the core concepts -- what leader election is, how distributed locks work, what Raft does, how split-brain happens, and how real companies use these tools. This part is pure preparation material: how to perform well in an interview on these topics, 30 brainstorming questions to test your depth, 10 homework exercises to build the muscle memory, and a quick reference card to review the night before an interview. You do not need to memorize everything here. Use it like a workout routine -- do it, review it, come back to it.)*
 
 ---
 
@@ -5860,7 +5860,7 @@ These questions do not have universal answers. The right answer depends on your 
 
 This section is structured differently than Parts A-C. It is not meant to be read front to back in one sitting. Here is how to get the most out of it.
 
-**If you are two weeks away from interviews:** start with Part 9 (the interview calibration). Read the L5 vs L6 contrast table carefully — not to memorize the answers, but to notice the questioning pattern that L6 engineers apply. Then work through the brainstorming questions in Part 10, section by section, over the next two weeks. Aim for 3-4 questions per day. Do not just read the questions — answer them out loud or on paper. Talking through distributed systems problems is a different skill than thinking through them silently.
+**If you are two weeks away from interviews:** start with Part 9 (the interview calibration). Read the L5 vs L6 contrast table carefully -- not to memorize the answers, but to notice the questioning pattern that L6 engineers apply. Then work through the brainstorming questions in Part 10, section by section, over the next two weeks. Aim for 3-4 questions per day. Do not just read the questions -- answer them out loud or on paper. Talking through distributed systems problems is a different skill than thinking through them silently.
 
 **If you are two days away from interviews:** read Part 9, the key numbers table, and the Quick Reference Card. Do Exercise 8 (the interview simulation). Skim the contrast table. Do not try to cram all 30 questions.
 
@@ -5868,7 +5868,7 @@ This section is structured differently than Parts A-C. It is not meant to be rea
 
 **If you are not preparing for interviews:** use the brainstorming questions as thinking exercises the next time you are designing a distributed system. Question 13 about optimistic locking vs. distributed locks is worth working through before your next database design review. Question 24 about Patroni failover is worth reading before your next PostgreSQL HA deployment.
 
-The exercises are designed to be done over the course of a few weeks, not in one marathon session. Skip around based on what you are working on. Return to difficult questions after you have thought about them for a day or two — the second pass is usually more productive than the first.
+The exercises are designed to be done over the course of a few weeks, not in one marathon session. Skip around based on what you are working on. Return to difficult questions after you have thought about them for a day or two -- the second pass is usually more productive than the first.
 
 ---
 
@@ -5878,11 +5878,11 @@ The exercises are designed to be done over the course of a few weeks, not in one
 
 Let's talk about what really happens in a system design interview when the topic touches coordination.
 
-Most candidates think the interview will ask something like: "Explain what ZooKeeper does." Or: "How does leader election work?" Those are knowledge questions — vocabulary tests, really. Engineers preparing for L5 or L6 interviews sometimes spend hours memorizing the internals of Paxos or the ZAB protocol, expecting to recite them on demand.
+Most candidates think the interview will ask something like: "Explain what ZooKeeper does." Or: "How does leader election work?" Those are knowledge questions -- vocabulary tests, really. Engineers preparing for L5 or L6 interviews sometimes spend hours memorizing the internals of Paxos or the ZAB protocol, expecting to recite them on demand.
 
 But that is almost never what happens.
 
-Senior engineer interviews test whether you can make good design decisions in the face of ambiguity and trade-offs. The interviewer does not care if you can recite Raft's log replication steps in order. They care whether you would actually use Raft — or something simpler — for the specific problem in front of you. They care whether you know when coordination is the right answer and when it is overengineering.
+Senior engineer interviews test whether you can make good design decisions in the face of ambiguity and trade-offs. The interviewer does not care if you can recite Raft's log replication steps in order. They care whether you would actually use Raft -- or something simpler -- for the specific problem in front of you. They care whether you know when coordination is the right answer and when it is overengineering.
 
 Here are the five most common disguises that coordination problems wear in interviews:
 
@@ -5890,7 +5890,7 @@ Here are the five most common disguises that coordination problems wear in inter
 
 **Disguise 1: "Design a distributed job scheduler."**
 
-This sounds like a scheduling problem — queues, workers, priority. But the hidden coordination problem is: who decides which server runs which job? If you don't think about this, you'll design a system where two servers simultaneously decide that "send the billing email to customer 1234 at 9am" is due. They both run it. The customer gets two emails and a support ticket.
+This sounds like a scheduling problem -- queues, workers, priority. But the hidden coordination problem is: who decides which server runs which job? If you don't think about this, you'll design a system where two servers simultaneously decide that "send the billing email to customer 1234 at 9am" is due. They both run it. The customer gets two emails and a support ticket.
 
 The interviewer is watching: do you notice the coordination need, or do you design the happy path and miss the double-execution problem entirely?
 
@@ -5904,13 +5904,13 @@ This sounds like a simple question with a simple answer: add a lock. But the int
 
 **Disguise 3: "How does your system handle leader failure?"**
 
-Most candidates describe the election process — the heartbeats, the timeout, the new leader being elected. That's fine. But the interviewer's real question is hidden in the second half: "What happens to requests during the election window?" The 10-30 seconds between the old leader dying and the new leader being ready is the dangerous window. What do in-flight writes do? What do reads do? What does the client see? An L6 answer describes this window in detail and has a specific plan for it.
+Most candidates describe the election process -- the heartbeats, the timeout, the new leader being elected. That's fine. But the interviewer's real question is hidden in the second half: "What happens to requests during the election window?" The 10-30 seconds between the old leader dying and the new leader being ready is the dangerous window. What do in-flight writes do? What do reads do? What does the client see? An L6 answer describes this window in detail and has a specific plan for it.
 
 ---
 
 **Disguise 4: "What happens if your coordination service goes down?"**
 
-This is the question that most reveals whether someone has actually operated production systems. Your coordination service — etcd, ZooKeeper, Redis — is not a magic box that never fails. It has disk drives that fill up. It has network cards that hiccup. It gets upgraded. It gets misconfigured. The engineer who has operated these systems has seen at least one of these events. They have a visceral answer. The engineer who has only read about them gives a vague theoretical answer that the interviewer can see through in about 10 seconds.
+This is the question that most reveals whether someone has actually operated production systems. Your coordination service -- etcd, ZooKeeper, Redis -- is not a magic box that never fails. It has disk drives that fill up. It has network cards that hiccup. It gets upgraded. It gets misconfigured. The engineer who has operated these systems has seen at least one of these events. They have a visceral answer. The engineer who has only read about them gives a vague theoretical answer that the interviewer can see through in about 10 seconds.
 
 ---
 
@@ -5926,32 +5926,32 @@ The sophisticated answer recognizes that "exactly 1,000 requests per minute" is 
 
 Across all five disguises, the evaluator is looking for the same signal: do you default to coordination as your first tool, or do you first ask whether coordination can be avoided?
 
-This is not a trick. It is a genuine signal about how you think. Engineers who reach for distributed locks and ZooKeeper immediately are solving the problem in front of them. Engineers who first ask "do we actually need this coordination?" are solving the right problem. At L6, you are expected to know that coordination tools are powerful but expensive — and to treat them as a last resort rather than a first instinct.
+This is not a trick. It is a genuine signal about how you think. Engineers who reach for distributed locks and ZooKeeper immediately are solving the problem in front of them. Engineers who first ask "do we actually need this coordination?" are solving the right problem. At L6, you are expected to know that coordination tools are powerful but expensive -- and to treat them as a last resort rather than a first instinct.
 
 ---
 
 ## L5 vs L6 Contrast Table
 
-Read this table carefully. Each row is a real scenario you might encounter in an interview or in production. The L5 answer is not wrong — it would work, probably. The L6 answer is better because it asks harder questions before committing to a solution.
+Read this table carefully. Each row is a real scenario you might encounter in an interview or in production. The L5 answer is not wrong -- it would work, probably. The L6 answer is better because it asks harder questions before committing to a solution.
 
 The goal is not to memorize L6 answers. It is to internalize the L6 way of asking questions.
 
 | Scenario | L5 Approach | L6 Approach |
 |---|---|---|
-| **Prevent duplicate job execution** | "Use a distributed lock on the job ID." | "First: make the job idempotent — design it so running it twice gives the same result. Then: use a database unique constraint on `(job_id, execution_date)`. The database enforces uniqueness without any external coordination service. Only add a distributed lock if idempotency isn't achievable and you need to prevent the duplicate attempt from even starting — not just from succeeding twice." |
-| **Elect a new leader after failure** | "Use ZooKeeper for leader election." | "What's the acceptable failover window? What happens to in-flight requests during election? What's the degraded behavior — can the system serve reads but not writes? Only then: yes, ZooKeeper or etcd with a 30-second lease and STONITH fencing to prevent the old leader from continuing to write after it's been replaced." |
-| **Global rate limiting at 10,000 requests per second** | "Use Redis with INCR for all requests. Every request hits Redis, Redis atomically increments the counter, we check the result." | "At 10,000 RPS, a Redis INCR per request means 10,000 Redis calls per second. Redis can handle it technically — but it is now the critical path for every single API request. A 1ms Redis hiccup becomes a 1ms latency spike for every user. Consider a hybrid: per-node token buckets that handle individual requests with no network hop, plus periodic Redis synchronization every 1-5 seconds for global accounting. Approximate counts but 10× more resilient." |
+| **Prevent duplicate job execution** | "Use a distributed lock on the job ID." | "First: make the job idempotent -- design it so running it twice gives the same result. Then: use a database unique constraint on `(job_id, execution_date)`. The database enforces uniqueness without any external coordination service. Only add a distributed lock if idempotency isn't achievable and you need to prevent the duplicate attempt from even starting -- not just from succeeding twice." |
+| **Elect a new leader after failure** | "Use ZooKeeper for leader election." | "What's the acceptable failover window? What happens to in-flight requests during election? What's the degraded behavior -- can the system serve reads but not writes? Only then: yes, ZooKeeper or etcd with a 30-second lease and STONITH fencing to prevent the old leader from continuing to write after it's been replaced." |
+| **Global rate limiting at 10,000 requests per second** | "Use Redis with INCR for all requests. Every request hits Redis, Redis atomically increments the counter, we check the result." | "At 10,000 RPS, a Redis INCR per request means 10,000 Redis calls per second. Redis can handle it technically -- but it is now the critical path for every single API request. A 1ms Redis hiccup becomes a 1ms latency spike for every user. Consider a hybrid: per-node token buckets that handle individual requests with no network hop, plus periodic Redis synchronization every 1-5 seconds for global accounting. Approximate counts but 10x more resilient." |
 | **Split-brain during network partition** | "Detect it and alert the on-call team." | "Detect, fence immediately, verify data divergence, reconcile. Split-brain has a data corruption window that starts the moment the partition occurs and ends the moment fencing kicks in. The question is not just 'did split-brain happen' but 'how much data diverged before detection, and is any of it irreconcilable?' What's the maximum acceptable data loss? That drives the fencing design." |
-| **etcd is slow** | "Investigate etcd — check CPU, memory, disk I/O, network." | "Who is using etcd and for what? Application data creeping into etcd alongside coordination metadata is the most common cause. Check the etcd database size against the 8GB recommended limit. The symptom is 'etcd is slow.' The root cause is almost always misuse. Fix the abuse, then re-evaluate whether etcd itself needs tuning." |
-| **Distributed lock timeout tuned to 5 seconds** | "Increase the timeout to 10 seconds to give more buffer." | "What does the protected operation actually take? If the 99th percentile is 500ms, a 5-second TTL is a 10× buffer — already generous. A longer TTL means a crashed server holds a stale lock for longer before it expires. The right TTL is 3-5× the 99th percentile operation duration for THIS operation. What is that number?" |
-| **Need strong consistency for config reads** | "Always read from the leader. Only the leader has the guaranteed latest data." | "How often does config change? If config updates happen once per day and each service reads config every 30-60 seconds, even a follower with 30-second max staleness is fine. Forcing all config reads through the leader wastes leader capacity for a staleness tolerance that the data doesn't actually require. Cache aggressively with a local 60-second TTL — this is a coordination-avoidance opportunity, not a strong-consistency requirement." |
-| **ZooKeeper upgrade, brief downtime needed** | "Schedule a maintenance window, notify users, take ZooKeeper down for the upgrade." | "What breaks if ZooKeeper is down for 5 minutes? Walk through every dependency: leader election pauses but the existing leader stays (no new elections, but current leader serves); lock acquisitions fail (clients should retry with exponential backoff, not fail hard); Kafka partition leadership freezes (existing leaders keep working). Are any of these catastrophic or just inconvenient? Design a degraded mode for each, then the maintenance window isn't a crisis — it's a planned graceful degradation." |
+| **etcd is slow** | "Investigate etcd -- check CPU, memory, disk I/O, network." | "Who is using etcd and for what? Application data creeping into etcd alongside coordination metadata is the most common cause. Check the etcd database size against the 8GB recommended limit. The symptom is 'etcd is slow.' The root cause is almost always misuse. Fix the abuse, then re-evaluate whether etcd itself needs tuning." |
+| **Distributed lock timeout tuned to 5 seconds** | "Increase the timeout to 10 seconds to give more buffer." | "What does the protected operation actually take? If the 99th percentile is 500ms, a 5-second TTL is a 10x buffer -- already generous. A longer TTL means a crashed server holds a stale lock for longer before it expires. The right TTL is 3-5x the 99th percentile operation duration for THIS operation. What is that number?" |
+| **Need strong consistency for config reads** | "Always read from the leader. Only the leader has the guaranteed latest data." | "How often does config change? If config updates happen once per day and each service reads config every 30-60 seconds, even a follower with 30-second max staleness is fine. Forcing all config reads through the leader wastes leader capacity for a staleness tolerance that the data doesn't actually require. Cache aggressively with a local 60-second TTL -- this is a coordination-avoidance opportunity, not a strong-consistency requirement." |
+| **ZooKeeper upgrade, brief downtime needed** | "Schedule a maintenance window, notify users, take ZooKeeper down for the upgrade." | "What breaks if ZooKeeper is down for 5 minutes? Walk through every dependency: leader election pauses but the existing leader stays (no new elections, but current leader serves); lock acquisitions fail (clients should retry with exponential backoff, not fail hard); Kafka partition leadership freezes (existing leaders keep working). Are any of these catastrophic or just inconvenient? Design a degraded mode for each, then the maintenance window isn't a crisis -- it's a planned graceful degradation." |
 
 ---
 
 **The L6 pattern in plain English:**
 
-Before adding any coordination to a design, L6 engineers ask three questions in order. Not just in interviews — in their actual daily work.
+Before adding any coordination to a design, L6 engineers ask three questions in order. Not just in interviews -- in their actual daily work.
 
 **Question 1: Can we avoid coordination entirely?**
 
@@ -5959,13 +5959,13 @@ Partitioning eliminates coordination for data that can be split by ownership (ea
 
 **Question 2: What is the minimum coordination needed?**
 
-If coordination is unavoidable, use the simplest form that works. A database transaction (with a row-level lock) is lighter than a distributed lock — it requires no external service. A distributed lock is lighter than leader election — it doesn't require all nodes to participate in a consensus round. Leader election is lighter than full Raft consensus — it's just claiming a key, not replicating a log. Use the minimum.
+If coordination is unavoidable, use the simplest form that works. A database transaction (with a row-level lock) is lighter than a distributed lock -- it requires no external service. A distributed lock is lighter than leader election -- it doesn't require all nodes to participate in a consensus round. Leader election is lighter than full Raft consensus -- it's just claiming a key, not replicating a log. Use the minimum.
 
 **Question 3: What is the degraded behavior when coordination fails?**
 
 Every coordination service can go down. "The system becomes unavailable" is technically an answer but it is a bad design. "The system serves reads but blocks writes for up to 30 seconds, then stops accepting writes to prevent split-brain" is a real design decision. "The system falls back to per-node rate limiting, which may allow up to 5% excess traffic during Redis outages" is an excellent design decision.
 
-These three questions shape every answer an L6 engineer gives on coordination topics. They are not a script to memorize — they are a thinking pattern to internalize.
+These three questions shape every answer an L6 engineer gives on coordination topics. They are not a script to memorize -- they are a thinking pattern to internalize.
 
 ---
 
@@ -5979,7 +5979,7 @@ Understanding how interviewers evaluate coordination answers changes how you app
 
 Can you identify when a coordination problem exists, and can you articulate what specifically the problem is? This sounds obvious, but a large percentage of candidates miss embedded coordination problems entirely and design systems with silent double-execution or split-brain vulnerabilities that they never address.
 
-A candidate who identifies the problem gets credit even if their solution is not optimal. A candidate who misses the problem gets no credit even if they happen to describe a solution that accidentally addresses it — because a solution without understanding the problem is not repeatable.
+A candidate who identifies the problem gets credit even if their solution is not optimal. A candidate who misses the problem gets no credit even if they happen to describe a solution that accidentally addresses it -- because a solution without understanding the problem is not repeatable.
 
 **Signal to give:** explicitly say "the coordination problem here is [X]" before describing your solution. Make the problem visible before you solve it.
 
@@ -5989,7 +5989,7 @@ A candidate who identifies the problem gets credit even if their solution is not
 
 Given that you have identified the problem, does your solution match the severity of the problem? Or does it overshoot (using full Raft consensus to protect a 500ms operation that could use a database row lock) or undershoot (using eventually consistent storage for financial ledger entries that require strong consistency)?
 
-Solution calibration is where most of the differentiation between L5 and L6 happens. L5 engineers know the tools. L6 engineers know how to match the tool to the requirement — and can explain why the match is right.
+Solution calibration is where most of the differentiation between L5 and L6 happens. L5 engineers know the tools. L6 engineers know how to match the tool to the requirement -- and can explain why the match is right.
 
 **Signal to give:** explain why you chose this level of coordination and not a simpler or stronger one. "I'm using a database row lock rather than a distributed lock because the critical section only involves one database, the database is already in the write path, and the row lock has no external service dependency. I would upgrade to a distributed lock if the critical section spanned multiple databases or multiple services."
 
@@ -5999,7 +5999,7 @@ Solution calibration is where most of the differentiation between L5 and L6 happ
 
 Can you describe what happens when your chosen mechanism fails? Not "if Redis goes down, we have a problem" but "if Redis goes down, the lock acquisition call returns an error, the client retries with exponential backoff for up to 3 seconds, and if it still cannot acquire after 3 seconds, it fails the request with a 503 response to the API caller. The operation does not proceed without the lock."
 
-Failure reasoning is the dimension that most often separates candidates with interview experience from candidates with production experience. Production experience teaches you that everything fails — and that "we have monitoring" is not a sufficient plan.
+Failure reasoning is the dimension that most often separates candidates with interview experience from candidates with production experience. Production experience teaches you that everything fails -- and that "we have monitoring" is not a sufficient plan.
 
 **Signal to give:** for every coordination component in your design, proactively say "and when this fails..." before the interviewer asks. Do not wait for the "what happens if [X] goes down?" question. Raise it yourself.
 
@@ -6007,10 +6007,10 @@ Failure reasoning is the dimension that most often separates candidates with int
 
 **The scoring summary:**
 
-- Named the coordination problem explicitly → Dimension 1 ✓
-- Chose the minimum necessary mechanism and explained why → Dimension 2 ✓
-- Described the failure behavior of the mechanism proactively → Dimension 3 ✓
-- Named what was out of scope and why → Bonus signal: shows judgment about problem boundaries
+- Named the coordination problem explicitly -> Dimension 1 Y
+- Chose the minimum necessary mechanism and explained why -> Dimension 2 Y
+- Described the failure behavior of the mechanism proactively -> Dimension 3 Y
+- Named what was out of scope and why -> Bonus signal: shows judgment about problem boundaries
 
 An answer that hits all three dimensions plus the bonus signal is a strong L6 answer regardless of which specific tools were chosen.
 
@@ -6026,27 +6026,27 @@ When you practice answering system design questions, this is the structure to ai
 
 "Before I design anything, let me understand the requirements. A few clarifying questions.
 
-First: how many jobs? A few hundred recurring cron jobs — like 'generate the daily report at 2am' — or millions of one-time tasks — like 'send a push notification to this user in 24 hours'? These two shapes require very different architectures.
+First: how many jobs? A few hundred recurring cron jobs -- like 'generate the daily report at 2am' -- or millions of one-time tasks -- like 'send a push notification to this user in 24 hours'? These two shapes require very different architectures.
 
 Second: how long do jobs run? Seconds? Minutes? Could any job run for hours? The answer affects how I design the lock TTL and the retry policy.
 
-Third: what's the consequence of running a job twice? If this is regenerating a cached analytics report — double execution is wasteful but harmless. If this is sending a billing email — double execution means the customer gets two invoices and calls support. If this is charging a credit card — double execution means the customer is double-charged and you have a legal problem. The stakes determine how hard I work on preventing duplicates.
+Third: what's the consequence of running a job twice? If this is regenerating a cached analytics report -- double execution is wasteful but harmless. If this is sending a billing email -- double execution means the customer gets two invoices and calls support. If this is charging a credit card -- double execution means the customer is double-charged and you have a legal problem. The stakes determine how hard I work on preventing duplicates.
 
 Fourth: what's the acceptable downtime if the scheduler itself fails? Can jobs be delayed by up to 30 seconds? One minute? Five minutes? This sets the failover window target.
 
 [Interviewer responds: hundreds of cron jobs, jobs run 1 second to several minutes, double execution is harmful because these are billing notifications, sub-minute failover is acceptable.]
 
-Okay, that clarifies a lot. With a few hundred jobs and harmful double-execution, I want a leader-based architecture — one elected server is responsible for scheduling decisions. Let me walk through four components.
+Okay, that clarifies a lot. With a few hundred jobs and harmful double-execution, I want a leader-based architecture -- one elected server is responsible for scheduling decisions. Let me walk through four components.
 
 ---
 
 **Component 1: Leader Election**
 
-I'll run three instances of the scheduler service. Only the elected leader runs the scheduling loop — the other two are warm standbys. I'll use etcd for the election: the leader holds a lease key with a 30-second TTL and renews it every 15 seconds. The standbys watch the key; if it expires, they race to claim it.
+I'll run three instances of the scheduler service. Only the elected leader runs the scheduling loop -- the other two are warm standbys. I'll use etcd for the election: the leader holds a lease key with a 30-second TTL and renews it every 15 seconds. The standbys watch the key; if it expires, they race to claim it.
 
-Why 30 seconds? That's the failover window — in the worst case, the leader crashes right after renewing, so the standbys wait the full 30 seconds before the lease expires. During those 30 seconds, no new jobs start. Jobs that are already running — they're in separate worker processes — continue without interruption. For billing notifications, a 30-second delay is acceptable.
+Why 30 seconds? That's the failover window -- in the worst case, the leader crashes right after renewing, so the standbys wait the full 30 seconds before the lease expires. During those 30 seconds, no new jobs start. Jobs that are already running -- they're in separate worker processes -- continue without interruption. For billing notifications, a 30-second delay is acceptable.
 
-Why three instances, not two? With two instances, if one crashes, the remaining instance can still claim the lease — one is a majority of one. But if you have two instances and the network partitions between them, each one can claim the lease independently. Three instances prevent that: with a network partition of 1 and 2, the side with 2 can still reach etcd for quorum (assuming etcd is 3-node). The side with 1 cannot. You avoid split-brain.
+Why three instances, not two? With two instances, if one crashes, the remaining instance can still claim the lease -- one is a majority of one. But if you have two instances and the network partitions between them, each one can claim the lease independently. Three instances prevent that: with a network partition of 1 and 2, the side with 2 can still reach etcd for quorum (assuming etcd is 3-node). The side with 1 cannot. You avoid split-brain.
 
 ---
 
@@ -6054,14 +6054,14 @@ Why three instances, not two? With two instances, if one crashes, the remaining 
 
 I store jobs in PostgreSQL. The table has these columns:
 
-- `job_id` — unique identifier
-- `schedule` — cron expression like "0 9 * * *" (9am daily)
-- `next_run` — the next scheduled execution time (pre-computed)
-- `status` — 'pending', 'running', 'completed', 'failed'
-- `locked_by` — which scheduler instance claimed this job
-- `lock_expires` — when the row-level lock expires (separate from the leader lease)
+- `job_id` -- unique identifier
+- `schedule` -- cron expression like "0 9 * * *" (9am daily)
+- `next_run` -- the next scheduled execution time (pre-computed)
+- `status` -- 'pending', 'running', 'completed', 'failed'
+- `locked_by` -- which scheduler instance claimed this job
+- `lock_expires` -- when the row-level lock expires (separate from the leader lease)
 
-The leader runs a polling loop every 10 seconds. It queries: `SELECT * FROM jobs WHERE next_run <= NOW() AND status = 'pending'`. For each matching job, it uses `SELECT FOR UPDATE SKIP LOCKED` — a PostgreSQL feature that atomically grabs rows that aren't already locked by another connection. This prevents two schedulers from both grabbing the same job during a brief window where two leaders overlap (possible during failover).
+The leader runs a polling loop every 10 seconds. It queries: `SELECT * FROM jobs WHERE next_run <= NOW() AND status = 'pending'`. For each matching job, it uses `SELECT FOR UPDATE SKIP LOCKED` -- a PostgreSQL feature that atomically grabs rows that aren't already locked by another connection. This prevents two schedulers from both grabbing the same job during a brief window where two leaders overlap (possible during failover).
 
 After claiming a job, the leader updates it: `locked_by = my_id`, `lock_expires = NOW() + 2 minutes`, `status = 'running'`. Then it dispatches to a worker.
 
@@ -6069,11 +6069,11 @@ After claiming a job, the leader updates it: `locked_by = my_id`, `lock_expires 
 
 **Component 3: Idempotency Guard**
 
-Even with leader election and row-level locks, rare edge cases can result in a job being dispatched twice — during failover, if the old leader dispatched a job right before dying and the new leader re-discovers it in the database. To protect against this, every worker checks before executing: does a record already exist in the `job_executions` table for `(job_id, scheduled_run_time)` with status `completed`? If yes, skip this execution — it already happened successfully.
+Even with leader election and row-level locks, rare edge cases can result in a job being dispatched twice -- during failover, if the old leader dispatched a job right before dying and the new leader re-discovers it in the database. To protect against this, every worker checks before executing: does a record already exist in the `job_executions` table for `(job_id, scheduled_run_time)` with status `completed`? If yes, skip this execution -- it already happened successfully.
 
 The `job_executions` table has a unique constraint on `(job_id, scheduled_run_time)`. If two workers somehow try to mark the same execution as complete simultaneously, the unique constraint ensures only one INSERT succeeds. The second gets a constraint violation, recognizes it's a duplicate, and stops.
 
-This layered approach — leader election plus row-level lock plus idempotency guard — means we have three independent defenses against double execution. All three would have to fail simultaneously for a billing email to be sent twice.
+This layered approach -- leader election plus row-level lock plus idempotency guard -- means we have three independent defenses against double execution. All three would have to fail simultaneously for a billing email to be sent twice.
 
 ---
 
@@ -6081,7 +6081,7 @@ This layered approach — leader election plus row-level lock plus idempotency g
 
 If etcd becomes unreachable, the leader is in an ambiguous state: is it still the leader, or has a new leader been elected and it just can't see the election because the network is broken? This is the core of the split-brain problem.
 
-The safe answer for this system: if the leader cannot renew its etcd lease, it should continue running until the lease TTL expires (it might genuinely still be the leader — etcd might be temporarily unreachable but the leader is healthy), then stop the scheduling loop. It does not start a new election. It does not guess. It stops and waits for etcd to recover or for a human to intervene.
+The safe answer for this system: if the leader cannot renew its etcd lease, it should continue running until the lease TTL expires (it might genuinely still be the leader -- etcd might be temporarily unreachable but the leader is healthy), then stop the scheduling loop. It does not start a new election. It does not guess. It stops and waits for etcd to recover or for a human to intervene.
 
 What happens to jobs during this period? No new jobs start. Running jobs continue. When etcd recovers, whichever instance claims the lease first becomes the new leader and resumes scheduling. Jobs that were due during the outage will be scheduled slightly late, which is acceptable for this use case.
 
@@ -6091,7 +6091,7 @@ What happens to jobs during this period? No new jobs start. Running jobs continu
 
 I want to call out two things I explicitly scoped out:
 
-First, millisecond-level job start precision. This design has a 10-second polling interval and a 30-second failover window. If a job is scheduled for 9:00:00.000am, it might start at 9:00:07am on a normal day or at 9:00:35am after a failover. For billing notifications, that's fine. For high-frequency financial operations, it's not. If we need sub-second precision, we need a different architecture — probably a priority queue with push-based job delivery rather than a polling loop.
+First, millisecond-level job start precision. This design has a 10-second polling interval and a 30-second failover window. If a job is scheduled for 9:00:00.000am, it might start at 9:00:07am on a normal day or at 9:00:35am after a failover. For billing notifications, that's fine. For high-frequency financial operations, it's not. If we need sub-second precision, we need a different architecture -- probably a priority queue with push-based job delivery rather than a polling loop.
 
 Second, millions of jobs. This design uses a polling loop over a jobs table. At hundreds of jobs, the SELECT query is fast. At millions of jobs, it becomes a table scan. If the requirement grows to millions of one-time tasks, I'd partition the job table by scheduled time and use a dedicated job queue system (like SQS or Kafka) for delivery, with the scheduler only managing the coordination layer.
 
@@ -6102,11 +6102,11 @@ I flagged both of these because I want to confirm they're out of scope before I 
 That is a complete L6 answer. Notice what it did:
 
 - Spent two minutes asking four questions before drawing a single diagram.
-- Described each component in the order that builds on the previous one (election → table → idempotency → degraded mode).
+- Described each component in the order that builds on the previous one (election -> table -> idempotency -> degraded mode).
 - For every component, described what happens when it fails.
-- Ended by explicitly naming two things it was NOT solving — and offering to address them if they're in scope.
+- Ended by explicitly naming two things it was NOT solving -- and offering to address them if they're in scope.
 
-The last move — naming what you scoped out — is something interviewers specifically look for. It signals that you are aware of the limitations of your design and have made conscious trade-off decisions rather than accidentally missing things.
+The last move -- naming what you scoped out -- is something interviewers specifically look for. It signals that you are aware of the limitations of your design and have made conscious trade-off decisions rather than accidentally missing things.
 
 ---
 
@@ -6126,7 +6126,7 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *Why this matters:* Tool-dropping without justification signals pattern-matching rather than understanding. Interviewers can tell the difference between "I know the tool" and "I understand the problem." If you cannot explain why ZooKeeper fits this specific problem better than etcd or Redis or a database row lock, mentioning it does more damage than not mentioning it.
 
-*The better response:* Describe the coordination need first. Then choose the tool. "I need leader election with a strongly consistent view of cluster membership across 5 nodes. The consistency guarantee needs to hold even during network partitions — the system should rather be unavailable than incorrectly claim two leaders. etcd, which implements Raft, is a good fit: it provides strong consistency, has good tooling for Kubernetes environments where we're running, and my team has operational familiarity with it. ZooKeeper would also provide the guarantee — it uses ZAB, a similar consensus protocol — but the operational overhead of ZooKeeper is higher for a small cluster, and the client libraries are older." That is a reasoned choice. An interviewer respects that.
+*The better response:* Describe the coordination need first. Then choose the tool. "I need leader election with a strongly consistent view of cluster membership across 5 nodes. The consistency guarantee needs to hold even during network partitions -- the system should rather be unavailable than incorrectly claim two leaders. etcd, which implements Raft, is a good fit: it provides strong consistency, has good tooling for Kubernetes environments where we're running, and my team has operational familiarity with it. ZooKeeper would also provide the guarantee -- it uses ZAB, a similar consensus protocol -- but the operational overhead of ZooKeeper is higher for a small cluster, and the client libraries are older." That is a reasoned choice. An interviewer respects that.
 
 ---
 
@@ -6136,13 +6136,13 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *What the interviewer actually hears:* "This person's first instinct when they see a concurrency problem is to add coordination. They haven't considered whether the coordination is actually necessary."
 
-*Why this matters:* Distributed locks cost money — 8ms of latency per acquisition, a network dependency, a potential single point of failure. For high-frequency operations, this adds up fast. For operations that can be made idempotent, the lock is unnecessary overhead. An engineer who adds locks habitually is an engineer whose systems will have unnecessary bottlenecks and unnecessary dependencies.
+*Why this matters:* Distributed locks cost money -- 8ms of latency per acquisition, a network dependency, a potential single point of failure. For high-frequency operations, this adds up fast. For operations that can be made idempotent, the lock is unnecessary overhead. An engineer who adds locks habitually is an engineer whose systems will have unnecessary bottlenecks and unnecessary dependencies.
 
 *The better response:* Before reaching for a lock, ask: "What is the actual race condition, and what is the cheapest way to prevent it?" The checklist:
 
 1. Can a database transaction handle it? A `SELECT FOR UPDATE` row lock inside a database transaction is simpler than a distributed lock, requires no external service, and handles most critical section needs for database-backed operations.
 
-2. Can idempotency handle it? If you can design the operation so that running it twice produces the same outcome as running it once, there is no race condition — just redundant work. No lock needed.
+2. Can idempotency handle it? If you can design the operation so that running it twice produces the same outcome as running it once, there is no race condition -- just redundant work. No lock needed.
 
 3. Can partitioning eliminate it? If you partition data so each server exclusively owns a shard, there is no cross-server race condition for writes within a shard. No lock needed for those operations.
 
@@ -6156,9 +6156,9 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *What the interviewer actually hears:* "This person has not operated a production system where Redis went down at 2am or etcd lost quorum during an upgrade."
 
-*Why this matters:* Coordination services fail. Not rarely — regularly. etcd gets upgraded and has a brief unavailability window. Redis restarts after being evicted from an OOM-killed container. ZooKeeper loses quorum because two of three nodes happen to be on the same physical rack that lost power. A design that has not explicitly thought about these scenarios is a design that will have a crisis the first time any of them happen.
+*Why this matters:* Coordination services fail. Not rarely -- regularly. etcd gets upgraded and has a brief unavailability window. Redis restarts after being evicted from an OOM-killed container. ZooKeeper loses quorum because two of three nodes happen to be on the same physical rack that lost power. A design that has not explicitly thought about these scenarios is a design that will have a crisis the first time any of them happen.
 
-*The better response:* For every coordination dependency in your design, proactively say: "And here is what happens when [etcd / Redis / ZooKeeper] is unavailable." Then give a specific degraded behavior. Not "the system becomes unavailable" — that's an observation, not a design. Something like: "If Redis is unavailable, the rate limiter falls back to per-node in-memory token buckets. Global rate limiting is suspended. Individual nodes continue enforcing their local rate limit of 50 requests per second per user. Users may be able to exceed the global 1,000 per minute limit during a Redis outage, but only by approximately the number of API servers times the per-node limit — in our case, 20 servers × 50 RPS = 1,000 RPS total, which is close enough for the duration of a brief outage." That's a real degraded mode. The interviewer knows you've thought about it.
+*The better response:* For every coordination dependency in your design, proactively say: "And here is what happens when [etcd / Redis / ZooKeeper] is unavailable." Then give a specific degraded behavior. Not "the system becomes unavailable" -- that's an observation, not a design. Something like: "If Redis is unavailable, the rate limiter falls back to per-node in-memory token buckets. Global rate limiting is suspended. Individual nodes continue enforcing their local rate limit of 50 requests per second per user. Users may be able to exceed the global 1,000 per minute limit during a Redis outage, but only by approximately the number of API servers times the per-node limit -- in our case, 20 servers x 50 RPS = 1,000 RPS total, which is close enough for the duration of a brief outage." That's a real degraded mode. The interviewer knows you've thought about it.
 
 ---
 
@@ -6168,9 +6168,9 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *What the interviewer actually hears:* "This person doesn't understand that multi-leader replication creates conflicts, and hasn't thought about what happens when both leaders accept writes to the same data simultaneously."
 
-*Why this matters:* Multi-leader sounds appealing and it genuinely is in specific situations (geo-distributed writes, offline-capable mobile apps). But it comes with a real cost: conflict resolution. When Leader A accepts "set x=1" and Leader B accepts "set x=2" at the same moment, what value does x have? Last-write-wins chooses based on timestamp — but clocks can skew by 100ms, so "last" is not well-defined. Application-level merge requires your application to understand what the right merge semantics are. Neither is free.
+*Why this matters:* Multi-leader sounds appealing and it genuinely is in specific situations (geo-distributed writes, offline-capable mobile apps). But it comes with a real cost: conflict resolution. When Leader A accepts "set x=1" and Leader B accepts "set x=2" at the same moment, what value does x have? Last-write-wins chooses based on timestamp -- but clocks can skew by 100ms, so "last" is not well-defined. Application-level merge requires your application to understand what the right merge semantics are. Neither is free.
 
-*The better response:* State the trade-off explicitly. "Multi-leader gives better write availability — both US-East and EU-West can accept writes independently without coordinating through a single leader. The cost is conflict resolution. When both leaders accept writes to the same record, the system needs a strategy: last-write-wins (simple but loses data), application-level merge (correct but complex), or conflict detection with user notification (safe but creates work for users). For [this use case], conflicts are [likely / unlikely] because [reason]. Given that, multi-leader is [appropriate / not appropriate]." The interviewer then knows you understand the trade-off and made a deliberate choice, not an accidental one.
+*The better response:* State the trade-off explicitly. "Multi-leader gives better write availability -- both US-East and EU-West can accept writes independently without coordinating through a single leader. The cost is conflict resolution. When both leaders accept writes to the same record, the system needs a strategy: last-write-wins (simple but loses data), application-level merge (correct but complex), or conflict detection with user notification (safe but creates work for users). For [this use case], conflicts are [likely / unlikely] because [reason]. Given that, multi-leader is [appropriate / not appropriate]." The interviewer then knows you understand the trade-off and made a deliberate choice, not an accidental one.
 
 ---
 
@@ -6178,11 +6178,11 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *The thinking:* The default TTL in the documentation is 30 seconds. That seems reasonable. I'll use 30 seconds.
 
-*What happens in production:* The job takes 5 seconds normally. But the 99th percentile is 25 seconds — because sometimes the downstream API is slow, or the server is under load, or there's a GC pause. The lock expires at second 30. Another server sees the expired lock and starts the same job. Now two servers are running simultaneously. The TTL was 6× the average duration and still failed.
+*What happens in production:* The job takes 5 seconds normally. But the 99th percentile is 25 seconds -- because sometimes the downstream API is slow, or the server is under load, or there's a GC pause. The lock expires at second 30. Another server sees the expired lock and starts the same job. Now two servers are running simultaneously. The TTL was 6x the average duration and still failed.
 
-*Why this matters:* TTL is not a safety margin — it is a declaration of how long the protected operation is expected to take. Setting it to an arbitrary round number without understanding the operation duration is exactly how you get subtle race conditions in production that show up once a week at 3am.
+*Why this matters:* TTL is not a safety margin -- it is a declaration of how long the protected operation is expected to take. Setting it to an arbitrary round number without understanding the operation duration is exactly how you get subtle race conditions in production that show up once a week at 3am.
 
-*The better response:* "The TTL should be 3 to 5 times the 99th percentile duration of the protected operation. For this operation: the average is 5 seconds, the 95th percentile is 15 seconds, the 99th percentile is 25 seconds. A TTL of 90 seconds — roughly 3.5× the 99th percentile — gives reasonable safety margin while ensuring that a crashed server releases the lock within 90 seconds. I should also monitor for lock expiry events. If I ever see a lock expire before it's released, the TTL is too short for the current operation profile and needs adjustment."
+*The better response:* "The TTL should be 3 to 5 times the 99th percentile duration of the protected operation. For this operation: the average is 5 seconds, the 95th percentile is 15 seconds, the 99th percentile is 25 seconds. A TTL of 90 seconds -- roughly 3.5x the 99th percentile -- gives reasonable safety margin while ensuring that a crashed server releases the lock within 90 seconds. I should also monitor for lock expiry events. If I ever see a lock expire before it's released, the TTL is too short for the current operation profile and needs adjustment."
 
 ---
 
@@ -6190,11 +6190,11 @@ Read each one carefully. Recognizing these patterns in your own thinking is how 
 
 *The thinking:* I have replicas. I have automatic failover. Therefore I have high availability.
 
-*What the interviewer is calculating quietly:* 99.99% uptime allows 52 minutes of downtime per year. A leader election with a 30-second TTL costs up to 30 seconds per event. One leader failure per month × 30 seconds = 360 seconds = 6 minutes per year. That is 11.5% of the 99.99% budget, from one planned failover per month. Two per month: 23% of the budget. Unplanned failures on top of that: you are probably already over 99.99% without realizing it.
+*What the interviewer is calculating quietly:* 99.99% uptime allows 52 minutes of downtime per year. A leader election with a 30-second TTL costs up to 30 seconds per event. One leader failure per month x 30 seconds = 360 seconds = 6 minutes per year. That is 11.5% of the 99.99% budget, from one planned failover per month. Two per month: 23% of the budget. Unplanned failures on top of that: you are probably already over 99.99% without realizing it.
 
 *Why this matters:* "High availability" is a number, not a feeling. The interviewer wants to see that you have thought about the math, not just the architecture.
 
-*The better response:* "With automated leader election using a 30-second TTL and 15-second heartbeat, each failover event costs up to 30 seconds of write unavailability. For 99.99% uptime — 52 minutes per year — that means I can afford roughly 104 failover events of 30 seconds each, or about 2 per week. For normal operational events (monthly deployments causing one election per month), that budget is comfortable. For 99.999% — only 5.26 minutes per year — I can afford about 10 events total. That requires either extremely stable infrastructure OR a reduced election window. Techniques for reducing the window below 10 seconds include pre-vote optimization in Raft (a pre-check round before starting a real election, to avoid unnecessary elections from brief network blips), smaller TTLs with tighter heartbeat intervals (risky on variable networks), and STONITH fencing (fencing the old leader immediately rather than waiting for lease expiry)."
+*The better response:* "With automated leader election using a 30-second TTL and 15-second heartbeat, each failover event costs up to 30 seconds of write unavailability. For 99.99% uptime -- 52 minutes per year -- that means I can afford roughly 104 failover events of 30 seconds each, or about 2 per week. For normal operational events (monthly deployments causing one election per month), that budget is comfortable. For 99.999% -- only 5.26 minutes per year -- I can afford about 10 events total. That requires either extremely stable infrastructure OR a reduced election window. Techniques for reducing the window below 10 seconds include pre-vote optimization in Raft (a pre-check round before starting a real election, to avoid unnecessary elections from brief network blips), smaller TTLs with tighter heartbeat intervals (risky on variable networks), and STONITH fencing (fencing the old leader immediately rather than waiting for lease expiry)."
 
 ---
 
@@ -6206,36 +6206,36 @@ You do not need to memorize all of these. But the ones in bold are worth knowing
 
 | Metric | Typical Value | How to Use It in an Interview |
 |---|---|---|
-| NTP clock skew between servers | **10–100 milliseconds** | "This is why wall-clock timestamps cannot be used for event ordering in distributed systems. Two servers' clocks can differ by up to 100ms, so 'which event happened first' based on timestamps is unreliable at that granularity." |
-| TrueTime uncertainty (Google Spanner) | ~7 milliseconds | "Google Spanner achieves external consistency by waiting out the TrueTime uncertainty interval between commits. It knows its uncertainty bound is ±7ms, so it waits at least 7ms before committing a new transaction to guarantee its timestamp is higher than the previous one." |
-| Raft heartbeat interval | **50–150 milliseconds** | "Lower heartbeat intervals detect failures faster but add more network traffic. 100ms is a common production default. If your network has high jitter, you may need a higher interval to avoid false-positive failure detection." |
-| Raft election timeout | **150–300 milliseconds** | "Randomized within this range to prevent all followers from timing out simultaneously and splitting the vote. If they all timed out at the same millisecond, no one would win — they'd all vote for themselves." |
-| Leader election total duration (lease-based) | **10–30 seconds** | "This is the failover window — the gap between the old leader dying and the new leader serving traffic. During this window, write requests fail or queue. This number drives the design of your degraded mode." |
-| Distributed lock TTL | **Should be 3–5× the 99th percentile operation duration** | "Not a round number picked from documentation. For a 500ms operation, 5 seconds is a reasonable TTL. For a 20-second operation, 60-90 seconds." |
+| NTP clock skew between servers | **10-100 milliseconds** | "This is why wall-clock timestamps cannot be used for event ordering in distributed systems. Two servers' clocks can differ by up to 100ms, so 'which event happened first' based on timestamps is unreliable at that granularity." |
+| TrueTime uncertainty (Google Spanner) | ~7 milliseconds | "Google Spanner achieves external consistency by waiting out the TrueTime uncertainty interval between commits. It knows its uncertainty bound is +/-7ms, so it waits at least 7ms before committing a new transaction to guarantee its timestamp is higher than the previous one." |
+| Raft heartbeat interval | **50-150 milliseconds** | "Lower heartbeat intervals detect failures faster but add more network traffic. 100ms is a common production default. If your network has high jitter, you may need a higher interval to avoid false-positive failure detection." |
+| Raft election timeout | **150-300 milliseconds** | "Randomized within this range to prevent all followers from timing out simultaneously and splitting the vote. If they all timed out at the same millisecond, no one would win -- they'd all vote for themselves." |
+| Leader election total duration (lease-based) | **10-30 seconds** | "This is the failover window -- the gap between the old leader dying and the new leader serving traffic. During this window, write requests fail or queue. This number drives the design of your degraded mode." |
+| Distributed lock TTL | **Should be 3-5x the 99th percentile operation duration** | "Not a round number picked from documentation. For a 500ms operation, 5 seconds is a reasonable TTL. For a 20-second operation, 60-90 seconds." |
 | Lock acquisition overhead (Redis) | **~8 milliseconds** | "Two network round trips to Redis at ~2ms each, plus processing time. Small but not zero. At 10,000 lock acquisitions per second, Redis becomes the bottleneck." |
-| etcd maximum recommended database size | **8 GB** | "Beyond this, etcd performance degrades significantly — compaction becomes urgent and latencies spike. Monitor with `etcdctl endpoint status` and alert at 6GB." |
-| etcd cluster size recommendation | **3 or 5 nodes** | "Never 2 or 4. With 2 nodes you need both for quorum — no fault tolerance. With 4 nodes, quorum is 3, which tolerates only 1 failure — same as 3 nodes but more expensive. Always odd numbers." |
+| etcd maximum recommended database size | **8 GB** | "Beyond this, etcd performance degrades significantly -- compaction becomes urgent and latencies spike. Monitor with `etcdctl endpoint status` and alert at 6GB." |
+| etcd cluster size recommendation | **3 or 5 nodes** | "Never 2 or 4. With 2 nodes you need both for quorum -- no fault tolerance. With 4 nodes, quorum is 3, which tolerates only 1 failure -- same as 3 nodes but more expensive. Always odd numbers." |
 | Phi Accrual failure detector threshold | phi = 8 | "At phi=8, the detector has 99.9999% confidence a node is dead based on heartbeat history. The threshold is tuned to the 99th percentile of your network's heartbeat delay." |
 
 ---
 
 **A note on memorizing numbers:**
 
-The goal is not to pass a quiz. The goal is to sound like someone who has spent time in production with these systems. The way you use these numbers in an interview is by attaching them to reasoning: "The Raft election timeout is typically 150-300ms — and it's randomized in that range specifically because if all followers timed out at the exact same moment, they'd all vote for themselves and split the election. The randomization ensures one follower starts the election a few milliseconds before the others, which usually means it gets votes before anyone else has time to also declare itself a candidate."
+The goal is not to pass a quiz. The goal is to sound like someone who has spent time in production with these systems. The way you use these numbers in an interview is by attaching them to reasoning: "The Raft election timeout is typically 150-300ms -- and it's randomized in that range specifically because if all followers timed out at the exact same moment, they'd all vote for themselves and split the election. The randomization ensures one follower starts the election a few milliseconds before the others, which usually means it gets votes before anyone else has time to also declare itself a candidate."
 
-That kind of contextual usage — attaching the number to the reason it is that number — is what the interviewer actually wants to hear.
+That kind of contextual usage -- attaching the number to the reason it is that number -- is what the interviewer actually wants to hear.
 
-**A note on numbers you should have in your head cold — no hesitation:**
+**A note on numbers you should have in your head cold -- no hesitation:**
 
 These five numbers come up in almost every coordination interview. If you pause to think about them, it signals unfamiliarity. If they come out naturally as you talk, it signals experience:
 
-- **30 seconds** — typical leader election lease TTL, the failover window
-- **8 milliseconds** — the overhead of one distributed lock acquisition in Redis
-- **100 milliseconds** — approximate latency of one Raft consensus round in a single datacenter
-- **8 GB** — etcd's maximum recommended database size
-- **3 or 5 nodes** — the correct etcd/ZooKeeper cluster sizes (never 2, never 4)
+- **30 seconds** -- typical leader election lease TTL, the failover window
+- **8 milliseconds** -- the overhead of one distributed lock acquisition in Redis
+- **100 milliseconds** -- approximate latency of one Raft consensus round in a single datacenter
+- **8 GB** -- etcd's maximum recommended database size
+- **3 or 5 nodes** -- the correct etcd/ZooKeeper cluster sizes (never 2, never 4)
 
-If you can fit these five numbers into your answer naturally and explain why they are what they are, you will sound like you have operated these systems — which is exactly the signal the interviewer is looking for.
+If you can fit these five numbers into your answer naturally and explain why they are what they are, you will sound like you have operated these systems -- which is exactly the signal the interviewer is looking for.
 
 ---
 
@@ -6267,13 +6267,13 @@ Before diving into the brainstorming questions, answer these 10 quick questions 
 
 # Part 10: Brainstorming Questions
 
-These 30 questions cover everything in Chapter 22. They are organized into five sections. Work through them on paper or out loud — do not just read them. The questions have hints embedded in them for the ones that need nudging. Take the hints if you need them. Try without them first.
+These 30 questions cover everything in Chapter 22. They are organized into five sections. Work through them on paper or out loud -- do not just read them. The questions have hints embedded in them for the ones that need nudging. Take the hints if you need them. Try without them first.
 
 **How to get the most out of these questions:**
 
-For each question, spend at least 5 minutes thinking before reading the hints. Your first instinct is important data — if your first instinct is "add a distributed lock," that is worth noticing. If your first instinct is "wait, do we even need coordination here?" that is also worth noticing. The questions are designed to push your instinct in the second direction.
+For each question, spend at least 5 minutes thinking before reading the hints. Your first instinct is important data -- if your first instinct is "add a distributed lock," that is worth noticing. If your first instinct is "wait, do we even need coordination here?" that is also worth noticing. The questions are designed to push your instinct in the second direction.
 
-After you have an answer, read the hint. Does the hint match your thinking? Does it reveal something you missed? Write down the gap between your answer and the hint's direction — that gap is where your understanding needs work.
+After you have an answer, read the hint. Does the hint match your thinking? Does it reveal something you missed? Write down the gap between your answer and the hint's direction -- that gap is where your understanding needs work.
 
 The most valuable questions are the ones where your first answer is confident but wrong. Those are the ones to return to.
 
@@ -6281,10 +6281,10 @@ The most valuable questions are the ones where your first answer is confident bu
 
 ## Answer Framework for Coordination Questions
 
-Before the questions, here is a framework for structuring your answer whenever a question touches coordination. This is not a script — it is a checklist to run through mentally before you start talking.
+Before the questions, here is a framework for structuring your answer whenever a question touches coordination. This is not a script -- it is a checklist to run through mentally before you start talking.
 
 **Step 1: Restate the core problem.**
-"The underlying problem here is that two servers might simultaneously try to [do the thing]. The question is how to prevent that — or whether we need to prevent it at all."
+"The underlying problem here is that two servers might simultaneously try to [do the thing]. The question is how to prevent that -- or whether we need to prevent it at all."
 
 **Step 2: Ask whether coordination can be avoided.**
 "Let me first ask whether we can avoid coordination entirely. Can the operation be made idempotent? Can we partition by ownership so each server has exclusive access? If yes to either, we don't need a lock."
@@ -6298,11 +6298,11 @@ Before the questions, here is a framework for structuring your answer whenever a
 **Step 5: Name what you're not solving.**
 "I'm not solving [specific edge case] today because [it's out of scope / it's a separate problem / it requires significantly more complexity]. If that's in scope, we should talk about it."
 
-This framework takes about 60-90 seconds to run through explicitly. In a 45-minute interview, spending 90 seconds on this framework for each major design decision is time well spent — it shows rigor, not slowness.
+This framework takes about 60-90 seconds to run through explicitly. In a 45-minute interview, spending 90 seconds on this framework for each major design decision is time well spent -- it shows rigor, not slowness.
 
 ---
 
-## Section A: Coordination Fundamentals (Questions 1–6)
+## Section A: Coordination Fundamentals (Questions 1-6)
 
 These questions test your understanding of why coordination problems exist and what the fundamental constraints are.
 
@@ -6312,11 +6312,11 @@ These questions test your understanding of why coordination problems exist and w
 
 You are designing a distributed system for processing stock trades. Each trade must be processed exactly once. You have 5 servers that all pull from the same work queue.
 
-**Part A:** Why is "at-most-once" processing insufficient for trades? Why is "at-least-once" processing also insufficient? What does "exactly-once" actually mean in a distributed context — and why is it harder than it sounds in a single-process world?
+**Part A:** Why is "at-most-once" processing insufficient for trades? Why is "at-least-once" processing also insufficient? What does "exactly-once" actually mean in a distributed context -- and why is it harder than it sounds in a single-process world?
 
 Think about this carefully. At-most-once means: if something goes wrong, we skip the trade. The trade simply does not happen. What does that look like from the customer's perspective? At-least-once means: if something goes wrong, we retry the trade. We might process it twice. What does that look like from the customer's perspective?
 
-Now think about "exactly-once." In a single-process program, this is easy: either the function ran or it didn't. In a distributed system, a server can crash after starting a trade but before confirming it completed. From the server's perspective, it never finished. From the trade's perspective, it might have partially completed. "Exactly-once" in distributed systems actually means "at-least-once delivery with idempotent processing" — you guarantee you try at least once, potentially many times, but you design the processing step so that running it twice gives the same final state as running it once.
+Now think about "exactly-once." In a single-process program, this is easy: either the function ran or it didn't. In a distributed system, a server can crash after starting a trade but before confirming it completed. From the server's perspective, it never finished. From the trade's perspective, it might have partially completed. "Exactly-once" in distributed systems actually means "at-least-once delivery with idempotent processing" -- you guarantee you try at least once, potentially many times, but you design the processing step so that running it twice gives the same final state as running it once.
 
 **Part B:** Design the exactly-once guarantee for a stock trade without using a distributed lock. What data do you store in your database before processing? What check do you perform before processing? What happens if the server crashes after the check but before writing the "completed" record?
 
@@ -6326,11 +6326,11 @@ Hint: imagine a `trade_executions` table with columns `(trade_id, executed_at, s
 
 **Question 2**
 
-Two researchers are editing a shared research document simultaneously — similar to Google Docs. User A is in Boston and changes the document title to "Climate Research 2026" at 2:00:00.000 PM. User B is in Tokyo changes the same title to "Climate Study 2026" at 2:00:00.005 PM. Because of network delays, User B's change arrives at the server before User A's.
+Two researchers are editing a shared research document simultaneously -- similar to Google Docs. User A is in Boston and changes the document title to "Climate Research 2026" at 2:00:00.000 PM. User B is in Tokyo changes the same title to "Climate Study 2026" at 2:00:00.005 PM. Because of network delays, User B's change arrives at the server before User A's.
 
-**Part A:** What coordination problem is this specifically? Walk through why leader election would not solve it (hint: having one server be authoritative for writes doesn't tell you which write "wins" — both writes are from legitimate users). Walk through why a distributed lock would not solve it — or would it? What approach does Google Docs actually use for concurrent document edits?
+**Part A:** What coordination problem is this specifically? Walk through why leader election would not solve it (hint: having one server be authoritative for writes doesn't tell you which write "wins" -- both writes are from legitimate users). Walk through why a distributed lock would not solve it -- or would it? What approach does Google Docs actually use for concurrent document edits?
 
-Consider what kind of data structure the document title is. A counter? A set of elements you can add to independently? A free-form string? CRDTs — conflict-free replicated data types — work beautifully for sets and counters but not for arbitrary string replacements. What does that mean for this problem?
+Consider what kind of data structure the document title is. A counter? A set of elements you can add to independently? A free-form string? CRDTs -- conflict-free replicated data types -- work beautifully for sets and counters but not for arbitrary string replacements. What does that mean for this problem?
 
 **Part B:** Extend the problem. User A deletes an entire paragraph. At the exact same moment, User B is typing new text inside that same paragraph. User B's typing arrives at the server right after User A's deletion. What should happen?
 
@@ -6348,13 +6348,13 @@ What about reads? Can a single Raft node serve reads if it was the leader before
 
 **Part B:** Your operations team fixes the disk issue on Node 1 and the memory issue on Node 2. Both nodes are ready to restart. Walk through exactly how you bring the cluster back. In what order do you restart? What do you check before restarting? Is there a risk that the crashed nodes' data is stale? How do you handle that?
 
-Bonus: what does the single surviving node do if you restart both crashed nodes simultaneously? Think about what happens when Node 1 and Node 2 rejoin — do they form a new quorum without consulting Node 3? What does that mean for any writes Node 3 may have attempted while it was solo?
+Bonus: what does the single surviving node do if you restart both crashed nodes simultaneously? Think about what happens when Node 1 and Node 2 rejoin -- do they form a new quorum without consulting Node 3? What does that mean for any writes Node 3 may have attempted while it was solo?
 
 ---
 
 **Question 4**
 
-A distributed lock with a 10-second TTL is used to prevent two servers from simultaneously processing the same payment. Server A acquires the lock at T=0 and begins processing. At T=1, Server A's Java runtime begins a garbage collection pause — Server A is completely frozen, unable to send or receive any network traffic.
+A distributed lock with a 10-second TTL is used to prevent two servers from simultaneously processing the same payment. Server A acquires the lock at T=0 and begins processing. At T=1, Server A's Java runtime begins a garbage collection pause -- Server A is completely frozen, unable to send or receive any network traffic.
 
 **Part A:** Walk through the timeline second by second:
 
@@ -6365,11 +6365,11 @@ A distributed lock with a 10-second TTL is used to prevent two servers from simu
 - T=11: Server B notices the lock is gone and acquires it. [What does Server B believe?]
 - T=16: Server A wakes up from the GC pause. [What does Server A believe? What is the actual reality?]
 
-**Part B:** This is for a payment processor. If Server B processes the payment while Server A is paused — and then Server A wakes up and ALSO processes the payment — the customer is double-charged.
+**Part B:** This is for a payment processor. If Server B processes the payment while Server A is paused -- and then Server A wakes up and ALSO processes the payment -- the customer is double-charged.
 
 Describe exactly how fencing tokens prevent this. What does Server A receive when it first acquires the lock? What does Server B receive when it acquires the lock after Server A's expires? What does the payment processor do differently when it receives Server A's request after Server B has already processed the payment?
 
-Focus on the specific check the payment processor makes. What value does it compare? What does "reject" mean here — does it reject the entire transaction or just return a "already processed" response?
+Focus on the specific check the payment processor makes. What value does it compare? What does "reject" mean here -- does it reject the entire transaction or just return a "already processed" response?
 
 ---
 
@@ -6379,11 +6379,11 @@ You are explaining to your non-technical CEO why leader election takes 30 second
 
 **Part A:** Explain the fundamental trade-off between a short election timeout and a long election timeout in terms a smart non-technical person can understand. Use a concrete analogy.
 
-Here is one analogy to build on if you want: imagine a basketball referee who calls a foul if a player freezes for more than 2 seconds. This catches real fouls quickly. But if a player trips and briefly freezes for 2.1 seconds while recovering, the referee calls a foul incorrectly. Now imagine the referee waits 10 seconds before calling a foul. Fewer false calls — but if someone is actually fouled, the game runs unprotected for 10 seconds first.
+Here is one analogy to build on if you want: imagine a basketball referee who calls a foul if a player freezes for more than 2 seconds. This catches real fouls quickly. But if a player trips and briefly freezes for 2.1 seconds while recovering, the referee calls a foul incorrectly. Now imagine the referee waits 10 seconds before calling a foul. Fewer false calls -- but if someone is actually fouled, the game runs unprotected for 10 seconds first.
 
 What is the "false foul" in the leader election context? Give a specific example of what happens to your system when a false-positive election fires during normal operation.
 
-**Part B:** Under what specific circumstances could you safely reduce the election timeout to 5 seconds? This is not a trick question — 5 seconds genuinely is safe in some environments. What properties of your network, your hardware monitoring, and your fencing mechanism would make 5 seconds reliable rather than trigger-happy?
+**Part B:** Under what specific circumstances could you safely reduce the election timeout to 5 seconds? This is not a trick question -- 5 seconds genuinely is safe in some environments. What properties of your network, your hardware monitoring, and your fencing mechanism would make 5 seconds reliable rather than trigger-happy?
 
 Consider: what additional information, beyond "I haven't heard a heartbeat in 5 seconds," would increase your confidence that a server is actually dead before starting an election?
 
@@ -6391,21 +6391,21 @@ Consider: what additional information, beyond "I haven't heard a heartbeat in 5 
 
 **Question 6**
 
-The FLP Impossibility theorem — proven in 1985 by Fischer, Lynch, and Paterson and considered one of the most important results in distributed computing theory — says that no algorithm can always achieve consensus in finite time if even one process might fail asynchronously. But etcd and ZooKeeper both claim to provide consensus. Are they violating a mathematical proof? Are they lying?
+The FLP Impossibility theorem -- proven in 1985 by Fischer, Lynch, and Paterson and considered one of the most important results in distributed computing theory -- says that no algorithm can always achieve consensus in finite time if even one process might fail asynchronously. But etcd and ZooKeeper both claim to provide consensus. Are they violating a mathematical proof? Are they lying?
 
 **Part A:** Explain the gap between what FLP proves theoretically and what practical consensus systems actually provide. The word "always" in the FLP statement is doing a lot of work. What exactly does FLP's "asynchronous" model assume that real systems do not actually have? What does "finite time" mean in the FLP context?
 
-Hint: FLP proves that in a purely asynchronous system — one where messages can be delayed arbitrarily and there are no timing guarantees — consensus is impossible in the worst case. Real distributed systems are not purely asynchronous. They have some timing properties. What are those properties, and how do they get around FLP?
+Hint: FLP proves that in a purely asynchronous system -- one where messages can be delayed arbitrarily and there are no timing guarantees -- consensus is impossible in the worst case. Real distributed systems are not purely asynchronous. They have some timing properties. What are those properties, and how do they get around FLP?
 
-**Part B:** State the specific assumption practical consensus systems make to "work around" FLP. This assumption is not hidden or sneaky — it is explicitly documented in the papers for Raft and Paxos. Give a concrete, real-world example of when this assumption fails in a production system. What does the system do when the assumption fails? Does it break, or does it handle it gracefully?
+**Part B:** State the specific assumption practical consensus systems make to "work around" FLP. This assumption is not hidden or sneaky -- it is explicitly documented in the papers for Raft and Paxos. Give a concrete, real-world example of when this assumption fails in a production system. What does the system do when the assumption fails? Does it break, or does it handle it gracefully?
 
 ---
 
-## Section B: Leader Election Design (Questions 7–12)
+## Section B: Leader Election Design (Questions 7-12)
 
-These questions test whether you can design election mechanisms for realistic scenarios — not just the happy-path textbook version.
+These questions test whether you can design election mechanisms for realistic scenarios -- not just the happy-path textbook version.
 
-A common mistake in leader election design questions: focusing entirely on the election algorithm and ignoring the transition period — what happens between "old leader died" and "new leader is fully ready." The transition period is where most real incidents happen. The new leader might need to load state, re-establish connections, and drain in-flight requests from the old leader. During this transition, requests might fail or queue. The interviewer wants to know that you have thought about this window, not just the steady state.
+A common mistake in leader election design questions: focusing entirely on the election algorithm and ignoring the transition period -- what happens between "old leader died" and "new leader is fully ready." The transition period is where most real incidents happen. The new leader might need to load state, re-establish connections, and drain in-flight requests from the old leader. During this transition, requests might fail or queue. The interviewer wants to know that you have thought about this window, not just the steady state.
 
 ---
 
@@ -6433,21 +6433,21 @@ You manage a Kafka cluster with 100 partitions spread across 5 brokers. Each bro
 
 Think about what leader election requires: other brokers must check the ZooKeeper state, claim leadership, and notify all producers and consumers of the new leader. What happens to ZooKeeper's request queue when 20 of these happen simultaneously in the first 500 milliseconds after a broker crash?
 
-**Part B:** Design a "staggered recovery" mechanism. Instead of all 20 partitions electing simultaneously, you want elections to be spread out over 30 seconds — one approximately every 1.5 seconds.
+**Part B:** Design a "staggered recovery" mechanism. Instead of all 20 partitions electing simultaneously, you want elections to be spread out over 30 seconds -- one approximately every 1.5 seconds.
 
-Walk through the mechanism: who detects that staggering is needed? Where does the staggering logic live — in the broker, in ZooKeeper, in the Kafka controller? During the 30-second staggering window, what state are the 20 partitions in — are they serving data, or paused? What is the trade-off of staggering vs. simultaneous election?
+Walk through the mechanism: who detects that staggering is needed? Where does the staggering logic live -- in the broker, in ZooKeeper, in the Kafka controller? During the 30-second staggering window, what state are the 20 partitions in -- are they serving data, or paused? What is the trade-off of staggering vs. simultaneous election?
 
 ---
 
 **Question 9**
 
-A deployment error results in a buggy version being accidentally deployed to only the leader node. The buggy version generates malformed Raft log entries — the entries pass syntax checking but fail the followers' semantic validation. Every single log entry the leader sends is being rejected by all followers. The leader does not know its entries are malformed — from its perspective, followers keep rejecting valid entries. It keeps retrying.
+A deployment error results in a buggy version being accidentally deployed to only the leader node. The buggy version generates malformed Raft log entries -- the entries pass syntax checking but fail the followers' semantic validation. Every single log entry the leader sends is being rejected by all followers. The leader does not know its entries are malformed -- from its perspective, followers keep rejecting valid entries. It keeps retrying.
 
 **Part A:** What is the state of the cluster during this period? Is the cluster making any forward progress? Are any writes being committed? What happens to client write requests? What do the followers report in their logs? What does the leader report in its logs?
 
 Think about Raft's quorum requirement: can the leader commit anything if all followers reject every entry? What does that mean for the `matchIndex` values the leader tracks for each follower?
 
-**Part B:** You need to safely rollback the leader to the previous version. Here is the complication: if you simply kill the buggy leader, an election happens. A follower might be elected — a follower that received and stored (but rejected) some of the malformed entries. Even though those entries were not committed, they are in the follower's log. What does Raft do with uncommitted entries when a new leader is elected?
+**Part B:** You need to safely rollback the leader to the previous version. Here is the complication: if you simply kill the buggy leader, an election happens. A follower might be elected -- a follower that received and stored (but rejected) some of the malformed entries. Even though those entries were not committed, they are in the follower's log. What does Raft do with uncommitted entries when a new leader is elected?
 
 Design a rollback procedure that: (1) minimizes the unavailability window, (2) ensures no malformed entries survive in any node's log, and (3) handles the case where the malformed entries were briefly stored in follower logs before rejection.
 
@@ -6469,11 +6469,11 @@ For example: if the cause is GC pauses, you would see GC log entries showing pau
 
 **Question 11**
 
-Your team proposes replacing your single-leader database setup with multi-leader replication. The argument: "With single-leader, the leader is a single point of failure. Two leaders — one in US-East, one in EU-West — means either region can write independently. No single point of failure."
+Your team proposes replacing your single-leader database setup with multi-leader replication. The argument: "With single-leader, the leader is a single point of failure. Two leaders -- one in US-East, one in EU-West -- means either region can write independently. No single point of failure."
 
-**Part A:** List what multi-leader solves. List what multi-leader creates. Be concrete for both lists. "Better write availability" is correct — but what specific scenarios does it help with? "Conflicts" is correct for the problem — but what does a conflict look like concretely, and what does the system need to do about it?
+**Part A:** List what multi-leader solves. List what multi-leader creates. Be concrete for both lists. "Better write availability" is correct -- but what specific scenarios does it help with? "Conflicts" is correct for the problem -- but what does a conflict look like concretely, and what does the system need to do about it?
 
-**Part B:** Your system is a financial ledger. A user has exactly $100 in their account. At 2:00:00.100 PM, they initiate a $60 withdrawal from an ATM in New York (writes to US-East leader). At 2:00:00.150 PM — 50 milliseconds later, before the US-East write has replicated to EU-West — they initiate an $80 withdrawal from an ATM in London (writes to EU-West leader). With single-leader, walk through what happens. With multi-leader, walk through what happens. What property of financial data makes multi-leader fundamentally unsafe here?
+**Part B:** Your system is a financial ledger. A user has exactly $100 in their account. At 2:00:00.100 PM, they initiate a $60 withdrawal from an ATM in New York (writes to US-East leader). At 2:00:00.150 PM -- 50 milliseconds later, before the US-East write has replicated to EU-West -- they initiate an $80 withdrawal from an ATM in London (writes to EU-West leader). With single-leader, walk through what happens. With multi-leader, walk through what happens. What property of financial data makes multi-leader fundamentally unsafe here?
 
 ---
 
@@ -6491,9 +6491,9 @@ Is any committed data lost? What is the Raft guarantee here about committed entr
 
 ---
 
-## Section C: Distributed Locks Deep Dives (Questions 13–18)
+## Section C: Distributed Locks Deep Dives (Questions 13-18)
 
-These questions go deeper on distributed locks than most interviews — but the failure modes they explore are exactly the ones that cause production incidents.
+These questions go deeper on distributed locks than most interviews -- but the failure modes they explore are exactly the ones that cause production incidents.
 
 When working through lock questions, keep asking: "What is the actual operation I am protecting, and what is the minimum mechanism that protects it?" The answer is often not a distributed lock. The answer is often a database transaction, or idempotency, or partitioning. A distributed lock is the right answer when: the critical section spans multiple systems that cannot share a single transaction, the operation cannot be made idempotent, and the contention rate is low enough that the 8ms overhead is acceptable per operation.
 
@@ -6524,7 +6524,7 @@ If the returned count is null (no row was updated because count was already 0), 
 
 **Question 14**
 
-Your distributed lock has a 30-second TTL. The protected operation normally takes 5 seconds. Your monitoring reveals: 0.1% of lock acquisitions result in the lock expiring before the server releases it — meaning the operation takes longer than 30 seconds in 0.1% of cases.
+Your distributed lock has a 30-second TTL. The protected operation normally takes 5 seconds. Your monitoring reveals: 0.1% of lock acquisitions result in the lock expiring before the server releases it -- meaning the operation takes longer than 30 seconds in 0.1% of cases.
 
 **Part A:** What does this 0.1% expiry rate mean for correctness? The math:
 
@@ -6536,7 +6536,7 @@ Write the pseudocode for:
 1. The main worker thread (acquires lock, does work, releases lock)
 2. The heartbeat thread (runs in background, renews lock every 10 seconds, stops when the main thread signals completion)
 
-What happens if the server crashes between heartbeats — specifically after the last heartbeat at second 20 of a 30-second TTL? When does the lock expire? Is that acceptable?
+What happens if the server crashes between heartbeats -- specifically after the last heartbeat at second 20 of a 30-second TTL? When does the lock expire? Is that acceptable?
 
 What happens if the heartbeat renewal fails (Redis is briefly unreachable) but the main worker is still running? Should the main worker stop or continue? What is the risk of each decision?
 
@@ -6544,7 +6544,7 @@ What happens if the heartbeat renewal fails (Redis is briefly unreachable) but t
 
 **Question 15**
 
-Your company uses Redlock — the multi-node Redis locking algorithm. You run 5 independent Redis instances (not clustered, not replicated — 5 truly independent masters). Redlock requires locking a majority of instances (at least 3 out of 5).
+Your company uses Redlock -- the multi-node Redis locking algorithm. You run 5 independent Redis instances (not clustered, not replicated -- 5 truly independent masters). Redlock requires locking a majority of instances (at least 3 out of 5).
 
 During a planned maintenance window, 1 Redis instance is gracefully shut down for a disk upgrade.
 
@@ -6554,7 +6554,7 @@ Think about the specific Redlock acquisition: a client sends SET commands to all
 
 **Part B:** Martin Kleppmann wrote a critique of Redlock arguing that even with all 5 Redis instances available and functioning correctly, Redlock is not safe for operations where correctness is critical. What is the specific failure mode he identified?
 
-Hint: it involves a process pause (like GC), a lock expiring, and a resource being modified by two clients simultaneously. How does this failure mode interact specifically with Redlock's distributed nature — why is it worse with Redlock than with a single-Redis lock?
+Hint: it involves a process pause (like GC), a lock expiring, and a resource being modified by two clients simultaneously. How does this failure mode interact specifically with Redlock's distributed nature -- why is it worse with Redlock than with a single-Redis lock?
 
 ---
 
@@ -6568,13 +6568,13 @@ redis.delete(lock_key)
 
 Without checking whether the current server actually holds the lock. The code has been in production for 3 months with no visible problems.
 
-**Part A:** Construct the exact sequence of events — with timestamps — where this bug causes the wrong server to release someone else's lock.
+**Part A:** Construct the exact sequence of events -- with timestamps -- where this bug causes the wrong server to release someone else's lock.
 
-Start with: Server A acquires the lock at T=0 with TTL=10s. Fill in the rest of the timeline — what GC pause or slow operation triggers the problem, when the lock expires, when Server B acquires it, and when Server A wakes up and calls delete.
+Start with: Server A acquires the lock at T=0 with TTL=10s. Fill in the rest of the timeline -- what GC pause or slow operation triggers the problem, when the lock expires, when Server B acquires it, and when Server A wakes up and calls delete.
 
 Make the timeline concrete. Something like:
 ```
-T=0s:    Server A: SET lock_key "A" EX 10 NX → OK (lock acquired)
+T=0s:    Server A: SET lock_key "A" EX 10 NX -> OK (lock acquired)
 T=3s:    Server A: [GC pause begins]
 ...
 ```
@@ -6593,7 +6593,7 @@ Explain why this check must happen inside a Lua script rather than as two separa
 
 A senior engineer at your company makes a bold claim at a design review: "Distributed locks do not provide mutual exclusion. They reduce the probability of concurrent access, but they cannot guarantee exclusion. Anyone building a system that relies on a distributed lock for correctness is building on sand."
 
-**Part A:** Prove they are correct. Construct the specific scenario — the exact sequence of events — where two servers simultaneously believe they hold the lock, have both passed all lock validation checks, and are both executing the protected critical section at the same time.
+**Part A:** Prove they are correct. Construct the specific scenario -- the exact sequence of events -- where two servers simultaneously believe they hold the lock, have both passed all lock validation checks, and are both executing the protected critical section at the same time.
 
 This is not a hypothetical "could theoretically happen." This is a scenario that happens in real production systems. What specific real-world condition triggers it?
 
@@ -6633,9 +6633,9 @@ During code review you notice that the external payment API has a 60-second time
 
 ---
 
-## Section D: Failure Mode Analysis (Questions 19–24)
+## Section D: Failure Mode Analysis (Questions 19-24)
 
-These questions simulate real production incidents. Practice them like drills — the goal is to build the instinct to respond methodically under pressure.
+These questions simulate real production incidents. Practice them like drills -- the goal is to build the instinct to respond methodically under pressure.
 
 The key skill these questions develop: separating "what do I do right now to stop the damage" from "what do I do in the next hour to understand the cause" from "what do I do in the next week to prevent recurrence." These are three different activities that require three different mental modes. Under the stress of an actual incident, candidates who can separate these phases outperform candidates who try to do all three simultaneously.
 
@@ -6649,7 +6649,7 @@ At 3am your monitoring fires: "Split-brain detected. Two nodes reporting as lead
 
 **Part A:** Write the first 10 steps of your incident response, in order. Be specific about what you do first versus what can wait. At what step do you declare a formal incident and wake up additional team members?
 
-Think about what is at risk every second you delay: both leaders are potentially accepting writes to the same data. What is the most important thing to stop first — diagnosis or the bleeding?
+Think about what is at risk every second you delay: both leaders are potentially accepting writes to the same data. What is the most important thing to stop first -- diagnosis or the bleeding?
 
 Consider: stopping writes to both nodes, identifying which node has more recent data, determining whether any transactions committed to one leader but not the other, and deciding how to reconcile.
 
@@ -6661,7 +6661,7 @@ How do you determine which node has the authoritative data? If both nodes accept
 
 **Question 20**
 
-Your cluster has been experiencing a leader election storm for 20 minutes. A new leader is elected every 2-3 minutes. No nodes are actually crashing — each new leader simply loses the election to a competitor after holding leadership for less than 3 minutes.
+Your cluster has been experiencing a leader election storm for 20 minutes. A new leader is elected every 2-3 minutes. No nodes are actually crashing -- each new leader simply loses the election to a competitor after holding leadership for less than 3 minutes.
 
 **Part A:** During a leader election storm, describe what the cluster can and cannot do:
 
@@ -6692,9 +6692,9 @@ The `/brokers` ZooKeeper path contains all Kafka broker registrations, topic con
 
 At each interval: what do producers see? What do consumers see? What are the brokers trying to do? What does ZooKeeper report?
 
-**Part B:** Kafka message data — the actual messages — is stored on broker disks, not in ZooKeeper. ZooKeeper stores only metadata. Given this, how do you recover the Kafka cluster without losing any messages?
+**Part B:** Kafka message data -- the actual messages -- is stored on broker disks, not in ZooKeeper. ZooKeeper stores only metadata. Given this, how do you recover the Kafka cluster without losing any messages?
 
-Walk through the recovery in order. What do you restart first? How do the brokers re-register in ZooKeeper? How does topic and partition metadata get reconstructed? What state does this leave consumers in — do they need to reset their offsets?
+Walk through the recovery in order. What do you restart first? How do the brokers re-register in ZooKeeper? How does topic and partition metadata get reconstructed? What state does this leave consumers in -- do they need to reset their offsets?
 
 ---
 
@@ -6702,7 +6702,7 @@ Walk through the recovery in order. What do you restart first? How do the broker
 
 You are managing a rolling upgrade of etcd from version 3.4 to version 3.5 across a 5-node production cluster. You have already upgraded 3 nodes (Nodes 3, 4, 5) to v3.5. Nodes 1 and 2 are still on v3.4. You begin upgrading Node 2.
 
-During the upgrade, Node 2 briefly starts on v3.5 and attempts to join the cluster. You notice in the logs that Node 2 is occasionally sending messages with a new protocol field that v3.4 nodes cannot parse. Node 1 — still on v3.4 — logs "unknown field in peer message" warnings.
+During the upgrade, Node 2 briefly starts on v3.5 and attempts to join the cluster. You notice in the logs that Node 2 is occasionally sending messages with a new protocol field that v3.4 nodes cannot parse. Node 1 -- still on v3.4 -- logs "unknown field in peer message" warnings.
 
 **Part A:** What is the specific risk at this moment? Walk through the cluster composition: you have 3 nodes on v3.5 and 1 node on v3.4 and 1 node mid-upgrade. Is quorum maintained? But is there a risk to correctness even if quorum is maintained?
 
@@ -6714,7 +6714,7 @@ Think about: what happens if Node 1 (v3.4) becomes the leader during this mixed-
 
 **Question 23**
 
-A user reports: "My scheduled report job ran 3 times yesterday instead of once." Your system uses leader election — only the elected leader runs the scheduling loop. You have 3 scheduler instances.
+A user reports: "My scheduled report job ran 3 times yesterday instead of once." Your system uses leader election -- only the elected leader runs the scheduling loop. You have 3 scheduler instances.
 
 Walk through at least 4 distinct failure scenarios that could cause triple execution. For each scenario:
 
@@ -6740,13 +6740,13 @@ What does the old primary do when its health returns? Does it try to reclaim its
 
 ---
 
-## Section E: System Design Questions (Questions 25–30)
+## Section E: System Design Questions (Questions 25-30)
 
-These are the closest to what you will see in an actual interview — open-ended design questions where coordination is a required component.
+These are the closest to what you will see in an actual interview -- open-ended design questions where coordination is a required component.
 
 For these questions, practice the full interview format: spend the first 2 minutes asking clarifying questions (write them out), then design for 10 minutes, then spend 3 minutes describing failure modes. If you skip the clarifying questions, you will design the wrong system. If you skip the failure mode discussion, you will lose the most important evaluation dimension.
 
-One tip for design questions with coordination: after you have drawn your boxes and arrows, go back and circle every coordination dependency — every place where one component needs another component to agree on something or hold something exclusive. For each circle, say out loud: "This is a coordination dependency. The failure mode is [X]. The degraded behavior is [Y]." This habit makes you look like you have operated systems at scale, because you have.
+One tip for design questions with coordination: after you have drawn your boxes and arrows, go back and circle every coordination dependency -- every place where one component needs another component to agree on something or hold something exclusive. For each circle, say out loud: "This is a coordination dependency. The failure mode is [X]. The degraded behavior is [Y]." This habit makes you look like you have operated systems at scale, because you have.
 
 ---
 
@@ -6754,7 +6754,7 @@ One tip for design questions with coordination: after you have drawn your boxes 
 
 Design a distributed cron scheduler for a company with: 500 cron jobs, 10 worker servers, job durations ranging from 1 second to 10 minutes, and a hard requirement that no job starts more than 10 seconds late.
 
-**Part A:** Design the leader election approach. Given the "no more than 10 seconds late" requirement: what is the maximum acceptable failover window? Can a standard 30-second lease TTL meet this requirement? If not, what changes — and what are the risks of those changes?
+**Part A:** Design the leader election approach. Given the "no more than 10 seconds late" requirement: what is the maximum acceptable failover window? Can a standard 30-second lease TTL meet this requirement? If not, what changes -- and what are the risks of those changes?
 
 Think through the failure modes: the leader crashes right after renewing. How long until a new leader is ready? What specific optimizations would reduce this window? What are the costs of each optimization?
 
@@ -6786,7 +6786,7 @@ Consider: what is the worst case of routing a connection to the "wrong" node bas
 
 Design a distributed counter for a website's "X users online now" feature. The count should update within 5 seconds of users joining or leaving. You have 20 web servers. 100,000 concurrent users at peak.
 
-**Part A:** Design a solution that does not use any centralized coordination service — no Redis, no etcd, no shared counter of any kind. How do 20 web servers collaboratively produce a "total users online" number? What communication pattern enables this? How fresh is the number that any given server reports?
+**Part A:** Design a solution that does not use any centralized coordination service -- no Redis, no etcd, no shared counter of any kind. How do 20 web servers collaboratively produce a "total users online" number? What communication pattern enables this? How fresh is the number that any given server reports?
 
 Consider: gossip protocols, broadcast-based aggregation, designated aggregator nodes, and hierarchical counting.
 
@@ -6812,7 +6812,7 @@ Design the leader election architecture for a globally distributed service with 
 - Requirement 1: the service can survive US-East total failure without any interruption to EU-West users
 - Requirement 2: during normal operation, US-East users should experience low write latency (not paying the 100ms cross-region round trip)
 
-**Part A:** If you run one global Raft group with all 6 nodes, and the leader is in US-East, calculate the write latency for a US-East client. With 6 nodes, quorum is 4. The leader needs acknowledgment from 3 other nodes. If the leader contacts all 5 other nodes in parallel, which 3 respond first — the 2 in-region nodes (at 5ms) or the 3 EU-West nodes (at 100ms)? What is the resulting write latency, and why?
+**Part A:** If you run one global Raft group with all 6 nodes, and the leader is in US-East, calculate the write latency for a US-East client. With 6 nodes, quorum is 4. The leader needs acknowledgment from 3 other nodes. If the leader contacts all 5 other nodes in parallel, which 3 respond first -- the 2 in-region nodes (at 5ms) or the 3 EU-West nodes (at 100ms)? What is the resulting write latency, and why?
 
 **Part B:** Design an architecture that meets both requirements. Think about: do you need one Raft group or two? If two, how does EU-West take over when US-East fails entirely? What coordination mechanism prevents EU-West from starting a split-brain rather than an orderly takeover?
 
@@ -6824,7 +6824,7 @@ Describe the normal-path write flow, the read flow, and the failover sequence in
 
 A startup CTO sends you the following message:
 
-*"Hey — we need strong consistency across our checkout flow. When a user checks out, we touch 5 microservices: inventory (decrement item count), payment (charge card), orders (create order record), shipping (schedule delivery), notifications (send confirmation email). All 5 need to succeed or all 5 need to roll back. I was reading about 2-Phase Commit (2PC) and it seems like the right tool. Can you review the approach before we build it?"*
+*"Hey -- we need strong consistency across our checkout flow. When a user checks out, we touch 5 microservices: inventory (decrement item count), payment (charge card), orders (create order record), shipping (schedule delivery), notifications (send confirmation email). All 5 need to succeed or all 5 need to roll back. I was reading about 2-Phase Commit (2PC) and it seems like the right tool. Can you review the approach before we build it?"*
 
 Write a response to the CTO. Cover:
 - What 2PC provides and guarantees (in plain language)
@@ -6832,7 +6832,7 @@ Write a response to the CTO. Cover:
 - What alternative approach you recommend for the checkout flow
 - Why the alternative, while not providing exactly the same ACID guarantees as 2PC, is safer and more operationally sound for this use case
 
-Write this as a real message — specific, concrete, respecting the CTO's technical knowledge without being condescending.
+Write this as a real message -- specific, concrete, respecting the CTO's technical knowledge without being condescending.
 
 ---
 
@@ -6841,16 +6841,16 @@ Write this as a real message — specific, concrete, respecting the CTO's techni
 You are facilitating the post-mortem for a major outage. Here is the timeline:
 
 ```
-3:00:00pm — A 3-second network hiccup on the primary datacenter switch.
-3:00:03pm — Followers detect missed heartbeats (heartbeat interval: 100ms,
+3:00:00pm -- A 3-second network hiccup on the primary datacenter switch.
+3:00:03pm -- Followers detect missed heartbeats (heartbeat interval: 100ms,
              election timeout: 1 second). Election starts.
-3:00:04pm — Node 5 wins the election. Starts loading its in-memory state
+3:00:04pm -- Node 5 wins the election. Starts loading its in-memory state
              from its 10GB snapshot file on disk.
-3:01:50pm — Node 5 is still loading. It has not sent any heartbeats because
+3:01:50pm -- Node 5 is still loading. It has not sent any heartbeats because
              its event loop is blocked on disk I/O. Followers detect failure.
              New election starts.
-3:02:00pm — Node 2 wins. Starts loading its 10GB snapshot. Same problem.
-3:02:00pm–5:00pm — Election storm. New leader every ~2 minutes, each one
+3:02:00pm -- Node 2 wins. Starts loading its 10GB snapshot. Same problem.
+3:02:00pm-5:00pm -- Election storm. New leader every ~2 minutes, each one
              spending its entire tenure loading disk, never sending heartbeats.
              System serves no traffic for 2 hours.
 ```
@@ -6868,9 +6868,9 @@ Hint: there is a mistake in the election timeout, a mistake in how the new leade
 
 # Homework Exercises
 
-These 10 exercises are meant to be worked through, not just read. Set aside an hour for each one. Some are design exercises (write pseudocode or diagrams). Some are calculation exercises (show the math). Some are simulation exercises (work through a timeline step by step). None of them have perfectly correct answers — the goal is to build the reasoning muscle, not to find THE answer.
+These 10 exercises are meant to be worked through, not just read. Set aside an hour for each one. Some are design exercises (write pseudocode or diagrams). Some are calculation exercises (show the math). Some are simulation exercises (work through a timeline step by step). None of them have perfectly correct answers -- the goal is to build the reasoning muscle, not to find THE answer.
 
-**A note on difficulty:** Exercises 1, 7, and 9 are medium difficulty — they test design judgment and trade-off reasoning. Exercises 2, 3, and 4 are more technical — they require you to reason about mechanisms at a concrete level. Exercises 5 and 6 are debugging exercises — they require you to reason backward from symptoms to root causes. Exercises 8 and 10 are full synthesis exercises — they require everything at once.
+**A note on difficulty:** Exercises 1, 7, and 9 are medium difficulty -- they test design judgment and trade-off reasoning. Exercises 2, 3, and 4 are more technical -- they require you to reason about mechanisms at a concrete level. Exercises 5 and 6 are debugging exercises -- they require you to reason backward from symptoms to root causes. Exercises 8 and 10 are full synthesis exercises -- they require everything at once.
 
 If you find an exercise easy, push yourself to go deeper. "What would break this solution?" or "What would the 99th percentile failure look like?" are questions you can ask of any exercise answer to make it harder.
 
@@ -6878,7 +6878,7 @@ If you find an exercise very hard, do not skip it. Sit with the difficulty for a
 
 **About working in groups:** these exercises are significantly more valuable when done with another person. One of you answers, the other asks "what if?" and "what happens when X fails?" and "why did you choose that rather than Y?" The critique process reveals gaps that solo study misses. If you are preparing for interviews with a study partner, use these exercises as the basis for mock design reviews.
 
-**Grading your own work:** after completing an exercise, rate yourself on the three interview dimensions from the "What Interviewers Are Actually Scoring" section. Did you identify the underlying coordination problem clearly? Did you choose an appropriately calibrated solution — not over-engineered, not under-engineered? Did you describe the failure behavior of your chosen mechanism? A score of 3 out of 3 means the exercise was too easy and you should push yourself deeper. A score of 1 out of 3 means the exercise was calibrated correctly and you have real learning to do.
+**Grading your own work:** after completing an exercise, rate yourself on the three interview dimensions from the "What Interviewers Are Actually Scoring" section. Did you identify the underlying coordination problem clearly? Did you choose an appropriately calibrated solution -- not over-engineered, not under-engineered? Did you describe the failure behavior of your chosen mechanism? A score of 3 out of 3 means the exercise was too easy and you should push yourself deeper. A score of 1 out of 3 means the exercise was calibrated correctly and you have real learning to do.
 
 ---
 
@@ -6902,19 +6902,19 @@ Even with the database-level design, rare duplicate executions might occur (cloc
 - What database query reveals duplicate executions after the fact?
 - How frequently should this query run?
 - What alert should fire, and at what threshold?
-- When a duplicate is detected, what information do you need to investigate — what data does the alert include?
+- When a duplicate is detected, what information do you need to investigate -- what data does the alert include?
 
 **Part C: Remediate a duplicate**
 
 Your monitoring fires: job `billing_12345` was executed twice on `2026-06-07`. The job sends a billing email to a customer.
 
-Walk through the remediation step by step. What data do you look at first? How do you confirm the customer received two emails rather than zero? What action do you take — do you send a correction email, credit their account, or just log and move on? Does the answer change if the job was charging a credit card instead of sending an email?
+Walk through the remediation step by step. What data do you look at first? How do you confirm the customer received two emails rather than zero? What action do you take -- do you send a correction email, credit their account, or just log and move on? Does the answer change if the job was charging a credit card instead of sending an email?
 
 ---
 
 ## Exercise 2: Implement a Leader Election (Conceptual)
 
-Write clean, readable pseudocode for a lease-based leader election using Redis. This is the simpler "claim a key, renew it, watch for changes" approach — not a full Raft implementation. It trades correctness guarantees (Raft is stronger) for simplicity.
+Write clean, readable pseudocode for a lease-based leader election using Redis. This is the simpler "claim a key, renew it, watch for changes" approach -- not a full Raft implementation. It trades correctness guarantees (Raft is stronger) for simplicity.
 
 **Part A: `claim_leadership(server_id, ttl_ms)`**
 
@@ -6924,15 +6924,15 @@ Write the complete function. Include error handling for the case where Redis is 
 
 **Part B: `renew_leadership(server_id, ttl_ms)`**
 
-This function extends your lease — but only if you are still the current leader. A naive implementation would: read the key, check if it matches `server_id`, then reset the TTL. But there is a race condition: between reading and resetting, another server might claim leadership. The correct implementation uses a Lua script that does the check-and-set atomically.
+This function extends your lease -- but only if you are still the current leader. A naive implementation would: read the key, check if it matches `server_id`, then reset the TTL. But there is a race condition: between reading and resetting, another server might claim leadership. The correct implementation uses a Lua script that does the check-and-set atomically.
 
 Write the Lua script and the Python function that calls it.
 
 **Part C: `watch_for_leadership_change(callback, poll_interval_ms)`**
 
-This function polls Redis every `poll_interval_ms` milliseconds to check if the current leader has changed. When a change is detected — either a different server holds the key, or the key is missing (no leader) — call `callback(new_leader_id)` where `new_leader_id` is the new leader's server ID or `None` if no leader.
+This function polls Redis every `poll_interval_ms` milliseconds to check if the current leader has changed. When a change is detected -- either a different server holds the key, or the key is missing (no leader) -- call `callback(new_leader_id)` where `new_leader_id` is the new leader's server ID or `None` if no leader.
 
-Write the polling loop. Include the case where Redis is temporarily unreachable — should the function call `callback(None)` immediately, or wait for Redis to recover?
+Write the polling loop. Include the case where Redis is temporarily unreachable -- should the function call `callback(None)` immediately, or wait for Redis to recover?
 
 **Part D: Calculate the minimum safe TTL**
 
@@ -6940,7 +6940,7 @@ Given:
 - The leader does 1 second of work per cycle
 - Network RTT to Redis is 2ms
 - You want to renew the lease with at least 50% of the TTL remaining
-- You want 3× safety buffer above the renewal interval
+- You want 3x safety buffer above the renewal interval
 
 Work through the math step by step to arrive at a minimum safe TTL in seconds. Then sanity-check: at this TTL, how long does a failed server hold a stale lock before it expires?
 
@@ -6948,7 +6948,7 @@ Work through the math step by step to arrive at a minimum safe TTL in seconds. T
 
 ## Exercise 3: Fencing Token Implementation
 
-A storage service receives writes from multiple clients. Some clients might hold expired locks and try to write stale data. You need the storage service itself to detect and reject these stale writes — not rely on the lock TTL being "long enough."
+A storage service receives writes from multiple clients. Some clients might hold expired locks and try to write stale data. You need the storage service itself to detect and reject these stale writes -- not rely on the lock TTL being "long enough."
 
 **Part A: Design the storage API**
 
@@ -6968,9 +6968,9 @@ Write the new API signature and describe the storage service's internal state.
 The storage service has max seen token = 41 for resource `user_profile_123`.
 
 Write requests arrive in this order:
-1. `PUT /resource/user_profile_123` with `fencing_token: 42` and `data: "Alice"` → ?
-2. `PUT /resource/user_profile_123` with `fencing_token: 45` and `data: "Bob"` → ?
-3. `PUT /resource/user_profile_123` with `fencing_token: 43` and `data: "Charlie"` → ?
+1. `PUT /resource/user_profile_123` with `fencing_token: 42` and `data: "Alice"` -> ?
+2. `PUT /resource/user_profile_123` with `fencing_token: 45` and `data: "Bob"` -> ?
+3. `PUT /resource/user_profile_123` with `fencing_token: 43` and `data: "Charlie"` -> ?
 
 For each: write the response code and body, and explain the reasoning. What is the final stored value for `user_profile_123`? What is the max seen token after all three requests?
 
@@ -6991,11 +6991,11 @@ The storage service crashes after processing the three requests above. On restar
 Draw the Raft log state for a 3-node cluster: Leader L, Follower A, Follower B. Use a table format.
 
 Event sequence:
-1. Client writes `Set x=1` → committed to all 3 nodes
-2. Client writes `Set y=2` → committed to all 3 nodes
-3. Client writes `Set z=3` → Leader L accepts it locally but CRASHES before replicating to any follower
+1. Client writes `Set x=1` -> committed to all 3 nodes
+2. Client writes `Set y=2` -> committed to all 3 nodes
+3. Client writes `Set z=3` -> Leader L accepts it locally but CRASHES before replicating to any follower
 4. Follower A detects the missed heartbeat, starts an election (Term 2), wins because it has the most up-to-date log among A and B (both have only 2 entries), becomes new leader
-5. Client retries `Set z=3` → committed by new leader in Term 2
+5. Client retries `Set z=3` -> committed by new leader in Term 2
 
 **Part A: Log state at each step**
 
@@ -7015,7 +7015,7 @@ What does Raft require L to do? Does L try to convince A that its Term 1 entry i
 
 Is there any possible scenario where L's `[T:1, I:3, C:Set z=3]` could conflict with an ENTIRELY DIFFERENT command at A's log index 3?
 
-Think carefully: what if, between A becoming leader (step 4) and the client retrying (step 5), A had received and committed a DIFFERENT write to index 3 — say `Set w=99`? Could this happen? What Raft rule prevents this from causing permanent inconsistency?
+Think carefully: what if, between A becoming leader (step 4) and the client retrying (step 5), A had received and committed a DIFFERENT write to index 3 -- say `Set w=99`? Could this happen? What Raft rule prevents this from causing permanent inconsistency?
 
 ---
 
@@ -7034,7 +7034,7 @@ Be concrete. "Redis bug" is not a hypothesis. "Redis is running out of memory an
 
 **Part B: The surprising finding**
 
-You add logging and discover: both workers are calling `SETNX lock_key worker_id` and both are receiving the response `1` (meaning: the key was successfully created, i.e., it did not previously exist). This should be impossible — SETNX is supposed to be atomic.
+You add logging and discover: both workers are calling `SETNX lock_key worker_id` and both are receiving the response `1` (meaning: the key was successfully created, i.e., it did not previously exist). This should be impossible -- SETNX is supposed to be atomic.
 
 How is it possible for SETNX to return `1` twice for the same key? What specific Redis configuration or deployment condition would cause this?
 
@@ -7063,7 +7063,7 @@ Pattern: leader is elected, renews once at second 45, but then the lease expires
 
 **Part A: What the pattern reveals**
 
-Node3 is elected at 14:00:00, lease expires at 14:01:30. First renewal is at 14:00:45 (second 45). A successful renewal resets the TTL to 90 seconds from that moment — so the lease should now expire at 14:02:15 (second 135 from the original election). But the lease expires at 14:01:28 — second 88 from election, only 43 seconds after the first renewal.
+Node3 is elected at 14:00:00, lease expires at 14:01:30. First renewal is at 14:00:45 (second 45). A successful renewal resets the TTL to 90 seconds from that moment -- so the lease should now expire at 14:02:15 (second 135 from the original election). But the lease expires at 14:01:28 -- second 88 from election, only 43 seconds after the first renewal.
 
 Calculate: if the first renewal at second 45 succeeded, the second renewal should happen at approximately second 45+45=90. But the lease expired at second 88. What does this mean about when the second renewal happened and whether it succeeded?
 
@@ -7106,13 +7106,13 @@ Design a three-layer caching strategy:
 - Layer 2: a shared cache (Redis or memcached) per datacenter
 - Layer 3: the authoritative metadata service (etcd or similar)
 
-For each layer: what is the TTL? How is it invalidated when shard assignments change? What happens if a layer is unavailable — does the next layer get a cache miss, or is there fallback logic?
+For each layer: what is the TTL? How is it invalidated when shard assignments change? What happens if a layer is unavailable -- does the next layer get a cache miss, or is there fallback logic?
 
 What is the maximum staleness of a shard routing decision under this architecture? Is that acceptable?
 
 **Part C: Live resharding cutover**
 
-Shard 3 currently holds users 48M-49M (user_id % 16 == 3, for IDs in the range 48M-49M — a simplification). You are splitting Shard 3: users 48M-48.5M stay on the existing Shard 3 hardware, users 48.5M-49M move to a new Shard 17.
+Shard 3 currently holds users 48M-49M (user_id % 16 == 3, for IDs in the range 48M-49M -- a simplification). You are splitting Shard 3: users 48M-48.5M stay on the existing Shard 3 hardware, users 48.5M-49M move to a new Shard 17.
 
 Live traffic continues throughout. No user should send a write to Shard 3 that then needs to move to Shard 17, or vice versa.
 
@@ -7132,26 +7132,26 @@ Set a timer for 30 minutes. Read the question. Then answer it out loud or on pap
 
 ---
 
-**Minutes 0–5: Clarifying questions**
+**Minutes 0-5: Clarifying questions**
 
-Write out your clarifying questions before designing anything. Think about: what does "1,000 requests per minute" mean — is it a fixed window (0:00-1:00, 1:00-2:00) or a sliding window (any 60-second window)? What does "globally" mean in practice — does a request to server A count against the same limit as a request to server B? What is the consequence of exceeding the limit — hard reject, soft warning, or throttling? What does "must continue functioning" mean when Redis is down — fail open (allow all requests) or fail closed (reject all requests)?
+Write out your clarifying questions before designing anything. Think about: what does "1,000 requests per minute" mean -- is it a fixed window (0:00-1:00, 1:00-2:00) or a sliding window (any 60-second window)? What does "globally" mean in practice -- does a request to server A count against the same limit as a request to server B? What is the consequence of exceeding the limit -- hard reject, soft warning, or throttling? What does "must continue functioning" mean when Redis is down -- fail open (allow all requests) or fail closed (reject all requests)?
 
-**Minutes 5–15: Normal path design**
+**Minutes 5-15: Normal path design**
 
 Design the architecture for when Redis is available. Walk through: where is the rate limit counter stored, what data structure, what Redis command, what happens per request step by step. Address the sliding window vs. fixed window choice and justify it. Address what happens if two requests for the same user arrive at different servers simultaneously.
 
-**Minutes 15–20: Degraded path (Redis down)**
+**Minutes 15-20: Degraded path (Redis down)**
 
 Design what happens when Redis is unavailable. Be specific: how does each API server detect that Redis is down? What is the fallback behavior? How do you prevent a Redis outage from causing a cascading failure across all API servers?
 
-**Minutes 20–25: Edge cases**
+**Minutes 20-25: Edge cases**
 
 Work through these specific edge cases:
 - User is at exactly 999 requests. They send 3 simultaneous requests. Under your design, how many go through?
 - Redis recovers after a 2-minute outage. The per-server fallback counters are not reflected in Redis. What happens to users who were active during the outage?
-- One of your 20 API servers is processing 10× more traffic than the others (traffic imbalance). How does this affect rate limiting accuracy?
+- One of your 20 API servers is processing 10x more traffic than the others (traffic imbalance). How does this affect rate limiting accuracy?
 
-**Minutes 25–30: Reflection**
+**Minutes 25-30: Reflection**
 
 Write down honestly: what did you NOT address in your design? What assumption did you make that you should have explicitly asked about? If you had 10 more minutes, what would you add first?
 
@@ -7170,7 +7170,7 @@ Your team is choosing between three options for running your coordination servic
 - Provider handles upgrades, backups, and incident response
 
 **Option C:** Reuse the ZooKeeper cluster that is already running for Kafka.
-- Incremental cost: approximately $0 — the cluster already exists
+- Incremental cost: approximately $0 -- the cluster already exists
 
 **Part A: The real cost of Option C**
 
@@ -7202,7 +7202,7 @@ For each company: which option do you recommend, and why? What would need to cha
 
 ## Exercise 10: Final Thought Experiment
 
-Your manager sets a goal for Q3: achieve 99.999% uptime — five nines. Currently you achieve approximately 99.95%, which means about 4.4 hours of downtime per year, most of it from planned maintenance and the occasional leader election during a deployment.
+Your manager sets a goal for Q3: achieve 99.999% uptime -- five nines. Currently you achieve approximately 99.95%, which means about 4.4 hours of downtime per year, most of it from planned maintenance and the occasional leader election during a deployment.
 
 **Part A: The election window budget**
 
@@ -7220,7 +7220,7 @@ How far are you from 99.999%?
 
 Design specific changes to reduce the leader election window from 30 seconds to under 5 seconds, without using multi-leader replication.
 
-Think about: can the lease TTL be reduced safely? What is the minimum safe TTL given your network's heartbeat reliability? Can STONITH let the new leader start faster by immediately fencing the old leader? Can a "pre-elected standby" — a designated hot standby that is already running and ready — reduce the time from "leader failure detected" to "new leader serving traffic"?
+Think about: can the lease TTL be reduced safely? What is the minimum safe TTL given your network's heartbeat reliability? Can STONITH let the new leader start faster by immediately fencing the old leader? Can a "pre-elected standby" -- a designated hot standby that is already running and ready -- reduce the time from "leader failure detected" to "new leader serving traffic"?
 
 For each technique: what does it require, what is the risk, and how much does it reduce the election window?
 
@@ -7252,7 +7252,7 @@ Also: practice explaining the difference between at-most-once, at-least-once, an
 
 **If you are most nervous about the design questions (Questions 25-30):**
 
-Focus on Exercise 8 (the rate limiter simulation). Set the timer. Do it under real time pressure. The goal is to build the habit of asking clarifying questions before designing — this habit does not come naturally under interview pressure without specific practice.
+Focus on Exercise 8 (the rate limiter simulation). Set the timer. Do it under real time pressure. The goal is to build the habit of asking clarifying questions before designing -- this habit does not come naturally under interview pressure without specific practice.
 
 Also: practice the "Answer Framework" from the beginning of Part 10. Run through it explicitly for one design problem per day. After a week of this, it will become automatic.
 
@@ -7260,9 +7260,9 @@ Also: practice the "Answer Framework" from the beginning of Part 10. Run through
 
 **If you are most nervous about failure mode questions (Questions 19-24):**
 
-Focus on Exercises 1 (coordination avoidance audit), 5 (lock debugging), and 6 (election storm post-mortem). These exercises force you to trace failure sequences step by step — which is exactly what Questions 19-24 require.
+Focus on Exercises 1 (coordination avoidance audit), 5 (lock debugging), and 6 (election storm post-mortem). These exercises force you to trace failure sequences step by step -- which is exactly what Questions 19-24 require.
 
-Also: the next time something fails in a system you operate — even a small personal project — spend 10 minutes writing a mini post-mortem. What failed? Why? What would have caught it earlier? What would have prevented it? This habit builds the instinct that failure-mode questions test.
+Also: the next time something fails in a system you operate -- even a small personal project -- spend 10 minutes writing a mini post-mortem. What failed? Why? What would have caught it earlier? What would have prevented it? This habit builds the instinct that failure-mode questions test.
 
 ---
 
@@ -7284,7 +7284,7 @@ After you have worked through an exercise, ask: "What did I miss? What did I ass
 
 # Quick Reference Card
 
-*Review this the night before any interview that touches distributed systems. Read it slowly, not quickly — the goal is to refresh the mental models, not just scan the words.*
+*Review this the night before any interview that touches distributed systems. Read it slowly, not quickly -- the goal is to refresh the mental models, not just scan the words.*
 
 ---
 
@@ -7320,7 +7320,7 @@ The confusion: people say "we need quorum" when they mean "we need a consensus a
 
 At-least-once means: you guarantee the operation runs, possibly multiple times. The operation must be idempotent to be safe.
 
-Exactly-once means: you guarantee the operation runs exactly one time. In distributed systems, this is achieved by at-least-once delivery plus idempotent processing — you try multiple times but design the operation so that multiple tries produce the same final state.
+Exactly-once means: you guarantee the operation runs exactly one time. In distributed systems, this is achieved by at-least-once delivery plus idempotent processing -- you try multiple times but design the operation so that multiple tries produce the same final state.
 
 The confusion: "exactly-once" sounds like you can prevent retries. You cannot reliably prevent retries in a distributed system (messages can be delivered multiple times). The only way to achieve exactly-once semantics is to design the processing step to be safe to repeat.
 
@@ -7330,7 +7330,7 @@ The confusion: "exactly-once" sounds like you can prevent retries. You cannot re
 
 Availability is the percentage of time the system serves requests successfully. 99.99% availability means the system is up 99.99% of the time.
 
-Fault tolerance is the ability to continue operating when components fail. A fault-tolerant system might still experience brief unavailability during a failure — but it recovers automatically.
+Fault tolerance is the ability to continue operating when components fail. A fault-tolerant system might still experience brief unavailability during a failure -- but it recovers automatically.
 
 The confusion: people use "fault tolerant" to mean "always available." A system can be highly fault tolerant and still have 30-second election windows (during which it is unavailable). Fault tolerance determines what happens after a failure. Availability is the measurement of the result.
 
@@ -7341,14 +7341,14 @@ The confusion: people use "fault tolerant" to mean "always available." A system 
 | Mechanism | Latency Overhead | Failure Risk | When to Use It |
 |---|---|---|---|
 | **No coordination** | ~0ms | None | Idempotent operations (safe to repeat), CRDT-compatible data types, data that is naturally partitioned by ownership so no cross-server coordination is needed |
-| **Partitioning** | ~0ms | None | Any data that can be cleanly split — user data by user_id, order data by order_id. Each server owns its partition exclusively; no cross-server race conditions for writes within a partition |
-| **Leader election** | ~10ms per write + 10-30s failover window | The leader is a SPOF — but with automated failover. The failure mode is an availability window, not data corruption (assuming fencing works) | Any situation that requires exactly one authoritative server: primary database, job scheduler, configuration writer, shard assignment manager |
+| **Partitioning** | ~0ms | None | Any data that can be cleanly split -- user data by user_id, order data by order_id. Each server owns its partition exclusively; no cross-server race conditions for writes within a partition |
+| **Leader election** | ~10ms per write + 10-30s failover window | The leader is a SPOF -- but with automated failover. The failure mode is an availability window, not data corruption (assuming fencing works) | Any situation that requires exactly one authoritative server: primary database, job scheduler, configuration writer, shard assignment manager |
 | **Distributed lock** | ~8ms per lock acquisition | Lock service (Redis) is a SPOF. If lock service is down, lock acquisitions fail. If a lock holder crashes, other servers wait for TTL expiry | Short critical sections that run at low-to-moderate frequency. Not appropriate for high-frequency operations (>1,000/sec) or long-running operations |
 | **Full consensus (Raft/ZAB)** | ~100ms per committed operation (requires majority acknowledgment) | A minority of nodes can fail and the system remains available. This is the strongest fault tolerance model | Replicated state machines where every replica must have identical state: coordination services themselves, strongly consistent distributed databases |
 
 **The decision tree:** start at "no coordination." Only move down the list when the previous option cannot meet the requirement. Each step adds latency, operational complexity, and new failure modes. The cost must be justified by the requirement.
 
-**How to present this decision tree in an interview:** when a question involves coordination, say these words explicitly: "Before I design a coordination mechanism, let me ask whether we can avoid it." Then walk through partitioning, idempotency, and eventual consistency. Only after eliminating those options should you move to locks, election, or consensus. Interviewers notice when you do this — and they notice when you don't.
+**How to present this decision tree in an interview:** when a question involves coordination, say these words explicitly: "Before I design a coordination mechanism, let me ask whether we can avoid it." Then walk through partitioning, idempotency, and eventual consistency. Only after eliminating those options should you move to locks, election, or consensus. Interviewers notice when you do this -- and they notice when you don't.
 
 ---
 
@@ -7358,13 +7358,13 @@ Before any distributed lock goes to production:
 
 - [ ] **Lock has a TTL.** If the lock holder crashes without releasing the lock, the TTL ensures the lock expires automatically. Without a TTL, a crashed server holds the lock forever.
 
-- [ ] **Lock stores the holder's identity.** The lock value is `{server_id}:{request_id}` — not just `1` or `true`. This allows the holder to verify it still owns the lock before releasing. Without identity: Server A's lock can be released by Server B.
+- [ ] **Lock stores the holder's identity.** The lock value is `{server_id}:{request_id}` -- not just `1` or `true`. This allows the holder to verify it still owns the lock before releasing. Without identity: Server A's lock can be released by Server B.
 
 - [ ] **Lock release is atomic via Lua script.** The "check that I own it, then delete it" operation must be a single atomic Redis Lua script. Two separate commands (GET value, then DEL if it matches) have a race condition: between GET and DEL, Server A's lock can expire and Server B can acquire it, and then Server A's DEL deletes Server B's lock.
 
-- [ ] **Fencing tokens are used for writes to protected resources.** The storage layer receiving writes must also receive and enforce fencing tokens. This protects against a lock holder that woke up from a GC pause after its lock expired — the storage layer rejects its write even though the lock service has already given the lock to someone else.
+- [ ] **Fencing tokens are used for writes to protected resources.** The storage layer receiving writes must also receive and enforce fencing tokens. This protects against a lock holder that woke up from a GC pause after its lock expired -- the storage layer rejects its write even though the lock service has already given the lock to someone else.
 
-- [ ] **TTL = 3-5× the 99th percentile operation duration.** Not a round number from documentation. Measure the actual operation duration distribution. Tune to the 99th percentile, then multiply by 3-5.
+- [ ] **TTL = 3-5x the 99th percentile operation duration.** Not a round number from documentation. Measure the actual operation duration distribution. Tune to the 99th percentile, then multiply by 3-5.
 
 - [ ] **Acquisition retries use exponential backoff with jitter.** If 1,000 clients simultaneously fail to acquire a lock (because one server holds it), a fixed-interval retry causes a thundering herd when the lock is released. Random exponential backoff distributes the retry attempts over time.
 
@@ -7378,7 +7378,7 @@ Before a leader election mechanism goes to production:
 
 - [ ] **Heartbeat interval is configured and appropriate.** Typically 50-150ms for a single datacenter. Cross-region setups may need 500ms-1s to account for network jitter. Too low: excessive network traffic. Too high: slow failure detection.
 
-- [ ] **Election timeout is randomized within a range.** Typically 3-10× the heartbeat interval. Randomization prevents the "thundering herd" of all followers simultaneously declaring themselves leader, which would split votes and delay the election.
+- [ ] **Election timeout is randomized within a range.** Typically 3-10x the heartbeat interval. Randomization prevents the "thundering herd" of all followers simultaneously declaring themselves leader, which would split votes and delay the election.
 
 - [ ] **Fencing mechanism exists and is tested.** Either STONITH (automated power-off of the old leader via a management interface) or epoch-based rejection (storage layer rejects writes from servers whose epoch is lower than the current leader's epoch). Without fencing: a revived old leader can corrupt data by continuing to write after being replaced.
 
@@ -7386,19 +7386,19 @@ Before a leader election mechanism goes to production:
 
 - [ ] **Leader voluntary stepdown on health degradation.** A leader that detects it is unhealthy (high memory utilization, elevated latency on health checks, slow disk I/O) should voluntarily transfer leadership rather than waiting to be timed out by followers. Voluntary stepdown is faster and cleaner than timeout-based failover.
 
-- [ ] **Monitoring covers elections, not just crashes.** Key metrics: election frequency (baseline it; alert on deviation), election duration (time from "election started" to "new leader serving traffic"), and leader tenure (alert when consistently shorter than the lease TTL — this indicates renewal failures).
+- [ ] **Monitoring covers elections, not just crashes.** Key metrics: election frequency (baseline it; alert on deviation), election duration (time from "election started" to "new leader serving traffic"), and leader tenure (alert when consistently shorter than the lease TTL -- this indicates renewal failures).
 
 ---
 
 ## Common Failure Patterns to Mention in Interviews
 
-These are the failure patterns that come up most often in coordination-related interviews. Mentioning them proactively — before the interviewer asks — signals that you have operated these systems rather than only read about them.
+These are the failure patterns that come up most often in coordination-related interviews. Mentioning them proactively -- before the interviewer asks -- signals that you have operated these systems rather than only read about them.
 
 ---
 
 **The GC Pause Problem**
 
-A Java server holding a distributed lock goes into a garbage collection pause. The pause lasts longer than the lock TTL. The lock expires. Another server acquires it. The first server wakes up from the pause and continues working — now without a valid lock, but it doesn't know that. Two servers are simultaneously executing the "protected" operation.
+A Java server holding a distributed lock goes into a garbage collection pause. The pause lasts longer than the lock TTL. The lock expires. Another server acquires it. The first server wakes up from the pause and continues working -- now without a valid lock, but it doesn't know that. Two servers are simultaneously executing the "protected" operation.
 
 Mention this whenever locks are in the design. Mention that fencing tokens protect against it.
 
@@ -7439,16 +7439,16 @@ Before every coordination decision, ask whether partitioning, idempotency, or ev
 Database transaction < distributed lock < leader election < full consensus. Use the lightest mechanism that solves the problem. If a database row lock works, don't add Redis. If Redis works, don't add ZooKeeper.
 
 **3. "What happens when the coordination service fails?"**
-For every coordination dependency in my design: what does the system do when it's unreachable? "The system fails" is not a design — it's an absence of design. "The system degrades gracefully by doing X" is a design.
+For every coordination dependency in my design: what does the system do when it's unreachable? "The system fails" is not a design -- it's an absence of design. "The system degrades gracefully by doing X" is a design.
 
 **4. "Split-brain is the enemy. Fencing tokens are the solution."**
-The key risk in any leader election or distributed lock system is split-brain — two nodes thinking they are both the authority. The key fix is fencing — either physically stopping the old leader (STONITH) or having the storage layer reject writes from servers with stale epoch numbers (fencing tokens). Mention split-brain risk. Mention how your design prevents it.
+The key risk in any leader election or distributed lock system is split-brain -- two nodes thinking they are both the authority. The key fix is fencing -- either physically stopping the old leader (STONITH) or having the storage layer reject writes from servers with stale epoch numbers (fencing tokens). Mention split-brain risk. Mention how your design prevents it.
 
 **5. "Fast failover costs: more false positives. Slow failover costs: longer outage window."**
 There is no perfect election timeout. Short timeout = fast failover but more unnecessary elections from momentary network blips. Long timeout = fewer false positives but longer outage when a real failure occurs. The right trade-off depends on the cost of a false-positive election vs. the cost of a 30-second outage. Know which is worse for the system being designed.
 
 **Bonus: "Proactively name what you are not solving."**
-At the end of your design, name two things you explicitly scoped out and why. "I am not solving the case where we need millions of jobs — this design uses a polling loop that tops out at tens of thousands of jobs before needing sharding. I am also not solving sub-second job start precision — the 10-second polling interval and 30-second failover window make that impossible here." This move signals judgment: you made conscious scope decisions rather than accidentally missing things.
+At the end of your design, name two things you explicitly scoped out and why. "I am not solving the case where we need millions of jobs -- this design uses a polling loop that tops out at tens of thousands of jobs before needing sharding. I am also not solving sub-second job start precision -- the 10-second polling interval and 30-second failover window make that impossible here." This move signals judgment: you made conscious scope decisions rather than accidentally missing things.
 
 ---
 
@@ -7470,7 +7470,7 @@ Work through the Section D brainstorming questions (19-24). For each question, w
 
 **Days 16-20: Design practice**
 
-Work through Section E brainstorming questions (25-30). For each one: spend 5 minutes asking clarifying questions, 10 minutes designing, 5 minutes describing failures. Time yourself. The pacing matters — candidates who spend 20 minutes on clarifying questions have no time left for design.
+Work through Section E brainstorming questions (25-30). For each one: spend 5 minutes asking clarifying questions, 10 minutes designing, 5 minutes describing failures. Time yourself. The pacing matters -- candidates who spend 20 minutes on clarifying questions have no time left for design.
 
 **Days 21-25: Lock mechanics**
 
@@ -7490,28 +7490,640 @@ Read the Quick Reference Card. Do the Quick Conceptual Self-Check again. Note wh
 
 Here is the central message of this entire chapter, stated as plainly as possible: **coordination is a tax.**
 
-Every distributed lock you add costs 8 milliseconds of latency per operation. Every leader election mechanism costs 10-30 seconds of unavailability during each failover. Every consensus round costs 100 milliseconds of write latency. These costs are paid on every operation, forever, as long as the system runs. They are not one-time investments — they are recurring overhead. The distributed systems engineers who build the cleanest, most resilient systems are not the ones who implement the most sophisticated coordination algorithms. They are the ones who look at a coordination requirement and ask whether it can be engineered away. Partitioning gives each server exclusive ownership of its data — no coordination needed for writes within a partition. Idempotency makes retries safe — no coordination needed to prevent duplicate execution. CRDTs make concurrent updates automatically mergeable — no coordination needed to resolve conflicts. These are not workarounds or compromises. They are the right answer when they fit. Design away the need for coordination first. Implement the coordination mechanism second.
+Every distributed lock you add costs 8 milliseconds of latency per operation. Every leader election mechanism costs 10-30 seconds of unavailability during each failover. Every consensus round costs 100 milliseconds of write latency. These costs are paid on every operation, forever, as long as the system runs. They are not one-time investments -- they are recurring overhead. The distributed systems engineers who build the cleanest, most resilient systems are not the ones who implement the most sophisticated coordination algorithms. They are the ones who look at a coordination requirement and ask whether it can be engineered away. Partitioning gives each server exclusive ownership of its data -- no coordination needed for writes within a partition. Idempotency makes retries safe -- no coordination needed to prevent duplicate execution. CRDTs make concurrent updates automatically mergeable -- no coordination needed to resolve conflicts. These are not workarounds or compromises. They are the right answer when they fit. Design away the need for coordination first. Implement the coordination mechanism second.
 
-When you do genuinely need coordination — and sometimes you genuinely do — the tools exist and they are excellent. etcd and ZooKeeper implement consensus correctly, have survived years of production use at enormous scale, and have well-documented operational properties. Redis provides fast, practical distributed locks for cases where the occasional edge case failure is acceptable. Raft provides replicated state machines with strong theoretical guarantees, implemented in mature software with good observability. You do not need to build these tools from scratch. You need to understand them well enough to choose them appropriately, configure them correctly, and monitor them effectively. The challenge is not the algorithm — it is the judgment.
+When you do genuinely need coordination -- and sometimes you genuinely do -- the tools exist and they are excellent. etcd and ZooKeeper implement consensus correctly, have survived years of production use at enormous scale, and have well-documented operational properties. Redis provides fast, practical distributed locks for cases where the occasional edge case failure is acceptable. Raft provides replicated state machines with strong theoretical guarantees, implemented in mature software with good observability. You do not need to build these tools from scratch. You need to understand them well enough to choose them appropriately, configure them correctly, and monitor them effectively. The challenge is not the algorithm -- it is the judgment.
 
-The skill that separates L5 from L6 on these topics is a shift in mindset, not a difference in knowledge. An L5 engineer knows how coordination works. They can explain leader election, describe the Raft log replication protocol, and implement a Redis lock correctly. An L6 engineer knows what happens when coordination fails — has already designed for that failure, has written the degraded mode behavior into the runbook, and can describe the exact behavior their system provides during a ZooKeeper outage at 3am. That second-order thinking — not "how does it work when it works" but "how does it fail when it fails, and what does my system do then" — is what interviewers are looking for at the senior level. It is also what prevents the 2am incidents that wake up the whole team. You cannot build that knowledge by reading. You build it by designing, operating, and debugging real systems. This chapter gives you the conceptual scaffolding. The real understanding comes when you use it.
+The skill that separates L5 from L6 on these topics is a shift in mindset, not a difference in knowledge. An L5 engineer knows how coordination works. They can explain leader election, describe the Raft log replication protocol, and implement a Redis lock correctly. An L6 engineer knows what happens when coordination fails -- has already designed for that failure, has written the degraded mode behavior into the runbook, and can describe the exact behavior their system provides during a ZooKeeper outage at 3am. That second-order thinking -- not "how does it work when it works" but "how does it fail when it fails, and what does my system do then" -- is what interviewers are looking for at the senior level. It is also what prevents the 2am incidents that wake up the whole team. You cannot build that knowledge by reading. You build it by designing, operating, and debugging real systems. This chapter gives you the conceptual scaffolding. The real understanding comes when you use it.
 
-These ideas will feel abstract the first time through. Split-brain, fencing tokens, election storms — they are vivid in description but not yet real. They become real the first time you watch your monitoring show two simultaneous leaders in a production system. They become real the first time you trace a customer's double-charge to a GC pause that outlasted a lock TTL. They become real the first time you participate in a post-mortem for an outage that started as a 3-second network hiccup and lasted two hours because three design decisions stacked badly against each other. The analogies in this chapter — the restaurant bill everyone waits for before paying, the bathroom key that only one person holds at a time, the jury that cannot deliver a verdict until all twelve members agree — are handholds you can grab while the real mental models form. The real models form through experience. The analogies get you to the experience. Use them, and then go build something.
+These ideas will feel abstract the first time through. Split-brain, fencing tokens, election storms -- they are vivid in description but not yet real. They become real the first time you watch your monitoring show two simultaneous leaders in a production system. They become real the first time you trace a customer's double-charge to a GC pause that outlasted a lock TTL. They become real the first time you participate in a post-mortem for an outage that started as a 3-second network hiccup and lasted two hours because three design decisions stacked badly against each other. The analogies in this chapter -- the restaurant bill everyone waits for before paying, the bathroom key that only one person holds at a time, the jury that cannot deliver a verdict until all twelve members agree -- are handholds you can grab while the real mental models form. The real models form through experience. The analogies get you to the experience. Use them, and then go build something.
 
 ---
 
 ## One Final Thought: The Thing That Does Not Show Up in Notes
 
-Everything in this chapter can be studied. The concepts, the numbers, the failure modes, the frameworks — all of it can be memorized, practiced, and retrieved on demand. But there is one thing that does not show up in notes and cannot be studied:
+Everything in this chapter can be studied. The concepts, the numbers, the failure modes, the frameworks -- all of it can be memorized, practiced, and retrieved on demand. But there is one thing that does not show up in notes and cannot be studied:
 
 The instinct.
 
-The instinct that fires when you see a design and immediately feel something is wrong — not because you consciously traced through the failure modes, but because your pattern-matching has been trained on enough examples that the wrongness is viscerally obvious. The engineer who worked through 30 distributed lock failures during an on-call rotation has that instinct. The engineer who read about 30 lock failures in a textbook has a much weaker version of it.
+The instinct that fires when you see a design and immediately feel something is wrong -- not because you consciously traced through the failure modes, but because your pattern-matching has been trained on enough examples that the wrongness is viscerally obvious. The engineer who worked through 30 distributed lock failures during an on-call rotation has that instinct. The engineer who read about 30 lock failures in a textbook has a much weaker version of it.
 
-The closest you can get to building that instinct without the on-call rotation is deliberate, repeated, effortful practice on the questions and exercises in this chapter — combined with deploying and operating real systems, even small ones, even personal projects. Build a tiny distributed job scheduler. Deploy a 3-node Redis cluster and watch what happens during a failover. Intentionally trigger a split-brain in a test environment and observe the symptom. Run the Raft log walkthrough exercise until it is completely boring — until you can draw the log state at any step without hesitation.
+The closest you can get to building that instinct without the on-call rotation is deliberate, repeated, effortful practice on the questions and exercises in this chapter -- combined with deploying and operating real systems, even small ones, even personal projects. Build a tiny distributed job scheduler. Deploy a 3-node Redis cluster and watch what happens during a failover. Intentionally trigger a split-brain in a test environment and observe the symptom. Run the Raft log walkthrough exercise until it is completely boring -- until you can draw the log state at any step without hesitation.
 
 The mental models in this chapter are correct. But mental models are not instinct. Instinct comes from repetition. Do the work.
 
 ---
 
 *End of Chapter 22, Part D. This concludes the four-part chapter on Leader Election, Coordination, and Distributed Locks.*
+
+---
+
+## Supplemental Brainstorming: Chapter 22 -- Leader Election
+
+### Section A: Advanced Coordination Patterns (Q34-Q40)
+
+**Question 34 -- Raft leader election under a network partition, step by step**
+
+A 5-node Raft cluster (A, B, C, D, E) is healthy. Node A is leader in term 7.
+A partition splits the cluster into {A, B} and {C, D, E} for 20 seconds.
+
+- Within {C, D, E}: timeouts are 150-300ms, no heartbeats from A. Which node triggers first? What does it send? Does it win?
+- Within {A, B}: A keeps sending heartbeats. Does A have quorum (majority of 5)? Can A safely commit new entries? Is this a safety violation?
+- C wins (term 8), commits entries 101-110. Partition heals at t=20s. A reconnects. Walk through reconciliation: what happens to A's "committed" writes? Were they truly durable?
+- Follow-up: Change the partition to {A, B, C} and {D, E}. A has quorum. D and E time out and try to elect. Can they get enough votes? What prevents two simultaneous valid leaders?
+
+---
+
+**Question 35 -- Raft election with simultaneous candidates and the pre-vote optimization**
+
+A 5-node Raft cluster has election timeouts in the 150-300ms range.
+Nodes B and C both time out simultaneously (B at 152ms, C at 158ms) and both send RequestVote.
+
+- Walk through the split-vote: if A hears B first and D hears C first, who wins? Does E break the tie?
+- If B gets 2 votes and C gets 2 votes (no majority of 3), a new round starts with fresh random timeouts. Calculate the probability of another split. Why does widening the timeout range help convergence?
+- Pre-vote: before incrementing its term, a candidate sends PreVote RPCs. A node grants a pre-vote only if it has not heard from a valid leader recently AND the candidate's log is current. Node A is briefly isolated; B and C form a healthy quorum. A triggers repeated elections, incrementing the term each time. How does pre-vote prevent A from destabilizing the cluster?
+- Follow-up: etcd uses pre-vote by default since v3.4. A developer argues it adds an extra round trip and slows election by 100-200ms. Under what failure scenarios is the extra round trip clearly worthwhile? When would you disable it?
+
+---
+
+**Question 36 -- etcd vs ZooKeeper: a concrete coordination decision**
+
+50 services register on startup, discover each other, and elect a coordinator.
+You must choose between etcd 3.x and ZooKeeper 3.8.
+
+- API model: etcd is a flat key-value store with client-side lease TTLs; ZooKeeper is a hierarchical znode tree with server-managed ephemeral nodes. For service registration, which model is more natural? What does a ZooKeeper ephemeral znode give you that an etcd lease does not?
+- Watch semantics: etcd streams events since a given revision. ZooKeeper watches are one-shot (must re-register after firing). During 100 registrations/second, a slow ZooKeeper client falls behind. How does this create an inconsistent view? What is the standard workaround?
+- Session vs lease: ZooKeeper expires sessions server-side. etcd requires client KeepAlive calls. If a client is OOM-killed, who revokes the registration faster?
+- Follow-up: Your org already runs Kubernetes (uses etcd internally). A new engineer proposes adding ZooKeeper "because Kafka requires it." How do you respond? Name one workload -- not Kafka -- where ZooKeeper genuinely wins.
+
+---
+
+**Question 37 -- Fencing tokens: the GC pause scenario in full detail**
+
+A distributed lock has a 10-second TTL. Lock holder gets token 42.
+A 14-second JVM GC pause: TTL expires, service B acquires the lock (token 43),
+database updates its stored token to 43. At t=14s, service A resumes with token 42.
+
+- Walk through the storage-layer rejection: what does the database check, what does it see, and what does it return to service A?
+- Implement fencing on an NFS-mounted log file (no native token field). One approach: a metadata file (fencing_token.txt) on NFS. Before each append, read the file, check the token, atomically update it. What POSIX operation gives atomicity? What POSIX operation does NOT?
+- Common mistake: developers check the fencing token in application code before the write, but the write itself does not carry the token. Why is check-then-act unsafe? What is the time window between the check and the write where the bug surfaces?
+- Follow-up: Amazon S3 does NOT support fencing tokens natively. Name two storage systems that support server-side fencing and two that require client-side workarounds. Why is native support architecturally superior?
+
+---
+
+**Question 38 -- Thundering herd during leader re-election**
+
+A ZooKeeper cluster has 500 clients, each watching /election/leader.
+The leader crashes. ZooKeeper deletes the node after the 6-second session timeout.
+All 500 watches fire at the same moment.
+
+- Naive implementation: every client immediately tries to create /election/leader. 499 fail, triggering another watch. Count the RPCs in the first 100ms: create requests, stat requests, watch registrations. This is the thundering herd.
+- The fix: sequential ephemeral node pattern. Each client creates /election/guid-N. Each watches only the next-lowest sequence node. Walk through election with 5 clients: node 1 (lowest) is leader and crashes. Which node fires a watch? Who becomes leader? Total ZooKeeper RPCs?
+- Stress-test: the pattern converts O(N) storms into O(1) per round. But if the newly eligible candidate also crashes immediately, it recurses. In a 10-candidate pool where the first 3 candidates each die immediately after becoming eligible, how many total ZooKeeper round trips does the worst case require?
+- Follow-up: Kubernetes uses a leader-election library backed by etcd leases. Multiple replicas compete simultaneously when the lease expires. How does Kubernetes avoid the thundering herd?
+
+---
+
+**Question 39 -- Distributed cron: guaranteeing exactly-one execution**
+
+A database vacuum job must run exactly once per hour across a 20-node fleet.
+No node is pre-designated as the scheduler. The job takes up to 3 minutes.
+Two simultaneous runs would corrupt the vacuum state.
+
+- Design the etcd-based mutex: each node creates /jobs/vacuum/lock with TTL=T. Only the winner runs. What should T be? If T=60s the lock expires during the 3-minute job. If T=3600s a crash at 10s skips the rest of the hour. What value balances these risks?
+- At-most-once vs at-least-once: a crashed winner means no re-run for the TTL. For a vacuum job (skip-is-ok), this is acceptable. For a payment batch (missed payments = bad), it is not. How do you redesign so a failed run triggers a re-run without allowing two simultaneous runs?
+- TTL drain problem: the winner finishes in 2 minutes, crashes before releasing the lock. No one runs until the TTL expires (say, 5 minutes) -- an unnecessary 3-minute delay. How do you shrink this without setting a dangerously short TTL?
+- Follow-up: Kubernetes CronJobs support concurrencyPolicy=Forbid, Allow, or Replace. Map each policy to the at-most-once / at-least-once / exactly-once spectrum. Which maps most closely to your etcd design?
+
+---
+
+**Question 40 -- Watch and notify in etcd: discovering leader changes reliably**
+
+Twenty follower services track the coordinator by watching /coordinator/current.
+The coordinator overwrites this key on every leadership change.
+
+- A follower starts up and calls Watch("/coordinator/current"). There is a subtle race: between calling Watch and the stream being established, the coordinator may change. Describe the "watch + get" pattern that closes this race. Why must the Get's response revision be compared to the watch's start revision?
+- etcd compacts event history every 5 minutes (default: last 10,000 events). A follower is offline for 7 minutes, reconnects, and calls Watch with last-seen revision R. etcd returns ErrCompacted. Walk through the recovery: what does the follower do next? Which revision should it pass to the new Watch call?
+- The coordinator key changes 500 times per second (pathological). The follower's watch event queue builds faster than it can process. etcd's server-side buffer per watch stream: 1,000 events. Overflow causes etcd to cancel the watch. Is this realistic for a leader-election key, or does the rate indicate a design problem upstream?
+- Follow-up: Compare etcd Watch to ZooKeeper's one-shot watch + getData pattern. Count total round trips for: (a) establishing an initial consistent view, and (b) receiving the next leadership change. Which requires more round trips? When does ZooKeeper's model become equivalent in practice?
+
+---
+
+### Section B: Standalone Cross-Chapter (Q41-Q42, Q47-Q48)
+
+**Question 41 -- Chubby design philosophy and what it influenced**
+
+Google's Chubby (2006) stores small files (a few KB each), maintains a few thousand sessions,
+and processes roughly 100 writes/second in production.
+It is intentionally limited to coarse-grained locking.
+
+- Why coarse-grained only? Walk through what would happen to Paxos leader throughput
+  if each of 10,000 MapReduce tasks tried to acquire a fine-grained Chubby lock per key-value pair.
+  Calculate the write RPC volume. At 100 writes/second capacity,
+  how many tasks can acquire locks per second?
+- Chubby's "jeopardy" state: when a session approaches its timeout,
+  Chubby sends a jeopardy notification and grants the client a 45-second grace period.
+  The client must behave as if its locks are already gone during jeopardy.
+  Compare to etcd's hard TTL expiry.
+  What is the operational advantage of the grace period?
+  Under what failure scenario does the grace period make correctness harder to reason about?
+- Chubby explicitly prohibits using it as a name service for millions of endpoints.
+  A team once registered every Bigtable tablet server address in Chubby and caused an outage.
+  How does this constraint shape Kubernetes architecture?
+  What does etcd store vs what does CoreDNS store, and why is this split correct?
+- Follow-up: You must build a distributed lock service from scratch in 2026.
+  You cannot use etcd, ZooKeeper, or Chubby.
+  Which Raft library would you embed (hashicorp/raft, dragonboat, or other)?
+  What features beyond raw Raft make it production-ready as a lock service?
+
+---
+
+**Question 42 -- PostgreSQL failover with etcd fencing (Ch22 + Ch21)**
+
+Your PostgreSQL setup: one primary (P), two replicas (R1 with zero lag, R2 with 500ms lag).
+Each runs a Patroni agent. Patroni uses etcd as its DCS. The primary P crashes.
+
+- Walk through Patroni's failover sequence in detail:
+  (a) The leader TTL expires in etcd.
+  (b) Both R1 and R2 attempt to acquire /service/postgres/leader.
+  (c) R1 wins (zero lag, higher priority). What etcd operation does R1 use to win atomically?
+  What does R2 do after losing?
+- R1 is promoted. It writes fencing token 88 to etcd.
+  Eight seconds later, the old primary P recovers from a temporary network partition.
+  P's etcd session has expired. P's Patroni agent tries to re-register.
+  What does it discover? What command does Patroni issue to prevent P from accepting writes?
+- R2 (500ms lag) was not promoted. R2 missed 50,000 unflushed WAL bytes.
+  Those bytes were never replicated before P crashed.
+  Are those writes lost permanently? What does synchronous_commit do to prevent this loss,
+  and what availability cost does it impose?
+- Follow-up: Patroni's "pause" mode: if etcd is unreachable, Patroni pauses automatic failover.
+  The existing primary continues. Replicas do not self-promote.
+  Compare to a system that promotes a replica automatically even when etcd is unreachable.
+  Which is safer for a financial database, and why?
+
+---
+**Question 47 -- Split-brain, STONITH, and the two-node cluster problem**
+
+A trading system uses a distributed lock (via etcd) to ensure exactly one execution engine runs.
+A prolonged network partition causes N1 and N2 to both believe the other is dead.
+Both execute trades simultaneously.
+
+- Define split-brain precisely: under what exact sequence -- partition timing, TTL expiry, lease renewal gaps -- do both nodes legitimately believe they hold the lock? Is this a bug in etcd, a protocol bug, or an inherent property of asynchronous networks?
+- STONITH resolves split-brain by power-cycling the peer via IPMI/iDRAC. If both the application network AND the STONITH network are partitioned simultaneously, what is the safe default for each node? Options: both run, both stop, one runs. Which is safest for a trading system?
+- Compare STONITH vs fencing tokens: STONITH works even if storage is unresponsive but requires hardware and 30-60s recovery time. Fencing tokens require storage-layer enforcement. Which is more suitable when the shared resource is a third-party FIX engine your team does not control?
+- Follow-up: Two-node cluster problem. With N1 and N2, Raft cannot form quorum (needs 2 of 2). Patroni adds a "witness" node: lightweight, participates in etcd quorum, does NOT run PostgreSQL. Why does the witness solve the two-node problem? What is its resource footprint?
+
+---
+
+**Question 48 -- Designing coordination-as-a-service on top of etcd**
+
+200 microservices connect directly to etcd. Incidents: TTL misconfiguration, missing fencing, no audit trail. Build a coordination service that wraps etcd and enforces correctness.
+
+- Design the API: five primitives -- AcquireLock(resource, ttl) -> (token, lease_id), RenewLock(lease_id), ReleaseLock(lease_id, token), GetLeader(group) -> (leader_id, token), Watch(key) -> event stream. For each, what happens when etcd is unavailable? Does AcquireLock fail open or fail closed? Justify.
+- The coordination service is stateless (state in etcd), 3 replicas behind a load balancer. Its own address must be discoverable -- but you cannot use it to discover itself. Describe three solutions: (a) hard-coded DNS, (b) service mesh sidecar, (c) client-embedded etcd endpoints. Failure modes of each?
+- Every acquire/release must be audited: timestamp, service identity (mTLS), resource, token, outcome. The log must survive coordination service failures. Option A: etcd side-effect key. Option B: Kafka topic. Option C: PostgreSQL table. For each: durability guarantee, ordering guarantee, cost per operation.
+- Follow-up: A misbehaving service acquires, crashes, restarts, re-acquires -- 500 times/second. That is 500 lease RPCs/second against etcd (5% of etcd's 10,000 RPS capacity). Design the rate limiter: algorithm, limit per service identity, and response to the rate-limited client.
+
+---
+
+---
+
+### Cross-chapter from Ch21: Automatic Failover and Split-Brain Risk
+
+**Question 41 -- Ch21 + Ch22: Automatic Failover and the Split-Brain Risk**
+
+Your PostgreSQL cluster: one leader, two followers. Patroni manages leader election using etcd as the distributed coordination store. At 2:14 AM, both followers detect the leader has not sent a heartbeat for 5 consecutive seconds. The configured timeout is 5 seconds. Follower A begins the promotion process.
+
+Meanwhile, the leader did not die. It experienced a 7-second network isolation to the etcd cluster and to the followers -- but it continued accepting writes from the application tier, which could still reach it directly. During those 7 seconds, the leader accepted 340 writes.
+
+- Define split-brain precisely in this context. What is the specific data integrity problem created when two nodes simultaneously believe they are the leader and both accept writes? At what moment in the 7-second window does split-brain begin, and at what moment does it end?
+- Patroni uses etcd for leader election. Explain the mechanism: what does a Patroni leader hold in etcd, how does it renew that hold, and why does the failure to renew cause the leader to voluntarily step down before a new leader is elected? Why does this mechanism prevent split-brain in the normal case?
+- STONITH (Shoot The Other Node In The Head) is used to forcefully fence the old leader before the new leader begins accepting writes. What failure scenario is STONITH designed to close that etcd-based election alone cannot close? Write the specific sequence of events where etcd election succeeds but split-brain still occurs without STONITH.
+- Follow-up: The 7-second isolation ends. The original leader reconnects to etcd. Patroni instructs it to step down and rejoin as a follower. The 340 writes it accepted during the isolation are not on the new leader (Follower A). What happens to those 340 writes? Does Patroni automatically replay them, discard them, or leave them for the operator to handle? What is the state of the data visible to the application immediately after the old leader rejoins as a follower? What monitoring metric tells you that 340 writes were diverged and not yet reconciled?
+
+> *Discussion notes:*
+> - *Split-brain begins the moment Follower A claims the etcd leader lock AND the old leader has not yet received the etcd session expiry notification. It ends when STONITH powers off the old leader.*
+> - *Patroni's etcd mechanism: the current leader holds a lease in etcd (e.g., TTL = 30 seconds) and renews it every 10 seconds. If renewal fails (network isolation from etcd), the lease expires. Follower A detects the expired lease and runs the election. The old leader, isolated from etcd, runs a watchdog that kills the local PostgreSQL process when the lease expires -- this is the software fence.*
+> - *Why STONITH is needed despite etcd: the watchdog is a software process on the old leader. If it is slow (OOM kill, OS scheduler delay), there is a window where both PostgreSQL processes run as primary. STONITH sends a BMC/IPMI power-off command from the new leader to the old leader node -- guaranteed at the hardware level, independent of software state.*
+> - *The 340 diverged writes: Patroni does not replay them automatically. They are accessible as WAL segments on the old leader's disk (now a follower). An operator must make a manual decision: replay (risk conflicts with new leader's writes in the same window) or discard (accept permanent data loss for those 340 writes). This is a data integrity incident requiring a human decision -- not just an availability incident.*
+> - *Post-incident check: monitor diverged_from_timeline metric in Patroni or compare pg_last_xact_replay_timestamp on the rejoined follower against the new leader's. Any gap in LSN sequence indicates diverged writes.*
+
+---
+
+
+### Cross-chapter from Ch21: Replication Lag During Leader Election
+
+**Question 46 -- Ch21 + Ch22: Replication Lag During Leader Election and Recovery**
+
+Your 3-node PostgreSQL cluster (1 leader, 2 followers) is running at steady state: 400ms replication lag on both followers. At 3:14 AM, the leader crashes. Patroni detects the failure in 10 seconds. Follower A was 400ms behind at the moment of crash. Follower B was 800ms behind. Patroni promotes Follower A because it has less lag. Total time from crash to new leader ready: 15 seconds. During those 15 seconds, application writes queue at the connection pool.
+
+- Trace the state of each component at five moments: T+0 (crash), T+10 (Patroni detects failure), T+15 (Follower A promoted), T+20 (queued writes begin applying to new leader), T+180 (steady state restored). For each moment, answer: what can the application write? What can the application read? What is Follower B's replication lag relative to the new leader?
+- During the 15-second leadership gap, 200 writes queue at the connection pool. These writes were sent by the application but not acknowledged. When the new leader is ready at T+15, the connection pool sends the 200 writes sequentially. If each write takes 5ms, how long until the last queued write is applied? What is the P99 latency for the write submitted at T=0 (before the crash) compared to a write submitted at T=16 (after the new leader is ready)?
+- Follower B was 800ms behind at T=0. Follower A (now the new leader) was 400ms behind. After promotion, Follower B must catch up to Follower A's state -- meaning it must apply the WAL that Follower A received from the old leader between T-800ms and T-400ms (the 400ms gap), plus any new writes applied since promotion. Estimate the total catch-up data Follower B must apply, assuming 12,000 writes/second at 500 bytes per write. How long does catch-up take if Follower B can apply at 15,000 writes/second?
+- Follow-up: During Follower B's catch-up, it is not available for reads (its data is too stale). Your application routes reads to the available follower (Follower A) and the primary (new leader). If your read traffic is 100,000 reads per second normally split 50/30/20 across primary and two followers, what is the read load on the primary and Follower A during catch-up? Is this within their capacity? What is the latency impact?
+
+> *Discussion notes:*
+> - *State trace: T+0 -- application cannot write (leader dead), reads from followers at 400ms and 800ms lag. T+10 -- Patroni detects failure, election starts. T+15 -- Follower A promoted, connection pool reconnects, writes resume. T+20 -- queued 200 writes begin applying. T+180 -- Follower B fully caught up, steady state restored.*
+> - *Queue drain timing: 200 queued writes x 5ms = 1 second. First write from queue: acknowledged at T+15.005. Last write: acknowledged at T+16. P99 write latency for a write submitted at T=0 (before crash, connection error received): the application retries. First available retry succeeds at T+15. Effective P99 from user perspective: 15 seconds.*
+> - *Catch-up data calculation: Follower A was 400ms behind at crash. 400ms x 12,000 writes/second = 4,800 writes Follower B must apply from the old leader's WAL, plus all writes arriving at the new leader after T+15. At apply rate 15,000/s and incoming rate 12,000/s: net gain = 3,000 writes/second. 4,800 / 3,000 = 1.6 seconds to drain the initial gap.*
+> - *Read load during Follower B catch-up: normally primary handles 50% of reads (50,000/s), Follower A 30%, Follower B 20%. During catch-up, Follower B unavailable. Primary absorbs Follower B's 20% share: primary now at 70,000 reads/second. Primary capacity ceiling: ~80,000 reads/second (reads + write overhead). System is at 87% capacity -- monitor closely, not in danger but watch for any additional load.*
+
+---
+
+
+---
+
+## Production Incident 1: Elasticsearch Split-Brain at a Financial Firm (2019)
+
+**Company:** A major financial data services firm (name not disclosed publicly; incident widely circulated in the Elasticsearch community)
+**Year:** 2019
+**System:** Elasticsearch 6.x cluster used for real-time trade indexing and analytics
+
+---
+
+### What Happened
+
+Imagine a country that has one president. The president makes all the final decisions -- which laws pass, which budgets get approved. Now imagine the country briefly splits in two because a mountain range floods and cuts off communication for 30 minutes. Each half of the country still has its congress, and each half elects a new president because they think the old one is dead. When the flood drains, there are two people who each sincerely believe they are the rightful president. Both have been signing laws. Both have been spending money. The country's books are now a mess.
+
+This is exactly what happened to this financial firm's Elasticsearch cluster in 2019.
+
+The cluster ran 7 nodes. Elasticsearch's master election at the time required `discovery.zen.minimum_master_nodes` to be set to prevent split-brain. The correct formula is `(N/2) + 1` -- for a 7-node cluster, that is 4. The firm's configuration had this value set to 2. It had been set to 2 during initial testing with a 3-node cluster, and nobody updated it when the cluster grew.
+
+On a Tuesday afternoon, a network switch firmware upgrade caused a 45-second partition. The 7 nodes split into two groups: 4 nodes on one side, 3 nodes on the other.
+
+With `minimum_master_nodes = 2`, both groups had enough nodes to elect a master. They both did. Two masters ran simultaneously for 45 seconds.
+
+Both masters accepted writes. Both wrote trade records into their own version of the index. When the partition healed, both masters tried to sync. Elasticsearch could not automatically resolve the diverged segment files. The index was corrupted.
+
+The data recovery effort took 6 hours of downtime and an additional 4 days of data reconciliation. The external audit for regulatory compliance added $2M in costs.
+
+---
+
+### The Technical Failure
+
+Elasticsearch 6.x used Zen Discovery, a bespoke master election protocol that was not a true implementation of Raft or Paxos. It used a quorum check on startup and on partition detection, but that quorum check was controlled by a single integer: `minimum_master_nodes`.
+
+The failure chain:
+
+1. Network partition splits cluster into {A, B, C, D} and {E, F, G}.
+2. Both sides detect master heartbeat loss (master was in group {A, B, C, D}).
+3. Group {A, B, C, D} re-elects master A1. `min_master_nodes = 2`, they have 4 -- election proceeds.
+4. Group {E, F, G} also elects master E1. `min_master_nodes = 2`, they have 3 -- election proceeds.
+5. Both masters begin accepting writes. Both confirm to clients: writes acknowledged.
+6. Trade records are written to A1's index (4 nodes). Same trade IDs are written with different data to E1's index (3 nodes).
+7. Partition heals at T+45s. Both masters are still running. Elasticsearch does not have a fencing mechanism -- no STONITH, no epoch-based write rejection.
+8. Cluster enters an irresolvable conflict. Segment files from both sides are incompatible.
+
+The core issue: Zen Discovery's quorum was advisory, not enforced at the storage level. A write was accepted if the local master said yes -- not if a majority of the cluster agreed.
+
+---
+
+### ASCII Diagram: The Failure Sequence
+
+```
+T=0: Normal cluster, 7 nodes, Master = Node A
++-----------------------------------------------+
+| Cluster                                       |
+|  [A*]--[B]--[C]--[D] ... [E]--[F]--[G]       |
+|  (* = master)                                 |
+|  min_master_nodes = 2 (WRONG -- should be 4)  |
++-----------------------------------------------+
+
+T=5s: Network switch firmware upgrade causes partition
++---------------------+   X   +-------------------+
+| Partition 1         |   X   | Partition 2       |
+| [A*]  [B]  [C]  [D] | /X\   | [E]   [F]   [G]  |
+|  4 nodes            |  X    |  3 nodes           |
++---------------------+   X   +-------------------+
+                         X
+         network switch firmware update
+         cuts link for 45 seconds
+
+T=8s: Both partitions detect master heartbeat loss
++---------------------+       +-------------------+
+| Partition 1         |       | Partition 2       |
+| Elects A1 as master |       | Elects E1 as      |
+| 4 >= 2: ALLOWED     |       | master            |
+|                     |       | 3 >= 2: ALLOWED   |
++---------------------+       +-------------------+
+         |                             |
+         v                             v
+  Accepts writes:              Accepts writes:
+  trade_id=T101 price=99.50    trade_id=T101 price=99.48
+  trade_id=T102 status=filled  trade_id=T102 status=partial
+
+T=50s: Partition heals
++---------------------------------------------+
+| Both masters still running                  |
+| A1: "I am master, I have T101 @ 99.50"      |
+| E1: "I am master, I have T101 @ 99.48"      |
+|                                             |
+|         CONFLICT -- no fencing token        |
+|         no epoch-based write rejection      |
+|         no automatic resolution possible    |
++---------------------------------------------+
+
+T=60s: Elasticsearch detects two masters, both step down
++---------------------------------------------+
+| Cluster leaderless                          |
+| Index segments from A1 and E1 are diverged  |
+| Merge fails -- segment format incompatible  |
+| Index is CORRUPT                            |
++---------------------------------------------+
+
+RESULT: 6-hour downtime, 4-day data reconciliation
+        $2M in audit and recovery costs
+```
+
+---
+
+### Root Cause
+
+`discovery.zen.minimum_master_nodes = 2` on a 7-node cluster. The correct value was 4. This single misconfigured integer removed the quorum safety net that prevents split-brain.
+
+Secondary cause: no monitoring alert existed for the `minimum_master_nodes` value relative to cluster size. When the cluster grew from 3 to 7 nodes over 18 months, no automated check verified that this parameter was updated.
+
+---
+
+### Fix
+
+**Immediate:** Restore index from last clean snapshot (T-4 hours). Replay 4 hours of trade event log from upstream Kafka topics to reconstruct the missing records. Manual reconciliation of the 45-second window where both masters wrote diverged records.
+
+**Configuration fix:**
+```
+discovery.zen.minimum_master_nodes: 4   # was 2
+```
+
+**Architecture fix (long-term):** Migrate to Elasticsearch 7.x, which removed `minimum_master_nodes` entirely. ES7 introduced a new election algorithm (based on Raft principles) that automatically computes the safe quorum and does not allow operator misconfiguration of this value. The cluster was upgraded 3 months later.
+
+**Process fix:** Added a startup check that computes the correct `minimum_master_nodes` value based on cluster size and alerts if the configured value is wrong. Added runbook step: any cluster resize requires a parameter audit.
+
+---
+
+### Staff Engineer Lessons
+
+- **A single misconfigured integer can destroy data integrity at scale.** The `minimum_master_nodes` value was not a subtle tuning parameter -- it was a fundamental safety threshold. Treat quorum values the same way you treat firewall rules: they require explicit review on every topology change, not just initial setup.
+- **Zen Discovery was not Raft.** Raft's safety guarantee is built into the protocol itself -- a node cannot commit a write unless a majority of nodes acknowledge it. Zen Discovery delegated that guarantee to operator configuration. When evaluating distributed coordination systems, ask: "Is the safety property enforced by the protocol, or by correct configuration?" If it is the latter, you are one misconfiguration away from data loss.
+- **No fencing = no safety.** The reason the split-brain was catastrophic rather than recoverable is that Elasticsearch had no epoch-based write rejection. A newly elected master should issue a new epoch (generation number). Old masters should reject writes from clients who send requests referencing the new epoch. Without this, an old master will happily keep writing after it has been superseded.
+- **Monitoring must cover configuration invariants, not just operational metrics.** CPU and latency dashboards will not tell you that your quorum threshold is wrong. Add invariant checks: "Is `minimum_master_nodes` equal to `floor(N/2) + 1`? Alert if not." These checks should run on every node addition or removal.
+
+---
+
+## Production Incident 2: Uber's etcd Clock Skew Incident (2021-era)
+
+**Company:** Uber
+**Year:** 2021 (approximate; referenced in internal postmortem summaries shared at distributed systems conferences)
+**System:** Uber's dispatch coordination service -- the system that assigns drivers to ride requests
+
+---
+
+### What Happened
+
+Imagine you rent a storage locker at a facility. The facility uses an electronic lock. The rule is: you hold the lock for 10 minutes, then it auto-expires and someone else can rent it. You put your stuff inside at 9:00 AM. The clock on the lock machine is running slow -- it thinks it is 8:55 AM when you leave at 9:09 AM. So it does not expire your lock until 9:15 AM by facility time, but your personal watch says you stopped paying at 9:09 AM. Meanwhile, the facility has already given a new renter a key starting at 9:09 AM because its internal log says you left at 9:04 AM (the slow clock's version of 9:09). Now two people have keys to the same locker. Both are putting things inside at the same time.
+
+This is approximately what happened at Uber in 2021. The "locker" was a distributed lock on a specific job queue entry. The "two people" were two instances of Uber's dispatch service. The "stuff inside the locker" was a driver assignment decision.
+
+Uber's dispatch coordination service used etcd as a distributed lock store. Each dispatch service instance acquired a lease on a job entry (a pending ride request) before processing it. The lease TTL was 15 seconds: if a service instance did not renew within 15 seconds, the lease expired and another instance could acquire it.
+
+The problem: NTP synchronization failed on a subset of Uber's hosts. Three hosts experienced clock drift of 8-12 seconds. When a dispatch instance on a drifted host acquired a lease, its local clock was 10 seconds behind real time. It calculated "I have 15 seconds left on my lease" when in reality, from etcd's perspective (which uses its own monotonic clock), the lease had 5 seconds left. The instance took its full expected 15 seconds to process the job. But from etcd's perspective, the lease expired at 5 seconds. At second 6, etcd made the lease available. A second dispatch instance on a non-drifted host acquired the lease and began processing the same job.
+
+Both instances completed driver assignment for the same ride request. Two drivers received notifications for one rider. One driver accepted and drove to the pickup. The second driver also drove to the pickup. Both drivers showed up. One driver had wasted a trip. The rider was confused. Uber's support cost for driver compensation was non-trivial at scale -- this pattern repeated for roughly 6 hours across approximately 0.3% of dispatches.
+
+---
+
+### The Technical Failure
+
+etcd leases are granted with a TTL expressed in seconds. etcd's internal clock is wall-clock time on the etcd leader. When a client acquires a lease, etcd records the grant time using its own clock.
+
+The client's local clock is used for one thing: deciding when to renew. If the client's clock drifts behind real time, it thinks it has more time remaining than it actually does. It delays the renewal heartbeat. etcd sees the renewal deadline pass without a heartbeat. The lease expires server-side. etcd makes the key available to new acquirers.
+
+Meanwhile the original client is still executing against the shared resource, believing its lease is valid.
+
+This is the classic "lease granted, clock drifts, lease expires on server while client still holds the resource" failure. It is documented in the Chubby paper (Google, 2006) and the etcd documentation, but the fix (fencing tokens) requires application-layer support that Uber's dispatch service did not have at the time.
+
+The specific failure chain at Uber:
+
+1. NTP daemon on 3 hosts fails to sync. Hosts drift 8-12 seconds behind.
+2. Dispatch instance D1 on a drifted host acquires lease on job J-5519, lease TTL = 15s.
+3. D1's local clock: T=0. D1 calculates renewal deadline: T=12 (renew at 80% of TTL).
+4. etcd's clock: T=0. etcd records lease expiry at real T=15.
+5. D1 begins processing J-5519. Local clock drifts. Real time passes faster than D1 believes.
+6. At real T=10, D1's local clock shows T=2. D1 thinks it has 10 seconds left. Does not renew.
+7. At real T=15, etcd expires the lease. Lease is released in etcd.
+8. Dispatch instance D2 on a healthy host sees the lease available. D2 acquires it at real T=15.
+9. D2 begins processing J-5519. Assigns driver to the ride.
+10. At real T=20 (D1's clock: T=12), D1 finishes processing. D1 also assigns a driver to J-5519.
+11. Two driver assignment messages are published. Two drivers navigate to the pickup.
+
+The job queue database had no idempotency check for driver assignment -- it accepted both writes. The downstream notification service sent both drivers the same rider's location.
+
+---
+
+### ASCII Diagram: The Failure Sequence
+
+```
+CLOCKS:
+  Real time (etcd clock):  ---0---5---10---15---20---25-->
+  D1 local clock (drifted): ---0--2---4----7----12---17-->
+                              ^                ^
+                              | 8-10 sec drift growing over time
+
+LEASE LIFECYCLE IN etcd:
+  Real time:  0         15
+              |---------|
+              lease     lease EXPIRES (etcd perspective)
+              granted
+
+D1 PERSPECTIVE (drifted clock):
+  D1 clock:  0              ~25 (thinks lease valid until ~25)
+              |-------------------------->
+              D1 believes lease is valid here ----------+
+                                                        |
+                                                 D1 finishes,
+                                                 assigns driver A
+
+D2 PERSPECTIVE (healthy clock):
+  Real time:      15         30
+                  |----------|
+                  D2 acquires     D2 finishes,
+                  lease (real     assigns driver B
+                  T=15)
+
+TIMELINE OF EVENTS:
++-------+------------------+----------------------------------+
+| Time  | etcd             | Dispatch service                 |
++-------+------------------+----------------------------------+
+| T=0   | Lease granted    | D1 starts processing J-5519      |
+|       | to D1, TTL=15s   | D1 clock says T=0                |
++-------+------------------+----------------------------------+
+| T=10  | Lease still held | D1 clock says T=2, no renewal    |
+|       |                  | D1 thinks 13 sec remain          |
++-------+------------------+----------------------------------+
+| T=15  | LEASE EXPIRES    | D1 still running, clock says T=7 |
+|       | Released in etcd | D1 thinks 8 sec remain           |
++-------+------------------+----------------------------------+
+| T=15  | D2 acquires      | D2 starts processing J-5519      |
+|       | lease on J-5519  |                                  |
++-------+------------------+----------------------------------+
+| T=20  | D2 holds lease   | D1 finishes: assigns driver A    |
+|       |                  | D2 finishes: assigns driver B    |
++-------+------------------+----------------------------------+
+| T=21  | -                | DB accepts BOTH driver writes    |
+|       |                  | Notification sent to BOTH drivers|
++-------+------------------+----------------------------------+
+| T+30m | -                | Driver A and B both at pickup    |
+|       |                  | Support tickets filed            |
++-------+------------------+----------------------------------+
+
+MISSING PROTECTION:
+  No fencing token:      etcd lease has a version/revision.
+                         DB write should check:
+                         "only apply if lease revision == N"
+                         D1's write has revision 47.
+                         D2's write has revision 48.
+                         DB should reject D1's write after D2 writes.
+                         But this check was NOT implemented.
+
+  No NTP monitoring:     3 hosts drifted 8-12 seconds.
+                         No alert fired. No automatic restart of ntpd.
+```
+
+---
+
+### Root Cause
+
+Two compounding failures:
+
+1. **NTP drift without detection:** Three hosts lost NTP synchronization and drifted 8-12 seconds. No monitoring alerted on clock offset exceeding a safe threshold (typically 1-2 seconds for systems that use lease-based coordination).
+
+2. **Missing fencing token enforcement:** The dispatch service used etcd leases to serialize access to job queue entries, but the database write that committed the driver assignment did not validate that the writing client still held the current lease. This is the fencing token gap. A fencing token (the etcd lease revision number) passed with each database write would have caused the DB to reject writes from clients whose lease had been superseded.
+
+---
+
+### Fix
+
+**Immediate (within 6 hours):** Restart NTP daemon on drifted hosts. This stopped new occurrences. Backfill driver assignments where two drivers were dispatched to the same job: cancel the second assignment, issue compensation to the affected driver.
+
+**Short-term (within 2 weeks):**
+
+Add clock skew monitoring with a hard alert:
+```
+if abs(local_clock - ntp_reference) > 2 seconds:
+    page on-call immediately
+    remove host from dispatch service rotation
+```
+
+**Long-term (within 2 months):** Implement fencing tokens. Each etcd lease has a revision number (a monotonically increasing integer). When D1 acquires lease revision 47, it passes `47` with every database write. The database enforces:
+
+```
+UPDATE job_assignments
+SET driver_id = :driver_id, lease_revision = :rev
+WHERE job_id = :job_id
+  AND (lease_revision IS NULL OR lease_revision < :rev)
+```
+
+If D2 writes with revision 48 first, D1's subsequent write with revision 47 is rejected. The database acts as the final arbiter of "who held the lease most recently."
+
+---
+
+### Staff Engineer Lessons
+
+- **Leases are only as good as the clock they run on.** Any system that uses time-bounded leases for mutual exclusion assumes that local clocks are accurate. This assumption breaks silently. NTP drift is not a hypothetical -- it happens in production, especially after host reboots, kernel upgrades, or hypervisor migrations. Clock skew monitoring is not optional for systems that use distributed locks. Alert threshold: 500ms for most systems, 100ms for high-frequency lock systems.
+- **A lock without a fencing token is a polite suggestion, not a guarantee.** The entire point of a distributed lock is to prevent two processes from acting on the same resource simultaneously. But if the protected resource (the database, the downstream service) does not enforce the "only the current lock holder can write" invariant, the lock is advisory. Every distributed lock implementation must answer: "How does the resource reject writes from a client whose lock has expired?" If the answer is "it doesn't," you do not have a real lock.
+- **etcd leases are not Chubby sessions.** Google's Chubby paper explicitly documents the clock skew problem and recommends that clients treat leases as expiring earlier than the server-side TTL by the maximum expected clock skew plus one heartbeat interval. Uber's dispatch service did not implement this safety margin. Build it in: `effective_remaining = server_ttl - max_clock_skew - one_heartbeat`. Renew before that threshold.
+- **Duplicate processing at 0.3% sounds small; at Uber's scale it is not.** Uber handles millions of trips per day. 0.3% is tens of thousands of duplicate dispatches over 6 hours. Design systems with the assumption that correctness failures have a multiplier proportional to traffic volume. The cost of implementing fencing tokens is one conditional clause in a database write. The cost of not implementing them is support tickets, driver compensation, and an incident postmortem.
+
+---
+
+## L5 vs L6 Calibration: Leader Election and Distributed Locks
+
+| Dimension | L5 (Senior Engineer) | L6 (Staff Engineer) |
+|-----------|----------------------|---------------------|
+| **Consensus algorithm choice** | Knows Raft vs Paxos at a high level; reaches for etcd or ZooKeeper without deep justification | Explains the specific safety properties of each algorithm (leader completeness, log matching); chooses based on write throughput, quorum size, and leader lease semantics; flags when a simpler primary-backup approach is sufficient and Raft is overkill |
+| **Lock design** | Uses `SETNX`/`SET NX PX` in Redis or etcd `Put` with a lease; aware of basic TTL | Designs the full lock lifecycle: acquire with TTL, renew heartbeat at 80% of TTL, release on completion, handle crash-without-release; separates lock acquisition from lock enforcement; specifies what the protected resource does when the lock cannot be verified |
+| **Fencing tokens** | Aware that fencing tokens exist; can describe the concept | Implements fencing tokens end-to-end: etcd revision as token, database conditional write that rejects stale tokens, what to do when a rejected write means the original operation may have partially completed |
+| **Split-brain prevention** | Knows that split-brain is bad; knows quorum helps | Can derive the correct quorum formula for any N-node cluster; explains why quorum at the election layer is insufficient without fencing at the write layer; can describe what correct split-brain recovery looks like for both the in-flight writes and the diverged segments |
+| **etcd operations** | Can use etcd client libraries; knows TTL and watch basics | Understands etcd's linearizable read vs serializable read tradeoff; knows when to use `WithRequireLeader` to prevent stale reads during leader election; can explain etcd's compaction and defragmentation requirements at scale; knows the election key pattern (`/leader/service-name`) |
+| **ZooKeeper vs etcd decision** | Defers to "just use etcd, it's newer" | Makes a structured choice: ZooKeeper for systems that need sequential znodes and watch semantics (distributed queues, service discovery at large scale); etcd for systems that need simpler key-value leases and strong consistency with gRPC; knows that ZooKeeper's ephemeral nodes and etcd's leases solve the same problem differently |
+| **Lease TTL tuning** | Sets TTL to a round number (30s, 60s) without analysis | Derives TTL from: max acceptable failover time, heartbeat interval, max clock skew, and p99 renewal latency under load. Example: failover target = 10s, heartbeat = 3s, clock skew = 500ms, renewal p99 = 1s --> TTL = 8s (tight but correct). Knows that TTL too short causes false expirations under GC pauses |
+| **Coordination overhead** | Treats coordination as a fixed cost; adds locks when needed | Quantifies coordination overhead: each etcd round trip ~1ms at p50, 5ms at p99 under load. Avoids coordination on the hot path by using optimistic concurrency at the DB layer and reserving distributed locks for true mutual exclusion requirements (not just "feels safer") |
+| **Failure detection** | Relies on heartbeat timeout as the only failure detector | Layers failure detection: heartbeat timeout (coarse), application-level health check (medium), hardware watchdog or STONITH (hard guarantee). Understands that software failure detectors have false positive rates and designs the system to be correct under false positives |
+| **Distributed cron design** | Uses a single cron host or a simple lock around job execution | Designs distributed cron with leader election for the scheduler, idempotent job execution at the worker level, and a job log that allows replay on crash. Explicitly handles the "job started but leader died before marking complete" case. Knows that etcd-backed distributed cron (like Kubernetes CronJob) uses leader election for the controller, not for each individual job |
+| **Multi-region coordination** | Knows that multi-region coordination is hard; avoids it | Can articulate why cross-region locks have prohibitive latency (one round trip across US regions = 70ms; lock + operation + release = 210ms min). Designs to avoid cross-region coordination: region-local leaders with cross-region replication of the outcome, not cross-region consensus for every operation |
+| **Clock skew awareness** | Knows that NTP can drift; treats it as an edge case | Treats clock skew as an operational invariant to monitor and enforce. Designs lease renewals with a skew safety margin. Specifies the monitoring alert: alert if `chronyc tracking` or `timedatectl` reports offset > 500ms. Knows that virtualized environments and live migration cause sudden clock jumps that NTP cannot immediately correct |
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+Same problem at four levels: you have a job scheduler that must run each job exactly once across 10 servers.
+
+### Intern Level: "Check a flag in the database"
+
+The intern adds a column `is_running` to the jobs table. Before starting a job, check: "is is_running = true?" If no, set it to true and run. When done, set to false.
+
+Think of this like two roommates deciding who cooks dinner by checking if the stove is on. Except: what if both check at the same moment and both see the stove is off? Both start cooking. Two dinners. Race condition.
+
+The intern's database flag has an identical race: two servers check `is_running` at the same time, both see false, both set true, both run the job. The "lock" is an illusion because the check-then-set is not atomic.
+
+### Mid-Level (L4): "Use a database transaction with SELECT FOR UPDATE"
+
+L4 knows about database locks. They use `SELECT FOR UPDATE` to atomically claim the job: "SELECT * FROM jobs WHERE id = X AND is_running = false FOR UPDATE." The database lock prevents two servers from claiming the same job simultaneously.
+
+This works. Until: what if the server that claimed the job crashes mid-execution? The row stays locked forever. The `FOR UPDATE` lock is held by a database connection. If the connection dies (server crash), the database releases the lock. But now the job is half-done, and no other server knows it was partially executed.
+
+L4 fixed the race condition, but created a new problem: what happens after a crash?
+
+### Senior (L5): "Use a distributed lock with a TTL"
+
+L5 uses etcd or Redis with a TTL-based lease: "Acquire lock with 30-second TTL. Run the job. Renew the lock every 10 seconds while running. Release when done."
+
+If the server crashes: the lock expires after 30 seconds, another server acquires it and re-runs the job.
+
+L5 also adds idempotency: jobs must be safe to re-run (idempotent). Before running, check if this job was already partially completed (checkpoint table). Resume from checkpoint instead of restarting from scratch.
+
+```
+L5 DISTRIBUTED LOCK PATTERN:
+  1. Acquire lock (etcd lease, 30s TTL)
+  2. Start job, write checkpoint every N records
+  3. Renew lease every 10s while running
+  4. If crash: lock expires, new server picks up from checkpoint
+  5. Release lock when done
+
+  Key insight: TTL + checkpoint = crash-safe exactly-once execution
+```
+
+L5 thinks about the failure mode: what if the job takes longer than 30 seconds? They add: "Lease renewal must be on a background thread. If renewal fails (etcd is slow), alert before the lease expires."
+
+### Staff (L6): "The lock is not the hard part -- fencing is"
+
+L6 does everything L5 does, then asks: "What if the server holding the lock is not dead, just paused? A Java GC pause of 40 seconds. The lease expires. Another server acquires the lock. Now TWO servers believe they hold the lock. Both write to the same output file. Data corruption."
+
+This is not a theoretical problem. It happened to LinkedIn, GitHub, and every major distributed system at scale. The TTL-based lease is necessary but not sufficient.
+
+L6 adds fencing tokens: etcd increments a monotonic token with every lock grant. The job server includes the token in every write to downstream systems: "Write this record only if fencing token > your last seen token." Storage systems reject writes with stale tokens.
+
+```
+L6 FENCING TOKEN FLOW:
+  Server A acquires lock: etcd grants token=42
+  A runs for 35s, GC pause starts
+  Lock expires (30s TTL). Server B acquires lock: etcd grants token=43
+  B starts running, writes with token=43
+  A wakes from GC, tries to write with token=42
+  Storage rejects: "42 < 43, you are stale, your write is rejected"
+  Result: B's writes win, A's stale writes are blocked
+
+  WITHOUT fencing: both A and B write, data corruption
+  WITH fencing: A's stale writes are rejected, B's writes win
+```
+
+L6 also designs for the "split-brain in the lock service itself" scenario: "What if etcd itself partitions? The Raft algorithm prevents two leaders, but during election there's a window where no leader exists. Our lock service becomes unavailable. Our job scheduler stalls. What's the SLA impact and how do we alert?"
+
+### The Pattern
+
+- Intern: database flag (race condition)
+- L4: database transaction lock (can't handle crashes)
+- L5: distributed lease with TTL + idempotency + checkpoints
+- L6: fencing tokens to prevent stale locks from writing + lock service failure mode analysis
+
+---

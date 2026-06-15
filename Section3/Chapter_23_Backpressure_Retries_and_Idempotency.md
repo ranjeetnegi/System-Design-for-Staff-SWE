@@ -1,10 +1,10 @@
-# Chapter 23: Backpressure, Retries, and Idempotency — Keeping Systems Alive Under Pressure
+# Chapter 23: Backpressure, Retries, and Idempotency -- Keeping Systems Alive Under Pressure
 
-*(Note to reader: This chapter is about a fundamental truth in distributed systems — the systems that stay alive under pressure are not the ones with the most servers. They are the ones that know how to say "slow down," how to try again carefully, and how to make sure that trying again does not cause double trouble. Every concept here comes from real production outages at real companies. Netflix lost customers for hours because of retry storms. Amazon has caused double charges because of missing idempotency. Stripe built one of the most elegant idempotency systems in the industry. We will learn all of it. No jargon without explanation. No concept without an analogy you have already lived.)*
+*(Note to reader: This chapter is about a fundamental truth in distributed systems -- the systems that stay alive under pressure are not the ones with the most servers. They are the ones that know how to say "slow down," how to try again carefully, and how to make sure that trying again does not cause double trouble. Every concept here comes from real production outages at real companies. Netflix lost customers for hours because of retry storms. Amazon has caused double charges because of missing idempotency. Stripe built one of the most elegant idempotency systems in the industry. We will learn all of it. No jargon without explanation. No concept without an analogy you have already lived.)*
 
 ---
 
-## The Big Opening Story — Friday Night at the Restaurant
+## The Big Opening Story -- Friday Night at the Restaurant
 
 Imagine a restaurant called "The Golden Plate." On a normal Friday night, it serves 100 customers per hour. The kitchen has 10 chefs, 20 tables, and a system that works smoothly. The waiters know every customer. The chefs know every dish. Orders go in, food comes out, everyone is happy.
 
@@ -22,7 +22,7 @@ Twenty tables. Four hundred people. Tables are crammed together. Extra chairs ar
 
 Order number 47: "medium-rare steak" gets cooked to well-done because the chef has no time to monitor it.
 
-Order number 83: "no onions" — missed. Customer is allergic. This is now a medical situation.
+Order number 83: "no onions" -- missed. Customer is allergic. This is now a medical situation.
 
 Order number 119: belongs to Table 7. Gets delivered to Table 11. Table 11 eats it because they have been waiting so long they are not checking anymore.
 
@@ -30,13 +30,13 @@ The waiters, running between 20 crammed tables, start colliding with each other.
 
 Four hours later: half the customers have left in frustration. The other half ate something but are unhappy. The Yelp review that originally brought them in is now buried under 200 one-star reviews about chaos and bad food. The restaurant's reputation, built over years, is damaged in one night.
 
-This is what happens when a computer server tries to handle every request that arrives, no matter how many arrive. The server keeps accepting connections. Memory fills up. CPU is maxed. Responses start taking 30 seconds instead of 300 milliseconds. Errors multiply. Everything is slow, wrong, or broken — for everyone.
+This is what happens when a computer server tries to handle every request that arrives, no matter how many arrive. The server keeps accepting connections. Memory fills up. CPU is maxed. Responses start taking 30 seconds instead of 300 milliseconds. Errors multiply. Everything is slow, wrong, or broken -- for everyone.
 
 ---
 
 ### Option 2: The Greeter Manages the Flow
 
-The manager does something different. She positions a greeter — let's call her Maria — at the front door.
+The manager does something different. She positions a greeter -- let's call her Maria -- at the front door.
 
 Maria greets every arriving group with warmth. She checks the current state of the restaurant. "We have 20 tables. 16 are full. We have 4 open right now. After that, the wait is about 30 minutes. Would you like to wait, or would you prefer to come back later?"
 
@@ -44,7 +44,7 @@ Some groups say "30 minutes is fine, we will wait at the bar." They wait. They g
 
 Other groups say "30 minutes is too long, we will try somewhere else." They leave. That is okay. The restaurant cannot serve them well right now anyway. Better they leave than they stay, have a terrible experience, and leave a bad review.
 
-Inside the restaurant: 20 tables. 100 customers per hour. Kitchen operating at 80% capacity — comfortable, sustainable, accurate. Chefs have time to care. Waiters have time to double-check orders. Every dish that goes out is correct.
+Inside the restaurant: 20 tables. 100 customers per hour. Kitchen operating at 80% capacity -- comfortable, sustainable, accurate. Chefs have time to care. Waiters have time to double-check orders. Every dish that goes out is correct.
 
 That Friday night: the 120 customers who got seated had excellent experiences. The 280 who left went to other restaurants. The Golden Plate gets 120 five-star reviews and maintains its reputation.
 
@@ -60,7 +60,7 @@ What if Maria, trying to be accurate, quotes the absolute maximum wait time unde
 
 Nobody wants to wait 90 minutes for dinner. Every group turns around and leaves. The restaurant, which could comfortably serve 100 customers per hour, serves zero customers that night. The kitchen sits idle. The chefs are paid to do nothing. Revenue: zero. An entirely wasted night.
 
-This is a system with too-aggressive backpressure — one that rejects so much work that it wastes its own capacity. The right answer is not "reject everything" any more than it is "accept everything." It is calibrate carefully: accept what you can handle well, turn away what you cannot.
+This is a system with too-aggressive backpressure -- one that rejects so much work that it wastes its own capacity. The right answer is not "reject everything" any more than it is "accept everything." It is calibrate carefully: accept what you can handle well, turn away what you cannot.
 
 ---
 
@@ -76,9 +76,9 @@ Here is where the retry problem begins.
 
 The kitchen is slammed. It is Friday night and there are 80 other orders ahead of yours. Your salmon is re-queued. The waiter, anxious and wanting to make things right, goes back to the kitchen every 30 seconds to ask: "Is Table 7's salmon ready yet?"
 
-Every time he asks, a chef has to stop what they are doing, look up from the other 80 orders, check the status, say "not yet," and go back to cooking. The waiter is creating extra interruptions in a kitchen that is already at maximum capacity. Your salmon is not coming faster. It is coming slower — because every 30-second check steals 10 seconds of chef attention away from actually cooking.
+Every time he asks, a chef has to stop what they are doing, look up from the other 80 orders, check the status, say "not yet," and go back to cooking. The waiter is creating extra interruptions in a kitchen that is already at maximum capacity. Your salmon is not coming faster. It is coming slower -- because every 30-second check steals 10 seconds of chef attention away from actually cooking.
 
-This is a retry storm. The client (waiter) hammers the server (kitchen) with repeated requests. Each request creates work. That work reduces the server's capacity to actually do the original job. The thing the client wants most — the salmon — is delayed by the very act of repeatedly asking for it.
+This is a retry storm. The client (waiter) hammers the server (kitchen) with repeated requests. Each request creates work. That work reduces the server's capacity to actually do the original job. The thing the client wants most -- the salmon -- is delayed by the very act of repeatedly asking for it.
 
 And now the worst part: the charge. When you ordered, the restaurant's policy is to hold your credit card. When the wrong dish arrived and you sent it back, the card was charged anyway (the kitchen made the dish). When you reordered and the salmon finally arrived, the card was charged again.
 
@@ -94,7 +94,7 @@ Here is the summary before we go deeper:
 
 **Backpressure** = Maria the greeter managing the front door. Control how much work enters the system so the system can do that work well. Without backpressure, everything degrades for everyone.
 
-**Retries** = The waiter going back to the kitchen every 30 seconds. Retries are supposed to handle situations where something went wrong temporarily. But done wrong — too fast, too often, all at once — retries make the problem dramatically worse.
+**Retries** = The waiter going back to the kitchen every 30 seconds. Retries are supposed to handle situations where something went wrong temporarily. But done wrong -- too fast, too often, all at once -- retries make the problem dramatically worse.
 
 **Idempotency** = Preventing the double-charge. When you retry an operation (reorder the salmon), the system should recognize "we already started processing this" and not create a duplicate effect (double charge). An idempotent operation can be executed multiple times and only happen once.
 
@@ -104,73 +104,73 @@ Three concepts. One restaurant story. This chapter explains all three, the math 
 
 ## Chapter at a Glance
 
-Before diving into the details, here is the full picture of what we are building toward. Read through this box now. You will not understand everything yet — that is fine. Come back to it after you finish the chapter and it will all make sense.
+Before diving into the details, here is the full picture of what we are building toward. Read through this box now. You will not understand everything yet -- that is fine. Come back to it after you finish the chapter and it will all make sense.
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║         CHAPTER 23: BACKPRESSURE, RETRIES, AND IDEMPOTENCY                 ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║   THE STABILITY TRIANGLE                                                     ║
-║   ─────────────────────────────────────────────────────────────────────     ║
-║                                                                              ║
-║              ┌─────────────────────────────┐                                ║
-║              │       BACKPRESSURE          │                                ║
-║              │  Controls input rate        │                                ║
-║              │  Prevents overload          │                                ║
-║              │  Token bucket, rate limit   │                                ║
-║              └──────────┬──────────────────┘                                ║
-║                         │                                                    ║
-║              "Only take │ work you can handle"                               ║
-║                         │                                                    ║
-║         ┌───────────────┴──────────────────┐                                ║
-║         │                                  │                                ║
-║ ┌───────┴──────────┐           ┌───────────┴──────┐                         ║
-║ │     RETRIES      │           │   IDEMPOTENCY    │                         ║
-║ │  Handle transient│           │  Makes retries   │                         ║
-║ │  failures safely │           │  safe to do      │                         ║
-║ │  Exponential     │           │  Idempotency key │                         ║
-║ │  backoff + jitter│           │  Deduplication   │                         ║
-║ └──────────────────┘           └──────────────────┘                         ║
-║                                                                              ║
-║   HOW THEY WORK TOGETHER                                                     ║
-║   ─────────────────────────────────────────────────────────────────────     ║
-║                                                                              ║
-║   Backpressure alone:  System stays healthy, but transient errors            ║
-║                        lose requests permanently                             ║
-║                                                                              ║
-║   Retries alone:       Transient errors are handled, but bad retries         ║
-║                        crash the server. And users get double-charged.       ║
-║                                                                              ║
-║   Idempotency alone:   Retries are safe, but without backpressure,          ║
-║                        the server is still overwhelmed                       ║
-║                                                                              ║
-║   ALL THREE TOGETHER:  Stable. Resilient. Safe. Production-ready.           ║
-║                                                                              ║
-║   THE CHAIN OF NECESSITY                                                     ║
-║   ─────────────────────────────────────────────────────────────────────     ║
-║   "No idempotency + retries = double charges"                                ║
-║   "No backpressure + retries = retry storm = outage"                         ║
-║   "No retries + backpressure = transient errors lost forever"                ║
-║                                                                              ║
-║   KEY NUMBERS TO KNOW                                                        ║
-║   ─────────────────────────────────────────────────────────────────────     ║
-║   Exponential backoff:   Starts at 100ms, doubles each attempt               ║
-║   Maximum backoff cap:   30 seconds (users won't wait longer)                ║
-║   Jitter range:          ±25% of calculated delay                            ║
-║   Circuit breaker trips: At 50% error rate over 10-second window            ║
-║   Circuit open duration: 30-60 seconds (service restart + warmup)           ║
-║   Token bucket rate:     Refills at capacity / second                        ║
-║   Max retry attempts:    3-5 (more = problem is not transient)               ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
++==============================================================================+
+|         CHAPTER 23: BACKPRESSURE, RETRIES, AND IDEMPOTENCY                 |
++==============================================================================+
+|                                                                              |
+|   THE STABILITY TRIANGLE                                                     |
+|   ---------------------------------------------------------------------     |
+|                                                                              |
+|              +-----------------------------+                                |
+|              |       BACKPRESSURE          |                                |
+|              |  Controls input rate        |                                |
+|              |  Prevents overload          |                                |
+|              |  Token bucket, rate limit   |                                |
+|              +----------+------------------+                                |
+|                         |                                                    |
+|              "Only take | work you can handle"                               |
+|                         |                                                    |
+|         +---------------+------------------+                                |
+|         |                                  |                                |
+| +-------+----------+           +-----------+------+                         |
+| |     RETRIES      |           |   IDEMPOTENCY    |                         |
+| |  Handle transient|           |  Makes retries   |                         |
+| |  failures safely |           |  safe to do      |                         |
+| |  Exponential     |           |  Idempotency key |                         |
+| |  backoff + jitter|           |  Deduplication   |                         |
+| +------------------+           +------------------+                         |
+|                                                                              |
+|   HOW THEY WORK TOGETHER                                                     |
+|   ---------------------------------------------------------------------     |
+|                                                                              |
+|   Backpressure alone:  System stays healthy, but transient errors            |
+|                        lose requests permanently                             |
+|                                                                              |
+|   Retries alone:       Transient errors are handled, but bad retries         |
+|                        crash the server. And users get double-charged.       |
+|                                                                              |
+|   Idempotency alone:   Retries are safe, but without backpressure,          |
+|                        the server is still overwhelmed                       |
+|                                                                              |
+|   ALL THREE TOGETHER:  Stable. Resilient. Safe. Production-ready.           |
+|                                                                              |
+|   THE CHAIN OF NECESSITY                                                     |
+|   ---------------------------------------------------------------------     |
+|   "No idempotency + retries = double charges"                                |
+|   "No backpressure + retries = retry storm = outage"                         |
+|   "No retries + backpressure = transient errors lost forever"                |
+|                                                                              |
+|   KEY NUMBERS TO KNOW                                                        |
+|   ---------------------------------------------------------------------     |
+|   Exponential backoff:   Starts at 100ms, doubles each attempt               |
+|   Maximum backoff cap:   30 seconds (users won't wait longer)                |
+|   Jitter range:          +/-25% of calculated delay                            |
+|   Circuit breaker trips: At 50% error rate over 10-second window            |
+|   Circuit open duration: 30-60 seconds (service restart + warmup)           |
+|   Token bucket rate:     Refills at capacity / second                        |
+|   Max retry attempts:    3-5 (more = problem is not transient)               |
+|                                                                              |
++==============================================================================+
 ```
 
 Let us talk about how these three concepts relate to each other, because the relationship matters as much as the individual concepts.
 
-Think of a restaurant kitchen as a machine. Backpressure is the greeter at the front door. She decides how many customers enter. Without her, the kitchen gets overloaded and everything goes wrong. But even with a perfectly managed front door, things still go wrong inside the kitchen — a dish is dropped, an order is misread, a stove malfunctions. These are transient failures. Retries handle them: try making the dish again.
+Think of a restaurant kitchen as a machine. Backpressure is the greeter at the front door. She decides how many customers enter. Without her, the kitchen gets overloaded and everything goes wrong. But even with a perfectly managed front door, things still go wrong inside the kitchen -- a dish is dropped, an order is misread, a stove malfunctions. These are transient failures. Retries handle them: try making the dish again.
 
-But here is the catch. If the retry creates a duplicate entry in the kitchen order system, the customer gets charged twice and two dishes are made instead of one. Idempotency is the solution: the kitchen order system checks whether this order has already been processed before starting again. "Did we already start this salmon? Yes? Then do not start it again — just check its current status."
+But here is the catch. If the retry creates a duplicate entry in the kitchen order system, the customer gets charged twice and two dishes are made instead of one. Idempotency is the solution: the kitchen order system checks whether this order has already been processed before starting again. "Did we already start this salmon? Yes? Then do not start it again -- just check its current status."
 
 The three concepts form a triangle where each one depends on the others. A system with all three can survive most real-world failure scenarios gracefully. A system missing any one of the three has a specific, predictable failure mode. The rest of this chapter is about understanding each corner of that triangle deeply enough to implement it correctly.
 
@@ -182,11 +182,11 @@ Before we go into the mechanics, it is worth understanding how junior engineers 
 
 | Scenario | L5 Approach | L6 Approach |
 |---|---|---|
-| Service is timing out | "Add retries to handle the timeouts" | "First: why is it timing out? Retries on a constantly-overloaded service make the problem worse — this might be a retry storm in the making. Is the error transient (happens sometimes) or permanent (always happening)? If always, retries accomplish nothing." |
+| Service is timing out | "Add retries to handle the timeouts" | "First: why is it timing out? Retries on a constantly-overloaded service make the problem worse -- this might be a retry storm in the making. Is the error transient (happens sometimes) or permanent (always happening)? If always, retries accomplish nothing." |
 | User got double-charged | "Find the bug in the payment code" | "The bug is in the architecture, not the code. Any payment system without idempotency keys will produce double charges under normal network retry conditions. Fix the architecture first." |
-| Traffic spike incoming | "Scale up servers before the spike" | "What is the realistic capacity after scaling? Set backpressure thresholds before the spike arrives — decide in advance what you will reject. Scaling during a spike is often too slow to help." |
-| Circuit breaker tripping | "Increase the failure threshold so it stops tripping" | "The circuit breaker is telling you something is wrong with the downstream service. Increasing the threshold means ignoring the warning. Fix the underlying issue — the circuit breaker is protecting you, not lying to you." |
-| Retry with immediate backoff | "Add a 100ms sleep between retries" | "Fixed interval creates synchronized retry waves. Use exponential backoff with jitter — random variation in timing prevents all clients from hammering the recovering service at the same moment." |
+| Traffic spike incoming | "Scale up servers before the spike" | "What is the realistic capacity after scaling? Set backpressure thresholds before the spike arrives -- decide in advance what you will reject. Scaling during a spike is often too slow to help." |
+| Circuit breaker tripping | "Increase the failure threshold so it stops tripping" | "The circuit breaker is telling you something is wrong with the downstream service. Increasing the threshold means ignoring the warning. Fix the underlying issue -- the circuit breaker is protecting you, not lying to you." |
+| Retry with immediate backoff | "Add a 100ms sleep between retries" | "Fixed interval creates synchronized retry waves. Use exponential backoff with jitter -- random variation in timing prevents all clients from hammering the recovering service at the same moment." |
 
 The pattern you see in the L6 column is consistent: they ask "why" before reaching for a tool. When a service times out, adding retries is the obvious tool. But the L6 question is: why is it timing out? If it is timing out because it is overloaded, adding retries is gasoline on the fire. The root cause must be understood before the solution is chosen.
 
@@ -218,11 +218,11 @@ Retries are designed for these scenarios. They are genuinely useful for transien
 
 Think about a freeway during rush hour. Traffic is moving at 10 miles per hour instead of the usual 65. Some impatient drivers decide to take surface streets instead.
 
-Here is what happens. Those surface streets normally carry light traffic — maybe 100 cars per hour. Now 500 extra cars are routing through them. The surface streets become gridlocked too. Now both the freeway AND the surface streets are slow. Total traffic in the metro area is worse than if those 500 cars had just stayed on the freeway and waited.
+Here is what happens. Those surface streets normally carry light traffic -- maybe 100 cars per hour. Now 500 extra cars are routing through them. The surface streets become gridlocked too. Now both the freeway AND the surface streets are slow. Total traffic in the metro area is worse than if those 500 cars had just stayed on the freeway and waited.
 
 The drivers who left the freeway did not fix anything. They redistributed the problem and amplified it.
 
-Bad retries work exactly the same way. A server is struggling under load — it is at capacity, handling requests slowly. Clients start timing out. They retry. Those retries are additional requests on top of the original load. The server, which was already at 100% capacity, is now receiving 150% of what it can handle. More requests fail. More retries happen. 200% of capacity. Everything fails. The entire service goes down.
+Bad retries work exactly the same way. A server is struggling under load -- it is at capacity, handling requests slowly. Clients start timing out. They retry. Those retries are additional requests on top of the original load. The server, which was already at 100% capacity, is now receiving 150% of what it can handle. More requests fail. More retries happen. 200% of capacity. Everything fails. The entire service goes down.
 
 The server capacity did not change. The retry behavior turned a "some requests are slow" problem into a "nothing works at all" catastrophe.
 
@@ -236,7 +236,7 @@ A service can handle exactly 800 requests per second. One thousand clients each 
 
 ```
 T=0: Initial State
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Load Arriving at Server:    1,000 requests/second
 Server Capacity:              800 requests/second
 Excess (goes to failure):     200 requests/second
@@ -247,7 +247,7 @@ Failure Rate:                  20%
 
 ```
 T=1: After First Retry Wave
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Original load:              1,000 requests/second
 First-wave retries:           200 requests/second
 Total arriving at server:   1,200 requests/second
@@ -260,7 +260,7 @@ Failure Rate:                  33%
 
 ```
 T=2: After Second Retry Wave
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Original load:              1,000 requests/second
 Second-wave retries:          400 requests/second
 Total arriving at server:   1,400 requests/second
@@ -273,7 +273,7 @@ Failure Rate:                  43%
 
 ```
 T=3: After Third Retry Wave
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Total arriving at server:   1,600 requests/second
 Capacity:                     800 requests/second
 Failures:                     800 requests
@@ -282,7 +282,7 @@ Failure Rate:                  50%
 
 ```
 T=4: Complete Collapse
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Original 1,000 + accumulated retries = 2,000+ requests/second
 Server Capacity:              800 requests/second
 Failures:                   1,200 requests
@@ -295,45 +295,45 @@ The system is now in a death spiral.
 Here is that spiral visualized as a chart:
 
 ```
-RETRY DEATH SPIRAL — Load vs. Time
-─────────────────────────────────────────────────────────────────
+RETRY DEATH SPIRAL -- Load vs. Time
+-----------------------------------------------------------------
 
-Load        ████████████████████████████████████████████████████
-(req/sec)   ██    Total Load (original + retries)              ██
-            ██                                                  ██
-2000 ──────────────────────────────────────────────────────► ████
-            │                                               ████
-1600 ─────────────────────────────────────────────────── ████
-            │                                         ████
-1200 ──────────────────────────────────────────── ████
-            │                                  ████
-  800 ──── ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ← SERVER CAPACITY (stays flat)
-            │                                  ████
-  400 ──────────────────────────────────────────────── ████
-            │                                              ████
-    0  ─────┴──────┬────────┬────────┬────────┬────────►
+Load        ####################################################
+(req/sec)   ##    Total Load (original + retries)              ##
+            ##                                                  ##
+2000 ------------------------------------------------------> ####
+            |                                               ####
+1600 --------------------------------------------------- ####
+            |                                         ####
+1200 -------------------------------------------- ####
+            |                                  ####
+  800 ---- ############################## <- SERVER CAPACITY (stays flat)
+            |                                  ####
+  400 ------------------------------------------------ ####
+            |                                              ####
+    0  -----+------+--------+--------+--------+-------->
                   T=0      T=1      T=2      T=3      T=4
-                                                    ▲
+                                                    ^
                                               FULL OUTAGE
 
-Failure     ████
-Rate        ██    Failure Rate                                   ██
-            ██                                                  ██
- 100% ──────────────────────────────────────────────────────► ████
-            │                                               ████
-  60% ──────────────────────────────────────────────── ████
-            │                                       ████
-  43% ────────────────────────────────────────── ████
-            │                               ████
-  33% ──────────────────────────────── ████
-            │                     ████
-  20% ─────────────────────── ████
-            │            ████
-   0% ──────┴──────┬────────┬────────┬────────┬────────►
+Failure     ####
+Rate        ##    Failure Rate                                   ##
+            ##                                                  ##
+ 100% ------------------------------------------------------> ####
+            |                                               ####
+  60% ------------------------------------------------ ####
+            |                                       ####
+  43% ------------------------------------------ ####
+            |                               ####
+  33% -------------------------------- ####
+            |                     ####
+  20% ----------------------- ####
+            |            ####
+   0% ------+------+--------+--------+--------+-------->
                   T=0      T=1      T=2      T=3      T=4
 ```
 
-Read that chart carefully. The server capacity — the flat line at 800 requests/second — never changed. Not by a single request. The server did not get slower. The server did not get worse. The only thing that changed was client retry behavior. Bad retries transformed a "20% of requests are slow" situation into "100% of requests are failing."
+Read that chart carefully. The server capacity -- the flat line at 800 requests/second -- never changed. Not by a single request. The server did not get slower. The server did not get worse. The only thing that changed was client retry behavior. Bad retries transformed a "20% of requests are slow" situation into "100% of requests are failing."
 
 This is the retry paradox. The retries that were supposed to help each individual client make their request succeed ended up ensuring that no request could succeed. When every client retries simultaneously and immediately, the collective behavior is catastrophic even though each individual behavior seemed reasonable.
 
@@ -363,7 +363,7 @@ The ATM is down because its connection to the bank's network is congested. That 
 
 **The analogy:** Imagine 1,000 people setting their alarm clocks to wake up at exactly 7:00:00 AM. Not 6:58. Not 7:02. Exactly 7:00:00. They all wake up at the same second. They all reach for their phones at 7:00:02. They all try to check their news app at 7:00:05.
 
-The app's servers receive 1,000 simultaneous requests at 7:00:05. Maybe that is fine — the app is designed for it. But now imagine instead that 1,000 customers are waiting for a slow service to come back online. The service went down at 6:59:00. All 1,000 clients are set to retry exactly 60 seconds after failure. So at 7:00:00, all 1,000 clients retry simultaneously.
+The app's servers receive 1,000 simultaneous requests at 7:00:05. Maybe that is fine -- the app is designed for it. But now imagine instead that 1,000 customers are waiting for a slow service to come back online. The service went down at 6:59:00. All 1,000 clients are set to retry exactly 60 seconds after failure. So at 7:00:00, all 1,000 clients retry simultaneously.
 
 If the service has just barely recovered and can handle 200 requests per second, it receives 1,000 requests in the same instant. 800 of them fail. Those 800 retry again at T+60 seconds. Another retry wave. The service never gets a chance to stabilize because every 60 seconds it is hit by a synchronized wall of traffic.
 
@@ -374,20 +374,20 @@ If the service has just barely recovered and can handle 200 requests per second,
 Here is the visual difference:
 
 ```
-FIXED RETRY — All clients retry at T=1000ms
-─────────────────────────────────────────────────────────────────
+FIXED RETRY -- All clients retry at T=1000ms
+-----------------------------------------------------------------
 Requests
 per 100ms
 
- 200 │                          ████
-     │                          ████
- 150 │                          ████
-     │                          ████
- 100 │                          ████
-     │                          ████
-  50 │                          ████
-     │                          ████
-   0 ├────────────────────────────────────────────────────────►
+ 200 |                          ####
+     |                          ####
+ 150 |                          ####
+     |                          ####
+ 100 |                          ####
+     |                          ####
+  50 |                          ####
+     |                          ####
+   0 +-------------------------------------------------------->
      T=0     T=200    T=400    T=600    T=800   T=1000   T=1200
 
      200 clients all retry at exactly T=1000ms.
@@ -395,28 +395,28 @@ per 100ms
      This spike likely causes more failures.
 
 
-JITTERED RETRY — Clients retry between T=750ms and T=1250ms
-─────────────────────────────────────────────────────────────────
+JITTERED RETRY -- Clients retry between T=750ms and T=1250ms
+-----------------------------------------------------------------
 Requests
 per 100ms
 
-  50 │
-     │
-  40 │                     ████  ████  ████  ████  ████
-     │                     ████  ████  ████  ████  ████
-  30 │                     ████  ████  ████  ████  ████
-     │                     ████  ████  ████  ████  ████
-  20 │                     ████  ████  ████  ████  ████
-     │                     ████  ████  ████  ████  ████
-  10 │                     ████  ████  ████  ████  ████
-     │                     ████  ████  ████  ████  ████
-   0 ├────────────────────────────────────────────────────────►
+  50 |
+     |
+  40 |                     ####  ####  ####  ####  ####
+     |                     ####  ####  ####  ####  ####
+  30 |                     ####  ####  ####  ####  ####
+     |                     ####  ####  ####  ####  ####
+  20 |                     ####  ####  ####  ####  ####
+     |                     ####  ####  ####  ####  ####
+  10 |                     ####  ####  ####  ####  ####
+     |                     ####  ####  ####  ####  ####
+   0 +-------------------------------------------------------->
      T=0     T=200    T=400    T=600    T=800   T=1000   T=1200
-                                         ↑                  ↑
+                                         ^                  ^
                                        T=750              T=1250
 
      Same 200 clients, but spread across a 500ms window.
-     Server receives ~40 requests per 100ms — smooth, manageable.
+     Server receives ~40 requests per 100ms -- smooth, manageable.
      Service has a real chance to recover.
 ```
 
@@ -450,26 +450,26 @@ No number of retries will fix this. The attachment is missing from the email. Th
 
 | HTTP Code | What It Means | Worth Retrying? |
 |---|---|---|
-| 400 Bad Request | Your request is malformed or missing required fields | NO — the request has a bug, fix the request |
-| 401 Unauthorized | Wrong or missing authentication credentials | NO — fix the credentials, not the retry count |
-| 403 Forbidden | You are authenticated but not allowed to do this | NO — you need different permissions, not more retries |
-| 404 Not Found | The resource does not exist at this URL | NO — it is not coming back, the URL or ID is wrong |
-| 408 Request Timeout | Server gave up waiting for your request | YES — try again, the server was temporarily busy |
-| 429 Too Many Requests | You are sending too fast, slow down | YES — but wait for the "Retry-After" duration first |
-| 500 Internal Server Error | The server crashed or had an unexpected error | MAYBE — try once, if it fails again, stop |
-| 502 Bad Gateway | A proxy between you and the server had a problem | YES — network issues are typically transient |
-| 503 Service Unavailable | The server is temporarily overloaded | YES — wait, then retry with backoff |
-| 504 Gateway Timeout | The upstream server took too long | YES — with exponential backoff |
+| 400 Bad Request | Your request is malformed or missing required fields | NO -- the request has a bug, fix the request |
+| 401 Unauthorized | Wrong or missing authentication credentials | NO -- fix the credentials, not the retry count |
+| 403 Forbidden | You are authenticated but not allowed to do this | NO -- you need different permissions, not more retries |
+| 404 Not Found | The resource does not exist at this URL | NO -- it is not coming back, the URL or ID is wrong |
+| 408 Request Timeout | Server gave up waiting for your request | YES -- try again, the server was temporarily busy |
+| 429 Too Many Requests | You are sending too fast, slow down | YES -- but wait for the "Retry-After" duration first |
+| 500 Internal Server Error | The server crashed or had an unexpected error | MAYBE -- try once, if it fails again, stop |
+| 502 Bad Gateway | A proxy between you and the server had a problem | YES -- network issues are typically transient |
+| 503 Service Unavailable | The server is temporarily overloaded | YES -- wait, then retry with backoff |
+| 504 Gateway Timeout | The upstream server took too long | YES -- with exponential backoff |
 
-The key distinction is: errors in the 400-range are "your fault" errors — your request is wrong, and retrying the same wrong request accomplishes nothing. Errors in the 500-range are "server's fault" errors — the server had a problem, and it might not have that problem on the next attempt.
+The key distinction is: errors in the 400-range are "your fault" errors -- your request is wrong, and retrying the same wrong request accomplishes nothing. Errors in the 500-range are "server's fault" errors -- the server had a problem, and it might not have that problem on the next attempt.
 
-A common mistake: blindly retrying all errors regardless of type. This means retrying 401 errors (wrong password), which is not only useless but can trigger account lockouts on some systems. It means retrying 404 errors, which can look like polling a resource into existence (it will never exist). It means retrying 400 errors when the client's code has a bug — the engineer sees "it retried 5 times" and thinks the system is resilient, when actually it just wasted 5 attempts on an unfixable request.
+A common mistake: blindly retrying all errors regardless of type. This means retrying 401 errors (wrong password), which is not only useless but can trigger account lockouts on some systems. It means retrying 404 errors, which can look like polling a resource into existence (it will never exist). It means retrying 400 errors when the client's code has a bug -- the engineer sees "it retried 5 times" and thinks the system is resilient, when actually it just wasted 5 attempts on an unfixable request.
 
 ---
 
 ### Sin 5: Ignoring Retry-After Headers
 
-**The analogy:** You call a restaurant to make a reservation. The host says: "We are fully booked right now. Try calling back at 6pm, we should have availability then." You hang up and immediately call back. The host, slightly annoyed, says "I just told you — call back at 6pm." You hang up and call back again.
+**The analogy:** You call a restaurant to make a reservation. The host says: "We are fully booked right now. Try calling back at 6pm, we should have availability then." You hang up and immediately call back. The host, slightly annoyed, says "I just told you -- call back at 6pm." You hang up and call back again.
 
 The host gave you specific information. Ignoring it and calling back immediately is both useless and rude. The same logic applies in server communication.
 
@@ -501,21 +501,21 @@ Each time you try and fail, you double your patience. You are being respectful o
 
 ```
 EXPONENTIAL BACKOFF SCHEDULE
-─────────────────────────────────────────────────────────────────
-Attempt │ Wait Before Retry  │ Wait With Jitter (±25%)
-────────┼────────────────────┼─────────────────────────────────
-  1st   │ (try immediately)  │ (no wait — first attempt)
-  2nd   │ 100ms              │ 75ms to 125ms
-  3rd   │ 200ms              │ 150ms to 250ms
-  4th   │ 400ms              │ 300ms to 500ms
-  5th   │ 800ms              │ 600ms to 1,000ms
-  6th   │ 1,600ms            │ 1,200ms to 2,000ms
-  7th   │ 3,200ms            │ 2,400ms to 4,000ms
-  8th   │ 6,400ms            │ 4,800ms to 8,000ms
-  9th   │ 12,800ms           │ 9,600ms to 16,000ms
- 10th   │ 30,000ms (capped)  │ 22,500ms to 30,000ms (capped)
-        │                    │
-        ← doubles each time  ← random within range
+-----------------------------------------------------------------
+Attempt | Wait Before Retry  | Wait With Jitter (+/-25%)
+--------+--------------------+---------------------------------
+  1st   | (try immediately)  | (no wait -- first attempt)
+  2nd   | 100ms              | 75ms to 125ms
+  3rd   | 200ms              | 150ms to 250ms
+  4th   | 400ms              | 300ms to 500ms
+  5th   | 800ms              | 600ms to 1,000ms
+  6th   | 1,600ms            | 1,200ms to 2,000ms
+  7th   | 3,200ms            | 2,400ms to 4,000ms
+  8th   | 6,400ms            | 4,800ms to 8,000ms
+  9th   | 12,800ms           | 9,600ms to 16,000ms
+ 10th   | 30,000ms (capped)  | 22,500ms to 30,000ms (capped)
+        |                    |
+        <- doubles each time  <- random within range
         
 Note: Most systems stop at attempt 3-5. The table shows more
 attempts only to illustrate the doubling pattern.
@@ -565,7 +565,7 @@ def retry_with_backoff(
             return result         # It worked! Return the result immediately.
             
         except TransientError as e:
-            # A transient error — maybe worth retrying
+            # A transient error -- maybe worth retrying
             
             if attempt == max_attempts - 1:
                 # This was our last allowed attempt. Give up.
@@ -589,7 +589,7 @@ def retry_with_backoff(
             # Loop back to the top and try again
             
         except PermanentError as e:
-            # A permanent error — retrying is pointless
+            # A permanent error -- retrying is pointless
             # Raise immediately without any more attempts
             raise e
 ```
@@ -599,7 +599,7 @@ Let us trace through an example. Suppose `operation` is a function that calls a 
 ```
 Attempt 0 (first try):
   - Calls the API
-  - API returns 503 (Service Unavailable) → TransientError raised
+  - API returns 503 (Service Unavailable) -> TransientError raised
   - attempt == 0, max_attempts - 1 == 4, so not the last attempt
   - raw_delay = min(100 * (2**0), 30000) = min(100 * 1, 30000) = 100ms
   - jitter: random between 75ms and 125ms, say 91ms
@@ -608,7 +608,7 @@ Attempt 0 (first try):
 
 Attempt 1 (first retry):
   - Calls the API
-  - API returns 503 → TransientError again
+  - API returns 503 -> TransientError again
   - attempt == 1, not the last attempt
   - raw_delay = min(100 * (2**1), 30000) = min(100 * 2, 30000) = 200ms
   - jitter: random between 150ms and 250ms, say 187ms
@@ -617,36 +617,36 @@ Attempt 1 (first retry):
 
 Attempt 2 (second retry):
   - Calls the API
-  - API returns 200 (OK) — the service recovered!
+  - API returns 200 (OK) -- the service recovered!
   - Returns the result immediately
   - Total time spent: 91ms + 187ms + a few ms for the successful call
   - About 280ms total. Perfectly acceptable.
 ```
 
-Now let us trace a failure path — the API never recovers:
+Now let us trace a failure path -- the API never recovers:
 
 ```
-Attempt 0: 503 → sleep 91ms
-Attempt 1: 503 → sleep 187ms
-Attempt 2: 503 → sleep 392ms (jittered 400ms)
-Attempt 3: 503 → sleep 798ms (jittered 800ms)
-Attempt 4: 503 → attempt == max_attempts - 1, so raise the error
+Attempt 0: 503 -> sleep 91ms
+Attempt 1: 503 -> sleep 187ms
+Attempt 2: 503 -> sleep 392ms (jittered 400ms)
+Attempt 3: 503 -> sleep 798ms (jittered 800ms)
+Attempt 4: 503 -> attempt == max_attempts - 1, so raise the error
 
 Total time: ~1.5 seconds before giving up and returning an error.
-This is called "fail fast" — do not leave the caller waiting forever.
+This is called "fail fast" -- do not leave the caller waiting forever.
 ```
 
-The key insight in the code: `2 ** attempt` is the source of the exponential growth. When `attempt = 0`, `2 ** 0 = 1`. When `attempt = 1`, `2 ** 1 = 2`. When `attempt = 2`, `2 ** 2 = 4`. When `attempt = 3`, `2 ** 3 = 8`. It doubles each time. That is what "exponential" means — the growth is driven by a power (exponent), not linear addition.
+The key insight in the code: `2 ** attempt` is the source of the exponential growth. When `attempt = 0`, `2 ** 0 = 1`. When `attempt = 1`, `2 ** 1 = 2`. When `attempt = 2`, `2 ** 2 = 4`. When `attempt = 3`, `2 ** 3 = 8`. It doubles each time. That is what "exponential" means -- the growth is driven by a power (exponent), not linear addition.
 
 ---
 
-### The Retry Budget — Thinking at the Service Level
+### The Retry Budget -- Thinking at the Service Level
 
 Individual retry logic protects one request. But what about the whole service?
 
-Imagine your payment service makes 10,000 requests per second to the bank's API. The bank's API has a 1% error rate (100 failed requests per second). Each failed request retries up to 3 times. In a normal scenario, this is fine — 100 retries per second is trivial overhead on a 10,000 RPS service.
+Imagine your payment service makes 10,000 requests per second to the bank's API. The bank's API has a 1% error rate (100 failed requests per second). Each failed request retries up to 3 times. In a normal scenario, this is fine -- 100 retries per second is trivial overhead on a 10,000 RPS service.
 
-Now the bank's API has an incident. Error rate spikes to 30% (3,000 failed requests per second). Each of those retries 3 times. Retry load: 9,000 extra requests per second. Total load on the bank's API: 10,000 + 9,000 = 19,000 requests per second. If the bank's API capacity is 12,000 RPS, you have now pushed it past capacity — making the outage worse.
+Now the bank's API has an incident. Error rate spikes to 30% (3,000 failed requests per second). Each of those retries 3 times. Retry load: 9,000 extra requests per second. Total load on the bank's API: 10,000 + 9,000 = 19,000 requests per second. If the bank's API capacity is 12,000 RPS, you have now pushed it past capacity -- making the outage worse.
 
 The retry budget approach says: "Retries should never consume more than X% of total capacity." Example: set the retry budget at 10% of total request capacity. If retries are consuming more than 10% of your service's outbound capacity, stop retrying and return errors.
 
@@ -656,11 +656,11 @@ A retry budget is the same idea: when the system is under stress (high error rat
 
 ---
 
-## Circuit Breakers — Knowing When to Stop Trying Completely
+## Circuit Breakers -- Knowing When to Stop Trying Completely
 
 ### The Electrical Analogy
 
-When your home has a problem with electrical wiring — maybe a short circuit, maybe a device drawing too much power — the circuit breaker trips. The circuit breaker is a physical switch that breaks the connection. Power to that circuit is completely cut.
+When your home has a problem with electrical wiring -- maybe a short circuit, maybe a device drawing too much power -- the circuit breaker trips. The circuit breaker is a physical switch that breaks the connection. Power to that circuit is completely cut.
 
 The reason you want this: running electricity through a damaged circuit does not fix the damage. It makes it worse. It generates heat. It can cause a fire. The right response is to cut power, find the damage, fix it, then restore power.
 
@@ -674,7 +674,7 @@ A circuit breaker has exactly three states. Understanding these states and the t
 
 **State 1: CLOSED**
 
-"Closed" in electrical terms means the circuit is complete — electricity flows normally. In software terms: requests pass through to the downstream service normally.
+"Closed" in electrical terms means the circuit is complete -- electricity flows normally. In software terms: requests pass through to the downstream service normally.
 
 While in the CLOSED state, the circuit breaker tracks outcomes. Every request that succeeds or fails is counted. The breaker calculates a rolling failure rate: "Of the last N requests in the past T seconds, what percentage failed?"
 
@@ -682,7 +682,7 @@ If the failure rate exceeds the threshold (typically 50%), the breaker transitio
 
 **State 2: OPEN**
 
-"Open" in electrical terms means the circuit is broken — electricity cannot flow. In software terms: ALL requests to the downstream service are immediately rejected without even making a network call.
+"Open" in electrical terms means the circuit is broken -- electricity cannot flow. In software terms: ALL requests to the downstream service are immediately rejected without even making a network call.
 
 This is the key mechanism. In the OPEN state, when your code calls `call_payment_api()`, the circuit breaker does not actually call the API. It immediately raises `CircuitOpenError("Service unavailable")`. No network request is made. The failure is instant (microseconds) rather than slow (30-second timeout).
 
@@ -690,7 +690,7 @@ Why is instant failure better than slow failure? Because slow failure blocks thr
 
 With a circuit breaker in OPEN state: failures are instant. Threads are freed immediately. Your service can continue handling other requests (perhaps ones that don't require the failing dependency). The failure is contained.
 
-The OPEN state lasts for a configured period — typically 30-60 seconds. This gives the downstream service time to recover.
+The OPEN state lasts for a configured period -- typically 30-60 seconds. This gives the downstream service time to recover.
 
 **State 3: HALF-OPEN**
 
@@ -707,63 +707,63 @@ Half-open is a "probe" state. You are testing reality with minimal risk. One req
 ### The State Machine Diagram
 
 ```
-╔════════════════════════════════════════════════════════════════╗
-║            CIRCUIT BREAKER STATE MACHINE                       ║
-╚════════════════════════════════════════════════════════════════╝
++================================================================+
+|            CIRCUIT BREAKER STATE MACHINE                       |
++================================================================+
 
-                    ┌─────────────────────────────────────┐
-                    │                                     │
-                    ▼                                     │
-            ┌───────────────┐                            │
-            │               │  ← Requests pass through   │
-            │    CLOSED     │    normally                 │
-            │               │                            │
-            │  Counting     │                            │
-            │  successes    │                            │
-            │  and failures │                            │
-            └───────┬───────┘                            │
-                    │                                     │
-                    │  Failure rate exceeds 50%           │
-                    │  (e.g., 50 of last 100 failed)      │
-                    │                                     │
-                    ▼                                     │
-            ┌───────────────┐                            │
-            │               │  ← ALL requests instantly  │
-            │     OPEN      │    rejected (no network     │
-            │               │    call made)               │
-            │  Failing fast │                            │
-            │  No requests  │                            │
-            │  to downstream│                            │
-            └───────┬───────┘                            │
-                    │                                     │
-                    │  Timeout expires                    │
-                    │  (e.g., 60 seconds passed)          │
-                    │                                     │
-                    ▼                                     │
-            ┌───────────────┐                            │
-            │               │  ← Allows ONE test         │
-            │  HALF-OPEN    │    request through          │
-            │               │                            │
-            │  Probing for  │                            │
-            │  recovery     │                            │
-            └───────┬───────┘                            │
-                    │                                     │
-          ┌─────────┴──────────┐                         │
-          │                    │                         │
-          ▼                    ▼                         │
-   Test succeeds!        Test fails!                     │
-          │                    │                         │
-          │                    └──────────────► OPEN     │
-          │                        (reset timer,         │
-          │                         try again in 60s)    │
-          │                                              │
-          └──────────────────────────────────────────────┘
+                    +-------------------------------------+
+                    |                                     |
+                    v                                     |
+            +---------------+                            |
+            |               |  <- Requests pass through   |
+            |    CLOSED     |    normally                 |
+            |               |                            |
+            |  Counting     |                            |
+            |  successes    |                            |
+            |  and failures |                            |
+            +-------+-------+                            |
+                    |                                     |
+                    |  Failure rate exceeds 50%           |
+                    |  (e.g., 50 of last 100 failed)      |
+                    |                                     |
+                    v                                     |
+            +---------------+                            |
+            |               |  <- ALL requests instantly  |
+            |     OPEN      |    rejected (no network     |
+            |               |    call made)               |
+            |  Failing fast |                            |
+            |  No requests  |                            |
+            |  to downstream|                            |
+            +-------+-------+                            |
+                    |                                     |
+                    |  Timeout expires                    |
+                    |  (e.g., 60 seconds passed)          |
+                    |                                     |
+                    v                                     |
+            +---------------+                            |
+            |               |  <- Allows ONE test         |
+            |  HALF-OPEN    |    request through          |
+            |               |                            |
+            |  Probing for  |                            |
+            |  recovery     |                            |
+            +-------+-------+                            |
+                    |                                     |
+          +---------+----------+                         |
+          |                    |                         |
+          v                    v                         |
+   Test succeeds!        Test fails!                     |
+          |                    |                         |
+          |                    +--------------> OPEN     |
+          |                        (reset timer,         |
+          |                         try again in 60s)    |
+          |                                              |
+          +----------------------------------------------+
                  Transition back to CLOSED
                  (normal operation resumes)
 
 
 WHAT EACH STATE MEANS FOR A REQUEST ARRIVING RIGHT NOW:
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 CLOSED:    Request goes through to the downstream service.
            Network call is made. We wait for a response.
 
@@ -777,7 +777,7 @@ HALF-OPEN: If this is the test request, it goes through.
 
 The transition arrows tell you the logic. CLOSED becomes OPEN when failures pile up. OPEN becomes HALF-OPEN when time passes. HALF-OPEN goes back to CLOSED on success or back to OPEN on failure.
 
-After looking at this diagram, consider what life looks like without a circuit breaker during an outage. Every request to the downstream service waits 30 seconds for a timeout. Your service has 100 threads. After 100 slow requests, all 100 threads are stuck waiting. New requests cannot be handled at all. Your service is down — not because of the downstream service, but because of how you handle the downstream service's failure.
+After looking at this diagram, consider what life looks like without a circuit breaker during an outage. Every request to the downstream service waits 30 seconds for a timeout. Your service has 100 threads. After 100 slow requests, all 100 threads are stuck waiting. New requests cannot be handled at all. Your service is down -- not because of the downstream service, but because of how you handle the downstream service's failure.
 
 With a circuit breaker: the first few requests fail slowly (waiting for timeout). The breaker opens. Every subsequent request fails instantly. Threads are freed. Your service continues operating. Users get clear error messages ("payment service temporarily unavailable") instead of infinite loading spinners. The failure is contained, named, and fast.
 
@@ -835,11 +835,11 @@ class CircuitBreaker:
         # State is either CLOSED or HALF-OPEN. Try the operation.
         try:
             result = operation()          # Make the actual call
-            self._record_success()        # It worked — update counts
+            self._record_success()        # It worked -- update counts
             return result
             
         except Exception as e:
-            self._record_failure()        # It failed — update counts
+            self._record_failure()        # It failed -- update counts
             raise e                       # Re-raise so the caller sees the error
     
     def _record_success(self):
@@ -881,7 +881,7 @@ Let us trace through a real scenario:
 ```
 Scenario: Payment API starts failing due to database overload
 
-T=0: 100 requests → 50 succeed, 50 fail
+T=0: 100 requests -> 50 succeed, 50 fail
      failure_rate = 50/100 = 0.50 = exactly at threshold
      Breaker trips. State: OPEN
 
@@ -914,22 +914,22 @@ Here is the scariest scenario in distributed systems: a failure in one service c
 Consider a typical e-commerce architecture: the web server calls the order service, which calls the inventory service, which calls the database.
 
 ```
-Web Server → Order Service → Inventory Service → Database
-    ↑                                               ↓
-    └────────────────────────────────────────────── ┘
+Web Server -> Order Service -> Inventory Service -> Database
+    ^                                               v
+    +---------------------------------------------- +
                 (database becomes slow)
 
 Without circuit breakers:
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 1. Database becomes slow (maybe due to a maintenance operation)
 2. Inventory Service: requests to DB take 30 seconds each
-3. Inventory Service threads: 100 threads × 30 seconds = stuck
+3. Inventory Service threads: 100 threads x 30 seconds = stuck
 4. Inventory Service: cannot handle new requests (all threads busy)
 5. Order Service: calls to Inventory Service now time out (30 seconds)
-6. Order Service threads: 100 threads × 30 seconds = stuck
+6. Order Service threads: 100 threads x 30 seconds = stuck
 7. Order Service: cannot handle new requests
 8. Web Server: calls to Order Service now time out (30 seconds)
-9. Web Server threads: 100 threads × 30 seconds = stuck
+9. Web Server threads: 100 threads x 30 seconds = stuck
 10. Web Server: cannot handle new user requests
 11. Users: website appears completely down
 
@@ -938,7 +938,7 @@ A single slow component cascaded through 3 layers.
 
 
 With circuit breakers:
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 1. Database becomes slow
 2. Inventory Service: requests to DB start failing/timing out
 3. Circuit breaker in Inventory Service trips (50% failure rate)
@@ -955,7 +955,7 @@ The database was slow. The website degraded gracefully, not crashed.
 Each circuit breaker contained the failure to its own layer.
 ```
 
-This difference — full crash vs. graceful degradation — is what circuit breakers exist to create. They are one of the most important resilience tools in distributed systems.
+This difference -- full crash vs. graceful degradation -- is what circuit breakers exist to create. They are one of the most important resilience tools in distributed systems.
 
 ---
 
@@ -964,58 +964,58 @@ This difference — full crash vs. graceful degradation — is what circuit brea
 When a request fails, you need a consistent process for deciding what to do. This decision tree, used universally in production engineering, walks you through the logic:
 
 ```
-╔══════════════════════════════════════════════════════════════════╗
-║              FAILURE DECISION TREE                               ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|              FAILURE DECISION TREE                               |
++==================================================================+
 
-                        ┌─────────────────┐
-                        │  Request Failed  │
-                        └────────┬────────┘
-                                 │
-                                 ▼
-                   ┌─────────────────────────────┐
-                   │  Is the error code          │
-                   │  retryable?                 │
-                   │                             │
-                   │  NOT retryable:             │
-                   │  400 Bad Request            │
-                   │  401 Unauthorized           │
-                   │  403 Forbidden              │
-                   │  404 Not Found              │
-                   └──────┬──────────────────────┘
-                          │
-              ┌───────────┴────────────┐
-              │                        │
-              ▼                        ▼
+                        +-----------------+
+                        |  Request Failed  |
+                        +--------+--------+
+                                 |
+                                 v
+                   +-----------------------------+
+                   |  Is the error code          |
+                   |  retryable?                 |
+                   |                             |
+                   |  NOT retryable:             |
+                   |  400 Bad Request            |
+                   |  401 Unauthorized           |
+                   |  403 Forbidden              |
+                   |  404 Not Found              |
+                   +------+----------------------+
+                          |
+              +-----------+------------+
+              |                        |
+              v                        v
          NOT retryable            Retryable
-              │               (408, 429, 500,
-              │                502, 503, 504)
-              │                        │
-              ▼                        ▼
+              |               (408, 429, 500,
+              |                502, 503, 504)
+              |                        |
+              v                        v
     Return error to            Is the circuit
     client immediately         breaker OPEN?
-    (no retry)                      │
-                            ┌───────┴────────┐
-                            │                │
-                            ▼                ▼
+    (no retry)                      |
+                            +-------+--------+
+                            |                |
+                            v                v
                          OPEN            CLOSED or
-                            │            HALF-OPEN
-                            │                │
-                            ▼                ▼
+                            |            HALF-OPEN
+                            |                |
+                            v                v
                   Return "service     Have I exceeded
                   unavailable" fast   max retry attempts?
-                  (circuit open)           │
-                                  ┌────────┴────────┐
-                                  │                  │
-                                  ▼                  ▼
-                            YES — exceeded     NO — attempts
-                                  │            remain
-                                  ▼                  │
-                         Return error to             ▼
+                  (circuit open)           |
+                                  +--------+--------+
+                                  |                  |
+                                  v                  v
+                            YES -- exceeded     NO -- attempts
+                                  |            remain
+                                  v                  |
+                         Return error to             v
                          caller (fail fast)  Wait (exponential
                                              backoff + jitter)
-                                                      │
-                                                      ▼
+                                                      |
+                                                      v
                                                Retry request
                                                (go back to top)
 ```
@@ -1035,18 +1035,18 @@ These numbers represent the accumulated experience of production engineering at 
 | Max retry attempts | 3 to 5 | More than 5 means the problem is probably not transient |
 | Base backoff delay | 100ms | Short enough to not hurt user experience, long enough to matter |
 | Max backoff delay | 30 seconds | Users abandon anything that takes longer than 30 seconds |
-| Jitter range | ±25% of calculated delay | Wide enough to spread retries, narrow enough to stay predictable |
+| Jitter range | +/-25% of calculated delay | Wide enough to spread retries, narrow enough to stay predictable |
 | Circuit breaker failure threshold | 50% error rate | Half of requests failing means something is seriously wrong |
 | Circuit breaker measurement window | 10 seconds of recent requests | Enough history to be meaningful, recent enough to respond quickly |
 | Circuit open duration | 30 to 60 seconds | Typical service restart is 15-30s, plus warmup time |
 | Half-open test requests | 1 | Enough to verify recovery without overwhelming the recovering service |
-| Retry budget (whole service) | ≤ 10% of total capacity | Retries should be overhead, not the dominant traffic pattern |
+| Retry budget (whole service) | <= 10% of total capacity | Retries should be overhead, not the dominant traffic pattern |
 
 A common mistake is treating these as one-size-fits-all. They are starting points. A payment processing service might use 3 retries with 30-second open duration (caution: double charges are catastrophic). An image resizing service might use 5 retries with 10-second open duration (failures are cheaper). Calibrate based on the cost of failure and the expected recovery time.
 
 ---
 
-## Retry Storms — When Everyone Retries at Once
+## Retry Storms -- When Everyone Retries at Once
 
 We saw the math earlier: bad retries turn a 20% failure rate into a 100% outage. Now let us look at the specific phenomenon called a retry storm, understand the amplification math in detail, and learn the strategies for breaking one.
 
@@ -1056,7 +1056,7 @@ We saw the math earlier: bad retries turn a 20% failure rate into a 100% outage.
 
 A hospital emergency room is overwhelmed on a Saturday night. Patients are waiting 4 hours to be seen. Some patients, after waiting 2 hours, leave and drive to a different hospital. That hospital is also overwhelmed (same Saturday night, same region). They wait another 2 hours there. Meanwhile, the first hospital calls their registered number: "We have a bed ready for you." But the patient is already at hospital two. The first hospital has wasted a staff member's time, a phone call, and a prepared bed.
 
-At hospital two, more patients are arriving — including patients from hospital one. Hospital two is now handling its own patients plus the overflow from hospital one. Its wait time jumps from 2 hours to 5 hours. More patients leave hospital two. They go to hospital three.
+At hospital two, more patients are arriving -- including patients from hospital one. Hospital two is now handling its own patients plus the overflow from hospital one. Its wait time jumps from 2 hours to 5 hours. More patients leave hospital two. They go to hospital three.
 
 This is a retry storm. The "patients" (client requests) are moving between "hospitals" (service replicas or clusters) in response to slow service. Each move brings the new destination closer to its own overload point. The aggregate medical system (your distributed service) is consuming far more resources than the actual medical need (actual user requests) warrants.
 
@@ -1069,38 +1069,38 @@ Let us calculate exactly how many requests a retry storm generates. This math co
 **Setup:** A service is experiencing failures. Each failed request retries N times. The failure rate is R (a number between 0 and 1, so 50% = 0.5).
 
 **Formula for total requests per original request:**
-`Total = 1 + R + R² + R³ + ... + R^N`
+`Total = 1 + R + R^2 + R^3 + ... + R^N`
 
 This is a geometric series. Let us plug in real numbers.
 
 ```
 SCENARIO A: 3 retries, 50% failure rate
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 Original 1,000 requests:                           1,000
 First retry (50% of 1,000 fail):                     500
 Second retry (50% of 500 fail):                      250
 Third retry (50% of 250 fail):                       125
 Total requests to the server:                      1,875
-Amplification factor:                              1.875×
+Amplification factor:                              1.875x
 
 The server handles 1,875 requests to serve 1,000 users.
 Overhead: 875 extra requests (87.5% overhead)
 
 
 SCENARIO B: 3 retries, 80% failure rate
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 Original 1,000 requests:                           1,000
 First retry (80% of 1,000 fail):                     800
 Second retry (80% of 800 fail):                      640
 Third retry (80% of 640 fail):                       512
 Total requests to the server:                      2,952
-Amplification factor:                              2.95×
+Amplification factor:                              2.95x
 
-Nearly 3× the original load on a server that is already failing at 80%.
+Nearly 3x the original load on a server that is already failing at 80%.
 
 
 SCENARIO C: 5 retries, 99% failure rate (near-complete outage)
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 Original 1,000 requests:                           1,000
 First retry (99% of 1,000 fail):                     990
 Second retry (99% of 990 fail):                      980
@@ -1108,37 +1108,37 @@ Third retry (99% of 980 fail):                       970
 Fourth retry (99% of 970 fail):                      960
 Fifth retry (99% of 960 fail):                       950
 Total requests to the server:                      5,850
-Amplification factor:                              5.85×
+Amplification factor:                              5.85x
 
 A server that is already failing 99% of the time
-is receiving ALMOST 6× the original request load.
+is receiving ALMOST 6x the original request load.
 This is why retry storms are self-reinforcing.
 ```
 
 Here is the amplification factor visualized across failure rates:
 
 ```
-RETRY AMPLIFICATION — How Much Extra Load Do Retries Add?
-─────────────────────────────────────────────────────────────────
+RETRY AMPLIFICATION -- How Much Extra Load Do Retries Add?
+-----------------------------------------------------------------
 Amplification
 Factor
-(total load /    ·
-original load) ·
-               ·     (5 retries, 99% failure rate = 5.85×)
-  6.0 ────────────────────────────────────────────────────────●
-               ·
-  5.0 ─────────────────────────────────────────────────────·
-               ·                                         ·
-  4.0 ──────────────────────────────────────────────── ·
-               ·                              (5 retries)
-  3.0 ───────────────────────────────────────·
-               ·                          ·
-  2.0 ────────────────────────────────── ●  ← (3 retries, 80% = 2.95×)
-               ·                      ·
-  1.5 ──────────────────────────────·
-               ·            (3 retries)
-  1.0 ─────── ●  ← (no retries = 1.0×, baseline)
-               │─────────────────────────────────────────────►
+(total load /    *
+original load) *
+               *     (5 retries, 99% failure rate = 5.85x)
+  6.0 --------------------------------------------------------*
+               *
+  5.0 -----------------------------------------------------*
+               *                                         *
+  4.0 ------------------------------------------------ *
+               *                              (5 retries)
+  3.0 ---------------------------------------*
+               *                          *
+  2.0 ---------------------------------- *  <- (3 retries, 80% = 2.95x)
+               *                      *
+  1.5 ------------------------------*
+               *            (3 retries)
+  1.0 ------- *  <- (no retries = 1.0x, baseline)
+               |--------------------------------------------->
               0%    20%    40%    50%    60%    80%    99%
                            Failure Rate
 
@@ -1147,11 +1147,11 @@ When a service is barely working (high failure rate),
 retries make it work even less.
 ```
 
-The counter-intuitive truth: retries hurt the most exactly when you need them the most. When a service is at 99% failure rate, it desperately needs fewer requests, not more. But retries guarantee it gets more. This is why circuit breakers exist — to cut off retries completely when the service is clearly too broken to help.
+The counter-intuitive truth: retries hurt the most exactly when you need them the most. When a service is at 99% failure rate, it desperately needs fewer requests, not more. But retries guarantee it gets more. This is why circuit breakers exist -- to cut off retries completely when the service is clearly too broken to help.
 
 ---
 
-### Breaking the Retry Storm — Four Strategies
+### Breaking the Retry Storm -- Four Strategies
 
 **Strategy 1: The Retry Budget**
 
@@ -1169,30 +1169,30 @@ Imagine you have a physical bucket that starts with 10 tokens in it. Each token 
 
 ```
 TOKEN BUCKET FOR RETRIES
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 
-Start:  [●●●●●●●●●●]  10 tokens available
+Start:  [**********]  10 tokens available
 
 Request 1 fails. You want to retry.
-Take a token: [●●●●●●●●●]   9 tokens left. Retry granted.
+Take a token: [*********]   9 tokens left. Retry granted.
 
-Request 2 fails. Take a token: [●●●●●●●●]   8 tokens left. Retry granted.
-Request 3 fails. Take a token: [●●●●●●●]    7 tokens left. Retry granted.
-Request 4 fails. Take a token: [●●●●●●]     6 tokens left. Retry granted.
-Request 5 fails. Take a token: [●●●●●]      5 tokens left. Retry granted.
-Request 6 fails. Take a token: [●●●●]       4 tokens left. Retry granted.
-Request 7 fails. Take a token: [●●●]        3 tokens left. Retry granted.
-Request 8 fails. Take a token: [●●]         2 tokens left. Retry granted.
-Request 9 fails. Take a token: [●]          1 token left.  Retry granted.
+Request 2 fails. Take a token: [********]   8 tokens left. Retry granted.
+Request 3 fails. Take a token: [*******]    7 tokens left. Retry granted.
+Request 4 fails. Take a token: [******]     6 tokens left. Retry granted.
+Request 5 fails. Take a token: [*****]      5 tokens left. Retry granted.
+Request 6 fails. Take a token: [****]       4 tokens left. Retry granted.
+Request 7 fails. Take a token: [***]        3 tokens left. Retry granted.
+Request 8 fails. Take a token: [**]         2 tokens left. Retry granted.
+Request 9 fails. Take a token: [*]          1 token left.  Retry granted.
 Request 10 fails. Take a token: []          0 tokens left. Retry granted.
 
 Request 11 fails. No tokens left.           Retry DENIED. Return error.
 Request 12 fails. No tokens left.           Retry DENIED. Return error.
 
-After 1 minute: bucket refills with 1 token.  [●]
+After 1 minute: bucket refills with 1 token.  [*]
 Request 13 fails. Take the 1 token: []      Retry granted.
 
-After another minute: [●]                   1 more retry available.
+After another minute: [*]                   1 more retry available.
 ```
 
 The token bucket forces retry pacing. You cannot retry faster than the bucket refills. This prevents a single client from flooding the server with retries, even if that client is experiencing very high failure rates.
@@ -1213,11 +1213,11 @@ This is one of the most important concepts in production systems engineering, an
 
 ### The Traffic Standing Wave Analogy
 
-Have you ever driven on a highway, hit heavy traffic, crawled for 20 minutes, then suddenly the traffic clears and you are back to normal speed — and there is no accident, no construction, no obvious cause? Just open road ahead?
+Have you ever driven on a highway, hit heavy traffic, crawled for 20 minutes, then suddenly the traffic clears and you are back to normal speed -- and there is no accident, no construction, no obvious cause? Just open road ahead?
 
 This is a traffic standing wave. It is a real phenomenon studied by traffic scientists. Here is what causes it:
 
-One car slows down slightly — maybe the driver glanced at their phone, or saw something at the roadside. The car behind has to brake more sharply (reaction time means you always brake harder than the car ahead). The car behind that brakes harder still. Backward propagation turns a tiny slowdown into a complete traffic jam. The original car is now miles ahead, moving at full speed. But the "jam" — a wave of braking — propagates backward through traffic like a sound wave.
+One car slows down slightly -- maybe the driver glanced at their phone, or saw something at the roadside. The car behind has to brake more sharply (reaction time means you always brake harder than the car ahead). The car behind that brakes harder still. Backward propagation turns a tiny slowdown into a complete traffic jam. The original car is now miles ahead, moving at full speed. But the "jam" -- a wave of braking -- propagates backward through traffic like a sound wave.
 
 The jam is self-sustaining. New cars continuously drive into it and feed it. It does not need the original cause anymore. The original cause is gone. The jam persists.
 
@@ -1307,65 +1307,65 @@ The metastable failure state is what makes production incidents so hard to handl
 
 ## Summary of Part 1
 
-Before we move to Part 2 (Backpressure mechanisms and how to implement them) and Part 3 (Idempotency — making retries safe), let us consolidate what Part 1 established.
+Before we move to Part 2 (Backpressure mechanisms and how to implement them) and Part 3 (Idempotency -- making retries safe), let us consolidate what Part 1 established.
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║                  PART 1 SUMMARY: RETRIES                            ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  THE CORE INSIGHT                                                    ║
-║  Retries are useful for transient failures. But bad retries          ║
-║  turn small problems into complete outages.                          ║
-║                                                                      ║
-║  THE FIVE SINS                                                       ║
-║  1. Immediate retry — adds load at the worst moment                  ║
-║  2. Fixed-interval retry — creates synchronized retry waves          ║
-║  3. Unbounded retries — never returns to the caller                  ║
-║  4. Retrying non-retryable errors — pointless, can cause harm        ║
-║  5. Ignoring Retry-After headers — ignores explicit server guidance  ║
-║                                                                      ║
-║  THE CORRECT APPROACH                                                ║
-║  Exponential backoff: 100ms → 200ms → 400ms → 800ms → 1600ms        ║
-║  Cap at 30 seconds maximum wait                                      ║
-║  Add ±25% jitter to prevent synchronized retry waves                 ║
-║  Maximum 3-5 attempts total                                          ║
-║  Only retry retryable error codes (408, 429, 500, 502, 503, 504)    ║
-║  Always honor Retry-After headers                                    ║
-║                                                                      ║
-║  CIRCUIT BREAKERS                                                    ║
-║  Three states: CLOSED → OPEN → HALF-OPEN → CLOSED                   ║
-║  Trip at 50% failure rate. Stay open 30-60 seconds.                 ║
-║  Test with one request in HALF-OPEN before resuming normal traffic. ║
-║  Prevent cascading failures by containing failure to one layer.     ║
-║                                                                      ║
-║  RETRY STORMS                                                        ║
-║  Amplification factor = 1 + R + R² + ... + R^N                      ║
-║  At 80% failure rate with 3 retries: 2.95× amplification           ║
-║  Self-reinforcing: more retries → more load → more failures          ║
-║  Break with: circuit breakers, retry budgets, token buckets         ║
-║                                                                      ║
-║  METASTABLE FAILURE STATES                                           ║
-║  When the original trigger is gone but the failure persists         ║
-║  because the failure itself generates the conditions that           ║
-║  sustain it. Break the loop: circuit breakers + timeouts + jitter.  ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|                  PART 1 SUMMARY: RETRIES                            |
++======================================================================+
+|                                                                      |
+|  THE CORE INSIGHT                                                    |
+|  Retries are useful for transient failures. But bad retries          |
+|  turn small problems into complete outages.                          |
+|                                                                      |
+|  THE FIVE SINS                                                       |
+|  1. Immediate retry -- adds load at the worst moment                  |
+|  2. Fixed-interval retry -- creates synchronized retry waves          |
+|  3. Unbounded retries -- never returns to the caller                  |
+|  4. Retrying non-retryable errors -- pointless, can cause harm        |
+|  5. Ignoring Retry-After headers -- ignores explicit server guidance  |
+|                                                                      |
+|  THE CORRECT APPROACH                                                |
+|  Exponential backoff: 100ms -> 200ms -> 400ms -> 800ms -> 1600ms        |
+|  Cap at 30 seconds maximum wait                                      |
+|  Add +/-25% jitter to prevent synchronized retry waves                 |
+|  Maximum 3-5 attempts total                                          |
+|  Only retry retryable error codes (408, 429, 500, 502, 503, 504)    |
+|  Always honor Retry-After headers                                    |
+|                                                                      |
+|  CIRCUIT BREAKERS                                                    |
+|  Three states: CLOSED -> OPEN -> HALF-OPEN -> CLOSED                   |
+|  Trip at 50% failure rate. Stay open 30-60 seconds.                 |
+|  Test with one request in HALF-OPEN before resuming normal traffic. |
+|  Prevent cascading failures by containing failure to one layer.     |
+|                                                                      |
+|  RETRY STORMS                                                        |
+|  Amplification factor = 1 + R + R^2 + ... + R^N                      |
+|  At 80% failure rate with 3 retries: 2.95x amplification           |
+|  Self-reinforcing: more retries -> more load -> more failures          |
+|  Break with: circuit breakers, retry budgets, token buckets         |
+|                                                                      |
+|  METASTABLE FAILURE STATES                                           |
+|  When the original trigger is gone but the failure persists         |
+|  because the failure itself generates the conditions that           |
+|  sustain it. Break the loop: circuit breakers + timeouts + jitter.  |
+|                                                                      |
++======================================================================+
 ```
 
-Part 1 gave you the tools to handle failures gracefully — retry correctly, know when to stop retrying, protect yourself from downstream failures with circuit breakers, and recognize when you are in a retry storm or metastable state.
+Part 1 gave you the tools to handle failures gracefully -- retry correctly, know when to stop retrying, protect yourself from downstream failures with circuit breakers, and recognize when you are in a retry storm or metastable state.
 
 Part 2 (in the full chapter) covers backpressure: how to control the rate of incoming work before it overwhelms your system. This is the "Maria at the front door" half of the story.
 
 Part 3 covers idempotency: how to make retries safe so that retrying a payment does not charge the user twice. This is the "double charge prevention" half of the story.
 
-All three parts together give you the complete toolkit for building systems that stay alive under pressure — not just under normal conditions, but when things go wrong in the specific, predictable ways that real production systems fail.
+All three parts together give you the complete toolkit for building systems that stay alive under pressure -- not just under normal conditions, but when things go wrong in the specific, predictable ways that real production systems fail.
 
 ---
 
 ## Interlude: Seeing These Concepts in the Real World
 
-Before moving on, it helps to see these concepts appear in real products you probably use every day. This is not trivia. It is evidence that these problems are universal — every company that builds distributed systems has to solve them.
+Before moving on, it helps to see these concepts appear in real products you probably use every day. This is not trivia. It is evidence that these problems are universal -- every company that builds distributed systems has to solve them.
 
 ---
 
@@ -1373,7 +1373,7 @@ Before moving on, it helps to see these concepts appear in real products you pro
 
 Stripe processes billions of dollars of payments. A wrong retry can mean a merchant gets double-paid or a customer gets double-charged. Stripe's engineering blog describes their retry system in detail.
 
-When a Stripe API call fails with a 500 or 503, Stripe recommends a specific retry strategy: start with a 200ms wait, double it each attempt, cap at 2 seconds, maximum 3 retries. Note the cap is 2 seconds — lower than our general 30-second recommendation — because payment UX requires faster feedback. If a payment has not gone through in 8 seconds total, users assume it failed and try again manually.
+When a Stripe API call fails with a 500 or 503, Stripe recommends a specific retry strategy: start with a 200ms wait, double it each attempt, cap at 2 seconds, maximum 3 retries. Note the cap is 2 seconds -- lower than our general 30-second recommendation -- because payment UX requires faster feedback. If a payment has not gone through in 8 seconds total, users assume it failed and try again manually.
 
 Stripe also handles the idempotency problem (covered in Part 3) by requiring clients to send an "Idempotency-Key" header with every payment request. This is their solution to the double-charge problem. If you retry with the same key, Stripe returns the cached result of the first attempt rather than running the payment again.
 
@@ -1383,15 +1383,15 @@ The key lesson from Stripe: retry parameters are not universal. They depend on t
 
 ### How AWS S3 Handles Retry Storms
 
-Amazon S3 (Simple Storage Service) is one of the most-used infrastructure services in the world. At their scale, retry storms are a serious threat — if millions of clients simultaneously retry a failed operation, S3 faces billions of extra requests in seconds.
+Amazon S3 (Simple Storage Service) is one of the most-used infrastructure services in the world. At their scale, retry storms are a serious threat -- if millions of clients simultaneously retry a failed operation, S3 faces billions of extra requests in seconds.
 
 AWS publishes specific retry recommendations for S3 clients:
-- Exponential backoff with full jitter (random between 0 and the calculated delay, not ±25%)
+- Exponential backoff with full jitter (random between 0 and the calculated delay, not +/-25%)
 - Base delay of 200ms
 - Maximum delay of 20 seconds
 - Maximum 10 retry attempts for large file operations
 
-The "full jitter" approach (random between 0 and calculated delay) is more aggressive than ±25% jitter and better at preventing synchronized retry waves at very large scales. When you have 10 million clients, even ±25% jitter can still create meaningful spikes. Full jitter spreads retries across the entire window.
+The "full jitter" approach (random between 0 and calculated delay) is more aggressive than +/-25% jitter and better at preventing synchronized retry waves at very large scales. When you have 10 million clients, even +/-25% jitter can still create meaningful spikes. Full jitter spreads retries across the entire window.
 
 ---
 
@@ -1405,26 +1405,26 @@ Their circuit breaker (Hystrix, now Resilience4j) wraps every external call. Whe
 3. Users see a degraded but functional experience rather than an error
 4. The recommendation engine gets time to recover
 
-The fallback is key to the Netflix approach. A circuit breaker that just returns an error is useful. A circuit breaker with a pre-built fallback that keeps the user experience functional is the gold standard. Users watching Netflix during a recommendation engine outage do not see an error page — they see "Top Picks" (a cached list) instead of "Recommended for You" (a personalized list). The distinction is invisible to most users.
+The fallback is key to the Netflix approach. A circuit breaker that just returns an error is useful. A circuit breaker with a pre-built fallback that keeps the user experience functional is the gold standard. Users watching Netflix during a recommendation engine outage do not see an error page -- they see "Top Picks" (a cached list) instead of "Recommended for You" (a personalized list). The distinction is invisible to most users.
 
 ---
 
 ### How Google Handles Retry Budgets
 
-Google's Site Reliability Engineering book (the "SRE Book" — available free online) describes a technique called "retry budgets" in detail. Google services track what percentage of total outbound requests are retries. If retries exceed 10% of total traffic for any downstream service, the retry budget is exhausted and the service stops retrying for a period.
+Google's Site Reliability Engineering book (the "SRE Book" -- available free online) describes a technique called "retry budgets" in detail. Google services track what percentage of total outbound requests are retries. If retries exceed 10% of total traffic for any downstream service, the retry budget is exhausted and the service stops retrying for a period.
 
-This number — 10% — is a rule of thumb that Google found effective across many services. It means: retries are overhead, not the primary workload. When retries become more than a small fraction of total traffic, something is seriously wrong with the downstream service and retrying is unlikely to help.
+This number -- 10% -- is a rule of thumb that Google found effective across many services. It means: retries are overhead, not the primary workload. When retries become more than a small fraction of total traffic, something is seriously wrong with the downstream service and retrying is unlikely to help.
 
-The SRE Book also discusses "load shedding" — dropping excess requests rather than queuing them — which connects directly to the backpressure mechanisms in Part 2.
+The SRE Book also discusses "load shedding" -- dropping excess requests rather than queuing them -- which connects directly to the backpressure mechanisms in Part 2.
 
 ---
 
 ## The Six Things To Remember About Retries Forever
 
-This is a condensed reference — the six insights that will serve you in every system design interview and every production incident for the rest of your engineering career.
+This is a condensed reference -- the six insights that will serve you in every system design interview and every production incident for the rest of your engineering career.
 
 **1. Retries are load amplifiers.**
-Every retry is an extra request. At high failure rates, retries multiply load. The formula is `1 + R + R² + ... + R^N`. At 80% failure rate with 3 retries, you are serving 2.95× the original request volume on an already-failing service.
+Every retry is an extra request. At high failure rates, retries multiply load. The formula is `1 + R + R^2 + ... + R^N`. At 80% failure rate with 3 retries, you are serving 2.95x the original request volume on an already-failing service.
 
 **2. Synchronization is the enemy.**
 Fixed retry intervals create retry waves. All clients retry at the same moment and re-overload the recovering service. Jitter (randomness in timing) breaks synchronization. Always add jitter. Always.
@@ -1436,7 +1436,7 @@ Fixed retry intervals create retry waves. All clients retry at the same moment a
 When failure rate is too high, retries make everything worse. A circuit breaker cuts off retries entirely and lets the downstream service recover. This is the most important mechanism for preventing retry storms from becoming full outages.
 
 **5. Retries require idempotency.**
-If you retry a payment without idempotency, you double-charge the customer. If you retry a database write without idempotency, you write duplicate records. Retries are only safe when the underlying operation is designed to handle being called multiple times. This is idempotency — the topic of Part 3.
+If you retry a payment without idempotency, you double-charge the customer. If you retry a database write without idempotency, you write duplicate records. Retries are only safe when the underlying operation is designed to handle being called multiple times. This is idempotency -- the topic of Part 3.
 
 **6. Metastable failures are self-sustaining.**
 When the original failure trigger is gone but the system is still broken because retry load is sustaining the failure, you are in a metastable state. Recognize the pattern (high retry rate + high failure rate + no apparent trigger). Break it by cutting retries (circuit breaker or retry budget), not by restarting services.
@@ -1452,7 +1452,7 @@ One of the most common mistakes in software development: engineers implement ret
 - The test environment does not simulate partial failures (some requests succeed, some fail)
 - The test environment does not simulate recovery (service comes back online mid-test)
 
-Testing retry logic properly requires chaos engineering. This means intentionally breaking things in production-like environments to see how the retry system responds. Netflix famously runs "Chaos Monkey" — a tool that randomly kills production servers to test that Netflix's retry and failover logic actually works.
+Testing retry logic properly requires chaos engineering. This means intentionally breaking things in production-like environments to see how the retry system responds. Netflix famously runs "Chaos Monkey" -- a tool that randomly kills production servers to test that Netflix's retry and failover logic actually works.
 
 You do not need Chaos Monkey to test your retry logic. But you do need:
 
@@ -1469,55 +1469,55 @@ Write these tests before you ship. Finding out your retry logic creates a retry 
 ## Quick-Reference Cheatsheet: Retry Decision Guide
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║              RETRY QUICK-REFERENCE                                   ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  BEFORE YOU ADD RETRIES, ASK:                                        ║
-║  ● Is the failure transient? (sometimes fails, or always fails?)     ║
-║  ● Is retrying safe? (could it double-charge, double-write?)         ║
-║  ● Is the circuit breaker already open? (if yes, don't retry)        ║
-║  ● Is this a retryable HTTP code? (400s = no, 500s = maybe)         ║
-║                                                                      ║
-║  BACKOFF FORMULA:                                                    ║
-║  delay = min(base_ms × 2^attempt, max_ms) × random(0.75, 1.25)     ║
-║                                                                      ║
-║  WITH NUMBERS:                                                       ║
-║  Attempt 1 → try immediately                                         ║
-║  Attempt 2 → ~100ms (75-125ms after jitter)                          ║
-║  Attempt 3 → ~200ms (150-250ms)                                      ║
-║  Attempt 4 → ~400ms (300-500ms)                                      ║
-║  Attempt 5 → ~800ms (600-1000ms)                                     ║
-║  → After 5 attempts, give up and return the error                    ║
-║                                                                      ║
-║  CIRCUIT BREAKER THRESHOLDS:                                         ║
-║  Trip at:    50% failure rate over a 10-second window               ║
-║  Stay open:  30 to 60 seconds                                        ║
-║  Test with:  1 request in HALF-OPEN state                            ║
-║                                                                      ║
-║  RETRY CODES — ALWAYS RETRY:                                         ║
-║  408 Request Timeout                                                  ║
-║  429 Too Many Requests (wait for Retry-After first)                  ║
-║  502 Bad Gateway                                                      ║
-║  503 Service Unavailable                                              ║
-║  504 Gateway Timeout                                                  ║
-║                                                                      ║
-║  RETRY CODES — NEVER RETRY:                                          ║
-║  400 Bad Request (fix the request)                                   ║
-║  401 Unauthorized (fix the credentials)                              ║
-║  403 Forbidden (you don't have permission)                           ║
-║  404 Not Found (it doesn't exist)                                    ║
-║                                                                      ║
-║  RETRY CODES — RETRY ONCE ONLY:                                      ║
-║  500 Internal Server Error (might be transient, might not be)        ║
-║                                                                      ║
-║  AMPLIFICATION AT DIFFERENT FAILURE RATES (3 retries):              ║
-║  20% failure rate → 1.25× amplification (safe)                      ║
-║  50% failure rate → 1.88× amplification (concerning)                ║
-║  80% failure rate → 2.95× amplification (dangerous)                 ║
-║  99% failure rate → 3.96× amplification (catastrophic)              ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|              RETRY QUICK-REFERENCE                                   |
++======================================================================+
+|                                                                      |
+|  BEFORE YOU ADD RETRIES, ASK:                                        |
+|  * Is the failure transient? (sometimes fails, or always fails?)     |
+|  * Is retrying safe? (could it double-charge, double-write?)         |
+|  * Is the circuit breaker already open? (if yes, don't retry)        |
+|  * Is this a retryable HTTP code? (400s = no, 500s = maybe)         |
+|                                                                      |
+|  BACKOFF FORMULA:                                                    |
+|  delay = min(base_ms x 2^attempt, max_ms) x random(0.75, 1.25)     |
+|                                                                      |
+|  WITH NUMBERS:                                                       |
+|  Attempt 1 -> try immediately                                         |
+|  Attempt 2 -> ~100ms (75-125ms after jitter)                          |
+|  Attempt 3 -> ~200ms (150-250ms)                                      |
+|  Attempt 4 -> ~400ms (300-500ms)                                      |
+|  Attempt 5 -> ~800ms (600-1000ms)                                     |
+|  -> After 5 attempts, give up and return the error                    |
+|                                                                      |
+|  CIRCUIT BREAKER THRESHOLDS:                                         |
+|  Trip at:    50% failure rate over a 10-second window               |
+|  Stay open:  30 to 60 seconds                                        |
+|  Test with:  1 request in HALF-OPEN state                            |
+|                                                                      |
+|  RETRY CODES -- ALWAYS RETRY:                                         |
+|  408 Request Timeout                                                  |
+|  429 Too Many Requests (wait for Retry-After first)                  |
+|  502 Bad Gateway                                                      |
+|  503 Service Unavailable                                              |
+|  504 Gateway Timeout                                                  |
+|                                                                      |
+|  RETRY CODES -- NEVER RETRY:                                          |
+|  400 Bad Request (fix the request)                                   |
+|  401 Unauthorized (fix the credentials)                              |
+|  403 Forbidden (you don't have permission)                           |
+|  404 Not Found (it doesn't exist)                                    |
+|                                                                      |
+|  RETRY CODES -- RETRY ONCE ONLY:                                      |
+|  500 Internal Server Error (might be transient, might not be)        |
+|                                                                      |
+|  AMPLIFICATION AT DIFFERENT FAILURE RATES (3 retries):              |
+|  20% failure rate -> 1.25x amplification (safe)                      |
+|  50% failure rate -> 1.88x amplification (concerning)                |
+|  80% failure rate -> 2.95x amplification (dangerous)                 |
+|  99% failure rate -> 3.96x amplification (catastrophic)              |
+|                                                                      |
++======================================================================+
 ```
 
 ---
@@ -1542,31 +1542,31 @@ Before writing any retry code, classify each dependency:
 
 ```
 DEPENDENCY CLASSIFICATION TABLE
-─────────────────────────────────────────────────────────────────
-Dependency         │ Retryable? │ Idempotent? │ Max Latency
-───────────────────┼────────────┼─────────────┼──────────────
-Inventory Service  │ YES        │ YES         │ 200ms
-                   │ (503 when  │ (reserving  │ (user waiting)
-                   │  overload) │  same item  │
-                   │            │  twice is OK│
-                   │            │  if deduped)│
-───────────────────┼────────────┼─────────────┼──────────────
-Payment Service    │ YES        │ MUST BE     │ 3,000ms
-                   │ (network   │ (CRITICAL — │ (user will wait
-                   │  errors)   │  NO double  │  for payment)
-                   │            │  charges)   │
-───────────────────┼────────────┼─────────────┼──────────────
-Notification       │ YES        │ EVENTUALLY  │ 10,000ms
-Service            │ (email     │ (duplicate  │ (async — don't
-                   │  servers   │  email is   │  make user wait)
-                   │  are flaky)│  acceptable)│
-───────────────────┼────────────┼─────────────┼──────────────
-Orders Database    │ YES        │ MUST BE     │ 100ms
-                   │ (transient │ (NO double  │ (low latency
-                   │  DB errors)│  records)   │  expected)
+-----------------------------------------------------------------
+Dependency         | Retryable? | Idempotent? | Max Latency
+-------------------+------------+-------------+--------------
+Inventory Service  | YES        | YES         | 200ms
+                   | (503 when  | (reserving  | (user waiting)
+                   |  overload) |  same item  |
+                   |            |  twice is OK|
+                   |            |  if deduped)|
+-------------------+------------+-------------+--------------
+Payment Service    | YES        | MUST BE     | 3,000ms
+                   | (network   | (CRITICAL -- | (user will wait
+                   |  errors)   |  NO double  |  for payment)
+                   |            |  charges)   |
+-------------------+------------+-------------+--------------
+Notification       | YES        | EVENTUALLY  | 10,000ms
+Service            | (email     | (duplicate  | (async -- don't
+                   |  servers   |  email is   |  make user wait)
+                   |  are flaky)|  acceptable)|
+-------------------+------------+-------------+--------------
+Orders Database    | YES        | MUST BE     | 100ms
+                   | (transient | (NO double  | (low latency
+                   |  DB errors)|  records)   |  expected)
 ```
 
-This table tells you what retry strategy and parameters each call needs. Payment and database writes are the most critical — they must be idempotent. Notification is the most lenient — a duplicate email is annoying but not catastrophic.
+This table tells you what retry strategy and parameters each call needs. Payment and database writes are the most critical -- they must be idempotent. Notification is the most lenient -- a duplicate email is annoying but not catastrophic.
 
 ---
 
@@ -1631,7 +1631,7 @@ def place_order(user_id, cart, payment_method):
         inventory_service.release(reservation)
         return error(f"Payment failed: {e}")
     
-    # Step 3: Write to database (synchronous — user waits for confirmation)
+    # Step 3: Write to database (synchronous -- user waits for confirmation)
     try:
         order_record = retry_with_backoff(
             operation=lambda: database_breaker.call(
@@ -1646,31 +1646,31 @@ def place_order(user_id, cart, payment_method):
             base_delay_ms=50
         )
     except Exception:
-        # Payment succeeded but we couldn't record it — log urgently for manual review
+        # Payment succeeded but we couldn't record it -- log urgently for manual review
         alert_oncall(f"CRITICAL: Payment {charge.id} succeeded but order not recorded")
         return error("Order partially processed. Our team will follow up.")
     
-    # Step 4: Send notification (asynchronous — don't make user wait)
+    # Step 4: Send notification (asynchronous -- don't make user wait)
     # Fire and forget. If it fails, retry in background. User is already done.
     send_async(lambda: retry_with_backoff(
         operation=lambda: notification_breaker.call(
             lambda: notification_service.send_confirmation(user_id, order_record)
         ),
-        max_attempts=5,    # more attempts OK — email is lower stakes
-        base_delay_ms=1000 # longer delays OK — email is not time-critical
+        max_attempts=5,    # more attempts OK -- email is lower stakes
+        base_delay_ms=1000 # longer delays OK -- email is not time-critical
     ))
     
     return success(order_id=order_id)
 ```
 
-This is not perfect production code — it is simplified for illustration. But it demonstrates the key principles:
+This is not perfect production code -- it is simplified for illustration. But it demonstrates the key principles:
 
 - Each dependency has its own circuit breaker with appropriate thresholds
 - Each retry call has appropriate `max_attempts` and `base_delay_ms` based on the stakes
 - The payment step uses an `idempotency_key` (the `order_id`) to prevent double charges
 - Steps are ordered by importance: reserve before charge, charge before record
 - Failure at each step triggers appropriate cleanup (release inventory) or alerting
-- Notification is asynchronous — user gets a response immediately, email sends in background
+- Notification is asynchronous -- user gets a response immediately, email sends in background
 
 ---
 
@@ -1701,7 +1701,7 @@ User experience: 6 seconds of waiting (two 3-second timeouts) then an error. Not
 This is the scary scenario. Money was taken, order was not recorded.
 The code above logs an urgent alert and returns an error to the user.
 On-call engineer gets paged. They find the orphaned charge and manually create the order record.
-This is not automated — it is a manual recovery process. But it is caught immediately and bounded in scope.
+This is not automated -- it is a manual recovery process. But it is caught immediately and bounded in scope.
 The user gets an error message saying "our team will follow up" rather than a confusing hang.
 
 **Scenario D: All three services simultaneously have elevated error rates (widespread incident)**
@@ -1717,9 +1717,9 @@ Traffic resumes gradually. No retry storm.
 
 ### What This Walkthrough Demonstrates
 
-The four steps — classify, circuit-break, apply retry logic, think through failure scenarios — are the right order of operations. Most engineers jump straight to step 3 (write retry code) without doing steps 1 and 2. The result is retry code that works in normal conditions and fails catastrophically in outage conditions.
+The four steps -- classify, circuit-break, apply retry logic, think through failure scenarios -- are the right order of operations. Most engineers jump straight to step 3 (write retry code) without doing steps 1 and 2. The result is retry code that works in normal conditions and fails catastrophically in outage conditions.
 
-The classification step forces you to think about idempotency (Part 3) before you write a single line of retry code. The circuit breaker step forces you to think about isolation — each dependency failing independently rather than one failure cascading through the entire checkout process. The failure scenario walkthrough forces you to find the edge cases before users do.
+The classification step forces you to think about idempotency (Part 3) before you write a single line of retry code. The circuit breaker step forces you to think about isolation -- each dependency failing independently rather than one failure cascading through the entire checkout process. The failure scenario walkthrough forces you to find the edge cases before users do.
 
 This is what L6 engineering looks like in practice. Not "add retries here." But: "classify the dependencies, set appropriate circuit breakers, write idempotency-safe retry logic, then walk through the four most likely failure scenarios to verify the behavior is correct."
 
@@ -1729,68 +1729,68 @@ This is what L6 engineering looks like in practice. Not "add retries here." But:
 
 Here are all the technical terms introduced in Part 1, defined simply, in the order they appeared.
 
-**Transient failure** — A temporary problem that goes away on its own. Examples: brief network packet loss, a server that was momentarily busy. Worth retrying.
+**Transient failure** -- A temporary problem that goes away on its own. Examples: brief network packet loss, a server that was momentarily busy. Worth retrying.
 
-**Permanent failure** — A problem that will not go away without intervention. Examples: invalid credentials, a resource that does not exist. Not worth retrying.
+**Permanent failure** -- A problem that will not go away without intervention. Examples: invalid credentials, a resource that does not exist. Not worth retrying.
 
-**Retry storm** — When many clients all retry at the same time, creating more load on an already-failing service, making the failure worse. Self-reinforcing cycle.
+**Retry storm** -- When many clients all retry at the same time, creating more load on an already-failing service, making the failure worse. Self-reinforcing cycle.
 
-**Exponential backoff** — A retry strategy where the wait time between retries doubles with each attempt (100ms, 200ms, 400ms, 800ms...). Prevents hammering a recovering service.
+**Exponential backoff** -- A retry strategy where the wait time between retries doubles with each attempt (100ms, 200ms, 400ms, 800ms...). Prevents hammering a recovering service.
 
-**Jitter** — Randomness added to retry wait times to prevent all clients from retrying at exactly the same moment. Typically ±25% or fully random within the backoff window.
+**Jitter** -- Randomness added to retry wait times to prevent all clients from retrying at exactly the same moment. Typically +/-25% or fully random within the backoff window.
 
-**Circuit breaker** — A component that monitors failure rates and temporarily stops all requests to a failing service. Has three states: CLOSED (normal), OPEN (all requests fail fast), HALF-OPEN (testing recovery with one request).
+**Circuit breaker** -- A component that monitors failure rates and temporarily stops all requests to a failing service. Has three states: CLOSED (normal), OPEN (all requests fail fast), HALF-OPEN (testing recovery with one request).
 
-**CLOSED state** — Normal circuit breaker state. Requests pass through. Failures are counted.
+**CLOSED state** -- Normal circuit breaker state. Requests pass through. Failures are counted.
 
-**OPEN state** — Circuit breaker tripped. All requests immediately fail without network calls. Saves resources, allows service recovery.
+**OPEN state** -- Circuit breaker tripped. All requests immediately fail without network calls. Saves resources, allows service recovery.
 
-**HALF-OPEN state** — Circuit breaker testing state. One request allowed through. If it succeeds, return to CLOSED. If it fails, return to OPEN.
+**HALF-OPEN state** -- Circuit breaker testing state. One request allowed through. If it succeeds, return to CLOSED. If it fails, return to OPEN.
 
-**Cascading failure** — When one service's failure causes other services to fail, which cause more services to fail, until a small problem becomes a total outage. Circuit breakers prevent this.
+**Cascading failure** -- When one service's failure causes other services to fail, which cause more services to fail, until a small problem becomes a total outage. Circuit breakers prevent this.
 
-**Retry budget** — A limit on how much capacity can be spent on retries. Typically expressed as a percentage (10% of total requests). When exhausted, retries stop regardless of failure rate.
+**Retry budget** -- A limit on how much capacity can be spent on retries. Typically expressed as a percentage (10% of total requests). When exhausted, retries stop regardless of failure rate.
 
-**Token bucket** — A rate-limiting mechanism. Each retry costs a token. Tokens replenish at a fixed rate. When tokens run out, retries are denied until the bucket refills.
+**Token bucket** -- A rate-limiting mechanism. Each retry costs a token. Tokens replenish at a fixed rate. When tokens run out, retries are denied until the bucket refills.
 
-**Amplification factor** — How many total requests are sent for each original request, accounting for retries. Formula: `1 + R + R² + ... + R^N` where R is failure rate and N is max retries.
+**Amplification factor** -- How many total requests are sent for each original request, accounting for retries. Formula: `1 + R + R^2 + ... + R^N` where R is failure rate and N is max retries.
 
-**Metastable failure state** — A self-sustaining failure where the original trigger is gone but the system remains broken because the failure itself (typically retry load) is generating the conditions that sustain the failure.
+**Metastable failure state** -- A self-sustaining failure where the original trigger is gone but the system remains broken because the failure itself (typically retry load) is generating the conditions that sustain the failure.
 
-**Retry-After header** — An HTTP response header that tells clients how long to wait before retrying. Always honor it. It represents the server's own assessment of when it will be ready.
+**Retry-After header** -- An HTTP response header that tells clients how long to wait before retrying. Always honor it. It represents the server's own assessment of when it will be ready.
 
-**HTTP 429 Too Many Requests** — The HTTP status code for "you are sending too fast." Always retryable, but only after waiting the duration specified in the Retry-After header.
+**HTTP 429 Too Many Requests** -- The HTTP status code for "you are sending too fast." Always retryable, but only after waiting the duration specified in the Retry-After header.
 
-**Fail fast** — Returning an error immediately rather than queuing a request that will eventually time out. Better for users (they get a clear error quickly) and better for services (threads are not blocked waiting).
+**Fail fast** -- Returning an error immediately rather than queuing a request that will eventually time out. Better for users (they get a clear error quickly) and better for services (threads are not blocked waiting).
 
-**Graceful degradation** — A system continuing to operate in a reduced capacity rather than failing completely. Example: showing cached results when the live data service is down instead of showing an error page.
+**Graceful degradation** -- A system continuing to operate in a reduced capacity rather than failing completely. Example: showing cached results when the live data service is down instead of showing an error page.
 
 ---
 
-*End of Part A — Chapter 23: Backpressure, Retries, and Idempotency*
+*End of Part A -- Chapter 23: Backpressure, Retries, and Idempotency*
 
 ---
 
 **What to remember from Part A:**
 
-The restaurant on Friday night is not just an analogy. It is a precise model. Every distributed system faces the same choices the manager faced: let everyone in and collapse, manage the flow and maintain quality, or be so restrictive that you waste capacity. The right answer — carefully managed flow, clear communication, and graceful degradation — is the same in both cases.
+The restaurant on Friday night is not just an analogy. It is a precise model. Every distributed system faces the same choices the manager faced: let everyone in and collapse, manage the flow and maintain quality, or be so restrictive that you waste capacity. The right answer -- carefully managed flow, clear communication, and graceful degradation -- is the same in both cases.
 
 Retries feel like the obviously correct solution to failures. Of course you should try again when something fails. But "try again" without careful thought about timing, volume, error types, and downstream impact is how companies have lost millions of dollars and millions of users in a single bad Friday night.
 
 The circuit breaker, exponential backoff with jitter, retry budgets, and understanding of metastable failure states are not academic concepts. They are the difference between a system that handles a traffic spike gracefully and a system that turns a 500-millisecond database hiccup into a 4-hour outage. Every serious engineer who has been on-call for a production incident at a high-scale company has encountered at least one of these failure modes in the wild. Now you know what to call them, how they work, and how to prevent them.
-# Chapter 23 — Part B: Idempotency and Backpressure
+# Chapter 23 -- Part B: Idempotency and Backpressure
 
-*(Note to reader: Part A covered retries and circuit breakers — how your system handles failure gracefully. Part B covers two more essential survival tools. First: idempotency — how to make it safe to retry operations that would normally cause problems if run twice. Second: backpressure — how your system tells upstream callers "slow down" before it collapses under too much traffic. These two topics work hand in hand with retries. Without idempotency, retries cause disasters. Without backpressure, no amount of clever retry logic prevents a total meltdown. Everything is explained from scratch. You do not need any prior knowledge beyond a basic sense of how apps talk to each other over a network.)*
+*(Note to reader: Part A covered retries and circuit breakers -- how your system handles failure gracefully. Part B covers two more essential survival tools. First: idempotency -- how to make it safe to retry operations that would normally cause problems if run twice. Second: backpressure -- how your system tells upstream callers "slow down" before it collapses under too much traffic. These two topics work hand in hand with retries. Without idempotency, retries cause disasters. Without backpressure, no amount of clever retry logic prevents a total meltdown. Everything is explained from scratch. You do not need any prior knowledge beyond a basic sense of how apps talk to each other over a network.)*
 
 ---
 
-# Part 2: Idempotency — Making Operations Safe to Repeat
+# Part 2: Idempotency -- Making Operations Safe to Repeat
 
 ---
 
 ## What Does "Idempotent" Mean?
 
-The word "idempotent" sounds like it belongs in a math textbook. It does, actually — but the idea is shockingly simple once you see a good example. Let's start with an elevator.
+The word "idempotent" sounds like it belongs in a math textbook. It does, actually -- but the idea is shockingly simple once you see a good example. Let's start with an elevator.
 
 ---
 
@@ -1814,7 +1814,7 @@ Here it is in plain English: **an operation is idempotent if calling it multiple
 
 After the first call, all additional identical calls change nothing. The result is the same regardless of whether you called it once or a thousand times.
 
-This does not mean the operation always gives the same output regardless of input — it just means that REPEATING the same operation does not create new effects.
+This does not mean the operation always gives the same output regardless of input -- it just means that REPEATING the same operation does not create new effects.
 
 ---
 
@@ -1823,30 +1823,30 @@ This does not mean the operation always gives the same output regardless of inpu
 Here are common operations and whether they are idempotent:
 
 ```
-╔══════════════════════════════════╦═══════════════╦══════════════════════════════════════════════╗
-║ Operation                        ║ Idempotent?   ║ Why                                          ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ SET x = 5                        ║ YES           ║ Run it 10 times: x is still 5. No            ║
-║                                  ║               ║ matter how many times you set x to 5,        ║
-║                                  ║               ║ x is 5.                                      ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ INCREMENT x by 1                 ║ NO            ║ Run it 10 times: x increases 10 times.       ║
-║                                  ║               ║ Each call creates a new effect.              ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ DELETE record #5                 ║ YES           ║ After the first delete, record #5 is gone.   ║
-║                                  ║               ║ Deleting it again does nothing — it is       ║
-║                                  ║               ║ already gone. No new effect.                 ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ INSERT a new record              ║ NO            ║ Each insert creates a new row. Run it        ║
-║                                  ║               ║ 10 times: 10 new rows.                       ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ Send an email                    ║ NO            ║ Each call sends another email. Run it        ║
-║                                  ║               ║ 10 times: the recipient gets 10 emails.      ║
-╠══════════════════════════════════╬═══════════════╬══════════════════════════════════════════════╣
-║ Update username to "alice"       ║ YES           ║ After the first update, the username is      ║
-║                                  ║               ║ "alice." Updating it to "alice" again does   ║
-║                                  ║               ║ nothing new. It is already "alice."          ║
-╚══════════════════════════════════╩═══════════════╩══════════════════════════════════════════════╝
++==================================+===============+==============================================+
+| Operation                        | Idempotent?   | Why                                          |
++==================================+===============+==============================================+
+| SET x = 5                        | YES           | Run it 10 times: x is still 5. No            |
+|                                  |               | matter how many times you set x to 5,        |
+|                                  |               | x is 5.                                      |
++==================================+===============+==============================================+
+| INCREMENT x by 1                 | NO            | Run it 10 times: x increases 10 times.       |
+|                                  |               | Each call creates a new effect.              |
++==================================+===============+==============================================+
+| DELETE record #5                 | YES           | After the first delete, record #5 is gone.   |
+|                                  |               | Deleting it again does nothing -- it is       |
+|                                  |               | already gone. No new effect.                 |
++==================================+===============+==============================================+
+| INSERT a new record              | NO            | Each insert creates a new row. Run it        |
+|                                  |               | 10 times: 10 new rows.                       |
++==================================+===============+==============================================+
+| Send an email                    | NO            | Each call sends another email. Run it        |
+|                                  |               | 10 times: the recipient gets 10 emails.      |
++==================================+===============+==============================================+
+| Update username to "alice"       | YES           | After the first update, the username is      |
+|                                  |               | "alice." Updating it to "alice" again does   |
+|                                  |               | nothing new. It is already "alice."          |
++==================================+===============+==============================================+
 ```
 
 ---
@@ -1855,13 +1855,13 @@ Here are common operations and whether they are idempotent:
 
 Here is the critical connection to Part A of this chapter: **idempotent operations are safe to retry. Non-idempotent operations are dangerous to retry.**
 
-Think about what a retry means. You called an operation. Something went wrong — maybe the network hiccupped, maybe the server was slow. You are not sure if the operation completed. So you try again.
+Think about what a retry means. You called an operation. Something went wrong -- maybe the network hiccupped, maybe the server was slow. You are not sure if the operation completed. So you try again.
 
 If the operation is idempotent (like SET x = 5), retrying is totally fine. If the first call completed successfully, calling it again does nothing new. If the first call failed, the retry fixes the problem. Either way: no disaster.
 
 If the operation is NOT idempotent (like "send an email" or "charge a credit card"), retrying is dangerous. If the first call completed but the response was lost, retrying sends ANOTHER email or charges the customer TWICE. The customer gets spammed. The customer gets double-charged. Your customer service inbox explodes.
 
-This is why retry logic alone is not enough. You also need to think about whether your operations are safe to retry. And for operations that are NOT naturally safe — like sending emails or charging payments — you need a technique called **idempotency keys** to make them behave as if they are idempotent.
+This is why retry logic alone is not enough. You also need to think about whether your operations are safe to retry. And for operations that are NOT naturally safe -- like sending emails or charging payments -- you need a technique called **idempotency keys** to make them behave as if they are idempotent.
 
 That is what the next several sections cover.
 
@@ -1875,7 +1875,7 @@ Before we get to the solution, we need to really feel the problem. Because the p
 
 ### The Certified Mail Analogy
 
-You send a package via certified mail — the kind where the recipient has to sign for it, and you get a confirmation slip back once they have. You drop the package at the post office.
+You send a package via certified mail -- the kind where the recipient has to sign for it, and you get a confirmation slip back once they have. You drop the package at the post office.
 
 Now you wait. And wait. No confirmation slip arrives.
 
@@ -1904,32 +1904,32 @@ Your App: "Charge this credit card $100 for order #789."
 Here is the full sequence of what happens:
 
 ```
-╔═══════════════════════════════════════════════════════════════╗
-║              WHAT HAPPENS INSIDE THE NETWORK                  ║
-╠═══════════════════════════════════════════════════════════════╣
-║                                                               ║
-║  Step 1:  Your app sends the request                          ║
-║           Client ──────────────────────────────────► Server  ║
-║                                                               ║
-║  Step 2:  Request arrives at server                           ║
-║           Client                                    Server ✓  ║
-║                                                               ║
-║  Step 3:  Server processes the charge                         ║
-║           Client                            Server charges ✓  ║
-║                                                               ║
-║  Step 4:  Server sends "200 OK, success" response             ║
-║           Client                ◄──────────────────  Server  ║
-║                                                               ║
-║  Step 5:  Response gets LOST somewhere in the network         ║
-║           Client     ← (packet dropped here) ✗               ║
-║                                                               ║
-║  Step 6:  Your app's connection times out                     ║
-║           Client sees: TIMEOUT ERROR                          ║
-║                                                               ║
-╠═══════════════════════════════════════════════════════════════╣
-║  What your app knows: "something went wrong"                  ║
-║  What actually happened: the charge went through              ║
-╚═══════════════════════════════════════════════════════════════╝
++===============================================================+
+|              WHAT HAPPENS INSIDE THE NETWORK                  |
++===============================================================+
+|                                                               |
+|  Step 1:  Your app sends the request                          |
+|           Client ----------------------------------> Server  |
+|                                                               |
+|  Step 2:  Request arrives at server                           |
+|           Client                                    Server Y  |
+|                                                               |
+|  Step 3:  Server processes the charge                         |
+|           Client                            Server charges Y  |
+|                                                               |
+|  Step 4:  Server sends "200 OK, success" response             |
+|           Client                <------------------  Server  |
+|                                                               |
+|  Step 5:  Response gets LOST somewhere in the network         |
+|           Client     <- (packet dropped here) N               |
+|                                                               |
+|  Step 6:  Your app's connection times out                     |
+|           Client sees: TIMEOUT ERROR                          |
+|                                                               |
++===============================================================+
+|  What your app knows: "something went wrong"                  |
+|  What actually happened: the charge went through              |
++===============================================================+
 ```
 
 Your app gets a timeout error. From your app's perspective, this is indistinguishable from the case where the request never reached the server at all.
@@ -1952,7 +1952,7 @@ This is the problem idempotency keys solve.
 
 ### The Tracking Number Analogy
 
-When you ship a package with a carrier like UPS or FedEx, your package gets a unique tracking number — something like `1Z999AA10123456784`. This number is yours. It is tied to this specific shipment.
+When you ship a package with a carrier like UPS or FedEx, your package gets a unique tracking number -- something like `1Z999AA10123456784`. This number is yours. It is tied to this specific shipment.
 
 Now, suppose you worry the package did not arrive. You call FedEx. They look up `1Z999AA10123456784` in their system and say: "Yes, it was delivered on Tuesday at 2:14pm, signed by J. Smith." You know not to send another package.
 
@@ -1984,47 +1984,47 @@ This is the entire mechanism. Simple in concept. The devil is in the details, wh
 Let's walk through the credit card charge scenario from before, but now with an idempotency key:
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║           FIRST ATTEMPT (idempotency_key = "charge-456-789-1")               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Client → Server:  "Charge $100" + Idempotency-Key: charge-456-789-1         ║
-║                                                                               ║
-║  Server checks DB: SELECT * WHERE key = 'charge-456-789-1'                   ║
-║                    → NOT FOUND                                                ║
-║                                                                               ║
-║  Server processes: charge credit card → SUCCESS, charge_id = "ch_xyz99"      ║
-║                                                                               ║
-║  Server stores:    { key: "charge-456-789-1",                                ║
-║                      status: 200,                                             ║
-║                      result: { charge_id: "ch_xyz99" },                      ║
-║                      created_at: "2024-01-01 12:00:00" }                     ║
-║                                                                               ║
-║  Server → Client:  200 OK, { charge_id: "ch_xyz99" }                         ║
-║                                                                               ║
-║  ← Response LOST in network ✗                                                ║
-║                                                                               ║
-║  Client sees: TIMEOUT                                                         ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║           SECOND ATTEMPT (SAME idempotency_key = "charge-456-789-1")         ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Client → Server:  "Charge $100" + Idempotency-Key: charge-456-789-1         ║
-║                                                                               ║
-║  Server checks DB: SELECT * WHERE key = 'charge-456-789-1'                   ║
-║                    → FOUND! Stored result: { charge_id: "ch_xyz99" }         ║
-║                                                                               ║
-║  Server does NOT charge the card again                                        ║
-║                                                                               ║
-║  Server → Client:  200 OK, { charge_id: "ch_xyz99" }   (cached result)       ║
-║                    + Idempotency-Replayed: true          (tells client this   ║
-║                                                           was a cached reply) ║
-║                                                                               ║
-║  Client receives: SUCCESS ✓                                                   ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|           FIRST ATTEMPT (idempotency_key = "charge-456-789-1")               |
++===============================================================================+
+|                                                                               |
+|  Client -> Server:  "Charge $100" + Idempotency-Key: charge-456-789-1         |
+|                                                                               |
+|  Server checks DB: SELECT * WHERE key = 'charge-456-789-1'                   |
+|                    -> NOT FOUND                                                |
+|                                                                               |
+|  Server processes: charge credit card -> SUCCESS, charge_id = "ch_xyz99"      |
+|                                                                               |
+|  Server stores:    { key: "charge-456-789-1",                                |
+|                      status: 200,                                             |
+|                      result: { charge_id: "ch_xyz99" },                      |
+|                      created_at: "2024-01-01 12:00:00" }                     |
+|                                                                               |
+|  Server -> Client:  200 OK, { charge_id: "ch_xyz99" }                         |
+|                                                                               |
+|  <- Response LOST in network N                                                |
+|                                                                               |
+|  Client sees: TIMEOUT                                                         |
++===============================================================================+
+|           SECOND ATTEMPT (SAME idempotency_key = "charge-456-789-1")         |
++===============================================================================+
+|                                                                               |
+|  Client -> Server:  "Charge $100" + Idempotency-Key: charge-456-789-1         |
+|                                                                               |
+|  Server checks DB: SELECT * WHERE key = 'charge-456-789-1'                   |
+|                    -> FOUND! Stored result: { charge_id: "ch_xyz99" }         |
+|                                                                               |
+|  Server does NOT charge the card again                                        |
+|                                                                               |
+|  Server -> Client:  200 OK, { charge_id: "ch_xyz99" }   (cached result)       |
+|                    + Idempotency-Replayed: true          (tells client this   |
+|                                                           was a cached reply) |
+|                                                                               |
+|  Client receives: SUCCESS Y                                                   |
++===============================================================================+
 ```
 
-The key insight: **the customer is charged exactly once**, even though the client made two attempts. The second attempt returned the exact same result as the first — the same `charge_id`, the same success status — without triggering a second charge.
+The key insight: **the customer is charged exactly once**, even though the client made two attempts. The second attempt returned the exact same result as the first -- the same `charge_id`, the same success status -- without triggering a second charge.
 
 The non-idempotent "charge a credit card" operation now BEHAVES idempotently. Not because we changed the operation itself, but because we wrapped it with a deduplication layer.
 
@@ -2032,7 +2032,7 @@ The non-idempotent "charge a credit card" operation now BEHAVES idempotently. No
 
 ## Designing Good Idempotency Keys
 
-Not all idempotency keys are equal. A badly designed key defeats the purpose. Here are the properties a good key needs — with analogies for each.
+Not all idempotency keys are equal. A badly designed key defeats the purpose. Here are the properties a good key needs -- with analogies for each.
 
 ---
 
@@ -2040,7 +2040,7 @@ Not all idempotency keys are equal. A badly designed key defeats the purpose. He
 
 The key `order-12345-attempt-1` is tied to one specific business decision: "charge $100 for order #12345, first try." A different order gets a different key: `order-12346-attempt-1`. A different user's order does not accidentally share keys with yours.
 
-This is like FedEx tracking numbers being globally unique. If two packages shared a tracking number, the system would refuse to ship one of them — even if they are completely different packages going to completely different addresses. Uniqueness is what makes the deduplication work.
+This is like FedEx tracking numbers being globally unique. If two packages shared a tracking number, the system would refuse to ship one of them -- even if they are completely different packages going to completely different addresses. Uniqueness is what makes the deduplication work.
 
 ---
 
@@ -2051,7 +2051,7 @@ This is subtle and very important. Here is a trap:
 ```python
 # BAD: generates a random key each time
 import uuid
-key = str(uuid.uuid4())  # "a7f3b2c1-..." — different every time
+key = str(uuid.uuid4())  # "a7f3b2c1-..." -- different every time
 ```
 
 If the client crashes after generating this key but before getting a response, and then restarts and generates a NEW random key, the server sees a completely new operation. The original charge might have gone through, and now the retry charges again.
@@ -2075,7 +2075,7 @@ The analogy: a package tracking number that is derived from your customer accoun
 
 `user-456-payment-789` is better. It includes who the payment belongs to, preventing collisions between different users' operations.
 
-Think of it like a social security number (SSN). Your SSN is unique within a country (scoped to the US). But a SSN from the US and a national ID number from Canada might accidentally have the same digits — they live in different namespaces.
+Think of it like a social security number (SSN). Your SSN is unique within a country (scoped to the US). But a SSN from the US and a national ID number from Canada might accidentally have the same digits -- they live in different namespaces.
 
 ---
 
@@ -2085,39 +2085,39 @@ Idempotency key records should not live forever in your database. Here is why: i
 
 Probably not. A month has passed. The business context has clearly changed. The client has clearly abandoned the original attempt. Treating the new attempt as a duplicate of a month-old attempt would be wrong.
 
-The solution: set a TTL (Time To Live) on idempotency keys — a maximum age after which they expire and new attempts with the same key are treated as fresh operations. Typical TTLs range from **24 hours to 7 days**.
+The solution: set a TTL (Time To Live) on idempotency keys -- a maximum age after which they expire and new attempts with the same key are treated as fresh operations. Typical TTLs range from **24 hours to 7 days**.
 
 ---
 
 ### The Idempotency Key Cheat Sheet
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║               IDEMPOTENCY KEY DESIGN — DO'S AND DON'TS                      ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  DO:                                                                         ║
-║  ✓  Use stable business IDs: order_id, user_id, transaction_id              ║
-║  ✓  Include an attempt identifier: "...-attempt-1"                          ║
-║  ✓  Generate the key BEFORE making the attempt                              ║
-║     (so you can reuse the same key on retry)                                ║
-║  ✓  Store the key alongside your request data in your own DB first          ║
-║  ✓  Set a TTL: 24 hours to 7 days is typical                               ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  DON'T:                                                                      ║
-║  ✗  Use random UUIDs that you haven't persisted first                       ║
-║     (if your process crashes, you can't regenerate the same key)            ║
-║  ✗  Use timestamps as keys                                                   ║
-║     (two requests can arrive within the same millisecond)                   ║
-║  ✗  Use data that might change between retries                              ║
-║     (e.g., "current cart contents" — the user might have edited their cart) ║
-║  ✗  Use keys that are too generic                                            ║
-║     (e.g., just "payment-789" without user scoping)                         ║
-║  ✗  Store keys forever (they will bloat your database)                      ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
++==============================================================================+
+|               IDEMPOTENCY KEY DESIGN -- DO'S AND DON'TS                      |
++==============================================================================+
+|                                                                              |
+|  DO:                                                                         |
+|  Y  Use stable business IDs: order_id, user_id, transaction_id              |
+|  Y  Include an attempt identifier: "...-attempt-1"                          |
+|  Y  Generate the key BEFORE making the attempt                              |
+|     (so you can reuse the same key on retry)                                |
+|  Y  Store the key alongside your request data in your own DB first          |
+|  Y  Set a TTL: 24 hours to 7 days is typical                               |
+|                                                                              |
++==============================================================================+
+|                                                                              |
+|  DON'T:                                                                      |
+|  N  Use random UUIDs that you haven't persisted first                       |
+|     (if your process crashes, you can't regenerate the same key)            |
+|  N  Use timestamps as keys                                                   |
+|     (two requests can arrive within the same millisecond)                   |
+|  N  Use data that might change between retries                              |
+|     (e.g., "current cart contents" -- the user might have edited their cart) |
+|  N  Use keys that are too generic                                            |
+|     (e.g., just "payment-789" without user scoping)                         |
+|  N  Store keys forever (they will bloat your database)                      |
+|                                                                              |
++==============================================================================+
 ```
 
 ---
@@ -2128,7 +2128,7 @@ Here is a clean, safe key generation pattern:
 
 ```python
 def generate_idempotency_key(user_id, order_id, attempt_number):
-    # This is DETERMINISTIC — same inputs always produce the same key.
+    # This is DETERMINISTIC -- same inputs always produce the same key.
     # If you retry, you call this with the same arguments and get the same key.
     return f"charge-{user_id}-{order_id}-{attempt_number}"
 
@@ -2144,13 +2144,13 @@ if response.timed_out:
     # The network failed. Did the charge go through? We don't know.
     # Retry with THE SAME KEY. Server will deduplicate if charge already happened.
     response = payment_api.charge(amount=100, idempotency_key=key)
-    # Safe — same key means server checks before charging.
+    # Safe -- same key means server checks before charging.
 
 
 # --- USER EXPLICITLY RETRIES (e.g., user clicks "Try Again" button) ---
 # This is a NEW attempt, not a retry of the same attempt.
 # The user knows the previous attempt failed or they chose to retry explicitly.
-# Use a NEW attempt number — this is genuinely a new operation.
+# Use a NEW attempt number -- this is genuinely a new operation.
 attempt = 2
 key = generate_idempotency_key(user_id=456, order_id=789, attempt_number=attempt)
 # key = "charge-456-789-2"
@@ -2224,17 +2224,17 @@ def charge_credit_card(request):
 
 Let's walk through each step in plain English:
 
-**Step 0** (require the key): If a client forgets to send an idempotency key for a non-idempotent operation, the correct response is a 400 error — not "sure, we'll charge anyway." Forcing clients to include the key prevents accidental double-charges from clients who forgot to implement idempotency support.
+**Step 0** (require the key): If a client forgets to send an idempotency key for a non-idempotent operation, the correct response is a 400 error -- not "sure, we'll charge anyway." Forcing clients to include the key prevents accidental double-charges from clients who forgot to implement idempotency support.
 
 **Step 1** (check the cache): Every request hits the database first. "Have I seen this key?" If yes: skip all the business logic and just return the stored result. This is the deduplication step.
 
 **Step 2** (process): Only runs if Step 1 found nothing. The actual charge happens here. This code path is only reachable once per unique key.
 
-**Step 3** (store): After the charge succeeds, store the result. We store the entire HTTP response — status code and body — so we can replay it exactly on future requests with the same key.
+**Step 3** (store): After the charge succeeds, store the result. We store the entire HTTP response -- status code and body -- so we can replay it exactly on future requests with the same key.
 
 **Step 4** (return): Send the response back to the client.
 
-The `Idempotency-Replayed: true` header is a nice touch. It tells the client: "Hey, I recognized your key — you already did this. Here is the cached result." The client can log this for debugging or monitoring. It also lets clients distinguish between "the operation completed" and "the operation was replayed" — which can be useful for analytics.
+The `Idempotency-Replayed: true` header is a nice touch. It tells the client: "Hey, I recognized your key -- you already did this. Here is the cached result." The client can log this for debugging or monitoring. It also lets clients distinguish between "the operation completed" and "the operation was replayed" -- which can be useful for analytics.
 
 ---
 
@@ -2245,21 +2245,21 @@ There is a subtle bug in the implementation above. What if two requests with the
 Here is the timeline of the bug:
 
 ```
-╔════════════════════════════════════════════════════════════════════╗
-║           THE RACE CONDITION TIMELINE                              ║
-╠════════════════════════════════════════════════════════════════════╣
-║                                                                    ║
-║  Thread A:  Check DB for key → NOT FOUND                          ║
-║  Thread B:  Check DB for key → NOT FOUND  (same millisecond!)     ║
-║                                                                    ║
-║  Thread A:  Process charge → $100 charged ✓                       ║
-║  Thread B:  Process charge → $100 charged ✓ (DUPLICATE!)          ║
-║                                                                    ║
-║  Thread A:  Store result in DB                                     ║
-║  Thread B:  Store result in DB (overwrites A's result)             ║
-║                                                                    ║
-║  Customer: CHARGED TWICE despite using idempotency keys            ║
-╚════════════════════════════════════════════════════════════════════╝
++====================================================================+
+|           THE RACE CONDITION TIMELINE                              |
++====================================================================+
+|                                                                    |
+|  Thread A:  Check DB for key -> NOT FOUND                          |
+|  Thread B:  Check DB for key -> NOT FOUND  (same millisecond!)     |
+|                                                                    |
+|  Thread A:  Process charge -> $100 charged Y                       |
+|  Thread B:  Process charge -> $100 charged Y (DUPLICATE!)          |
+|                                                                    |
+|  Thread A:  Store result in DB                                     |
+|  Thread B:  Store result in DB (overwrites A's result)             |
+|                                                                    |
+|  Customer: CHARGED TWICE despite using idempotency keys            |
++====================================================================+
 ```
 
 This can happen if the client has two processes retrying simultaneously, or if a load balancer sends the same request to two different servers at the same time.
@@ -2275,7 +2275,7 @@ def charge_credit_card(request):
 
     # --- Atomic claim: set the key ONLY if it does not already exist ---
     # NX = "only set if Not eXists"
-    # This is a single atomic database operation — no race condition possible.
+    # This is a single atomic database operation -- no race condition possible.
     claimed = db.set(
         key=f"idempotency:{idempotency_key}",
         value="in_progress",    # Placeholder while we process
@@ -2332,18 +2332,18 @@ This is as important as what idempotency DOES guarantee. People often over-rely 
 
 **The parking ticket vs. parking violation analogy:**
 
-Suppose you get two parking tickets — one on Monday, one on Tuesday. Paying the Monday ticket twice is idempotent (the city's system rejects the duplicate payment). But paying the Monday ticket once and the Tuesday ticket once are TWO different payments for TWO different violations. Idempotency deduplicated the REPLAY. It did nothing about the fact that you have two separate obligations.
+Suppose you get two parking tickets -- one on Monday, one on Tuesday. Paying the Monday ticket twice is idempotent (the city's system rejects the duplicate payment). But paying the Monday ticket once and the Tuesday ticket once are TWO different payments for TWO different violations. Idempotency deduplicated the REPLAY. It did nothing about the fact that you have two separate obligations.
 
 Here is the same issue in a system:
 
 ```
 Timeline:
-1. Client sends: "Transfer $100 from Account A → Account B"
+1. Client sends: "Transfer $100 from Account A -> Account B"
    Key: "transfer-001"
 
 2. Network delays this request.
 
-3. Client sends: "Transfer $100 from Account B → Account A" (to reverse it)
+3. Client sends: "Transfer $100 from Account B -> Account A" (to reverse it)
    Key: "transfer-002"
 
 4. "transfer-002" arrives at the server FIRST and executes.
@@ -2353,13 +2353,13 @@ Timeline:
    (A sends $100 to B)
 
 Net result: B sent $100 to A, then A sent $100 back to B.
-Money moved twice but ended up in the same place. ✓ (in this case)
+Money moved twice but ended up in the same place. Y (in this case)
 
 But the ACCOUNTING TRAIL is wrong.
 And the ORDER matters for overdraft checks:
   - If A had $100 and B had $0:
-    - Correct order: A→B succeeds (A now $0, B now $100), B→A succeeds (B now $0, A now $100)
-    - Wrong order: B→A fails (B has $0, cannot send), A→B succeeds (A now $0, B now $100). A ends up with $0. B ends up with $100.
+    - Correct order: A->B succeeds (A now $0, B now $100), B->A succeeds (B now $0, A now $100)
+    - Wrong order: B->A fails (B has $0, cannot send), A->B succeeds (A now $0, B now $100). A ends up with $0. B ends up with $100.
     - BOTH requests have different keys, so idempotency does not help.
 ```
 
@@ -2371,7 +2371,7 @@ Ordering requires causal ordering mechanisms (covered in Chapter 20). Idempotenc
 
 The scenario: a user tries to buy 1 concert ticket. They get a timeout. They retry with the same idempotency key. The server correctly deduplicates. The user gets exactly 1 ticket. Idempotency works perfectly here.
 
-But: the same user opens a second browser tab and tries to buy another ticket from there. That tab generates a COMPLETELY DIFFERENT idempotency key (it is a new request from a new session). The server does not recognize any duplicate — because there is none. Two separate requests, two separate keys. The user ends up with 2 tickets.
+But: the same user opens a second browser tab and tries to buy another ticket from there. That tab generates a COMPLETELY DIFFERENT idempotency key (it is a new request from a new session). The server does not recognize any duplicate -- because there is none. Two separate requests, two separate keys. The user ends up with 2 tickets.
 
 Idempotency only prevents **retries of the same request**. It does not prevent **separate requests that happen to want the same thing**.
 
@@ -2382,7 +2382,7 @@ CREATE UNIQUE INDEX one_ticket_per_user_per_event
 ON ticket_purchases (user_id, event_id);
 ```
 
-This would reject the second purchase regardless of whether it came from the same request or a completely different one. That is a business constraint — idempotency is a network reliability tool. They solve different problems.
+This would reject the second purchase regardless of whether it came from the same request or a completely different one. That is a business constraint -- idempotency is a network reliability tool. They solve different problems.
 
 ---
 
@@ -2394,34 +2394,34 @@ The client retries with the same idempotency key.
 
 What does the server return?
 
-If you stored the idempotency result **after the order was created** (before the payment was attempted), the stored result is "order created" — even though the full operation failed. The retry sees the key in the database, assumes success, and returns the stored result. The user gets an order confirmation with no payment charged. You just gave something away for free.
+If you stored the idempotency result **after the order was created** (before the payment was attempted), the stored result is "order created" -- even though the full operation failed. The retry sees the key in the database, assumes success, and returns the stored result. The user gets an order confirmation with no payment charged. You just gave something away for free.
 
 The rule: **only store the idempotency result AFTER the entire operation either fully succeeds or fully fails**. Never store partial states.
 
 ```python
-# BAD — stores after first step completes (partial state)
+# BAD -- stores after first step completes (partial state)
 order = create_order(user_id, items)
 db.set(idempotency_key, {"status": "order_created"})  # WRONG! Stored partial result
 payment = charge_card(card_token, total)               # This might fail
 
-# GOOD — stores only after the whole thing completes
+# GOOD -- stores only after the whole thing completes
 order = create_order(user_id, items)
 payment = charge_card(card_token, total)  # Both steps must complete first
 # Only store after BOTH succeed:
 db.set(idempotency_key, {"status": "complete", "order": order, "payment": payment})
 ```
 
-If the second step fails, the entire operation is treated as failed — no idempotency result stored. The next retry starts fresh (the key is not in the database).
+If the second step fails, the entire operation is treated as failed -- no idempotency result stored. The next retry starts fresh (the key is not in the database).
 
 ---
 
 ### Gap 4: Idempotency Does Not Fix Non-Deterministic Operations
 
-If your server's behavior varies between calls — for example, it picks a random replica to process the job — then two calls with the same idempotency key might attempt to use different replicas, with different state, and produce different outcomes.
+If your server's behavior varies between calls -- for example, it picks a random replica to process the job -- then two calls with the same idempotency key might attempt to use different replicas, with different state, and produce different outcomes.
 
 Idempotency keys prevent DUPLICATE EFFECTS. They do not ensure IDENTICAL PROCESSING. If Replica A charges a card and stores the result, and Replica B independently processes the same key (due to a race condition before the lock was acquired), you could get different behaviors on each.
 
-This is a subtle edge case, but it matters for operations where "which server handled it" determines the outcome — like processing that depends on locally cached state. The fix is to ensure that idempotency key storage is centralized (all servers share the same idempotency key database) and that the lock is held properly.
+This is a subtle edge case, but it matters for operations where "which server handled it" determines the outcome -- like processing that depends on locally cached state. The fix is to ensure that idempotency key storage is centralized (all servers share the same idempotency key database) and that the lock is held properly.
 
 ---
 
@@ -2430,17 +2430,17 @@ This is a subtle edge case, but it matters for operations where "which server ha
 This is a lot to remember. Here is a condensed reference:
 
 ```
-╔═══════════════════════════════════════╦══════════════════════════════════════════════════════════════╗
-║ Gap                                   ║ What to Use Instead                                          ║
-╠═══════════════════════════════════════╬══════════════════════════════════════════════════════════════╣
-║ Ordering of different operations      ║ Causal ordering / sequence numbers (Chapter 20)              ║
-╠═══════════════════════════════════════╬══════════════════════════════════════════════════════════════╣
-║ Business constraint (1 ticket/user)   ║ Database unique constraint scoped to (user_id, event_id)    ║
-╠═══════════════════════════════════════╬══════════════════════════════════════════════════════════════╣
-║ Partial operation state               ║ Only store idempotency result after FULL completion          ║
-╠═══════════════════════════════════════╬══════════════════════════════════════════════════════════════╣
-║ Non-deterministic server behavior     ║ Centralized idempotency key storage + proper locking         ║
-╚═══════════════════════════════════════╩══════════════════════════════════════════════════════════════╝
++=======================================+==============================================================+
+| Gap                                   | What to Use Instead                                          |
++=======================================+==============================================================+
+| Ordering of different operations      | Causal ordering / sequence numbers (Chapter 20)              |
++=======================================+==============================================================+
+| Business constraint (1 ticket/user)   | Database unique constraint scoped to (user_id, event_id)    |
++=======================================+==============================================================+
+| Partial operation state               | Only store idempotency result after FULL completion          |
++=======================================+==============================================================+
+| Non-deterministic server behavior     | Centralized idempotency key storage + proper locking         |
++=======================================+==============================================================+
 ```
 
 Idempotency is a precise tool. It prevents one specific problem: a duplicate network request causing a duplicate real-world effect. For everything else, you need the specific tool designed for that specific problem.
@@ -2455,9 +2455,9 @@ Stripe's API requires an `Idempotency-Key` header for all POST requests. Here is
 
 - The key can be any string up to 255 characters. Stripe recommends version 4 UUIDs.
 - Keys expire after 24 hours. After 24 hours, a new request with the same key is treated as a fresh request.
-- If a request is still in progress (the "in_progress" state) and a second request arrives with the same key, Stripe returns a 409 Conflict error — "a request with this key is already being processed."
+- If a request is still in progress (the "in_progress" state) and a second request arrives with the same key, Stripe returns a 409 Conflict error -- "a request with this key is already being processed."
 - If a completed request is replayed, Stripe returns the original response with a `Idempotency-Replayed: true` header.
-- If you send a request with an existing key but DIFFERENT request parameters (different amount, different card), Stripe returns a 422 error — "idempotency key already used for a different request."
+- If you send a request with an existing key but DIFFERENT request parameters (different amount, different card), Stripe returns a 422 error -- "idempotency key already used for a different request."
 
 That last point is clever and worth noting separately.
 
@@ -2484,7 +2484,7 @@ def charge_credit_card(request):
                 body={"error": "This idempotency key was used for a different request. "
                                "Use a new key for a different operation."}
             )
-        # Fingerprints match — this is a genuine retry
+        # Fingerprints match -- this is a genuine retry
         return Response(
             status=cached["status_code"],
             body=cached["response_body"],
@@ -2536,7 +2536,7 @@ ON CONFLICT (idempotency_key) DO NOTHING;
 -- If this key is new: insert the row normally.
 ```
 
-This is the most bulletproof pattern. The database engine itself enforces uniqueness at the storage layer. No application-level race conditions possible — the database handles the concurrency internally.
+This is the most bulletproof pattern. The database engine itself enforces uniqueness at the storage layer. No application-level race conditions possible -- the database handles the concurrency internally.
 
 **When to use it:** operations with a clear natural unique identifier. Order creation (idempotency key = order ID), payment processing (idempotency key = payment reference number), event logging (idempotency key = event UUID). If there is a natural unique key, put it in the database constraint.
 
@@ -2572,7 +2572,7 @@ The `last_transaction_id != 'txn-abc123'` condition is the idempotency check. If
 
 ### Pattern 3: Version Numbers (Optimistic Concurrency)
 
-This pattern is for situations where multiple writers might be updating the same record simultaneously, and you want to ensure each writer works with the data they originally read — not data that someone else changed while they were working.
+This pattern is for situations where multiple writers might be updating the same record simultaneously, and you want to ensure each writer works with the data they originally read -- not data that someone else changed while they were working.
 
 ```sql
 -- Step 1: Read the current state, including a version number
@@ -2593,47 +2593,47 @@ WHERE
     AND version = 7;     -- Only update if nobody else changed it since we read it
 
 -- Check rows affected:
--- 0 rows = someone else updated between our read and write → retry with fresh data
+-- 0 rows = someone else updated between our read and write -> retry with fresh data
 -- 1 row = success
 ```
 
-The version number acts like a seal on an envelope. When you open the envelope (read the data), you know what version it was. When you try to close it again (update), you check the seal. If someone else opened it and resealed it while you were reading (version changed), you know — and you start over with the new version.
+The version number acts like a seal on an envelope. When you open the envelope (read the data), you know what version it was. When you try to close it again (update), you check the seal. If someone else opened it and resealed it while you were reading (version changed), you know -- and you start over with the new version.
 
-**When to use it:** scenarios where multiple users or processes might update the same record simultaneously. Profile edits, collaborative document editing, inventory updates from multiple warehouses. This is also called "optimistic locking" — you optimistically assume no conflict, then check at write time.
+**When to use it:** scenarios where multiple users or processes might update the same record simultaneously. Profile edits, collaborative document editing, inventory updates from multiple warehouses. This is also called "optimistic locking" -- you optimistically assume no conflict, then check at write time.
 
 ---
 
 ### Choosing the Right Database Pattern
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║           WHICH DATABASE IDEMPOTENCY PATTERN TO USE?                         ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  UNIQUE CONSTRAINT                                                            ║
-║  Use when: operation has a clear natural unique key (order ID, payment ref)  ║
-║  Best for: inserts (creating new records)                                    ║
-║  Complexity: LOW — just add UNIQUE to the column                             ║
-║                                                                               ║
-║  CONDITIONAL UPDATE                                                           ║
-║  Use when: you need to check preconditions AND track last operation           ║
-║  Best for: financial ledger updates, state machine transitions                ║
-║  Complexity: MEDIUM — requires tracking last_transaction_id                  ║
-║                                                                               ║
-║  VERSION NUMBERS (Optimistic Concurrency)                                    ║
-║  Use when: multiple concurrent writers are likely                             ║
-║  Best for: user profile updates, collaborative editing, inventory             ║
-║  Complexity: MEDIUM — requires version column and retry logic                ║
-║                                                                               ╟
-║  RULE OF THUMB:                                                               ║
-║  Start with Unique Constraint. If that doesn't fit, try Conditional Update.  ║
-║  Use Version Numbers when you genuinely expect concurrent conflicting writes. ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|           WHICH DATABASE IDEMPOTENCY PATTERN TO USE?                         |
++===============================================================================+
+|                                                                               |
+|  UNIQUE CONSTRAINT                                                            |
+|  Use when: operation has a clear natural unique key (order ID, payment ref)  |
+|  Best for: inserts (creating new records)                                    |
+|  Complexity: LOW -- just add UNIQUE to the column                             |
+|                                                                               |
+|  CONDITIONAL UPDATE                                                           |
+|  Use when: you need to check preconditions AND track last operation           |
+|  Best for: financial ledger updates, state machine transitions                |
+|  Complexity: MEDIUM -- requires tracking last_transaction_id                  |
+|                                                                               |
+|  VERSION NUMBERS (Optimistic Concurrency)                                    |
+|  Use when: multiple concurrent writers are likely                             |
+|  Best for: user profile updates, collaborative editing, inventory             |
+|  Complexity: MEDIUM -- requires version column and retry logic                |
+|                                                                               +
+|  RULE OF THUMB:                                                               |
+|  Start with Unique Constraint. If that doesn't fit, try Conditional Update.  |
+|  Use Version Numbers when you genuinely expect concurrent conflicting writes. |
++===============================================================================+
 ```
 
 ---
 
-# Part 3: Backpressure — Controlling the Flow
+# Part 3: Backpressure -- Controlling the Flow
 
 ---
 
@@ -2645,13 +2645,13 @@ Let's start with a garden hose.
 
 ### The Garden Hose Analogy
 
-A garden hose delivers water at a comfortable flow rate — say, enough to fill a bucket in 30 seconds. Now put your thumb over the end of the hose. Water pressure builds up behind your thumb. That built-up pressure is the hose "pushing back" against the source.
+A garden hose delivers water at a comfortable flow rate -- say, enough to fill a bucket in 30 seconds. Now put your thumb over the end of the hose. Water pressure builds up behind your thumb. That built-up pressure is the hose "pushing back" against the source.
 
 If the hose is connected to a smart pump with a pressure sensor, the pump detects the high pressure and automatically slows down its output. The pressure signal travels backward through the hose to the source. The source adapts.
 
 This is backpressure: **a signal that travels upstream (toward the sender) to tell the sender to slow down, because the receiver is full**.
 
-In distributed systems, backpressure is how a slow or overwhelmed downstream service tells upstream callers "you are sending too fast — slow down." Instead of accepting everything and collapsing under the load, the downstream service pushes back.
+In distributed systems, backpressure is how a slow or overwhelmed downstream service tells upstream callers "you are sending too fast -- slow down." Instead of accepting everything and collapsing under the load, the downstream service pushes back.
 
 ---
 
@@ -2666,7 +2666,7 @@ This is what happens to a server with no backpressure mechanism. The requests ar
 ```
 WITHOUT BACKPRESSURE:
 
-Clients → → → → → → → → → → → → → → → → → → → → Server
+Clients -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> -> Server
 (1,000 req/sec)                                   (capacity: 100 req/sec)
                                                   Queue fills up
                                                   Memory runs out
@@ -2686,14 +2686,14 @@ A fire hose with a valve. You signal "full" and the valve closes. Flow rate matc
 ```
 WITH BACKPRESSURE:
 
-Clients ← ← ← ← ← "SLOW DOWN" signal ← ← ← ← Server
+Clients <- <- <- <- <- "SLOW DOWN" signal <- <- <- <- Server
 (100 req/sec, matching server capacity)          (handling 100 req/sec)
                                                   Sustainable. Stable. Alive.
 ```
 
 The key insight: **a server that can handle 100 requests per second will fail if given 1,000 requests per second, no matter how good your code is**. There is no such thing as infinitely fast software. At some point, hardware limits kick in. Backpressure prevents the gap between arrival rate and processing rate from widening until the system breaks.
 
-It is not about making the server faster. It is about making the system honest: "here is what I can handle — please do not send more."
+It is not about making the server faster. It is about making the system honest: "here is what I can handle -- please do not send more."
 
 ---
 
@@ -2703,13 +2703,13 @@ It is not about making the server faster. It is about making the system honest: 
 
 Picture a single-lane bridge over a river. One car can cross at a time. When a car is on the bridge, a gate at the toll booth stays closed. New cars arriving queue up at the toll booth. They wait. When the bridge clears, the gate opens and the next car proceeds. The gate is the backpressure mechanism: it refuses to let cars enter faster than the bridge can handle them.
 
-Blocking backpressure works the same way: when the server's processing capacity is fully occupied, new incoming requests WAIT (block) in a queue until capacity frees up. The server does not accept and crash — it just makes callers wait.
+Blocking backpressure works the same way: when the server's processing capacity is fully occupied, new incoming requests WAIT (block) in a queue until capacity frees up. The server does not accept and crash -- it just makes callers wait.
 
 ---
 
 ### How Thread Pools Create Blocking Backpressure
 
-Most web servers use a thread pool — a fixed number of worker threads that handle requests. If there are 50 threads and 50 requests are being processed simultaneously, a 51st request must wait for one of the threads to finish before it can begin processing.
+Most web servers use a thread pool -- a fixed number of worker threads that handle requests. If there are 50 threads and 50 requests are being processed simultaneously, a 51st request must wait for one of the threads to finish before it can begin processing.
 
 ```python
 import concurrent.futures
@@ -2736,11 +2736,11 @@ The thread pool itself IS the backpressure mechanism. The 51st caller waits. The
 
 **Blocking works well when:**
 - The workload is synchronous and latency-tolerant. A batch job that processes files can wait a few seconds.
-- Wait times are short relative to the total acceptable latency. If the server processes requests in 10ms and you wait 20ms in queue, total is 30ms — maybe acceptable.
+- Wait times are short relative to the total acceptable latency. If the server processes requests in 10ms and you wait 20ms in queue, total is 30ms -- maybe acceptable.
 
 **Blocking fails when:**
 - Users are waiting in real time. If 50 threads are busy and a user waits 30 seconds for a thread... the user has already given up and left. The thread finally processes an abandoned request.
-- The arrival rate consistently exceeds capacity. If you can process 500 requests/second (50 threads × 10 per thread per second) but 600 requests/second arrive, the queue grows by 100 requests every second. After 60 seconds, 6,000 requests are waiting. After 10 minutes, it is unworkable. Blocking buys time but does not solve the underlying mismatch.
+- The arrival rate consistently exceeds capacity. If you can process 500 requests/second (50 threads x 10 per thread per second) but 600 requests/second arrive, the queue grows by 100 requests every second. After 60 seconds, 6,000 requests are waiting. After 10 minutes, it is unworkable. Blocking buys time but does not solve the underlying mismatch.
 
 ---
 
@@ -2757,11 +2757,11 @@ This is why you should never run a server at 100% CPU or thread utilization. Eve
 
 ---
 
-## Strategy 2: Token Bucket — The Industry Standard for Rate Limiting
+## Strategy 2: Token Bucket -- The Industry Standard for Rate Limiting
 
 ### The Bucket of Tokens Analogy
 
-You have a bucket that holds 100 tokens. Every second, 100 new tokens are added to the bucket — but the bucket has a maximum capacity of 100, so if it is already full, new tokens are discarded.
+You have a bucket that holds 100 tokens. Every second, 100 new tokens are added to the bucket -- but the bucket has a maximum capacity of 100, so if it is already full, new tokens are discarded.
 
 Every time a request arrives, it must take 1 token from the bucket. If there is at least 1 token available: take it, process the request. If the bucket is empty: the request must wait until a token arrives in the next refill, or be rejected immediately with a "slow down" signal.
 
@@ -2774,25 +2774,25 @@ Why this is clever:
 3. **Smooth recovery.** After a burst empties the bucket, the bucket gradually refills over the next second. The system recovers on its own.
 
 ```
-╔════════════════════════════════════════════════════════════════╗
-║               TOKEN BUCKET IN ACTION                           ║
-╠════════════════════════════════════════════════════════════════╣
-║                                                                ║
-║  t=0s:  Bucket full:  [●●●●●●●●●●] 10 tokens (capacity = 10) ║
-║                                                                ║
-║  t=0s:  10 requests arrive simultaneously                      ║
-║         Each takes 1 token: [          ] 0 tokens left         ║
-║         All 10 requests: ALLOWED immediately                   ║
-║                                                                ║
-║  t=0.1s: 5 more requests arrive. Bucket empty.                 ║
-║          These requests: DENIED (429 Too Many Requests)        ║
-║          Retry-After header: "0.9 seconds"                     ║
-║                                                                ║
-║  t=1s:  Refill! Bucket: [●●●●●●●●●●] 10 tokens again          ║
-║                                                                ║
-║  t=1s:  Next batch of 10 requests: ALLOWED                     ║
-║                                                                ║
-╚════════════════════════════════════════════════════════════════╝
++================================================================+
+|               TOKEN BUCKET IN ACTION                           |
++================================================================+
+|                                                                |
+|  t=0s:  Bucket full:  [**********] 10 tokens (capacity = 10) |
+|                                                                |
+|  t=0s:  10 requests arrive simultaneously                      |
+|         Each takes 1 token: [          ] 0 tokens left         |
+|         All 10 requests: ALLOWED immediately                   |
+|                                                                |
+|  t=0.1s: 5 more requests arrive. Bucket empty.                 |
+|          These requests: DENIED (429 Too Many Requests)        |
+|          Retry-After header: "0.9 seconds"                     |
+|                                                                |
+|  t=1s:  Refill! Bucket: [**********] 10 tokens again          |
+|                                                                |
+|  t=1s:  Next batch of 10 requests: ALLOWED                     |
+|                                                                |
++================================================================+
 ```
 
 ---
@@ -2806,9 +2806,9 @@ class TokenBucket:
     def __init__(self, capacity, refill_rate):
         """
         capacity:    Maximum tokens the bucket can hold (burst limit).
-                     Example: 1000 — can serve up to 1000 requests at once.
+                     Example: 1000 -- can serve up to 1000 requests at once.
         refill_rate: Tokens added per second (sustained rate limit).
-                     Example: 100 — can sustain 100 requests/second long-term.
+                     Example: 100 -- can sustain 100 requests/second long-term.
         """
         self.capacity = capacity            # Max tokens (burst size)
         self.tokens = capacity              # Start full
@@ -2829,7 +2829,7 @@ class TokenBucket:
         # (If 0.5 seconds passed and rate is 100/s, add 50 tokens)
         new_tokens = elapsed * self.refill_rate
 
-        # Update the bucket — but never exceed max capacity.
+        # Update the bucket -- but never exceed max capacity.
         self.tokens = min(
             self.capacity,           # Don't overflow the bucket
             self.tokens + new_tokens # Add what time has earned us
@@ -2841,16 +2841,16 @@ class TokenBucket:
             self.tokens -= tokens_needed  # Spend the tokens
             return True                   # ALLOWED
         else:
-            return False                  # RATE LIMITED — bucket empty
+            return False                  # RATE LIMITED -- bucket empty
 ```
 
 Each piece explained simply:
 
-- `capacity` is the burst limit — how many requests can hit all at once before the bucket empties. Like a reservoir that absorbs sudden surges.
+- `capacity` is the burst limit -- how many requests can hit all at once before the bucket empties. Like a reservoir that absorbs sudden surges.
 - `refill_rate` is the sustained throughput. Tokens trickle in at this rate. Sustained request rate above this means the bucket eventually empties and clients start getting rejected.
 - `elapsed * self.refill_rate` calculates how many tokens have "earned themselves" since the last check. If 2 seconds have passed and the rate is 100/second, 200 tokens have accumulated (up to the max).
 
-**An important note about distribution:** this implementation is local to one server. In a system with 10 servers, each server has its own separate bucket, allowing 10× the intended rate limit. For a shared rate limit across a whole cluster, you store the token count in Redis — a centralized shared database — so all servers draw from the same bucket.
+**An important note about distribution:** this implementation is local to one server. In a system with 10 servers, each server has its own separate bucket, allowing 10x the intended rate limit. For a shared rate limit across a whole cluster, you store the token count in Redis -- a centralized shared database -- so all servers draw from the same bucket.
 
 ---
 
@@ -2863,7 +2863,7 @@ bucket = TokenBucket(capacity=1000, refill_rate=100)
 
 def handle_request(request):
     if not bucket.consume():
-        # Bucket is empty — tell the client to wait and try again
+        # Bucket is empty -- tell the client to wait and try again
         return Response(
             status=429,              # HTTP 429 = "Too Many Requests"
             body={"error": "Rate limit exceeded. Please slow down."},
@@ -2874,7 +2874,7 @@ def handle_request(request):
             }
         )
 
-    # Token successfully consumed — proceed with the request
+    # Token successfully consumed -- proceed with the request
     return process(request)
 ```
 
@@ -2886,14 +2886,14 @@ The `Retry-After` header is a key kindness: you are not just rejecting the reque
 
 ### The Car Cruise Control Analogy
 
-A car's cruise control is set to 60 mph. But the car is not stupid — it does not just dump the same amount of fuel into the engine regardless of conditions. When you hit a hill (more resistance), the engine throttles up to maintain 60 mph. When you crest the hill and start going downhill (less resistance), it throttles back.
+A car's cruise control is set to 60 mph. But the car is not stupid -- it does not just dump the same amount of fuel into the engine regardless of conditions. When you hit a hill (more resistance), the engine throttles up to maintain 60 mph. When you crest the hill and start going downhill (less resistance), it throttles back.
 
 The cruise control ADAPTS to what the road is doing, trying to maintain a target despite changing conditions.
 
-AIMD (Additive Increase / Multiplicative Decrease) is a technique that adapts the concurrency limit — how many requests you allow to be in-flight simultaneously — based on observed system health.
+AIMD (Additive Increase / Multiplicative Decrease) is a technique that adapts the concurrency limit -- how many requests you allow to be in-flight simultaneously -- based on observed system health.
 
 - When things are going well (low latency, low error rate): SLOWLY increase the limit. +1 per time period.
-- When things are going badly (latency spikes, errors increasing): QUICKLY decrease the limit. ×0.5 (cut in half).
+- When things are going badly (latency spikes, errors increasing): QUICKLY decrease the limit. x0.5 (cut in half).
 
 ---
 
@@ -2903,31 +2903,31 @@ The "increase slowly, decrease quickly" asymmetry is intentional, and the reason
 
 **Slow increase when recovering:** A recovering server might seem healthy before it fully is. If you immediately ramp back up to the previous load as soon as latency drops, you might re-overwhelm the still-fragile service. Go slow. Let the server breathe. If it stays healthy, gradually add more load.
 
-**Fast decrease when struggling:** When a server is overwhelmed, every additional request makes things worse. Each extra request adds to the queue, adds to memory pressure, makes response times longer for everyone else. Cut load immediately and dramatically. Do not nibble at the problem — halve your load right now.
+**Fast decrease when struggling:** When a server is overwhelmed, every additional request makes things worse. Each extra request adds to the queue, adds to memory pressure, makes response times longer for everyone else. Cut load immediately and dramatically. Do not nibble at the problem -- halve your load right now.
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║              AIMD CONCURRENCY LIMIT OVER TIME (Sawtooth Pattern)             ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Concurrency                                                                  ║
-║  Limit                                                                        ║
-║    50 ┤                              ████                                     ║
-║    45 ┤                         █████  █                                      ║
-║    40 ┤                    █████       █                                      ║
-║    35 ┤               █████            █                                      ║
-║    30 ┤          █████                 █                                      ║
-║    25 ┤     █████                      █████                                  ║
-║    20 ┤█████                                █                                 ║
-║    15 ┤  "things going well,                █                                 ║
-║    10 ┤   slowly +1 each minute"            ████                              ║
-║     5 ┤                                         "latency spiked!              ║
-║     0 ┤─────────────────────────────────────     cut by half"                ║
-║       └────────────────────────────────────────────────────────── Time        ║
-║                                                                               ║
-║  Pattern: Slow climb (each step = +1)  →  Sudden drop (×0.5)                ║
-║           Then slow climb again from the lower baseline.                     ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|              AIMD CONCURRENCY LIMIT OVER TIME (Sawtooth Pattern)             |
++===============================================================================+
+|                                                                               |
+|  Concurrency                                                                  |
+|  Limit                                                                        |
+|    50 +                              ####                                     |
+|    45 +                         #####  #                                      |
+|    40 +                    #####       #                                      |
+|    35 +               #####            #                                      |
+|    30 +          #####                 #                                      |
+|    25 +     #####                      #####                                  |
+|    20 +#####                                #                                 |
+|    15 +  "things going well,                #                                 |
+|    10 +   slowly +1 each minute"            ####                              |
+|     5 +                                         "latency spiked!              |
+|     0 +-------------------------------------     cut by half"                |
+|       +---------------------------------------------------------- Time        |
+|                                                                               |
+|  Pattern: Slow climb (each step = +1)  ->  Sudden drop (x0.5)                |
+|           Then slow climb again from the lower baseline.                     |
++===============================================================================+
 ```
 
 This "sawtooth" pattern is natural and expected. It looks chaotic on a chart but it represents a self-regulating system that continuously probes for the maximum safe load without exceeding it.
@@ -2975,7 +2975,7 @@ Real-world implementations of this idea: Netflix's "Concurrency Limiter" library
 
 ## Choosing a Backpressure Strategy: Decision Guide
 
-We now have three main strategies. In a system design interview — or in a real design meeting — someone will eventually ask: "which one do we use?" Here is how to think through that choice.
+We now have three main strategies. In a system design interview -- or in a real design meeting -- someone will eventually ask: "which one do we use?" Here is how to think through that choice.
 
 ---
 
@@ -2987,7 +2987,7 @@ There are two fundamentally different situations:
 
 **Situation B: You are a public API.** External developers call your service. They wrote their own client code. You cannot change their clients. You can only control what YOU respond with.
 
-For Situation A (internal, you own both sides): **adaptive concurrency limits (AIMD)** are often the best choice. They self-regulate based on actual health signals. You do not need to guess the right rate limit number — the system figures it out.
+For Situation A (internal, you own both sides): **adaptive concurrency limits (AIMD)** are often the best choice. They self-regulate based on actual health signals. You do not need to guess the right rate limit number -- the system figures it out.
 
 For Situation B (external API, clients you do not control): **token bucket rate limiting** is the standard choice. It gives you a fixed, predictable limit you can document and publish ("our API allows 100 requests/second per API key"). External clients can code against a known limit.
 
@@ -2996,34 +2996,34 @@ For Situation B (external API, clients you do not control): **token bucket rate 
 ### The Decision Flowchart
 
 ```
-╔═══════════════════════════════════════════════════════════════════╗
-║         BACKPRESSURE STRATEGY DECISION GUIDE                      ║
-╠═══════════════════════════════════════════════════════════════════╣
-║                                                                   ║
-║  Is this a public API (external clients)?                         ║
-║    ├── YES → Use TOKEN BUCKET                                     ║
-║    │         - Publish your rate limits in documentation          ║
-║    │         - Return 429 with Retry-After header                 ║
-║    │         - Consider per-client buckets (by API key)           ║
-║    │                                                              ║
-║    └── NO (internal service) → Continue below                    ║
-║                                                                   ║
-║  Does load vary significantly and unpredictably?                  ║
-║    ├── YES → Use AIMD (Adaptive Concurrency)                      ║
-║    │         - Self-regulates without a fixed number to tune      ║
-║    │         - Great for services with variable downstream speed  ║
-║    │                                                              ║
-║    └── NO (load is steady or predictable) → Continue below       ║
-║                                                                   ║
-║  Is this a batch/background job (not user-facing)?                ║
-║    ├── YES → Use BLOCKING (thread pool)                           ║
-║    │         - Simple. No extra code needed.                      ║
-║    │         - Fine if users are not waiting.                     ║
-║    │                                                              ║
-║    └── NO (user-facing, latency matters) → Use TOKEN BUCKET       ║
-║          - Reject immediately, do not queue                       ║
-║          - Tell client when to retry                              ║
-╚═══════════════════════════════════════════════════════════════════╝
++===================================================================+
+|         BACKPRESSURE STRATEGY DECISION GUIDE                      |
++===================================================================+
+|                                                                   |
+|  Is this a public API (external clients)?                         |
+|    +-- YES -> Use TOKEN BUCKET                                     |
+|    |         - Publish your rate limits in documentation          |
+|    |         - Return 429 with Retry-After header                 |
+|    |         - Consider per-client buckets (by API key)           |
+|    |                                                              |
+|    +-- NO (internal service) -> Continue below                    |
+|                                                                   |
+|  Does load vary significantly and unpredictably?                  |
+|    +-- YES -> Use AIMD (Adaptive Concurrency)                      |
+|    |         - Self-regulates without a fixed number to tune      |
+|    |         - Great for services with variable downstream speed  |
+|    |                                                              |
+|    +-- NO (load is steady or predictable) -> Continue below       |
+|                                                                   |
+|  Is this a batch/background job (not user-facing)?                |
+|    +-- YES -> Use BLOCKING (thread pool)                           |
+|    |         - Simple. No extra code needed.                      |
+|    |         - Fine if users are not waiting.                     |
+|    |                                                              |
+|    +-- NO (user-facing, latency matters) -> Use TOKEN BUCKET       |
+|          - Reject immediately, do not queue                       |
+|          - Tell client when to retry                              |
++===================================================================+
 ```
 
 ---
@@ -3045,7 +3045,7 @@ def handle_request(request):
 
 **Per-client bucket:**
 ```python
-# One bucket PER API KEY — each client gets their own allowance
+# One bucket PER API KEY -- each client gets their own allowance
 client_buckets = {}  # In practice, stored in Redis so all servers share it
 
 def handle_request(request):
@@ -3072,7 +3072,7 @@ This is the model most public APIs use: Stripe, GitHub, Twitter, Twilio all rate
 
 ## Push vs. Pull Backpressure
 
-So far we have discussed the server pushing back against callers. But there is another dimension to backpressure: who controls the flow of data — the sender (pushing data) or the receiver (pulling data when ready)?
+So far we have discussed the server pushing back against callers. But there is another dimension to backpressure: who controls the flow of data -- the sender (pushing data) or the receiver (pulling data when ready)?
 
 ---
 
@@ -3086,101 +3086,101 @@ If you are a listener who is a slow note-taker, you will miss things. The broadc
 
 **PULL: the Netflix model.**
 
-Netflix does not beam your entire movie to you the moment you click play. It sends a chunk. Your device decodes and plays that chunk. When your device is ready for the next chunk, it requests it. Netflix sends the next chunk. Your device is always in control of the data flow — it only receives what it has asked for.
+Netflix does not beam your entire movie to you the moment you click play. It sends a chunk. Your device decodes and plays that chunk. When your device is ready for the next chunk, it requests it. Netflix sends the next chunk. Your device is always in control of the data flow -- it only receives what it has asked for.
 
-If your internet slows down, Netflix detects that your device is requesting chunks more slowly (because it is taking longer to decode them or the network is slow). Netflix adapts — sends smaller chunks, lower resolution. Your device's request rate is the backpressure signal.
+If your internet slows down, Netflix detects that your device is requesting chunks more slowly (because it is taking longer to decode them or the network is slow). Netflix adapts -- sends smaller chunks, lower resolution. Your device's request rate is the backpressure signal.
 
 ---
 
-### Push Backpressure — How It Works
+### Push Backpressure -- How It Works
 
 In the push model, the producer sends data as fast as it can. The consumer must signal "STOP" when it is full, and "READY" when it has caught up.
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║                    PUSH BACKPRESSURE FLOW                                    ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Producer ──────────────────────────────────────────────────► Consumer       ║
-║           "here's data, here's data, here's data, here's data"               ║
-║                                                                               ║
-║  Consumer buffer fills up                                                     ║
-║                                                                               ║
-║  Consumer ◄──────────────────────────────────────────────────── Producer     ║
-║           "STOP! I'm full! Please stop sending!"                             ║
-║                                                                               ║
-║  Producer pauses. Consumer drains its buffer.                                ║
-║                                                                               ║
-║  Consumer ──────────────────────────────────────────────────► Producer       ║
-║           "OK I've caught up. You can send again."                           ║
-║                                                                               ║
-║  Producer resumes sending.                                                   ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|                    PUSH BACKPRESSURE FLOW                                    |
++===============================================================================+
+|                                                                               |
+|  Producer --------------------------------------------------> Consumer       |
+|           "here's data, here's data, here's data, here's data"               |
+|                                                                               |
+|  Consumer buffer fills up                                                     |
+|                                                                               |
+|  Consumer <---------------------------------------------------- Producer     |
+|           "STOP! I'm full! Please stop sending!"                             |
+|                                                                               |
+|  Producer pauses. Consumer drains its buffer.                                |
+|                                                                               |
+|  Consumer --------------------------------------------------> Producer       |
+|           "OK I've caught up. You can send again."                           |
+|                                                                               |
+|  Producer resumes sending.                                                   |
++===============================================================================+
 ```
 
-Pros: low latency when the consumer is fast — data arrives immediately without waiting for a request.
+Pros: low latency when the consumer is fast -- data arrives immediately without waiting for a request.
 
 Cons: requires a feedback channel (the "STOP" signal must travel back to the producer). If the "STOP" signal is slow or lost, the buffer overflows before the producer pauses.
 
 ---
 
-### Pull Backpressure — How It Works
+### Pull Backpressure -- How It Works
 
 In the pull model, the consumer requests data only when it is ready for more. The producer only sends what has been requested.
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║                    PULL BACKPRESSURE FLOW                                    ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Consumer ──────────────────────────────────────────────────► Producer       ║
-║           "I'm ready. Please send me 10 items."                              ║
-║                                                                               ║
-║  Producer ──────────────────────────────────────────────────► Consumer       ║
-║           *sends 10 items*                                                   ║
-║                                                                               ║
-║  Consumer processes all 10 items.                                             ║
-║                                                                               ║
-║  Consumer ──────────────────────────────────────────────────► Producer       ║
-║           "Done! Send me 10 more."                                           ║
-║                                                                               ║
-║  Producer sends 10 more. And so on.                                          ║
-║                                                                               ║
-║  If consumer is slow: it simply requests less often. Producer waits.         ║
-║  No overflow possible. Consumer always in control.                           ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|                    PULL BACKPRESSURE FLOW                                    |
++===============================================================================+
+|                                                                               |
+|  Consumer --------------------------------------------------> Producer       |
+|           "I'm ready. Please send me 10 items."                              |
+|                                                                               |
+|  Producer --------------------------------------------------> Consumer       |
+|           *sends 10 items*                                                   |
+|                                                                               |
+|  Consumer processes all 10 items.                                             |
+|                                                                               |
+|  Consumer --------------------------------------------------> Producer       |
+|           "Done! Send me 10 more."                                           |
+|                                                                               |
+|  Producer sends 10 more. And so on.                                          |
+|                                                                               |
+|  If consumer is slow: it simply requests less often. Producer waits.         |
+|  No overflow possible. Consumer always in control.                           |
++===============================================================================+
 ```
 
-Pros: consumer is always in control. Overflow is essentially impossible — the consumer only receives what it explicitly asked for. Natural flow control.
+Pros: consumer is always in control. Overflow is essentially impossible -- the consumer only receives what it explicitly asked for. Natural flow control.
 
-Cons: higher latency — there is always a round-trip request before new data arrives. Slightly wasteful when the consumer is fast and could have handled more without asking.
+Cons: higher latency -- there is always a round-trip request before new data arrives. Slightly wasteful when the consumer is fast and could have handled more without asking.
 
 ---
 
 ### Comparison Table
 
 ```
-╔══════════════════════════════╦════════════════════════════════╦═════════════════════════════════╗
-║ Factor                       ║ PUSH                           ║ PULL                            ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Latency                      ║ Lower — data flows immediately ║ Higher — must request each batch║
-║                              ║ without waiting for a request  ║ before receiving it             ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Overflow risk                ║ Moderate — depends on buffer   ║ Very low — consumer controls    ║
-║                              ║ size and signal speed          ║ exactly how much it receives    ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Consumer control             ║ Limited — must signal "stop"   ║ Full — never receives more than ║
-║                              ║ after the fact                 ║ it requested                    ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Feedback channel needed?     ║ YES — "stop" and "ready"       ║ NO — requests are the signal   ║
-║                              ║ signals must travel upstream   ║                                 ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Best for                     ║ Streaming, real-time feeds,    ║ Batch processing, queue workers,║
-║                              ║ low-latency data pipelines     ║ file processing, safe loading   ║
-╠══════════════════════════════╬════════════════════════════════╬═════════════════════════════════╣
-║ Real-world examples          ║ gRPC streaming, WebSockets,    ║ SQS/RabbitMQ queue workers,     ║
-║                              ║ Kafka producers, TCP streams   ║ REST pagination, S3 downloads   ║
-╚══════════════════════════════╩════════════════════════════════╩═════════════════════════════════╝
++==============================+================================+=================================+
+| Factor                       | PUSH                           | PULL                            |
++==============================+================================+=================================+
+| Latency                      | Lower -- data flows immediately | Higher -- must request each batch|
+|                              | without waiting for a request  | before receiving it             |
++==============================+================================+=================================+
+| Overflow risk                | Moderate -- depends on buffer   | Very low -- consumer controls    |
+|                              | size and signal speed          | exactly how much it receives    |
++==============================+================================+=================================+
+| Consumer control             | Limited -- must signal "stop"   | Full -- never receives more than |
+|                              | after the fact                 | it requested                    |
++==============================+================================+=================================+
+| Feedback channel needed?     | YES -- "stop" and "ready"       | NO -- requests are the signal   |
+|                              | signals must travel upstream   |                                 |
++==============================+================================+=================================+
+| Best for                     | Streaming, real-time feeds,    | Batch processing, queue workers,|
+|                              | low-latency data pipelines     | file processing, safe loading   |
++==============================+================================+=================================+
+| Real-world examples          | gRPC streaming, WebSockets,    | SQS/RabbitMQ queue workers,     |
+|                              | Kafka producers, TCP streams   | REST pagination, S3 downloads   |
++==============================+================================+=================================+
 ```
 
 ---
@@ -3189,11 +3189,11 @@ Cons: higher latency — there is always a round-trip request before new data ar
 
 The software industry settled on a standard protocol for push-based backpressure called **Reactive Streams** (also the basis of the ReactiveX / RxJava / RxJS libraries). The central idea is elegant:
 
-The consumer calls `request(N)` — asking the producer to send at most N items. The producer sends at most N items. When the consumer is ready for more, it calls `request(N)` again.
+The consumer calls `request(N)` -- asking the producer to send at most N items. The producer sends at most N items. When the consumer is ready for more, it calls `request(N)` again.
 
 ```
 Consumer calls:  request(5)        request(5)         request(5)
-Producer sends:  ← item item item  ← item item item   ← item item item
+Producer sends:  <- item item item  <- item item item   <- item item item
                    item item           item item           item item
 
 Consumer processes each batch before requesting more.
@@ -3209,46 +3209,46 @@ The key libraries that implement this standard: **RxJava** (Android/Java), **RxJ
 
 ## Backpressure Across Service Boundaries
 
-Everything we have discussed so far has been about backpressure between a client and a single server. But real systems are chains of services calling each other. Backpressure needs to propagate through the entire chain — or the chain breaks.
+Everything we have discussed so far has been about backpressure between a client and a single server. But real systems are chains of services calling each other. Backpressure needs to propagate through the entire chain -- or the chain breaks.
 
 ---
 
 ### The Water Pipe Network Analogy
 
-Imagine the plumbing system in a tall building. Water pressure is managed at every junction — the main building supply line, the pipes that branch to each floor, the pipes on each floor, the faucet. If any section is too narrow to carry the required flow, it creates a bottleneck. The pressure differential at that bottleneck is the backpressure signal — it travels upstream to the building's main valve.
+Imagine the plumbing system in a tall building. Water pressure is managed at every junction -- the main building supply line, the pipes that branch to each floor, the pipes on each floor, the faucet. If any section is too narrow to carry the required flow, it creates a bottleneck. The pressure differential at that bottleneck is the backpressure signal -- it travels upstream to the building's main valve.
 
 In a microservices system, every service is a section of pipe. If Service C (the deepest in the chain) is overloaded:
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║              BACKPRESSURE PROPAGATION THROUGH A SERVICE CHAIN                ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Client  →  Service A  →  Service B  →  Service C                           ║
-║                                                                               ║
-║  Normal operation:                                                            ║
-║  Client sends 100/s → A processes and calls B → B calls C at 100/s          ║
-║  C processes at 100/s. Everyone happy.                                       ║
-║                                                                               ║
-║  Service C gets overwhelmed (database backup running, etc.):                 ║
-║                                                                               ║
-║  C overwhelmed → C returns errors/slow responses to B                        ║
-║  B's threads fill up waiting for C → B starts returning errors to A          ║
-║  A's threads fill up waiting for B → A starts returning errors to Client     ║
-║  Client sees errors/timeouts                                                  ║
-║                                                                               ║
-║  WITH proper backpressure (each service propagates the signal):              ║
-║  C signals "slow down" → B reduces its call rate to C                        ║
-║  B signals "slow down" → A reduces its call rate to B                        ║
-║  A signals "slow down" → Client reduces its request rate                    ║
-║                                                                               ║
-║  WITHOUT backpressure propagation:                                           ║
-║  C overwhelmed → fills up → crashes                                          ║
-║  B's pending requests to C all fail → B fills up → crashes                  ║
-║  A's pending requests to B all fail → A fills up → crashes                  ║
-║  Client sees: total outage across all three services                         ║
-║  This is called a CASCADING FAILURE.                                         ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|              BACKPRESSURE PROPAGATION THROUGH A SERVICE CHAIN                |
++===============================================================================+
+|                                                                               |
+|  Client  ->  Service A  ->  Service B  ->  Service C                           |
+|                                                                               |
+|  Normal operation:                                                            |
+|  Client sends 100/s -> A processes and calls B -> B calls C at 100/s          |
+|  C processes at 100/s. Everyone happy.                                       |
+|                                                                               |
+|  Service C gets overwhelmed (database backup running, etc.):                 |
+|                                                                               |
+|  C overwhelmed -> C returns errors/slow responses to B                        |
+|  B's threads fill up waiting for C -> B starts returning errors to A          |
+|  A's threads fill up waiting for B -> A starts returning errors to Client     |
+|  Client sees errors/timeouts                                                  |
+|                                                                               |
+|  WITH proper backpressure (each service propagates the signal):              |
+|  C signals "slow down" -> B reduces its call rate to C                        |
+|  B signals "slow down" -> A reduces its call rate to B                        |
+|  A signals "slow down" -> Client reduces its request rate                    |
+|                                                                               |
+|  WITHOUT backpressure propagation:                                           |
+|  C overwhelmed -> fills up -> crashes                                          |
+|  B's pending requests to C all fail -> B fills up -> crashes                  |
+|  A's pending requests to B all fail -> A fills up -> crashes                  |
+|  Client sees: total outage across all three services                         |
+|  This is called a CASCADING FAILURE.                                         |
++===============================================================================+
 ```
 
 The lesson: backpressure is not a one-service problem. Every service in the chain must be able to detect when its downstream dependencies are struggling and propagate that signal upstream. A service that silently absorbs downstream pressure and keeps accepting new requests from upstream is a ticking bomb.
@@ -3262,35 +3262,35 @@ One practical technique for propagating backpressure through a chain: **deadline
 Here is the idea. A client sends a request to Service A and is willing to wait at most 500 milliseconds for a response.
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║                        DEADLINE PROPAGATION                                  ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  Client → Service A: "I'll wait 500ms total"                                 ║
-║                                                                               ║
-║  Service A receives request. Has 500ms budget.                                ║
-║  A reserves ~100ms for its own processing.                                   ║
-║  A calls Service B: "I'll wait 400ms" (500 - 100 = 400)                      ║
-║                                                                               ║
-║  Service B receives request. Has 400ms budget.                               ║
-║  B reserves ~100ms for its own processing.                                   ║
-║  B calls Service C: "I'll wait 300ms" (400 - 100 = 300)                      ║
-║                                                                               ║
-║  Service C receives request. Has 300ms budget.                               ║
-║                                                                               ║
-║  SCENARIO: C takes 350ms to respond (over budget!)                           ║
-║                                                                               ║
-║  B's timeout fires at 300ms. B returns an error to A immediately.            ║
-║  A gets the error. Returns an error to Client immediately.                   ║
-║                                                                               ║
-║  Total client wait: ~300ms (not the full 500ms)                              ║
-║  The cascade "fails fast" rather than hanging.                               ║
-║                                                                               ║
-║  WITHOUT deadline propagation:                                                ║
-║  B waits its own fixed timeout (say, 10 seconds) for C.                      ║
-║  A waits its own fixed timeout (say, 10 seconds) for B.                      ║
-║  Client waits 10+ seconds for a service that is clearly failing.             ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|                        DEADLINE PROPAGATION                                  |
++===============================================================================+
+|                                                                               |
+|  Client -> Service A: "I'll wait 500ms total"                                 |
+|                                                                               |
+|  Service A receives request. Has 500ms budget.                                |
+|  A reserves ~100ms for its own processing.                                   |
+|  A calls Service B: "I'll wait 400ms" (500 - 100 = 400)                      |
+|                                                                               |
+|  Service B receives request. Has 400ms budget.                               |
+|  B reserves ~100ms for its own processing.                                   |
+|  B calls Service C: "I'll wait 300ms" (400 - 100 = 300)                      |
+|                                                                               |
+|  Service C receives request. Has 300ms budget.                               |
+|                                                                               |
+|  SCENARIO: C takes 350ms to respond (over budget!)                           |
+|                                                                               |
+|  B's timeout fires at 300ms. B returns an error to A immediately.            |
+|  A gets the error. Returns an error to Client immediately.                   |
+|                                                                               |
+|  Total client wait: ~300ms (not the full 500ms)                              |
+|  The cascade "fails fast" rather than hanging.                               |
+|                                                                               |
+|  WITHOUT deadline propagation:                                                |
+|  B waits its own fixed timeout (say, 10 seconds) for C.                      |
+|  A waits its own fixed timeout (say, 10 seconds) for B.                      |
+|  Client waits 10+ seconds for a service that is clearly failing.             |
++===============================================================================+
 ```
 
 Deadline propagation converts a "hang for the maximum timeout of every service" scenario into "fail as fast as the slowest step in the chain." The client gets an answer (even if it is an error) quickly, rather than waiting through multiple timeout windows stacked on top of each other.
@@ -3304,36 +3304,36 @@ In practice, deadlines are often passed in request headers. gRPC has native dead
 This section is about how senior engineers think about these problems versus junior engineers. Both groups know the basic techniques. The difference is in the questions they ask first.
 
 ```
-╔═══════════════════════════════════════════╦══════════════════════════════════════╦══════════════════════════════════════════════════════════════════════════╗
-║ Scenario                                  ║ L5 Response                          ║ L6 Response                                                              ║
-╠═══════════════════════════════════════════╬══════════════════════════════════════╬══════════════════════════════════════════════════════════════════════════╣
-║ "Our service is slow."                    ║ "Scale up — add more servers."       ║ "What's the bottleneck? If it's a downstream dependency (DB, external    ║
-║                                           ║                                      ║ API), adding more servers just creates more load on the bottleneck.       ║
-║                                           ║                                      ║ You need backpressure to the upstream caller so they stop sending         ║
-║                                           ║                                      ║ faster than the bottleneck can handle."                                  ║
-╠═══════════════════════════════════════════╬══════════════════════════════════════╬══════════════════════════════════════════════════════════════════════════╣
-║ "Our queue depth is growing."             ║ "Add more consumers to drain it."    ║ "Is the queue growing because producers are too fast, or consumers are   ║
-║                                           ║                                      ║ too slow? Growing producers → apply rate limits upstream. Slow           ║
-║                                           ║                                      ║ consumers → find the bottleneck in the consumer (CPU? DB? External API?) ║
-║                                           ║                                      ║ and fix that. These are different problems with different solutions."     ║
-╠═══════════════════════════════════════════╬══════════════════════════════════════╬══════════════════════════════════════════════════════════════════════════╣
-║ "Rate limit is 1,000 req/sec."            ║ "That's our SLA limit. Enforce it."  ║ "Does 1,000 req/sec mean sustained throughput or peak burst? A token     ║
-║                                           ║                                      ║ bucket with 1,000 capacity and a 200 refill rate supports 200/s sustained ║
-║                                           ║                                      ║ with 1,000 burst. If you need 1,000 sustained, the bucket fill rate must  ║
-║                                           ║                                      ║ be 1,000 — which means you need servers that can genuinely handle 1,000/s."║
-╠═══════════════════════════════════════════╬══════════════════════════════════════╬══════════════════════════════════════════════════════════════════════════╣
-║ "Client retries are overwhelming us."     ║ "Block the retries."                 ║ "Why are clients retrying so much? If our error rate is 30%, clients      ║
-║                                           ║                                      ║ SHOULD retry — we are failing them. Blocking retries treats the symptom. ║
-║                                           ║                                      ║ Fix the error rate. If retries are still too aggressive, tell clients to  ║
-║                                           ║                                      ║ add exponential backoff. But start with: why are we failing 30% of        ║
-║                                           ║                                      ║ requests in the first place?"                                            ║
-╠═══════════════════════════════════════════╬══════════════════════════════════════╬══════════════════════════════════════════════════════════════════════════╣
-║ "Backpressure is causing client           ║ "Increase the client timeout."       ║ "The backpressure is working correctly — the client is being told to      ║
-║  timeouts."                               ║                                      ║ slow down, and it is experiencing the cost of not slowing down. Increasing║
-║                                           ║                                      ║ the timeout makes the client wait longer before it retries, which creates  ║
-║                                           ║                                      ║ even more load. Investigate why the client is sending faster than we can   ║
-║                                           ║                                      ║ process. The timeout is the correct signal — the client should back off."  ║
-╚═══════════════════════════════════════════╩══════════════════════════════════════╩══════════════════════════════════════════════════════════════════════════╝
++===========================================+======================================+==========================================================================+
+| Scenario                                  | L5 Response                          | L6 Response                                                              |
++===========================================+======================================+==========================================================================+
+| "Our service is slow."                    | "Scale up -- add more servers."       | "What's the bottleneck? If it's a downstream dependency (DB, external    |
+|                                           |                                      | API), adding more servers just creates more load on the bottleneck.       |
+|                                           |                                      | You need backpressure to the upstream caller so they stop sending         |
+|                                           |                                      | faster than the bottleneck can handle."                                  |
++===========================================+======================================+==========================================================================+
+| "Our queue depth is growing."             | "Add more consumers to drain it."    | "Is the queue growing because producers are too fast, or consumers are   |
+|                                           |                                      | too slow? Growing producers -> apply rate limits upstream. Slow           |
+|                                           |                                      | consumers -> find the bottleneck in the consumer (CPU? DB? External API?) |
+|                                           |                                      | and fix that. These are different problems with different solutions."     |
++===========================================+======================================+==========================================================================+
+| "Rate limit is 1,000 req/sec."            | "That's our SLA limit. Enforce it."  | "Does 1,000 req/sec mean sustained throughput or peak burst? A token     |
+|                                           |                                      | bucket with 1,000 capacity and a 200 refill rate supports 200/s sustained |
+|                                           |                                      | with 1,000 burst. If you need 1,000 sustained, the bucket fill rate must  |
+|                                           |                                      | be 1,000 -- which means you need servers that can genuinely handle 1,000/s."|
++===========================================+======================================+==========================================================================+
+| "Client retries are overwhelming us."     | "Block the retries."                 | "Why are clients retrying so much? If our error rate is 30%, clients      |
+|                                           |                                      | SHOULD retry -- we are failing them. Blocking retries treats the symptom. |
+|                                           |                                      | Fix the error rate. If retries are still too aggressive, tell clients to  |
+|                                           |                                      | add exponential backoff. But start with: why are we failing 30% of        |
+|                                           |                                      | requests in the first place?"                                            |
++===========================================+======================================+==========================================================================+
+| "Backpressure is causing client           | "Increase the client timeout."       | "The backpressure is working correctly -- the client is being told to      |
+|  timeouts."                               |                                      | slow down, and it is experiencing the cost of not slowing down. Increasing|
+|                                           |                                      | the timeout makes the client wait longer before it retries, which creates  |
+|                                           |                                      | even more load. Investigate why the client is sending faster than we can   |
+|                                           |                                      | process. The timeout is the correct signal -- the client should back off."  |
++===========================================+======================================+==========================================================================+
 ```
 
 The L6 pattern is consistent: ask "WHY is this happening?" before asking "HOW do we respond?" The response to a symptom is often the wrong lever. Finding the root cause leads to solutions that actually fix the system rather than hiding the problem.
@@ -3342,50 +3342,50 @@ The L6 pattern is consistent: ask "WHY is this happening?" before asking "HOW do
 
 ## Real Incident: How Backpressure Saved (and Failed to Save) a System
 
-Sometimes the best way to understand a concept is to see what happens when a system has it — and what happens when a system does not. Here are two stories from the same fictional e-commerce company on the same Black Friday.
+Sometimes the best way to understand a concept is to see what happens when a system has it -- and what happens when a system does not. Here are two stories from the same fictional e-commerce company on the same Black Friday.
 
 ---
 
-### Story 1 — When Backpressure Worked: The Recommendation Service
+### Story 1 -- When Backpressure Worked: The Recommendation Service
 
-It is 6:00 AM on Black Friday. A marketing email goes out to 10 million customers: "SALE STARTS NOW." Within minutes, traffic spikes to 10× the normal level.
+It is 6:00 AM on Black Friday. A marketing email goes out to 10 million customers: "SALE STARTS NOW." Within minutes, traffic spikes to 10x the normal level.
 
-The company's recommendation service — the system that decides which products to show each customer — normally handles 5,000 requests per second. Now it is receiving 50,000 requests per second.
+The company's recommendation service -- the system that decides which products to show each customer -- normally handles 5,000 requests per second. Now it is receiving 50,000 requests per second.
 
 Six months earlier, an engineer had added a token bucket rate limiter to the recommendation service:
 - Bucket capacity: 50,000 tokens (large burst buffer)
 - Refill rate: 5,000 tokens per second (the actual sustainable rate)
 - Response when limited: HTTP 429 with `Retry-After: 1`
 
-At 10× traffic, the bucket empties in 1 second. Subsequent requests receive immediate 429 responses. No waiting. No pile-up.
+At 10x traffic, the bucket empties in 1 second. Subsequent requests receive immediate 429 responses. No waiting. No pile-up.
 
-The main product page had been designed with this in mind: if the recommendation service returns 429, fall back to "Featured Items" — a static list of popular products that needs no recommendation call.
+The main product page had been designed with this in mind: if the recommendation service returns 429, fall back to "Featured Items" -- a static list of popular products that needs no recommendation call.
 
-Result: customers on the first wave of traffic (before the bucket empties) see personalized recommendations. Customers on subsequent requests see "Featured Items." From the customer's perspective, both experiences look perfectly normal — featured items is a common e-commerce pattern. Nobody notices the degradation. 
+Result: customers on the first wave of traffic (before the bucket empties) see personalized recommendations. Customers on subsequent requests see "Featured Items." From the customer's perspective, both experiences look perfectly normal -- featured items is a common e-commerce pattern. Nobody notices the degradation. 
 
-Zero customer-facing errors. Zero service downtime. The recommendation service runs at exactly 5,000 requests per second all morning — the rate it can actually handle — and the rest of the traffic gracefully falls back.
+Zero customer-facing errors. Zero service downtime. The recommendation service runs at exactly 5,000 requests per second all morning -- the rate it can actually handle -- and the rest of the traffic gracefully falls back.
 
-The token bucket was the valve. The fallback was the contingency plan. Together they made the system resilient to a 10× traffic spike.
+The token bucket was the valve. The fallback was the contingency plan. Together they made the system resilient to a 10x traffic spike.
 
 ---
 
-### Story 2 — When No Backpressure Failed: The Inventory Service
+### Story 2 -- When No Backpressure Failed: The Inventory Service
 
-Same Black Friday. Same 10× traffic spike. Same morning. But a different part of the system.
+Same Black Friday. Same 10x traffic spike. Same morning. But a different part of the system.
 
-The inventory service — which checks whether a product is in stock before allowing a customer to add it to their cart — has no backpressure mechanism. No rate limit. No circuit breaker. No fallback.
+The inventory service -- which checks whether a product is in stock before allowing a customer to add it to their cart -- has no backpressure mechanism. No rate limit. No circuit breaker. No fallback.
 
 Normally, each inventory check takes 50ms. The service handles it fine.
 
-Under 10× load, the database powering the inventory service starts to struggle. Each check now takes 800ms (16× slower). The service has a thread pool of 200 threads. Each thread is now tied up for 800ms instead of 50ms.
+Under 10x load, the database powering the inventory service starts to struggle. Each check now takes 800ms (16x slower). The service has a thread pool of 200 threads. Each thread is now tied up for 800ms instead of 50ms.
 
 At 800ms per request and 200 threads, maximum throughput is 200 / 0.8 = 250 requests per second. Before the traffic spike, it was handling 5,000 requests per second. Now it can only handle 250.
 
-The 4,750 excess requests per second need to go somewhere. They queue in front of the inventory service. The queue grows by 4,750 requests every second. Memory fills up holding pending requests. New requests that arrive cannot even get into the queue — they time out immediately at the load balancer.
+The 4,750 excess requests per second need to go somewhere. They queue in front of the inventory service. The queue grows by 4,750 requests every second. Memory fills up holding pending requests. New requests that arrive cannot even get into the queue -- they time out immediately at the load balancer.
 
 Within 4 minutes, the inventory service is completely unresponsive. Every product page returns an error because the cart system cannot check inventory. Checkout is impossible. Customers see blank error pages.
 
-The cascading failure spreads: the recommendation service (which had just survived via its rate limiter) now takes calls from the product page — calls that include "check inventory before showing add-to-cart button." Those calls go to the dead inventory service, time out after 10 seconds, and now the product page itself starts timing out.
+The cascading failure spreads: the recommendation service (which had just survived via its rate limiter) now takes calls from the product page -- calls that include "check inventory before showing add-to-cart button." Those calls go to the dead inventory service, time out after 10 seconds, and now the product page itself starts timing out.
 
 Within 8 minutes, the entire shopping experience is down.
 
@@ -3396,22 +3396,22 @@ Total cost: estimated $4M in lost sales, $1.2M in refunded delivery charges (som
 ### The Contrast
 
 ```
-╔═════════════════════════════════════════╦═════════════════════════════════════════════╗
-║ Recommendation Service (Survived)       ║ Inventory Service (Failed)                  ║
-╠═════════════════════════════════════════╬═════════════════════════════════════════════╣
-║ Had a rate limiter (token bucket)       ║ No rate limiter                             ║
-║ Had a fallback behavior                 ║ No fallback — all or nothing                ║
-║ Rejected excess traffic immediately     ║ Accepted all traffic, queued until crash    ║
-║ Failed gracefully with degraded UX      ║ Failed catastrophically with total outage   ║
-╠═════════════════════════════════════════╬═════════════════════════════════════════════╣
-║ Same 10× traffic spike                  ║ Same 10× traffic spike                      ║
-║ Result: survived                        ║ Result: total outage, cascading failure      ║
-╚═════════════════════════════════════════╩═════════════════════════════════════════════╝
++=========================================+=============================================+
+| Recommendation Service (Survived)       | Inventory Service (Failed)                  |
++=========================================+=============================================+
+| Had a rate limiter (token bucket)       | No rate limiter                             |
+| Had a fallback behavior                 | No fallback -- all or nothing                |
+| Rejected excess traffic immediately     | Accepted all traffic, queued until crash    |
+| Failed gracefully with degraded UX      | Failed catastrophically with total outage   |
++=========================================+=============================================+
+| Same 10x traffic spike                  | Same 10x traffic spike                      |
+| Result: survived                        | Result: total outage, cascading failure      |
++=========================================+=============================================+
 ```
 
-Same event. Same company. Same traffic. Completely different outcomes — because one service had a plan and the other did not.
+Same event. Same company. Same traffic. Completely different outcomes -- because one service had a plan and the other did not.
 
-The difference was not engineering skill. It was whether someone had asked, six months earlier, "what happens to this service when it receives 10× its normal load?" For the recommendation service, someone had. For the inventory service, nobody had.
+The difference was not engineering skill. It was whether someone had asked, six months earlier, "what happens to this service when it receives 10x its normal load?" For the recommendation service, someone had. For the inventory service, nobody had.
 
 Backpressure is not a complicated system to build. A token bucket is 30 lines of code. A fallback behavior is a 5-line if-else in the caller. The hard part is remembering to think about it before the Black Friday that tests you.
 
@@ -3419,7 +3419,7 @@ Backpressure is not a complicated system to build. A token bucket is 30 lines of
 
 ## Common Mistakes (And How to Avoid Them)
 
-Before the summary, here is a list of the most common errors engineers make when implementing idempotency and backpressure — collected from real incident postmortems.
+Before the summary, here is a list of the most common errors engineers make when implementing idempotency and backpressure -- collected from real incident postmortems.
 
 ---
 
@@ -3479,7 +3479,7 @@ The fix: use per-client buckets (keyed by API key, user ID, or IP address). Isol
 
 The symptom: the public-facing API rate-limits external traffic correctly. But internally, Service A calls Service B which calls Service C with no limits between them. When B slows down, A keeps sending at full speed. B's queue fills up. Cascading failure.
 
-The fix: every service-to-service call needs its own backpressure mechanism. Internal calls are not safer than external calls — they are often FASTER and can generate MORE load in less time.
+The fix: every service-to-service call needs its own backpressure mechanism. Internal calls are not safer than external calls -- they are often FASTER and can generate MORE load in less time.
 
 ---
 
@@ -3491,11 +3491,11 @@ The fix: backpressure is a safety valve for traffic spikes and service protectio
 
 ---
 
-## Chapter Summary — Part B
+## Chapter Summary -- Part B
 
 Let's step back and collect what we learned.
 
-**Idempotency** solves the network uncertainty problem: you cannot know if a response was lost, so retrying is sometimes unavoidable, but retrying non-idempotent operations (like charging a credit card) causes disasters. Idempotency keys give every operation a unique tracking number. The server uses the key to deduplicate retries — processing the operation exactly once, no matter how many times the client retries.
+**Idempotency** solves the network uncertainty problem: you cannot know if a response was lost, so retrying is sometimes unavoidable, but retrying non-idempotent operations (like charging a credit card) causes disasters. Idempotency keys give every operation a unique tracking number. The server uses the key to deduplicate retries -- processing the operation exactly once, no matter how many times the client retries.
 
 Good idempotency keys are: derived from stable business identifiers (not random), generated before the attempt (so they survive crashes), scoped to the right user/operation, and given a TTL so they expire.
 
@@ -3503,7 +3503,7 @@ Idempotency does not prevent ordering problems, does not replace business constr
 
 **Backpressure** solves the flow rate mismatch problem: clients send faster than servers can process, servers queue up, queues overflow, systems crash. Backpressure is the server saying "slow down" before that happens.
 
-The three main strategies: blocking (requests wait their turn — simple but fragile at high rates), token bucket (burst-then-throttle — the industry standard for rate limiting), and AIMD adaptive limits (slowly loosen when healthy, aggressively tighten when struggling — self-regulating).
+The three main strategies: blocking (requests wait their turn -- simple but fragile at high rates), token bucket (burst-then-throttle -- the industry standard for rate limiting), and AIMD adaptive limits (slowly loosen when healthy, aggressively tighten when struggling -- self-regulating).
 
 Push vs. pull determines who controls flow: push is faster but needs explicit "stop" signals, pull is safer because the consumer requests only what it can handle. Reactive Streams is the industry standard for push-with-controlled-flow.
 
@@ -3519,7 +3519,7 @@ One more thing before we close Part B. These two topics are not independent. The
 
 Here is the scenario that ties them together:
 
-A client sends a request. The server is under load and rate-limits it (backpressure: 429, Retry-After: 2 seconds). The client waits 2 seconds and retries. This time the request gets through. The server processes it. The response is lost (network uncertainty). The client retries again — but now with an idempotency key, so the server recognizes the duplicate and returns the cached result without double-processing.
+A client sends a request. The server is under load and rate-limits it (backpressure: 429, Retry-After: 2 seconds). The client waits 2 seconds and retries. This time the request gets through. The server processes it. The response is lost (network uncertainty). The client retries again -- but now with an idempotency key, so the server recognizes the duplicate and returns the cached result without double-processing.
 
 Each mechanism covers a gap the other cannot:
 
@@ -3531,48 +3531,48 @@ Each mechanism covers a gap the other cannot:
 Together, they form a complete reliability layer around any API call:
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║          THE COMPLETE RELIABILITY LAYER AROUND AN API CALL                   ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  1. Client generates idempotency key BEFORE the request.                     ║
-║     (So retries can be safe)                                                  ║
-║                                                                               ║
-║  2. Circuit breaker checks: is the server known to be down?                  ║
-║     YES → fail fast, do not even try. (From Part A)                          ║
-║     NO  → proceed.                                                            ║
-║                                                                               ║
-║  3. Client sends request + idempotency key.                                  ║
-║                                                                               ║
-║  4. Server checks backpressure: is the token bucket empty?                   ║
-║     YES → return 429 with Retry-After: N                                     ║
-║     NO  → proceed to check idempotency key.                                  ║
-║                                                                               ║
-║  5. Server checks idempotency key: seen before?                               ║
-║     YES → return cached result (no re-processing).                           ║
-║     NO  → process the request, store result, return it.                      ║
-║                                                                               ║
-║  6. If client got 429: wait Retry-After seconds, then retry from step 2.     ║
-║     If client got timeout: retry from step 2 with SAME idempotency key.      ║
-║     If client got success: done. Key can be discarded.                        ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|          THE COMPLETE RELIABILITY LAYER AROUND AN API CALL                   |
++===============================================================================+
+|                                                                               |
+|  1. Client generates idempotency key BEFORE the request.                     |
+|     (So retries can be safe)                                                  |
+|                                                                               |
+|  2. Circuit breaker checks: is the server known to be down?                  |
+|     YES -> fail fast, do not even try. (From Part A)                          |
+|     NO  -> proceed.                                                            |
+|                                                                               |
+|  3. Client sends request + idempotency key.                                  |
+|                                                                               |
+|  4. Server checks backpressure: is the token bucket empty?                   |
+|     YES -> return 429 with Retry-After: N                                     |
+|     NO  -> proceed to check idempotency key.                                  |
+|                                                                               |
+|  5. Server checks idempotency key: seen before?                               |
+|     YES -> return cached result (no re-processing).                           |
+|     NO  -> process the request, store result, return it.                      |
+|                                                                               |
+|  6. If client got 429: wait Retry-After seconds, then retry from step 2.     |
+|     If client got timeout: retry from step 2 with SAME idempotency key.      |
+|     If client got success: done. Key can be discarded.                        |
++===============================================================================+
 ```
 
-This is what "production-grade reliability" means in practice. Not any one of these techniques in isolation — all of them together, each covering the failure modes the others cannot.
+This is what "production-grade reliability" means in practice. Not any one of these techniques in isolation -- all of them together, each covering the failure modes the others cannot.
 
-When you are designing a system and you identify an API call that: (1) must not be duplicated (payment, order creation), (2) must be retried on failure, and (3) might receive traffic spikes — you need all four mechanisms: idempotency keys, retries with backoff, circuit breakers, and backpressure. Leaving any one out creates a gap that will eventually cause an incident.
+When you are designing a system and you identify an API call that: (1) must not be duplicated (payment, order creation), (2) must be retried on failure, and (3) might receive traffic spikes -- you need all four mechanisms: idempotency keys, retries with backoff, circuit breakers, and backpressure. Leaving any one out creates a gap that will eventually cause an incident.
 
 ---
 
-*End of Part B. Part C covers the interaction between backpressure, retries, and idempotency in combined system designs — and how to reason about failure scenarios that involve all three.*
+*End of Part B. Part C covers the interaction between backpressure, retries, and idempotency in combined system designs -- and how to reason about failure scenarios that involve all three.*
 # Chapter 23: Backpressure, Retries, and Idempotency
 ## Part C: Load Shedding, Cascading Failures, Design Evolution, and Real Incidents
 
-*(Note to reader: Parts A and B of this chapter covered retries, circuit breakers, idempotency, and backpressure — the tools that help your system stay stable when things go wrong. This part goes further. We cover load shedding — how to deliberately drop some work so you can finish the rest. We cover cascading failures — how one small problem turns into a total outage. We look at real incidents with timelines you can follow step by step. And we trace how a system grows from "works when everything is fine" to "stays alive even when half of it is on fire." Every concept is explained from scratch. No jargon is left unexplained. Analogies come first, code comes second.)*
+*(Note to reader: Parts A and B of this chapter covered retries, circuit breakers, idempotency, and backpressure -- the tools that help your system stay stable when things go wrong. This part goes further. We cover load shedding -- how to deliberately drop some work so you can finish the rest. We cover cascading failures -- how one small problem turns into a total outage. We look at real incidents with timelines you can follow step by step. And we trace how a system grows from "works when everything is fine" to "stays alive even when half of it is on fire." Every concept is explained from scratch. No jargon is left unexplained. Analogies come first, code comes second.)*
 
 ---
 
-# Part 4: Load Shedding — Choosing What to Drop
+# Part 4: Load Shedding -- Choosing What to Drop
 
 ---
 
@@ -3582,21 +3582,21 @@ Here is a safety rule you have probably heard on an airplane.
 
 Before every flight, the flight attendant stands in the aisle and runs through the safety demonstration. At one point, they say something that sounds a little cold:
 
-*"In the event of a loss of cabin pressure, oxygen masks will drop from the compartment above your seat. Please put on your own mask before assisting others — including children."*
+*"In the event of a loss of cabin pressure, oxygen masks will drop from the compartment above your seat. Please put on your own mask before assisting others -- including children."*
 
 The first time you hear that, it might feel selfish. Put on YOUR mask before helping a child? What kind of rule is that?
 
 But think about what happens if you do it the other way. You try to help the child first. It takes ten seconds. In low-oxygen air, you start feeling dizzy at fifteen seconds. At thirty seconds, you pass out. Now there is a confused, panicking child AND an unconscious adult. Two problems instead of one. Nobody is getting helped.
 
-By protecting yourself first — spending five seconds on your own mask — you stay conscious. You can then help the child calmly and effectively. You can help the person in the next row. You can help four people instead of zero.
+By protecting yourself first -- spending five seconds on your own mask -- you stay conscious. You can then help the child calmly and effectively. You can help the person in the next row. You can help four people instead of zero.
 
 **Load shedding is the same philosophy applied to computer systems.**
 
-When a system is getting more requests than it can handle — say, ten times its normal load — it faces a choice. It can try to handle every single request. Or it can deliberately refuse some requests so it can handle the rest well.
+When a system is getting more requests than it can handle -- say, ten times its normal load -- it faces a choice. It can try to handle every single request. Or it can deliberately refuse some requests so it can handle the rest well.
 
 If it tries to handle everything, it usually ends up handling nothing. The server runs out of memory. Threads pile up waiting for each other. Response times balloon from 50 milliseconds to 30 seconds. Every user experiences a slow, broken, degraded system. The server crashes. Now nobody gets served.
 
-If it instead refuses 20 percent of requests immediately — with a clear, fast error message — then the remaining 80 percent get handled quickly and correctly. Eighty percent of users get good service. Twenty percent get a fast error they can retry in a moment. Total users served well: 80 percent. Compare that to the alternative: zero.
+If it instead refuses 20 percent of requests immediately -- with a clear, fast error message -- then the remaining 80 percent get handled quickly and correctly. Eighty percent of users get good service. Twenty percent get a fast error they can retry in a moment. Total users served well: 80 percent. Compare that to the alternative: zero.
 
 This is the counterintuitive truth of load shedding: **by serving fewer requests, you serve more users.**
 
@@ -3617,34 +3617,34 @@ Load shedding makes the trade-off explicit. Some requests succeed perfectly. Som
 
 ```
 WITHOUT LOAD SHEDDING:
-┌─────────────────────────────────────────────────────────────────┐
-│  100 requests/sec arrive. System can handle 50/sec.             │
-│                                                                  │
-│  Result: ALL 100 requests slow down                             │
-│  ├── Request 1 → 8,000ms response   (should be 80ms)           │
-│  ├── Request 2 → 9,200ms response                               │
-│  ├── Request 3 → 11,000ms response                              │
-│  └── ... all 100 users angry, most requests timeout, system crashes│
-│                                                                  │
-│  Users served well: 0 out of 100                                │
-└─────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------+
+|  100 requests/sec arrive. System can handle 50/sec.             |
+|                                                                  |
+|  Result: ALL 100 requests slow down                             |
+|  +-- Request 1 -> 8,000ms response   (should be 80ms)           |
+|  +-- Request 2 -> 9,200ms response                               |
+|  +-- Request 3 -> 11,000ms response                              |
+|  +-- ... all 100 users angry, most requests timeout, system crashes|
+|                                                                  |
+|  Users served well: 0 out of 100                                |
++-----------------------------------------------------------------+
 
 WITH LOAD SHEDDING:
-┌─────────────────────────────────────────────────────────────────┐
-│  100 requests/sec arrive. System can handle 50/sec.             │
-│  System sheds 50 requests immediately with 503.                 │
-│                                                                  │
-│  Result: 50 requests handled at normal speed                    │
-│  ├── Request 1  → 82ms response  ✓ (fast, correct)             │
-│  ├── Request 2  → 79ms response  ✓                              │
-│  ├── Request 51 → 503 error immediately  (retry in 5 seconds)  │
-│  └── ... 50 users happy, 50 users get a fast clear signal       │
-│                                                                  │
-│  Users served well: 50 out of 100 (vs. 0 without shedding)     │
-└─────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------+
+|  100 requests/sec arrive. System can handle 50/sec.             |
+|  System sheds 50 requests immediately with 503.                 |
+|                                                                  |
+|  Result: 50 requests handled at normal speed                    |
+|  +-- Request 1  -> 82ms response  Y (fast, correct)             |
+|  +-- Request 2  -> 79ms response  Y                              |
+|  +-- Request 51 -> 503 error immediately  (retry in 5 seconds)  |
+|  +-- ... 50 users happy, 50 users get a fast clear signal       |
+|                                                                  |
+|  Users served well: 50 out of 100 (vs. 0 without shedding)     |
++-----------------------------------------------------------------+
 ```
 
-The on-call engineer looking at these two scenarios sees something important: the system WITH load shedding is actually healthier. Error rates are high but they are 503 errors — controlled rejections. The system itself is stable. The system WITHOUT load shedding eventually crashes — now you get zero service instead of partial service.
+The on-call engineer looking at these two scenarios sees something important: the system WITH load shedding is actually healthier. Error rates are high but they are 503 errors -- controlled rejections. The system itself is stable. The system WITHOUT load shedding eventually crashes -- now you get zero service instead of partial service.
 
 ---
 
@@ -3654,7 +3654,7 @@ The on-call engineer looking at these two scenarios sees something important: th
 
 Picture a popular nightclub on a Saturday night. The club has a maximum legal capacity of 200 people. There is a bouncer at the door.
 
-When the club is below capacity, the bouncer lets everyone in. When the club hits 200 people, the bouncer stops letting new people enter. Some people wait in line outside (the queue). If the line is very long — say, a hundred people waiting — the bouncer walks down the line and tells people: "It is going to be more than an hour wait. You might want to try somewhere else tonight." Some people leave. Some stay.
+When the club is below capacity, the bouncer lets everyone in. When the club hits 200 people, the bouncer stops letting new people enter. Some people wait in line outside (the queue). If the line is very long -- say, a hundred people waiting -- the bouncer walks down the line and tells people: "It is going to be more than an hour wait. You might want to try somewhere else tonight." Some people leave. Some stay.
 
 The bouncer does NOT let the crowd grow forever. If people kept queueing indefinitely, the line would stretch around the block. People would wait three hours. Some would wait only to find out the club is closing. That is a terrible experience AND it creates a mob situation outside.
 
@@ -3669,23 +3669,23 @@ Queue-based load shedding works the same way:
 QUEUE-BASED LOAD SHEDDING:
 
 New requests arrive:                Workers process:
-        │                                  │
-        ▼                                  ▼
-┌──────────────────────────────────────────────────────────┐
-│                      QUEUE                               │
-│  [req1][req2][req3][req4][req5]...[req999][req1000]      │
-│   oldest                              newest             │
-│                     max = 1,000 items                    │
-└──────────────────────────────────────────────────────────┘
-        │                                  │
-        ▼                                  ▼
+        |                                  |
+        v                                  v
++----------------------------------------------------------+
+|                      QUEUE                               |
+|  [req1][req2][req3][req4][req5]...[req999][req1000]      |
+|   oldest                              newest             |
+|                     max = 1,000 items                    |
++----------------------------------------------------------+
+        |                                  |
+        v                                  v
   If queue < 1,000:              Workers pull from front,
   accept request,                process, send response
   add to back of queue
 
-  If queue ≥ 1,000:
+  If queue >= 1,000:
   REJECT immediately
-  → 503 "Queue full, retry later"
+  -> 503 "Queue full, retry later"
 ```
 
 ### How Long Will People Wait?
@@ -3695,12 +3695,12 @@ Queue sizing requires a simple calculation. Before you pick a maximum queue size
 The formula:
 
 ```
-Maximum wait time = queue size ÷ processing rate
+Maximum wait time = queue size / processing rate
 
 Example:
 - Workers process 100 requests per second
 - Maximum queue size = 1,000 requests
-- Maximum wait = 1,000 ÷ 100 = 10 seconds
+- Maximum wait = 1,000 / 100 = 10 seconds
 
 If clients timeout after 3 seconds, a 10-second max wait is terrible.
 Most requests at the back of the queue will timeout before they are processed.
@@ -3709,7 +3709,7 @@ You are doing work for nothing.
 Better choice:
 - Client timeout = 3 seconds
 - Processing rate = 100 req/sec
-- Maximum useful queue size = 3 × 100 = 300 requests
+- Maximum useful queue size = 3 x 100 = 300 requests
 ```
 
 This calculation is important. A queue that is "too large" gives you false comfort. You think requests are queued and will be served. But if they have been waiting longer than the client timeout, the client has given up. You will process those requests and send responses to nobody. Pure waste.
@@ -3719,17 +3719,17 @@ A tight queue that matches client timeout expectations forces you to reject clea
 ```python
 # Queue-based load shedding implementation
 
-MAX_QUEUE_SIZE = 300          # Calculated based on timeout × processing_rate
+MAX_QUEUE_SIZE = 300          # Calculated based on timeout x processing_rate
 request_queue = Queue(maxsize=MAX_QUEUE_SIZE)
 
 def handle_incoming_request(request):
     """Called for every incoming request"""
     try:
-        # Try to add to queue (non-blocking — fails immediately if full)
+        # Try to add to queue (non-blocking -- fails immediately if full)
         request_queue.put_nowait(request)
         return "QUEUED"
     except QueueFull:
-        # Queue is at capacity — reject immediately
+        # Queue is at capacity -- reject immediately
         metrics.increment("requests.rejected.queue_full")
         return Response(
             status=503,
@@ -3745,7 +3745,7 @@ def worker_loop():
         send_response(request.client, result)
 ```
 
-The `put_nowait()` call is the key: it fails immediately if the queue is full. The worker does NOT block waiting for space. This makes the rejection fast — the client gets their 503 in milliseconds, not seconds.
+The `put_nowait()` call is the key: it fails immediately if the queue is full. The worker does NOT block waiting for space. This makes the rejection fast -- the client gets their 503 in milliseconds, not seconds.
 
 ---
 
@@ -3761,13 +3761,13 @@ Queue-based shedding has a problem: it is a cliff. Below 1,000 items, you accept
 4. Queue fills back to 1,000.
 5. You reject everything. Cycle repeats.
 
-The system oscillates. Clients have a terrible experience — some requests get through, some do not, in a jagged pattern.
+The system oscillates. Clients have a terrible experience -- some requests get through, some do not, in a jagged pattern.
 
 **Random Early Detection (RED)** solves this by starting to reject SOME requests before the queue is full, and gradually rejecting more as the queue fills up. No cliff. A smooth slope.
 
 The analogy: instead of the bouncer waiting until the club is 100% full to start turning people away, they start occasionally (and randomly) turning people away at 80% capacity. As the club gets more full, more people are turned away. By the time it hits 100%, almost everyone is being turned away.
 
-Why random? Because random rejection is fair. Everyone in line has an equal chance of being rejected at any given utilization level. And because a gradual increase in rejection keeps the queue in a stable zone — you never hit the cliff.
+Why random? Because random rejection is fair. Everyone in line has an equal chance of being rejected at any given utilization level. And because a gradual increase in rejection keeps the queue in a stable zone -- you never hit the cliff.
 
 ```
 RED REJECTION PROBABILITY:
@@ -3794,11 +3794,11 @@ def should_reject_request(current_queue_size, max_queue_size):
     utilization = current_queue_size / max_queue_size
 
     if utilization < 0.5:
-        # Queue less than half full — accept everything
+        # Queue less than half full -- accept everything
         reject_probability = 0.0
 
     elif utilization < 0.8:
-        # 50% to 80% full — gently start rejecting
+        # 50% to 80% full -- gently start rejecting
         # At 50% full: 0% rejection
         # At 80% full: 10% rejection
         # Linear increase between these two points
@@ -3806,7 +3806,7 @@ def should_reject_request(current_queue_size, max_queue_size):
         reject_probability = fraction_through_range * 0.10
 
     else:
-        # 80% to 100% full — rejection ramps up fast
+        # 80% to 100% full -- rejection ramps up fast
         # At 80% full: 10% rejection
         # At 100% full: 100% rejection
         fraction_through_range = (utilization - 0.8) / 0.2  # 0.0 to 1.0
@@ -3820,9 +3820,9 @@ def handle_incoming_request(request):
     queue_size = request_queue.qsize()
 
     if should_reject_request(queue_size, MAX_QUEUE_SIZE):
-        # Probabilistic rejection — this request lost the lottery
+        # Probabilistic rejection -- this request lost the lottery
         metrics.increment("requests.rejected.red")
-        return Response(503, "High load — please retry with backoff")
+        return Response(503, "High load -- please retry with backoff")
 
     request_queue.put(request)
     return "QUEUED"
@@ -3835,7 +3835,7 @@ Queue utilization over time:
 
 WITH CLIFF-BASED REJECTION:           WITH RED:
                                        
-100% ─── accept ─── CLIFF ───reject   100%  ─────────────────────────
+100% --- accept --- CLIFF ---reject   100%  -------------------------
                                               slightly increasing
  80%                                    80%  rejection rate here     
                                               keeps system stable    
@@ -3872,31 +3872,31 @@ Priority-based load shedding works exactly the same way. You assign a priority t
 PRIORITY TIERS (example for an e-commerce system):
 
 CRITICAL    Payment processing, user authentication, health checks
-            → NEVER dropped. System would rather crash than drop these.
+            -> NEVER dropped. System would rather crash than drop these.
 
 HIGH        Product search, browse, add to cart, order status
-            → Dropped only if system is near total failure
+            -> Dropped only if system is near total failure
 
 MEDIUM      Product recommendations, "customers also bought"
             Wishlist sync, review fetching
-            → Dropped when system load > 80%
+            -> Dropped when system load > 80%
 
 LOW         Analytics event logging, browsing history sync
             Non-essential notification triggers
             Personalization model updates
-            → Dropped when system load > 60%
+            -> Dropped when system load > 60%
 ```
 
 The thresholds look like this:
 
 ```
 System Load    Action
-──────────────────────────────────────────────────────────
-0% – 60%       All tiers served normally
-60% – 80%      LOW priority requests start being shed
-80% – 90%      MEDIUM priority also shed
-90% – 95%      HIGH priority shed selectively
-95% – 100%     Only CRITICAL requests served
+----------------------------------------------------------
+0% - 60%       All tiers served normally
+60% - 80%      LOW priority requests start being shed
+80% - 90%      MEDIUM priority also shed
+90% - 95%      HIGH priority shed selectively
+95% - 100%     Only CRITICAL requests served
 ```
 
 Implementation:
@@ -3909,7 +3909,7 @@ def classify_priority(request):
     """
     path = request.path
 
-    # Payment and auth — always critical
+    # Payment and auth -- always critical
     if path.startswith("/payment") or path.startswith("/auth"):
         return "CRITICAL"
 
@@ -3938,10 +3938,10 @@ def handle_request(request):
         return shed(request, "System near capacity")
 
     if current_load > 0.80 and priority == "MEDIUM":
-        return shed(request, "High load — non-critical features paused")
+        return shed(request, "High load -- non-critical features paused")
 
     if current_load > 0.60 and priority == "LOW":
-        return shed(request, "High load — background sync paused")
+        return shed(request, "High load -- background sync paused")
 
     # This request gets through
     return process(request)
@@ -3967,7 +3967,7 @@ If you tell the recommendations team "your feature gets dropped during high load
 - Will users notice?
 - Is this permanent or temporary?
 
-If their feature is dropped 40 percent of the time during peak hours, their product metrics look terrible — not because their code is bad, but because it is being deliberately shedded. They need to know. They need to agree.
+If their feature is dropped 40 percent of the time during peak hours, their product metrics look terrible -- not because their code is bad, but because it is being deliberately shedded. They need to know. They need to agree.
 
 Priority-based load shedding requires a meeting across teams. Someone with authority (usually an engineering director or VP of engineering) needs to sign off on the priority tiers. The tiers need to be documented. And they need to be reviewed after incidents to confirm the decisions still make sense.
 
@@ -3981,7 +3981,7 @@ Without this alignment, priority shedding causes politics, not just code. Get th
 
 A restaurant prepared one hundred salads at noon. By 2pm, the salads are still sitting in the kitchen. At 3pm, a customer orders a salad. Should the kitchen serve a three-hour-old salad?
 
-Of course not. The salad is past its useful life. Serving it anyway does not help the customer — it makes things worse (food safety risk, unhappy customer). The right move: throw the old salads out and make a fresh one, or tell the customer "we are out of salads today."
+Of course not. The salad is past its useful life. Serving it anyway does not help the customer -- it makes things worse (food safety risk, unhappy customer). The right move: throw the old salads out and make a fresh one, or tell the customer "we are out of salads today."
 
 Requests have the same "freshness" problem. A request is useful only if the client is still waiting for a response. If a user clicked "Search" and your server queues that request but does not process it for 10 seconds... and the user's browser has a 3-second timeout... then the user has already seen an error and moved on. Processing that queued request at the 10-second mark sends a response to nobody. Pure waste.
 
@@ -3995,7 +3995,7 @@ T = 0.1s   Server receives request, adds to queue.
            Queue has 800 items ahead of it. At 100 req/sec processing rate,
            this request will not be processed until T = 8.1 seconds.
 T = 3.0s   Client timeout fires. User sees "Search timed out." User refreshes.
-           (New request generated — old one still in queue.)
+           (New request generated -- old one still in queue.)
 T = 8.1s   Worker pulls original request from queue.
            Checks deadline: T=8.1s > deadline=3.0s. EXPIRED.
            Worker discards request WITHOUT processing it.
@@ -4009,7 +4009,7 @@ Multiply by thousands of queued expired requests during overload.
 import time
 
 def process_queue(queue):
-    """Worker loop — processes requests from the queue"""
+    """Worker loop -- processes requests from the queue"""
     while True:
         if queue.empty():
             time.sleep(0.01)  # Brief sleep when nothing to do
@@ -4025,7 +4025,7 @@ def process_queue(queue):
                               time.now() - request.received_at)
             continue  # Skip to next request
 
-        # Client is still waiting — process this request
+        # Client is still waiting -- process this request
         start = time.now()
         result = do_work(request)
         latency = time.now() - start
@@ -4041,7 +4041,7 @@ Here is a subtlety that catches teams off guard.
 
 Suppose Service A receives a request from a user with a 10-second timeout. Service A calls Service B to do part of the work. Service B calls Service C for part of ITS work.
 
-If each service has its own independent timeout (say, each waits up to 10 seconds), the total wait time can be up to 30 seconds — even though the user will give up after 10 seconds.
+If each service has its own independent timeout (say, each waits up to 10 seconds), the total wait time can be up to 30 seconds -- even though the user will give up after 10 seconds.
 
 The right approach: pass the original deadline through the whole chain.
 
@@ -4049,13 +4049,13 @@ The right approach: pass the original deadline through the whole chain.
 User timeout: 10 seconds. Request arrives at T=0. Deadline = T+10s.
 
 Service A receives request.
-├── Remaining time until user gives up: 10 seconds
-├── Calls Service B with deadline = T+10s (pass the same deadline through)
-│   ├── Service B calculates: 9.8 seconds remain
-│   ├── Calls Service C with deadline = T+10s
-│   │   └── Service C calculates: 9.5 seconds remain
-│   └── Service B will not wait longer than 9.8 seconds for Service C
-└── Service A will not wait longer than 10 seconds for Service B
++-- Remaining time until user gives up: 10 seconds
++-- Calls Service B with deadline = T+10s (pass the same deadline through)
+|   +-- Service B calculates: 9.8 seconds remain
+|   +-- Calls Service C with deadline = T+10s
+|   |   +-- Service C calculates: 9.5 seconds remain
+|   +-- Service B will not wait longer than 9.8 seconds for Service C
++-- Service A will not wait longer than 10 seconds for Service B
 
 Result: nobody wastes time after the user has already given up.
 ```
@@ -4064,7 +4064,7 @@ This is called "context propagation" or "deadline propagation." In practice, you
 
 ---
 
-## Graceful Degradation — Having a Plan B (and a Plan C)
+## Graceful Degradation -- Having a Plan B (and a Plan C)
 
 ### The Swiss Army Knife vs. The Butter Knife
 
@@ -4072,7 +4072,7 @@ A Swiss Army knife has many tools packed into one handle: blade, scissors, can o
 
 A simple butter knife has one job. If it breaks, you have nothing.
 
-Your system can be built like a Swiss Army knife. Instead of one way to serve every request, you build a ladder of fallbacks. The primary way is the best. The first fallback is a bit worse. The second fallback is noticeably worse. The emergency fallback is far worse. But each rung of the ladder is better than nothing — better than a 500 error.
+Your system can be built like a Swiss Army knife. Instead of one way to serve every request, you build a ladder of fallbacks. The primary way is the best. The first fallback is a bit worse. The second fallback is noticeably worse. The emergency fallback is far worse. But each rung of the ladder is better than nothing -- better than a 500 error.
 
 This is called **graceful degradation**: when the best option is unavailable, you gracefully fall back to a lesser option, rather than failing completely.
 
@@ -4083,54 +4083,54 @@ This is called **graceful degradation**: when the best option is unavailable, yo
 Here is a concrete example. An e-commerce site has a product search feature. Under normal conditions, search is fast and smart. But what happens as parts of the system fail?
 
 ```
-╔══════════════════════════════════════════════════════════════════════╗
-║         SEARCH FEATURE — DEGRADATION LADDER                         ║
-╠══════════════════════════════════════════════════════════════════════╣
-║                                                                      ║
-║  TIER 0 — Fully Healthy (Normal Operation)                          ║
-║  ─────────────────────────────────────────────────────────────────  ║
-║  What happens: Real-time personalized search. Your search history   ║
-║  shapes results. Spell correction. Category filters. Sorting.       ║
-║  Latency: ~50ms                                                      ║
-║  What users see: Beautiful, relevant, personalized results          ║
-║                                                                      ║
-║  TIER 1 — Search Backend Slow (Degraded)                            ║
-║  ─────────────────────────────────────────────────────────────────  ║
-║  What happens: Serve cached search results from Redis.              ║
-║  Cache is up to 30 minutes old. Most popular queries are the same   ║
-║  from hour to hour. 95% of users never notice the cache.            ║
-║  Latency: ~5ms (from cache, no backend call)                        ║
-║  What users see: Results look the same. Slightly stale. Rare edge   ║
-║  cases get wrong results.                                           ║
-║                                                                      ║
-║  TIER 2 — Search Backend Down (Worse Degradation)                   ║
-║  ─────────────────────────────────────────────────────────────────  ║
-║  What happens: Show the top 100 most-popular items for every search.║
-║  No personalization. No query matching. Just "here are things       ║
-║  people often buy." User can still browse and find something.       ║
-║  Latency: ~1ms (pre-computed list)                                  ║
-║  What users see: Results are generic. Search feels broken.          ║
-║  But they can still use the site.                                   ║
-║                                                                      ║
-║  TIER 3 — Database Slow or Down (Severe Degradation)               ║
-║  ─────────────────────────────────────────────────────────────────  ║
-║  What happens: Show a completely static "Featured Products" page.   ║
-║  This is a pre-rendered HTML file that needs NO backend call.       ║
-║  No search at all. Just a curated list of products that were        ║
-║  manually chosen last week.                                         ║
-║  Latency: 0ms (static file served by CDN)                           ║
-║  What users see: A catalog-style page. No search box at all.        ║
-║  Strange but functional.                                            ║
-║                                                                      ║
-║  TIER 4 — Everything Down (Emergency Fallback)                      ║
-║  ─────────────────────────────────────────────────────────────────  ║
-║  What happens: Maintenance page with estimated return time.         ║
-║  A single static HTML page. Served by a completely separate,        ║
-║  tiny CDN. Needs NOTHING from your backend to render.               ║
-║  What users see: "We are experiencing technical difficulties.       ║
-║  Our team is aware and working on it. Estimated return: 2 hours."   ║
-║  Angry, but informed.                                               ║
-╚══════════════════════════════════════════════════════════════════════╝
++======================================================================+
+|         SEARCH FEATURE -- DEGRADATION LADDER                         |
++======================================================================+
+|                                                                      |
+|  TIER 0 -- Fully Healthy (Normal Operation)                          |
+|  -----------------------------------------------------------------  |
+|  What happens: Real-time personalized search. Your search history   |
+|  shapes results. Spell correction. Category filters. Sorting.       |
+|  Latency: ~50ms                                                      |
+|  What users see: Beautiful, relevant, personalized results          |
+|                                                                      |
+|  TIER 1 -- Search Backend Slow (Degraded)                            |
+|  -----------------------------------------------------------------  |
+|  What happens: Serve cached search results from Redis.              |
+|  Cache is up to 30 minutes old. Most popular queries are the same   |
+|  from hour to hour. 95% of users never notice the cache.            |
+|  Latency: ~5ms (from cache, no backend call)                        |
+|  What users see: Results look the same. Slightly stale. Rare edge   |
+|  cases get wrong results.                                           |
+|                                                                      |
+|  TIER 2 -- Search Backend Down (Worse Degradation)                   |
+|  -----------------------------------------------------------------  |
+|  What happens: Show the top 100 most-popular items for every search.|
+|  No personalization. No query matching. Just "here are things       |
+|  people often buy." User can still browse and find something.       |
+|  Latency: ~1ms (pre-computed list)                                  |
+|  What users see: Results are generic. Search feels broken.          |
+|  But they can still use the site.                                   |
+|                                                                      |
+|  TIER 3 -- Database Slow or Down (Severe Degradation)               |
+|  -----------------------------------------------------------------  |
+|  What happens: Show a completely static "Featured Products" page.   |
+|  This is a pre-rendered HTML file that needs NO backend call.       |
+|  No search at all. Just a curated list of products that were        |
+|  manually chosen last week.                                         |
+|  Latency: 0ms (static file served by CDN)                           |
+|  What users see: A catalog-style page. No search box at all.        |
+|  Strange but functional.                                            |
+|                                                                      |
+|  TIER 4 -- Everything Down (Emergency Fallback)                      |
+|  -----------------------------------------------------------------  |
+|  What happens: Maintenance page with estimated return time.         |
+|  A single static HTML page. Served by a completely separate,        |
+|  tiny CDN. Needs NOTHING from your backend to render.               |
+|  What users see: "We are experiencing technical difficulties.       |
+|  Our team is aware and working on it. Estimated return: 2 hours."   |
+|  Angry, but informed.                                               |
++======================================================================+
 ```
 
 The key insight: the key is pre-planning each tier. During an incident at 3am is not the time to ask "what should we show instead of search results?" The exhausted on-call engineer should not be making product decisions about fallback content. Have the answer decided, implemented, and TESTED before the outage. Every tier should be reachable and working before you ever need it.
@@ -4158,7 +4158,7 @@ def get_search_results(query, user_id):
             metrics.increment("search.tier", tags={"tier": "0"})
             return results
         except Exception as e:
-            # search_service failed — log it and fall through
+            # search_service failed -- log it and fall through
             log.warning(f"Search tier 0 failed: {e}. Falling to tier 1.")
 
     # TIER 1: Cached search results (up to 30 minutes stale)
@@ -4167,7 +4167,7 @@ def get_search_results(query, user_id):
         if cached:
             metrics.increment("search.tier", tags={"tier": "1"})
             return cached
-        # Cache miss — fall through
+        # Cache miss -- fall through
 
     # TIER 2: Popular items list
     if feature_flags.is_enabled("search.popular"):
@@ -4194,7 +4194,7 @@ The monitoring dashboard during an incident shows you which tier most searches a
 
 ---
 
-# Part 5: Cascading Failures — When One Problem Becomes Many
+# Part 5: Cascading Failures -- When One Problem Becomes Many
 
 ---
 
@@ -4204,7 +4204,7 @@ The monitoring dashboard during an incident shows you which tier most searches a
 
 On August 14, 2003, at 2:02pm Eastern Time, a software alarm system in Ohio stopped working. A specific monitoring alarm had silently failed due to a race condition in the energy management software. Nobody noticed.
 
-At 2:14pm, a high-voltage power line in northern Ohio sagged into an overgrown tree and tripped — an automatic safety mechanism that disconnects a line when it detects a fault. This happens occasionally. It is routine. The line's load would normally be redistributed automatically to neighboring lines.
+At 2:14pm, a high-voltage power line in northern Ohio sagged into an overgrown tree and tripped -- an automatic safety mechanism that disconnects a line when it detects a fault. This happens occasionally. It is routine. The line's load would normally be redistributed automatically to neighboring lines.
 
 But the failed alarm system meant the Ohio control room did not know the line had tripped.
 
@@ -4212,12 +4212,12 @@ At 3:05pm, a second line tripped. Still no alarm. The control room had no idea.
 
 As each line went down, its load transferred to neighboring lines. Those lines were now carrying more current than they were designed for. They sagged. More trees. More trips. Each trip made the remaining lines carry more load. Each remaining line was now closer to tripping.
 
-At 4:05pm — less than two hours after the first tree contact — the cascade reached critical mass. Power plants began automatic shutdown (they cannot operate safely in an uncontrolled grid). Within nine seconds, 256 power plants went offline. 55 million people in the northeastern United States and Canada lost power.
+At 4:05pm -- less than two hours after the first tree contact -- the cascade reached critical mass. Power plants began automatic shutdown (they cannot operate safely in an uncontrolled grid). Within nine seconds, 256 power plants went offline. 55 million people in the northeastern United States and Canada lost power.
 
 The root cause: one tree contact. The duration of the root cause: seconds.
 The outage: 55 million people. Duration: up to four days.
 
-Software cascading failures follow this exact pattern. One small fault goes undetected. Load redistributes to neighboring components. They become overloaded. They fail. More load redistributes. More components fail. The cascade reaches critical mass and the entire system collapses — long after the original fault has resolved itself.
+Software cascading failures follow this exact pattern. One small fault goes undetected. Load redistributes to neighboring components. They become overloaded. They fail. More load redistributes. More components fail. The cascade reaches critical mass and the entire system collapses -- long after the original fault has resolved itself.
 
 ---
 
@@ -4228,12 +4228,12 @@ Here is how a cascading failure plays out in a typical distributed system with t
 ```
 NORMAL OPERATION:
 
-User → Service A (frontend API)
-         │
-         ▼
+User -> Service A (frontend API)
+         |
+         v
        Service B (business logic)
-         │
-         ▼
+         |
+         v
        Service C (database / data layer)
 
 Each service handles its load. Response times are fast.
@@ -4248,7 +4248,7 @@ Now something goes wrong in Service C.
 
 **T = 0 seconds: The Trigger**
 
-Service C (the database) has a garbage collection pause. This is a routine event in many languages — the language runtime stops all threads briefly to clean up memory. Normally this takes 10-20 milliseconds. Today, the garbage collector encounters a particularly large memory heap and takes 2 full seconds.
+Service C (the database) has a garbage collection pause. This is a routine event in many languages -- the language runtime stops all threads briefly to clean up memory. Normally this takes 10-20 milliseconds. Today, the garbage collector encounters a particularly large memory heap and takes 2 full seconds.
 
 During those 2 seconds, Service C is not processing queries. They are queuing up.
 
@@ -4256,7 +4256,7 @@ During those 2 seconds, Service C is not processing queries. They are queuing up
 
 **T = 2 seconds: Slowdown Begins**
 
-GC pause ends. Service C resumes. But it has a backlog of 2 seconds × 20,000 queries/sec = 40,000 queued queries. Processing these takes time. Service C's response time climbs from 10ms to 500ms. Not dead — just slow.
+GC pause ends. Service C resumes. But it has a backlog of 2 seconds x 20,000 queries/sec = 40,000 queued queries. Processing these takes time. Service C's response time climbs from 10ms to 500ms. Not dead -- just slow.
 
 ---
 
@@ -4264,11 +4264,11 @@ GC pause ends. Service C resumes. But it has a backlog of 2 seconds × 20,000 qu
 
 Service B calls Service C for every request. Calls now take 500ms instead of 10ms. How does this affect Service B?
 
-Service B has 50 worker threads. Each thread can normally handle one request every 50ms (its own processing time) + 2 × 10ms (two database calls) = 70ms total. That is 14 requests per thread per second. 50 threads × 14 = 700 requests per second handled.
+Service B has 50 worker threads. Each thread can normally handle one request every 50ms (its own processing time) + 2 x 10ms (two database calls) = 70ms total. That is 14 requests per thread per second. 50 threads x 14 = 700 requests per second handled.
 
-Wait — Service B was handling 10,000 req/sec before. That means Service B had about 10,000 ÷ 14 ≈ 714 threads normally. Let us say it has 1,000 threads.
+Wait -- Service B was handling 10,000 req/sec before. That means Service B had about 10,000 / 14 ~= 714 threads normally. Let us say it has 1,000 threads.
 
-Now: each database call takes 500ms. Total time per request = 50ms + 2 × 500ms = 1,050ms. One thread handles 1,000ms ÷ 1,050ms ≈ 0.95 requests per second. 1,000 threads × 0.95 = 950 req/sec.
+Now: each database call takes 500ms. Total time per request = 50ms + 2 x 500ms = 1,050ms. One thread handles 1,000ms / 1,050ms ~= 0.95 requests per second. 1,000 threads x 0.95 = 950 req/sec.
 
 Service B can now only handle 950 requests per second, down from 10,000. It has 9,050 requests per second it cannot process. They queue.
 
@@ -4284,9 +4284,9 @@ Service B's request queue fills up in seconds. New requests from Service A start
 
 Service A is calling Service B and getting 503s. Service A was configured with a naive retry policy: retry immediately, 3 times, on any 5xx error. No backoff. No jitter.
 
-Every request that fails at Service B immediately generates 3 more requests to Service B. Service A is now sending 4× the original traffic to Service B: 10,000 original × 4 = 40,000 requests per second.
+Every request that fails at Service B immediately generates 3 more requests to Service B. Service A is now sending 4x the original traffic to Service B: 10,000 original x 4 = 40,000 requests per second.
 
-Service B, already at capacity, now receives four times the load. Its queue does not just overflow — it fills so fast that even requests that WOULD have been processed in time are delayed. The average wait time in B's queue jumps from seconds to minutes.
+Service B, already at capacity, now receives four times the load. Its queue does not just overflow -- it fills so fast that even requests that WOULD have been processed in time are delayed. The average wait time in B's queue jumps from seconds to minutes.
 
 ---
 
@@ -4315,23 +4315,23 @@ Service C's GC pause ended at T=2. By T=65, it has worked through its backlog of
 ```
 TIMELINE VISUALIZATION:
 
-Service C:  ══════╔══════════╗══════════════════════════════════════════
-                  │GC pause  │→ high latency → backlog clear → healthy
+Service C:  ======+==========+==========================================
+                  |GC pause  |-> high latency -> backlog clear -> healthy
                   T=0        T=2                               T=65s
-                                    │
-                                    ▼ slowness propagates
+                                    |
+                                    v slowness propagates
 
-Service B:  ════════════════════╔═══════════╗══════════════╦══╗ CRASH
-                                │queue fills│503 errors     │    │
+Service B:  ====================+===========+==============+==+ CRASH
+                                |queue fills|503 errors     |    |
                                 T=3         T=5             T=6  T=8s
 
-                                               │ retries × 4 amplify load
-                                               ▼
+                                               | retries x 4 amplify load
+                                               v
 
-Service A:  ═══════════════════════════════════════════════════╦══╗ CRASH
+Service A:  ===================================================+==+ CRASH
                                                                T=9 T=10s
 
-USER:       ════════════════════════════════════════════════════════ ERROR
+USER:       ======================================================== ERROR
                                                                    T=10s+
 ```
 
@@ -4359,36 +4359,36 @@ This is a composite based on real incidents reported by multiple e-commerce comp
 
 A mid-sized e-commerce platform processes payments through an internal Payment Processing Service (PPS). The checkout flow calls PPS once per order. Normal payment latency: 200ms. Normal daily volume: 100,000 orders.
 
-The day: Cyber Monday. Traffic is 5× normal.
+The day: Cyber Monday. Traffic is 5x normal.
 
 ---
 
-**9:15am — The Trigger**
+**9:15am -- The Trigger**
 
 PPS latency begins climbing. The cause: the database backing PPS is experiencing high lock contention as thousands of concurrent transactions try to update account balances simultaneously. Latency climbs from the normal 200ms to 800ms.
 
 ---
 
-**9:16am — Timeouts Begin**
+**9:16am -- Timeouts Begin**
 
 The checkout service has a 500ms timeout for payment calls (configured 18 months ago when PPS latency was reliably under 200ms). With PPS now averaging 800ms, nearly every payment call times out.
 
 The checkout service's retry configuration: 3 immediate retries on any timeout, no backoff, no delay.
 
 For each order:
-- Checkout calls PPS → timeout at 500ms
-- Checkout retries → timeout at 500ms
-- Checkout retries → timeout at 500ms
-- Checkout retries → timeout at 500ms
-- Checkout gives up → order fails
+- Checkout calls PPS -> timeout at 500ms
+- Checkout retries -> timeout at 500ms
+- Checkout retries -> timeout at 500ms
+- Checkout retries -> timeout at 500ms
+- Checkout gives up -> order fails
 
-PPS is receiving 4× the original volume of payment requests. PPS latency climbs to 2,000ms.
+PPS is receiving 4x the original volume of payment requests. PPS latency climbs to 2,000ms.
 
 ---
 
-**9:17am — Requests Are Going Through, Just Slowly**
+**9:17am -- Requests Are Going Through, Just Slowly**
 
-Here is the dangerous part that nobody on the checkout team realized: the 800ms latency does not mean PPS is failing. It means PPS is slow. Many payment requests ARE going through — they are committing to the database, charging the customer's card — but they take 800ms to respond, which is past checkout's 500ms timeout.
+Here is the dangerous part that nobody on the checkout team realized: the 800ms latency does not mean PPS is failing. It means PPS is slow. Many payment requests ARE going through -- they are committing to the database, charging the customer's card -- but they take 800ms to respond, which is past checkout's 500ms timeout.
 
 So the sequence is:
 1. Checkout calls PPS at T=0ms
@@ -4396,22 +4396,22 @@ So the sequence is:
 3. PPS commits the charge to the database at T=400ms (payment is real, money moved)
 4. PPS sends response at T=800ms
 5. Checkout times out at T=500ms, declares failure
-6. Checkout retries — PPS processes the retry as a brand new payment
+6. Checkout retries -- PPS processes the retry as a brand new payment
 7. Customer is charged twice
 
 **There are no idempotency keys.** Each call to PPS, including retries, is treated as a new, independent payment request. PPS has no way to know that "this is a retry of an order it already processed."
 
 ---
 
-**9:18am — The Retry Storm Compounds**
+**9:18am -- The Retry Storm Compounds**
 
-PPS is now receiving 4× traffic. Most of this traffic is retries of payments that may or may not have already gone through. PPS's database is now severely overloaded. Lock contention is extreme. Latency reaches 5,000ms.
+PPS is now receiving 4x traffic. Most of this traffic is retries of payments that may or may not have already gone through. PPS's database is now severely overloaded. Lock contention is extreme. Latency reaches 5,000ms.
 
 Every retry also times out. Retries of retries generate more retries. The feedback loop is complete.
 
 ---
 
-**9:20am — First Detection**
+**9:20am -- First Detection**
 
 An engineer monitoring the support queue notices an unusual volume of customer complaints: "I was charged twice." She checks the payments database. She sees double entries for thousands of orders.
 
@@ -4419,7 +4419,7 @@ She calls the on-call engineering lead.
 
 ---
 
-**9:22am — The Hard Decision**
+**9:22am -- The Hard Decision**
 
 Engineering and finance get on a call. Options:
 
@@ -4428,13 +4428,13 @@ Engineering and finance get on a call. Options:
 - Option 3: Shut down checkout entirely. Risk: zero revenue during Cyber Monday.
 - Option 4: Accept only cash-equivalent payments (gift cards). Too complex to implement quickly.
 
-Decision: shut down checkout. Zero revenue is better than double charges — double charges create regulatory liability, chargeback costs, and severe customer trust damage.
+Decision: shut down checkout. Zero revenue is better than double charges -- double charges create regulatory liability, chargeback costs, and severe customer trust damage.
 
 9:22am: checkout is disabled. A maintenance page is shown to users attempting to check out.
 
 ---
 
-**9:35am — Fix Deployed**
+**9:35am -- Fix Deployed**
 
 A quick fix: retries disabled entirely on payment calls. Every payment attempt is one try. If it fails, the order fails cleanly and the customer is told to try again.
 
@@ -4442,7 +4442,7 @@ This is not ideal (some legitimate transient failures will not be retried) but i
 
 ---
 
-**9:40am — Checkout Re-Enabled**
+**9:40am -- Checkout Re-Enabled**
 
 PPS has been receiving no new traffic for 18 minutes. Its queue is drained. Latency returns to 200ms. Checkout is re-enabled.
 
@@ -4458,7 +4458,7 @@ PPS has been receiving no new traffic for 18 minutes. Its queue is drained. Late
 - Refund processing time: 3 days (bank processing times)
 - Customer service contacts: 2,300 (many customers contacted support before their refund arrived)
 - Regulatory: filing required under payment card industry rules for the duplicate charge event
-- Cyber Monday revenue lost during shutdown: approximately $85,000 (22 minutes × estimated order rate)
+- Cyber Monday revenue lost during shutdown: approximately $85,000 (22 minutes x estimated order rate)
 - Total estimated cost of the incident: over $250,000 including engineering time, customer service, and relationship damage
 
 ---
@@ -4471,7 +4471,7 @@ PPS has been receiving no new traffic for 18 minutes. Its queue is drained. Late
 
 3. **Retry on timeout (wrong behavior for payments).** A timeout on a payment call does NOT mean the payment failed. It means the response was slow. Retrying a slow payment call risks charging twice.
 
-4. **No circuit breaker on PPS.** Checkout kept hammering PPS with 4× traffic even as PPS was clearly struggling. A circuit breaker would have opened and stopped the retry storm.
+4. **No circuit breaker on PPS.** Checkout kept hammering PPS with 4x traffic even as PPS was clearly struggling. A circuit breaker would have opened and stopped the retry storm.
 
 5. **Timeout configuration stale.** The 500ms timeout was set when PPS latency was 200ms. It was never updated as the system grew. It should have been 1,500ms or 2,000ms with current load patterns.
 
@@ -4495,7 +4495,7 @@ def charge_customer(order_id, amount, card_token):
 import uuid
 
 def charge_customer(order_id, amount, card_token):
-    # Generate idempotency key from the order — same order always = same key
+    # Generate idempotency key from the order -- same order always = same key
     # This key is the same across retries. PPS deduplicates on it.
     idempotency_key = f"charge-{order_id}"
 
@@ -4510,8 +4510,8 @@ def charge_customer(order_id, amount, card_token):
             return response
 
         except TimeoutError:
-            # Timeout ≠ failure. PPS may have processed this.
-            # Retry with SAME idempotency key — PPS will deduplicate.
+            # Timeout != failure. PPS may have processed this.
+            # Retry with SAME idempotency key -- PPS will deduplicate.
             if attempt < 2:
                 # Exponential backoff: wait 1s, then 2s, then give up
                 wait = 2 ** attempt  # 1s, 2s
@@ -4523,7 +4523,7 @@ def charge_customer(order_id, amount, card_token):
                 )
 
         except PermanentFailure as e:
-            # 4xx errors — do NOT retry. Card declined, invalid details, etc.
+            # 4xx errors -- do NOT retry. Card declined, invalid details, etc.
             raise PaymentFailed(str(e))
 
     # This line should not be reached, but just in case:
@@ -4538,12 +4538,12 @@ def charge(amount, card_token, idempotency_key, **kwargs):
     # Check if we have already processed this key
     existing = idempotency_store.get(idempotency_key)
     if existing:
-        # We processed this before — return the cached result
+        # We processed this before -- return the cached result
         # No second charge happens. The stored result is returned.
-        log.info(f"Idempotency hit for key {idempotency_key} — returning cached result")
+        log.info(f"Idempotency hit for key {idempotency_key} -- returning cached result")
         return existing.result
 
-    # First time we have seen this key — process it
+    # First time we have seen this key -- process it
     result = process_charge(amount, card_token)
 
     # Store the result so future retries get this cached response
@@ -4577,7 +4577,7 @@ def charge_customer(order_id, amount, card_token):
                              timeout=2.0)
 ```
 
-After these fixes: a subsequent load test simulated PPS slowness at 5× Cyber Monday traffic. The circuit breaker opened after 10 failures. Checkout returned a friendly "payment service temporarily slow" message. PPS received no retry amplification. When PPS recovered, the circuit breaker tested with one request, saw success, closed, and full traffic resumed. Total simulated downtime: 60 seconds. Zero duplicate charges.
+After these fixes: a subsequent load test simulated PPS slowness at 5x Cyber Monday traffic. The circuit breaker opened after 10 failures. Checkout returned a friendly "payment service temporarily slow" message. PPS received no retry amplification. When PPS recovered, the circuit breaker tested with one request, saw success, closed, and full traffic resumed. Total simulated downtime: 60 seconds. Zero duplicate charges.
 
 ---
 
@@ -4588,7 +4588,7 @@ After these fixes: a subsequent load test simulated PPS slowness at 5× Cyber Mo
 A media company runs one of the most popular news sites in the country. At peak, they handle 50,000 requests per second. Their architecture looks like this:
 
 ```
-Users → Load Balancer → Web Servers (×200) → Redis Cache → Database
+Users -> Load Balancer -> Web Servers (x200) -> Redis Cache -> Database
                                                (hit rate: 99%)
 ```
 
@@ -4602,7 +4602,7 @@ The database can comfortably handle 2,000 queries per second. Thanks to the 99% 
 
 **The Trigger: Scheduled Redis Maintenance**
 
-The infrastructure team scheduled a Redis cluster upgrade for 2am on a Tuesday — historically the quietest time. Traffic at 2am: about 12,000 requests per second. They expected a brief 30-second outage while Redis restarted.
+The infrastructure team scheduled a Redis cluster upgrade for 2am on a Tuesday -- historically the quietest time. Traffic at 2am: about 12,000 requests per second. They expected a brief 30-second outage while Redis restarted.
 
 What they did not account for: when Redis restarts, it starts completely empty. All cached articles are gone.
 
@@ -4616,7 +4616,7 @@ Redis goes offline. The restart process begins.
 
 **T = 1 second: All Requests Miss Cache**
 
-Every incoming request checks Redis. Redis is down. The web servers treat a Redis failure as a cache miss (they were configured to fail open — when cache is unavailable, go to database). All 12,000 requests per second now query the database directly.
+Every incoming request checks Redis. Redis is down. The web servers treat a Redis failure as a cache miss (they were configured to fail open -- when cache is unavailable, go to database). All 12,000 requests per second now query the database directly.
 
 The database receives 12,000 queries/second. Its maximum is 2,000. It is instantly at 600% capacity.
 
@@ -4624,7 +4624,7 @@ The database receives 12,000 queries/second. Its maximum is 2,000. It is instant
 
 **T = 3 seconds: Database Overwhelmed**
 
-Database latency spikes from 20ms to 8,000ms. It is not dead — it is just buried under six times its designed load. Connections are queuing. Lock waits are growing.
+Database latency spikes from 20ms to 8,000ms. It is not dead -- it is just buried under six times its designed load. Connections are queuing. Lock waits are growing.
 
 ---
 
@@ -4632,7 +4632,7 @@ Database latency spikes from 20ms to 8,000ms. It is not dead — it is just buri
 
 Web servers have a 5-second timeout for database queries. Queries are taking 8 seconds. Timeouts fire. Web servers log errors and return 500 to users.
 
-Users see errors. Most immediately click refresh (this is news — users want to read their article).
+Users see errors. Most immediately click refresh (this is news -- users want to read their article).
 
 ---
 
@@ -4718,9 +4718,9 @@ With a warm cache, the transition is invisible. Redis restarts in the background
 
 **Solution 2: Staggered TTL (Jitter)**
 
-Every cached article has a Time-To-Live — a timer after which Redis automatically deletes it. If all articles are cached with a TTL of exactly 5 minutes, they all expire at the same moment. Every 5 minutes there is a wave of cache misses hitting the database simultaneously. This is called a "thundering herd."
+Every cached article has a Time-To-Live -- a timer after which Redis automatically deletes it. If all articles are cached with a TTL of exactly 5 minutes, they all expire at the same moment. Every 5 minutes there is a wave of cache misses hitting the database simultaneously. This is called a "thundering herd."
 
-Fix: add random jitter to the TTL. Instead of exactly 300 seconds, use 300 ± 30 seconds (randomly chosen per item). Articles expire at different times instead of all at once.
+Fix: add random jitter to the TTL. Instead of exactly 300 seconds, use 300 +/- 30 seconds (randomly chosen per item). Articles expire at different times instead of all at once.
 
 ```python
 import random
@@ -4756,10 +4756,10 @@ def get_article(article_id):
     cache_key = f"article:{article_id}"
     lock_key = f"fetching:{article_id}"
 
-    # Check cache first (the happy path — 99% of requests end here)
+    # Check cache first (the happy path -- 99% of requests end here)
     cached = redis.get(cache_key)
     if cached:
-        return cached   # Cache hit — done in ~2ms
+        return cached   # Cache hit -- done in ~2ms
 
     # Cache miss. Try to claim the right to fetch from DB.
     # nx=True means "only set this key if it does NOT already exist"
@@ -4767,7 +4767,7 @@ def get_article(article_id):
     claimed_lock = redis.set(lock_key, "1", nx=True, ex=5)
 
     if claimed_lock:
-        # I won the race — I will fetch from the database
+        # I won the race -- I will fetch from the database
         try:
             article = database.get_article(article_id)
 
@@ -4782,14 +4782,14 @@ def get_article(article_id):
 
     else:
         # Another server is already fetching this article.
-        # Wait a moment and check the cache — it should be populated soon.
-        time.sleep(0.1)  # 100ms — the other server should finish in this time
+        # Wait a moment and check the cache -- it should be populated soon.
+        time.sleep(0.1)  # 100ms -- the other server should finish in this time
         result = redis.get(cache_key)
 
         if result:
             return result   # Got it from cache after the wait
 
-        # Still not there — fetch from DB directly (fallback)
+        # Still not there -- fetch from DB directly (fallback)
         # This handles the edge case where the other server crashed mid-fetch
         return database.get_article(article_id)
 ```
@@ -4798,12 +4798,12 @@ With this lock: 500 servers simultaneously notice a cache miss. One wins the loc
 
 **Solution 4: Circuit Breaker on the Database**
 
-When the database is overwhelmed, stop querying it. Return the last known cached value — even if it is technically "expired" — rather than hammering a struggling database.
+When the database is overwhelmed, stop querying it. Return the last known cached value -- even if it is technically "expired" -- rather than hammering a struggling database.
 
 ```python
 db_circuit_breaker = CircuitBreaker(
     name="database",
-    failure_threshold=50,   # 50 failures in 10 seconds → open
+    failure_threshold=50,   # 50 failures in 10 seconds -> open
     failure_window=10,
     open_duration=30,       # Try again after 30 seconds
 )
@@ -4822,13 +4822,13 @@ def get_article_with_fallback(article_id):
         redis.set(cache_key, article, ex=300)
         return article
     except CircuitOpenError:
-        # DB circuit is open — it is struggling. Do NOT add more load.
+        # DB circuit is open -- it is struggling. Do NOT add more load.
         # Return stale cached data if we have any (even if technically expired)
         stale = redis.get(cache_key, ignore_ttl=True)  # Hypothetical flag
         if stale:
             return stale  # Stale is better than an error
 
-        # No stale data either — return a generic error or placeholder
+        # No stale data either -- return a generic error or placeholder
         return ArticleUnavailable("Article temporarily unavailable")
 ```
 
@@ -4840,15 +4840,15 @@ A stale article (e.g., 7 minutes old when the TTL was 5 minutes) is almost alway
 
 ### Background
 
-A financial technology company processes payments through a validation service. They deploy using "canary releases" — instead of deploying new code to all servers at once (risky), they deploy to a small fraction first, watch for errors, and expand gradually.
+A financial technology company processes payments through a validation service. They deploy using "canary releases" -- instead of deploying new code to all servers at once (risky), they deploy to a small fraction first, watch for errors, and expand gradually.
 
 Deployment plan:
-- Deploy to 5% of servers → watch for 10 minutes
-- If healthy: 25% → watch for 10 minutes
-- If healthy: 50% → watch for 10 minutes
-- If healthy: 100% → done
+- Deploy to 5% of servers -> watch for 10 minutes
+- If healthy: 25% -> watch for 10 minutes
+- If healthy: 50% -> watch for 10 minutes
+- If healthy: 100% -> done
 
-This is a best practice. In this case, it was almost enough — but not quite.
+This is a best practice. In this case, it was almost enough -- but not quite.
 
 ---
 
@@ -4866,7 +4866,7 @@ The `loyalty_points_applied` field was added three weeks ago by the mobile app t
 
 Traffic to new version: 5% of all payments.
 Mobile app users: approximately 30% of all payment traffic.
-Payments from mobile that hit the new version: 5% × 30% = 1.5% of all payments.
+Payments from mobile that hit the new version: 5% x 30% = 1.5% of all payments.
 Each of these fails with 500.
 
 Overall error rate = 1.5%.
@@ -4880,7 +4880,7 @@ The alert threshold: overall payment error rate > 5%. No alert fires.
 No errors detected. Rollout expands to 25% of servers.
 
 Traffic to new version: 25% of all payments.
-Mobile payments hitting new version: 25% × 30% = 7.5% of all payments.
+Mobile payments hitting new version: 25% x 30% = 7.5% of all payments.
 Each of these fails.
 
 Overall error rate = 7.5%.
@@ -4940,7 +4940,7 @@ alert("payment.validation.new_version.error_rate") {
     condition: rate("payment.errors", version="canary") > 0.05  # 5%
     window: "2 minutes"
     severity: "critical"
-    message: "Canary deployment has elevated error rate — investigate before expanding"
+    message: "Canary deployment has elevated error rate -- investigate before expanding"
 }
 
 # This would have fired at T=2:02pm, within 2 minutes of deployment start.
@@ -4972,7 +4972,7 @@ def validate_payment(request):
     card_token = request["card_token"]
     loyalty_points = request.get("loyalty_points_applied", 0)  # Default if missing
 
-    # Log any unrecognized fields — don't crash on them
+    # Log any unrecognized fields -- don't crash on them
     known_fields = {"amount", "card_token", "loyalty_points_applied", "currency"}
     unknown_fields = set(request.keys()) - known_fields
     if unknown_fields:
@@ -4982,11 +4982,11 @@ def validate_payment(request):
 
 **Lesson 4: Test contracts between services, not just services in isolation.**
 
-Unit tests for the payment validator were 100% passing. None of them included `loyalty_points_applied` because the test was written before the field existed. Contract testing — where Service A's test suite includes real examples of payloads from Service B — would have caught this.
+Unit tests for the payment validator were 100% passing. None of them included `loyalty_points_applied` because the test was written before the field existed. Contract testing -- where Service A's test suite includes real examples of payloads from Service B -- would have caught this.
 
 ---
 
-# Part 6: Design Evolution — How Systems Mature
+# Part 6: Design Evolution -- How Systems Mature
 
 ---
 
@@ -5025,13 +5025,13 @@ def process_order(order):
 - Outages require manual intervention and full attention of the on-call engineer
 - There is no runbook ("what do you do when X breaks?")
 
-**The existential risk of Stage 1:** as traffic grows, the probability of a dependency failure in any given hour increases. A system that is fine at 1,000 requests per day may have daily outages at 1,000,000 requests per day — simply because more traffic means more chances for a downstream service to have a bad moment.
+**The existential risk of Stage 1:** as traffic grows, the probability of a dependency failure in any given hour increases. A system that is fine at 1,000 requests per day may have daily outages at 1,000,000 requests per day -- simply because more traffic means more chances for a downstream service to have a bad moment.
 
 ---
 
 ### Stage 2: Resilience Theater
 
-Stage 2 is tricky, because it looks like Stage 3 from the outside. Someone has added retries. They have added timeouts. There might even be a circuit breaker. But the implementation has gaps that make the resilience surface-level — it is theater.
+Stage 2 is tricky, because it looks like Stage 3 from the outside. Someone has added retries. They have added timeouts. There might even be a circuit breaker. But the implementation has gaps that make the resilience surface-level -- it is theater.
 
 **What it looks like:**
 
@@ -5039,28 +5039,28 @@ Stage 2 is tricky, because it looks like Stage 3 from the outside. Someone has a
 # Stage 2: Retries added, but with critical gaps
 
 def process_order(order):
-    # Retries added — but no idempotency!
+    # Retries added -- but no idempotency!
     for attempt in range(3):
         try:
             payment_result = payment_api.charge(
                 order.amount,
                 timeout=5.0
-                # No idempotency_key — retries may double-charge
+                # No idempotency_key -- retries may double-charge
             )
             break
         except TimeoutError:
             if attempt == 2:
                 raise
-            # Immediate retry with no backoff — amplifies load
+            # Immediate retry with no backoff -- amplifies load
             continue
 
-    # Circuit breaker exists — but threshold is set to 50% error rate
+    # Circuit breaker exists -- but threshold is set to 50% error rate
     # In practice, 50% error rate means the service is basically dead already
     # Circuit never trips in practice (threshold too high)
     with circuit_breaker(threshold=0.5):
         inventory.decrement(order.item)
 
-    # Email is synchronous — order "fails" if email is down,
+    # Email is synchronous -- order "fails" if email is down,
     # even though payment already went through
     email.send_confirmation(order.user)
 ```
@@ -5069,7 +5069,7 @@ def process_order(order):
 - Retries exist but occasionally cause duplicate orders or charges
 - "We added retries" but the retry logic retries on errors that should not be retried (like 400 Bad Request)
 - Circuit breakers exist but never actually trip (thresholds configured too high)
-- Monitoring exists but alerts fire constantly ("alert fatigue" — engineers ignore them) or never fire
+- Monitoring exists but alerts fire constantly ("alert fatigue" -- engineers ignore them) or never fire
 - Outages happen and the root cause always turns out to be "the resilience mechanism was there but not tuned"
 
 Stage 2 is the most dangerous stage. It gives a false sense of security. The system LOOKS resilient. Documentation says "we have circuit breakers and retries." But in production, those mechanisms do not work as intended. Engineers trust them. The trust is unearned.
@@ -5078,7 +5078,7 @@ Stage 2 is the most dangerous stage. It gives a false sense of security. The sys
 
 ### Stage 3: Production-Grade Resilience
 
-Stage 3 systems do not just have resilience mechanisms — they have tuned, tested, end-to-end resilience. Every piece works together. Failures are expected, detected quickly, and handled automatically.
+Stage 3 systems do not just have resilience mechanisms -- they have tuned, tested, end-to-end resilience. Every piece works together. Failures are expected, detected quickly, and handled automatically.
 
 **What it looks like:**
 
@@ -5088,7 +5088,7 @@ Stage 3 systems do not just have resilience mechanisms — they have tuned, test
 import uuid
 
 def process_order(order):
-    # Unique key for this order — same key used on retries
+    # Unique key for this order -- same key used on retries
     idempotency_key = f"order-{order.id}-{order.user_id}"
 
     # Payment: exponential backoff, idempotency, circuit breaker, correct retry policy
@@ -5100,10 +5100,10 @@ def process_order(order):
             timeout=2.0
         )
     except CircuitOpenError:
-        # Payment service is struggling — tell user to try again in 1 minute
+        # Payment service is struggling -- tell user to try again in 1 minute
         return PaymentUnavailable("Please try again in a minute")
     except PermanentFailure:
-        # Card declined, etc — do NOT retry
+        # Card declined, etc -- do NOT retry
         return PaymentFailed("Payment declined")
 
     # Inventory: optimistic locking to handle race conditions
@@ -5115,7 +5115,7 @@ def process_order(order):
     except StockChanged:
         # Refund the payment (idempotency means this is safe)
         payment_api.refund(idempotency_key)
-        return OutOfStock("Item sold out — payment refunded")
+        return OutOfStock("Item sold out -- payment refunded")
 
     # Email: asynchronous, decoupled from the order completion
     # If email fails, it retries in the background. Order is NOT failed.
@@ -5126,7 +5126,7 @@ def process_order(order):
         retry_policy=ExponentialBackoff(max_attempts=5)
     )
 
-    # Order is complete — email will arrive eventually
+    # Order is complete -- email will arrive eventually
     return OrderComplete(order.id)
 ```
 
@@ -5139,7 +5139,7 @@ def process_order(order):
 - New engineers can understand the resilience architecture from documentation
 - Chaos engineering is practiced (intentional failures in production reveal weak spots)
 
-The progression from Stage 1 to Stage 3 is not a single project. It is continuous improvement over years. Large companies with decades-old systems still have Stage 1 pockets in obscure corners. The goal is to shrink those pockets over time, and to ensure the most critical paths — the ones that touch money, user data, and user-facing experience — are firmly at Stage 3.
+The progression from Stage 1 to Stage 3 is not a single project. It is continuous improvement over years. Large companies with decades-old systems still have Stage 1 pockets in obscure corners. The goal is to shrink those pockets over time, and to ensure the most critical paths -- the ones that touch money, user data, and user-facing experience -- are firmly at Stage 3.
 
 ---
 
@@ -5149,22 +5149,22 @@ Let us trace a specific order processing service through three versions, showing
 
 ---
 
-### Version 1.0 — Launch Day
+### Version 1.0 -- Launch Day
 
 **Architecture:**
 ```
 User
-  │
-  ▼
+  |
+  v
 Order Service
-  ├──► Payment API  (external, third-party)
-  ├──► Inventory DB (internal database)
-  └──► Email Service (internal microservice)
+  +--> Payment API  (external, third-party)
+  +--> Inventory DB (internal database)
+  +--> Email Service (internal microservice)
 ```
 
 **Code:**
 ```python
-# Version 1.0 — works when everything is healthy
+# Version 1.0 -- works when everything is healthy
 
 def place_order(user_id, item_id, card_token):
     # Charge the card
@@ -5188,7 +5188,7 @@ def place_order(user_id, item_id, card_token):
 
 ---
 
-### Version 2.0 — After the First Major Outage
+### Version 2.0 -- After the First Major Outage
 
 The outage: payment API hung for 10 minutes. All order service threads blocked. New orders could not be placed. Urgent Slack messages, an engineer woke up at 3am, manually killed the hung threads.
 
@@ -5198,11 +5198,11 @@ The outage: payment API hung for 10 minutes. All order service threads blocked. 
 
 **Code:**
 ```python
-# Version 2.0 — timeouts and retries added (but gaps remain)
+# Version 2.0 -- timeouts and retries added (but gaps remain)
 
 def place_order(user_id, item_id, card_token):
     # ADDED: retries and timeout
-    # MISSING: idempotency key — retries may double-charge
+    # MISSING: idempotency key -- retries may double-charge
     for attempt in range(3):
         try:
             payment = payment_api.charge(
@@ -5214,7 +5214,7 @@ def place_order(user_id, item_id, card_token):
         except (TimeoutError, ServerError):
             if attempt == 2:
                 return {"status": "error", "message": "Payment failed"}
-            # Immediate retry — no backoff
+            # Immediate retry -- no backoff
 
     inventory_db.update(
         f"UPDATE items SET stock = stock - 1 WHERE id = {item_id}",
@@ -5248,33 +5248,33 @@ Also: email failures are silently ignored. The code has `pass` on email failure.
 
 ---
 
-### Version 3.0 — Production-Grade
+### Version 3.0 -- Production-Grade
 
 **Architecture:**
 ```
 User
-  │
-  ▼
+  |
+  v
 Order Service
-  │  (generates idempotency key for this order)
-  │
-  ├──► Payment API
-  │    - idempotency key passed
-  │    - exponential backoff retry (backoff: 1s, 2s)
-  │    - circuit breaker (opens at 10% error rate in 30s window)
-  │    - timeout: 3 seconds per attempt
-  │
-  ├──► Inventory DB
-  │    - optimistic locking (prevents overselling under race conditions)
-  │    - timeout: 2 seconds
-  │    - no retries (write operations must be carefully idempotent first)
-  │
-  ├──► Email Queue (async)
-  │    - fire-and-forget: order service does not wait for email
-  │    - email worker retries up to 5 times with exponential backoff
-  │    - if all retries fail: alerts on-call, email is manually resent
-  │
-  └──► Monitoring
+  |  (generates idempotency key for this order)
+  |
+  +--> Payment API
+  |    - idempotency key passed
+  |    - exponential backoff retry (backoff: 1s, 2s)
+  |    - circuit breaker (opens at 10% error rate in 30s window)
+  |    - timeout: 3 seconds per attempt
+  |
+  +--> Inventory DB
+  |    - optimistic locking (prevents overselling under race conditions)
+  |    - timeout: 2 seconds
+  |    - no retries (write operations must be carefully idempotent first)
+  |
+  +--> Email Queue (async)
+  |    - fire-and-forget: order service does not wait for email
+  |    - email worker retries up to 5 times with exponential backoff
+  |    - if all retries fail: alerts on-call, email is manually resent
+  |
+  +--> Monitoring
        - payment latency (p50, p95, p99)
        - payment error rate (by error type)
        - retry rate (what % of orders required a retry?)
@@ -5299,7 +5299,7 @@ T=190ms  Calls Inventory DB with optimistic lock:
          "Decrement stock for item 456, current stock must be 14"
 T=195ms  Inventory responds: stock decremented to 13. Success.
 T=196ms  Enqueues email task: "send confirmation to user 123 for order xyz"
-         (Does NOT wait for email — returns immediately)
+         (Does NOT wait for email -- returns immediately)
 T=197ms  Returns to user: {"status": "success", "order_id": "ord789"}
 T=1,200ms Email worker picks up the task, sends email
 T=1,400ms User receives confirmation email in inbox
@@ -5312,17 +5312,17 @@ Total user wait: 197ms. Clean. Fast.
 ```
 T=0ms    User clicks "Buy"
 T=2ms    Generates idempotency key: "order-usr123-itm456-sess789"
-T=4ms    Calls Payment API — timeout at 3,000ms
+T=4ms    Calls Payment API -- timeout at 3,000ms
 
 T=3,004ms Payment API timed out (but actually processed the charge at T=2,800ms
-           — slow response due to load, but charge committed)
+           -- slow response due to load, but charge committed)
 
 T=3,005ms Order Service's retry logic kicks in
            Calculates backoff: 1 second delay before retry
            
-T=4,005ms Calls Payment API again — SAME idempotency key: "order-usr123-itm456-sess789"
+T=4,005ms Calls Payment API again -- SAME idempotency key: "order-usr123-itm456-sess789"
            Payment API checks its idempotency store:
-           "Have I seen key order-usr123-itm456-sess789 before? YES — at T=2,800ms"
+           "Have I seen key order-usr123-itm456-sess789 before? YES -- at T=2,800ms"
            "Returning cached result: charge ID ch_abc123"
            Does NOT charge the card again.
 
@@ -5361,7 +5361,7 @@ Compare to Version 1.0: user sees a 30-second spinning wait, then a cryptic erro
 
 ---
 
-## Observability — How Do You Know If It's Working?
+## Observability -- How Do You Know If It's Working?
 
 ### The Vital Signs Monitor
 
@@ -5377,7 +5377,7 @@ Here are the core metrics for a resilient system. For each one: what it measures
 
 **What it measures:** the percentage of requests that return a 5xx error (server-side failure, as opposed to 4xx which are client mistakes).
 
-**Normal value:** less than 0.5% for most production APIs. Some error rate is always expected — misconfigurations, rare edge cases, clients sending malformed requests.
+**Normal value:** less than 0.5% for most production APIs. Some error rate is always expected -- misconfigurations, rare edge cases, clients sending malformed requests.
 
 **Alert threshold:** more than 2%. Something is wrong.
 **Page threshold:** more than 10%. Something is very wrong. Wake someone up.
@@ -5392,11 +5392,11 @@ Here are the core metrics for a resilient system. For each one: what it measures
 
 **What it measures:** what percentage of all requests required at least one retry before succeeding.
 
-**Normal value:** less than 5%. Some retries are expected — occasional network hiccups, brief DB query delays.
+**Normal value:** less than 5%. Some retries are expected -- occasional network hiccups, brief DB query delays.
 
 **Alert threshold:** more than 15%. Something upstream is unstable. Retries are adding load on top of normal load.
 
-**What a spike tells you:** a dependency is degraded. The system is burning extra capacity on retries instead of original requests. This is often a leading indicator — the error rate might still be acceptable (retries are succeeding) but the retry rate shows something is wrong before errors become user-visible.
+**What a spike tells you:** a dependency is degraded. The system is burning extra capacity on retries instead of original requests. This is often a leading indicator -- the error rate might still be acceptable (retries are succeeding) but the retry rate shows something is wrong before errors become user-visible.
 
 **Especially watch:** if retry rate spikes but error rate stays low, your retry logic is working but you are hiding a problem that will eventually get worse.
 
@@ -5435,7 +5435,7 @@ Here are the core metrics for a resilient system. For each one: what it measures
 
 **What it measures:** the 99th percentile request latency. This is the response time that 99% of requests are FASTER than. Put another way: the slowest 1% of requests take at least this long.
 
-**Why P99 instead of average?** Average latency hides the tail. Imagine 100 requests: 99 take 100ms, one takes 10,000ms. Average: 199ms — looks healthy. P99: 10,000ms — very unhealthy. That one slow request might be a paying customer.
+**Why P99 instead of average?** Average latency hides the tail. Imagine 100 requests: 99 take 100ms, one takes 10,000ms. Average: 199ms -- looks healthy. P99: 10,000ms -- very unhealthy. That one slow request might be a paying customer.
 
 **Normal value:** less than 200ms for most user-facing APIs.
 
@@ -5453,7 +5453,7 @@ Here are the core metrics for a resilient system. For each one: what it measures
 **Normal value:** very low, under 1%. You expect a small number of retries on your most important endpoints.
 
 **Alert threshold:** more than 5% hit rate. Either:
-(a) There is a retry storm — clients are retrying excessively.
+(a) There is a retry storm -- clients are retrying excessively.
 (b) A client has a bug and is sending the same request repeatedly with the same key.
 (c) Something else is causing clients to believe they need to retry when they do not.
 
@@ -5480,38 +5480,38 @@ Think of it as: you have a factory. Your factory can produce 100 cars per day. N
 Here is what a healthy system's monitoring dashboard looks like, and then what it looks like during the Cyber Monday incident we studied earlier:
 
 ```
-╔══════════════════════════════════════════════════════════════════════════╗
-║                   PAYMENT SYSTEM — LIVE DASHBOARD                       ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║                                                                          ║
-║  HEALTHY (Normal Monday):                                               ║
-║  ────────────────────────                                               ║
-║  Request rate:         8,200 req/min    ████████░░░░░░░░  (normal)     ║
-║  Error rate:           0.3%             █░░░░░░░░░░░░░░░  (great)      ║
-║  Retry rate:           1.2%             █░░░░░░░░░░░░░░░  (great)      ║
-║  P99 latency:          210ms            ██░░░░░░░░░░░░░░  (good)       ║
-║  Queue depth:          12/300           █░░░░░░░░░░░░░░░  (low)        ║
-║  Circuit breakers:     ALL CLOSED       ✓                               ║
-║  Idempotency hit rate: 0.8%             ░░░░░░░░░░░░░░░░  (normal)     ║
-║  Retry budget used:    3%               ░░░░░░░░░░░░░░░░  (fine)       ║
-║                                                                          ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║                                                                          ║
-║  INCIDENT (Cyber Monday 9:16am):                                        ║
-║  ───────────────────────────────                                        ║
-║  Request rate:         48,000 req/min   ████████████████  (5× traffic)  ║
-║  Error rate:           34% !!!          █████████████░░░  ← ALERT       ║
-║  Retry rate:           87% !!!          ████████████████  ← PAGE        ║
-║  P99 latency:          6,800ms !!!      ████████████████  ← PAGE        ║
-║  Queue depth:          298/300 !!!      ████████████████  ← PAGE        ║
-║  Circuit breakers:     PPS: OPEN !!!    ← ALERT (if configured)        ║
-║  Idempotency hit rate: 0% (none!)       ← The problem: no idempotency  ║
-║  Retry budget used:    76% !!!          ████████████░░░░  ← ALERT       ║
-║                                                                          ║
-║  ⚠ Idempotency hit rate = 0% during high retry rate means              ║
-║    duplicate requests are NOT being deduplicated. Duplicate charges     ║
-║    are likely.                                                          ║
-╚══════════════════════════════════════════════════════════════════════════╝
++==========================================================================+
+|                   PAYMENT SYSTEM -- LIVE DASHBOARD                       |
++==========================================================================+
+|                                                                          |
+|  HEALTHY (Normal Monday):                                               |
+|  ------------------------                                               |
+|  Request rate:         8,200 req/min    ########........  (normal)     |
+|  Error rate:           0.3%             #...............  (great)      |
+|  Retry rate:           1.2%             #...............  (great)      |
+|  P99 latency:          210ms            ##..............  (good)       |
+|  Queue depth:          12/300           #...............  (low)        |
+|  Circuit breakers:     ALL CLOSED       Y                               |
+|  Idempotency hit rate: 0.8%             ................  (normal)     |
+|  Retry budget used:    3%               ................  (fine)       |
+|                                                                          |
++==========================================================================+
+|                                                                          |
+|  INCIDENT (Cyber Monday 9:16am):                                        |
+|  -------------------------------                                        |
+|  Request rate:         48,000 req/min   ################  (5x traffic)  |
+|  Error rate:           34% !!!          #############...  <- ALERT       |
+|  Retry rate:           87% !!!          ################  <- PAGE        |
+|  P99 latency:          6,800ms !!!      ################  <- PAGE        |
+|  Queue depth:          298/300 !!!      ################  <- PAGE        |
+|  Circuit breakers:     PPS: OPEN !!!    <- ALERT (if configured)        |
+|  Idempotency hit rate: 0% (none!)       <- The problem: no idempotency  |
+|  Retry budget used:    76% !!!          ############....  <- ALERT       |
+|                                                                          |
+|  [!] Idempotency hit rate = 0% during high retry rate means              |
+|    duplicate requests are NOT being deduplicated. Duplicate charges     |
+|    are likely.                                                          |
++==========================================================================+
 ```
 
 Notice: if the monitoring dashboard had been fully configured before the incident, an engineer would have had ALL of this information at a glance the moment the incident started. The idempotency hit rate of 0% combined with a retry rate of 87% is a very specific signal: clients are retrying heavily, but idempotency is not deduplicating anything. The risk of double-processing is immediate and obvious.
@@ -5520,9 +5520,9 @@ With good observability, the time from "incident starts" to "engineer understand
 
 ---
 
-## The Resilience Checklist — Before You Ship
+## The Resilience Checklist -- Before You Ship
 
-Think of this as a pre-flight checklist. Pilots go through a checklist before every flight — not because they forget how to fly, but because checklists prevent the specific class of errors that happen when you are rushed, stressed, or distracted. Releasing new code is the same.
+Think of this as a pre-flight checklist. Pilots go through a checklist before every flight -- not because they forget how to fly, but because checklists prevent the specific class of errors that happen when you are rushed, stressed, or distracted. Releasing new code is the same.
 
 Go through this checklist for every service before it handles production traffic.
 
@@ -5531,113 +5531,113 @@ Go through this checklist for every service before it handles production traffic
 **Timeouts**
 
 ```
-□ All external API calls have timeouts
+[ ] All external API calls have timeouts
   (No call should be able to wait forever for a response)
 
-□ Timeout values are based on actual observed latency, not guesses
+[ ] Timeout values are based on actual observed latency, not guesses
   (If the API normally responds in 200ms, a 5-second timeout is too loose.
    If the API sometimes legitimately takes 2,000ms, a 500ms timeout is too tight.)
 
-□ Timeout values are reviewed every 6 months
+[ ] Timeout values are reviewed every 6 months
   (APIs change over time. Timeout from 18 months ago may no longer be appropriate.)
 ```
 
 **Idempotency**
 
 ```
-□ All operations with side effects have idempotency keys
+[ ] All operations with side effects have idempotency keys
   (Side effects = anything that changes state: charges, writes, sends)
 
-□ Idempotency keys are generated from stable business identifiers
-  (Not random UUIDs generated fresh on each retry — same order = same key always)
+[ ] Idempotency keys are generated from stable business identifiers
+  (Not random UUIDs generated fresh on each retry -- same order = same key always)
 
-□ Idempotency is tested: call the endpoint twice with the same key.
+[ ] Idempotency is tested: call the endpoint twice with the same key.
   Verify that one operation happens, not two.
 
-□ Idempotency store has appropriate TTL
+[ ] Idempotency store has appropriate TTL
   (How long do you need to deduplicate? 24 hours? 7 days? Match your retry window.)
 ```
 
 **Retries**
 
 ```
-□ Retries use exponential backoff with jitter
+[ ] Retries use exponential backoff with jitter
   (Not immediate retries, not fixed-interval retries)
 
-□ Retries have a maximum attempt count
-  (Infinite retries are not retries — they are a crash waiting to happen)
+[ ] Retries have a maximum attempt count
+  (Infinite retries are not retries -- they are a crash waiting to happen)
 
-□ Retries only happen on appropriate errors
+[ ] Retries only happen on appropriate errors
   (Retry: 503, 504, timeout. Do NOT retry: 400, 401, 403, 404, 409, 500 with
    certain meanings like "payment declined")
 
-□ Retry budget is tracked
+[ ] Retry budget is tracked
   (If retries consume >X% of capacity, stop retrying and fail fast instead)
 ```
 
 **Circuit Breakers**
 
 ```
-□ Circuit breakers on all external dependencies
+[ ] Circuit breakers on all external dependencies
   (Every third-party API, every microservice you call)
 
-□ Circuit breaker thresholds are based on observed error rates
-  (Not arbitrary numbers — review the service's normal and bad-day error rates)
+[ ] Circuit breaker thresholds are based on observed error rates
+  (Not arbitrary numbers -- review the service's normal and bad-day error rates)
 
-□ Circuit breaker fallbacks are implemented and tested
+[ ] Circuit breaker fallbacks are implemented and tested
   (What does the user see when the circuit is open? Is it acceptable?)
 
-□ Circuit breaker state is monitored and alerted on
+[ ] Circuit breaker state is monitored and alerted on
   (An open circuit should never go unnoticed)
 ```
 
 **Load Shedding**
 
 ```
-□ All request queues have depth limits
+[ ] All request queues have depth limits
   (No unbounded queues. A queue that grows forever is a memory leak.)
 
-□ Priority tiers are defined for all request types
+[ ] Priority tiers are defined for all request types
   (Know what you will drop first in an overload situation)
 
-□ Priority tier decisions are documented and cross-team approved
+[ ] Priority tier decisions are documented and cross-team approved
   (The product teams need to know and agree)
 
-□ Deadline propagation is implemented for multi-service calls
+[ ] Deadline propagation is implemented for multi-service calls
   (The deadline from the user's request flows through all downstream calls)
 ```
 
 **Graceful Degradation**
 
 ```
-□ Fallback tiers are defined for all critical features
+[ ] Fallback tiers are defined for all critical features
   (If feature X is down, what do users see? Is it pre-built and working?)
 
-□ Each fallback tier is tested regularly
-  (Kill the primary — does the fallback actually work? Test this before an incident.)
+[ ] Each fallback tier is tested regularly
+  (Kill the primary -- does the fallback actually work? Test this before an incident.)
 
-□ Feature flags are available to manually force a lower tier
+[ ] Feature flags are available to manually force a lower tier
   (During an incident, engineers should be able to degrade gracefully with one command)
 ```
 
 **Monitoring and Alerting**
 
 ```
-□ Error rate is tracked per service and per endpoint
+[ ] Error rate is tracked per service and per endpoint
   (Not just "overall system error rate")
 
-□ Retry rate is tracked
-□ P99 latency is tracked (not just average)
-□ Queue depth is tracked for all queues
-□ Circuit breaker state changes trigger alerts
-□ Idempotency key hit rate is tracked
-□ Retry budget consumption is tracked
+[ ] Retry rate is tracked
+[ ] P99 latency is tracked (not just average)
+[ ] Queue depth is tracked for all queues
+[ ] Circuit breaker state changes trigger alerts
+[ ] Idempotency key hit rate is tracked
+[ ] Retry budget consumption is tracked
 
-□ All alerts have been TESTED
+[ ] All alerts have been TESTED
   (Inject artificial errors in staging. Confirm the alert fires.
    An untested alert may have a configuration bug and may never fire.)
 
-□ Alerts have runbooks attached
+[ ] Alerts have runbooks attached
   (When an alert fires at 3am, the on-call engineer should know immediately
    what to do. Write the runbook before the incident, not during it.)
 ```
@@ -5645,21 +5645,21 @@ Go through this checklist for every service before it handles production traffic
 **Operational Readiness**
 
 ```
-□ Runbooks are written for each major failure scenario
+[ ] Runbooks are written for each major failure scenario
   (What to do when payment service is down. What to do when database is slow.
    What to do when queue depth is maxed. Each gets its own runbook.)
 
-□ Runbooks are tested in incident drills or game days
+[ ] Runbooks are tested in incident drills or game days
   (Read a runbook before a crisis. Find the gaps when stakes are low.)
 
-□ Graceful degradation is tested intentionally
+[ ] Graceful degradation is tested intentionally
   (Turn off Service X. Observe that the system degrades gracefully.
    Fix any cases where it does not.)
 
-□ Idempotency is tested in a chaos scenario
+[ ] Idempotency is tested in a chaos scenario
   (Inject random duplicate requests. Verify zero duplicate state changes.)
 
-□ Postmortems from past incidents are reviewed before shipping
+[ ] Postmortems from past incidents are reviewed before shipping
   (What did previous incidents teach you? Is the new code vulnerable to the same patterns?)
 ```
 
@@ -5673,15 +5673,15 @@ Resilience is also about culture and habits. The best monitoring dashboard fails
 
 The engineers who build the most reliable systems share a few habits:
 
-**They expect things to fail.** Not pessimistically — just honestly. "This downstream API will be slow someday. What happens when it is?" They ask this during design, not during incidents.
+**They expect things to fail.** Not pessimistically -- just honestly. "This downstream API will be slow someday. What happens when it is?" They ask this during design, not during incidents.
 
 **They treat incidents as learning, not punishment.** When something breaks, the first question is "what can we learn?" not "who is to blame?" Blame culture causes engineers to hide problems. Learning culture causes engineers to surface problems before they become incidents.
 
 **They test their failure paths.** "We have a circuit breaker" is meaningless until you have confirmed the circuit breaker actually trips and actually serves the fallback when the dependency fails. Testing failure paths requires deliberately breaking things in a controlled environment.
 
-**They revisit configurations.** Thresholds that were right 18 months ago may be wrong today. Traffic has changed. Dependencies have changed. Retry and circuit breaker configurations should be reviewed regularly — not just during incidents.
+**They revisit configurations.** Thresholds that were right 18 months ago may be wrong today. Traffic has changed. Dependencies have changed. Retry and circuit breaker configurations should be reviewed regularly -- not just during incidents.
 
-**They write runbooks for 3am.** Not for themselves — for their half-asleep, adrenaline-filled self who wakes up to a pager at 3am after only four hours of sleep. That person needs step-by-step instructions, not architectural wisdom. Write the runbook imagining your least rested, most stressed state.
+**They write runbooks for 3am.** Not for themselves -- for their half-asleep, adrenaline-filled self who wakes up to a pager at 3am after only four hours of sleep. That person needs step-by-step instructions, not architectural wisdom. Write the runbook imagining your least rested, most stressed state.
 
 ---
 
@@ -5693,7 +5693,7 @@ This part covered a lot of ground. Here is a map of everything we walked through
 
 **Graceful Degradation** is having a ladder of fallback options for every critical feature. When the best option fails, you drop to the next tier. You never drop to zero if you can help it. Pre-plan every tier. Test every tier. Have feature flags to manually select a tier during incidents.
 
-**Cascading Failures** follow a pattern: one small fault redistributes load to neighboring components, they become overloaded, they fail, more load redistributes, the cascade reaches critical mass and the system collapses — long after the original fault has resolved. Prevention requires circuit breakers (stop the load redistribution), backpressure (signal overload up the chain), and no immediate retries (avoid amplifying the load).
+**Cascading Failures** follow a pattern: one small fault redistributes load to neighboring components, they become overloaded, they fail, more load redistributes, the cascade reaches critical mass and the system collapses -- long after the original fault has resolved. Prevention requires circuit breakers (stop the load redistribution), backpressure (signal overload up the chain), and no immediate retries (avoid amplifying the load).
 
 **Real Incidents** illustrate that the gaps between theory and practice are where outages live. The Cyber Monday double-charge incident happened because retries existed without idempotency. The thundering herd happened because a maintenance window was not paired with cache warming. The partial deployment cascade happened because monitoring was configured for the whole system but not per version.
 
@@ -5703,15 +5703,15 @@ This part covered a lot of ground. Here is a map of everything we walked through
 
 **The Checklist** is the tool that prevents the specific class of errors that happen when you are moving fast, shipping frequently, and thinking about ten things at once.
 
-Part D continues with how these concepts appear in real system design interview answers — and what separates a strong answer from a weak one.
+Part D continues with how these concepts appear in real system design interview answers -- and what separates a strong answer from a weak one.
 
 ---
 
 *End of Part C*
-# Chapter 23: Backpressure, Retries, and Idempotency — Part D
+# Chapter 23: Backpressure, Retries, and Idempotency -- Part D
 ## Interview Calibration, Brainstorming Questions, Exercises, and Quick Reference
 
-*(This is Part D — the final part of Chapter 23. Parts A, B, and C covered all the core concepts, real-world incidents, and design patterns. This part is about applying what you learned: how to talk about it in interviews, how to practice thinking through hard scenarios, and how to have a cheat-sheet you can actually use.)*
+*(This is Part D -- the final part of Chapter 23. Parts A, B, and C covered all the core concepts, real-world incidents, and design patterns. This part is about applying what you learned: how to talk about it in interviews, how to practice thinking through hard scenarios, and how to have a cheat-sheet you can actually use.)*
 
 ---
 
@@ -5732,7 +5732,7 @@ What they are really asking: do you understand that different operations have di
 **Disguise 3: "How do you prevent duplicate orders if the client retries?"**
 What they are really asking: do you know what idempotency is? Can you design an idempotency key? Do you know the difference between making an operation safe to retry versus hoping it does not get called twice?
 
-**Disguise 4: "How would you handle a sudden 10× traffic spike?"**
+**Disguise 4: "How would you handle a sudden 10x traffic spike?"**
 What they are really asking: do you know that auto-scaling takes several minutes? What keeps the service alive during those minutes? Do you know about token buckets, queue-based backpressure, and load shedding?
 
 **Disguise 5: "Walk me through what happens during a cascading failure in your design."**
@@ -5744,9 +5744,9 @@ The interviewer is not grading whether you know the vocabulary words. They are g
 
 There are two types of candidates:
 
-**Type 1 — Reactive:** Designs the happy path. When the interviewer asks "what if the payment service is down?" they pause, think, and add a retry. One problem at a time, prompted by the interviewer.
+**Type 1 -- Reactive:** Designs the happy path. When the interviewer asks "what if the payment service is down?" they pause, think, and add a retry. One problem at a time, prompted by the interviewer.
 
-**Type 2 — Proactive:** During the initial design, says things like: "I'll add an idempotency key here because clients will retry on timeout. I'll put a circuit breaker on the payment call because I don't want a Stripe outage to take down the entire checkout. Email notifications will be async — order success doesn't depend on email."
+**Type 2 -- Proactive:** During the initial design, says things like: "I'll add an idempotency key here because clients will retry on timeout. I'll put a circuit breaker on the payment call because I don't want a Stripe outage to take down the entire checkout. Email notifications will be async -- order success doesn't depend on email."
 
 Type 2 is the L6 signal. Proactively mentioning retries, idempotency, circuit breakers, and degradation **without being asked**.
 
@@ -5754,18 +5754,18 @@ Type 2 is the L6 signal. Proactively mentioning retries, idempotency, circuit br
 
 ## L5 vs L6 Contrast Table
 
-This table shows the same scenario answered at two different levels. The L5 answer is not wrong — it just does not go far enough.
+This table shows the same scenario answered at two different levels. The L5 answer is not wrong -- it just does not go far enough.
 
 | Scenario | L5 Approach | L6 Approach |
 |---|---|---|
-| "Payment service times out" | "Add retry with 3 attempts" | "Retry with exponential backoff AND an idempotency key so the retry cannot double-charge. Plus a circuit breaker — if Stripe's error rate hits 20% in the last 30 seconds, stop retrying altogether and fail fast with a clear error to the user." |
-| "We need to handle 10× traffic spike" | "Auto-scale the servers" | "Auto-scaling takes 3-5 minutes. What happens in the first 5 minutes? Implement a token bucket so the service stays alive during scale-up rather than collapsing. Define exactly what degrades gracefully — recommendations shed first, search second, checkout never." |
+| "Payment service times out" | "Add retry with 3 attempts" | "Retry with exponential backoff AND an idempotency key so the retry cannot double-charge. Plus a circuit breaker -- if Stripe's error rate hits 20% in the last 30 seconds, stop retrying altogether and fail fast with a clear error to the user." |
+| "We need to handle 10x traffic spike" | "Auto-scale the servers" | "Auto-scaling takes 3-5 minutes. What happens in the first 5 minutes? Implement a token bucket so the service stays alive during scale-up rather than collapsing. Define exactly what degrades gracefully -- recommendations shed first, search second, checkout never." |
 | "Email notification sometimes fails" | "Retry the email send" | "Email goes into an async queue. Order confirmation does not wait for email. The queue retries with exponential backoff. After 5 failures, message goes to a dead-letter queue for manual review. The order is never failed because of an email." |
-| "Retry rate is 20%" | "That seems high, keep an eye on it" | "20% retry rate means 1 in 5 requests is failing on first try. That is the actual problem you need to fix. High retry rate is a symptom of a broken dependency — find the root cause. Tuning the retry config is not the answer." |
-| "User sees duplicate order" | "Find the bug in the retry code" | "This is an architecture bug, not a code bug. Retries on non-idempotent operations will always produce duplicates eventually. Idempotency keys at the API level prevent this structurally — it does not matter what the retry code does." |
-| "Service degraded — some requests slow" | "Scale up" | "Slow is often worse than down. Slow requests hold threads open. Thread pool exhaustion crashes the entire service. Set aggressive timeouts and fail fast. A 2-second timeout that returns a clear error is better than a 30-second wait that hangs everything." |
-| "Circuit breaker is open" | "Increase the threshold so it stops opening" | "The circuit breaker is working — it is protecting you from a broken dependency. Do not silence it. Find out why the dependency is failing. The open state is the feature doing its job correctly." |
-| "Need 99.9% uptime for this endpoint" | "Add redundancy and monitoring" | "99.9% means 8.7 hours of downtime per year — about 43 minutes per incident if you have one per month. Your MTTR must be under 43 minutes. That means: monitoring alert latency + on-call response time + fix and deploy time must all fit in that window. Work backwards from the SLA to the requirements." |
+| "Retry rate is 20%" | "That seems high, keep an eye on it" | "20% retry rate means 1 in 5 requests is failing on first try. That is the actual problem you need to fix. High retry rate is a symptom of a broken dependency -- find the root cause. Tuning the retry config is not the answer." |
+| "User sees duplicate order" | "Find the bug in the retry code" | "This is an architecture bug, not a code bug. Retries on non-idempotent operations will always produce duplicates eventually. Idempotency keys at the API level prevent this structurally -- it does not matter what the retry code does." |
+| "Service degraded -- some requests slow" | "Scale up" | "Slow is often worse than down. Slow requests hold threads open. Thread pool exhaustion crashes the entire service. Set aggressive timeouts and fail fast. A 2-second timeout that returns a clear error is better than a 30-second wait that hangs everything." |
+| "Circuit breaker is open" | "Increase the threshold so it stops opening" | "The circuit breaker is working -- it is protecting you from a broken dependency. Do not silence it. Find out why the dependency is failing. The open state is the feature doing its job correctly." |
+| "Need 99.9% uptime for this endpoint" | "Add redundancy and monitoring" | "99.9% means 8.7 hours of downtime per year -- about 43 minutes per incident if you have one per month. Your MTTR must be under 43 minutes. That means: monitoring alert latency + on-call response time + fix and deploy time must all fit in that window. Work backwards from the SLA to the requirements." |
 
 ### The L6 Pattern
 
@@ -5785,13 +5785,13 @@ The mental model is simple: **every external call is a promise that might be bro
 
 "Before I start drawing boxes, I want to make sure I understand the constraints. A few questions:
 
-What is the expected volume — transactions per second at peak?
+What is the expected volume -- transactions per second at peak?
 
 Does this need to be exact-once (meaning: charging twice is worse than not charging at all, like a financial transaction), or is approximate-once okay?
 
-Are there regulatory requirements I need to be aware of — PCI-DSS, SOX?
+Are there regulatory requirements I need to be aware of -- PCI-DSS, SOX?
 
-What is downstream — are we integrating with Stripe, a bank, an internal ledger?
+What is downstream -- are we integrating with Stripe, a bank, an internal ledger?
 
 *[Assume interviewer answers: 10,000 transactions per second at peak, exact-once mandatory because this is financial, downstream is Stripe's API.]*
 
@@ -5813,13 +5813,13 @@ idempotency_key = "charge-{user_id}-{order_id}-{attempt_hash}"
 
 Before processing any charge, we check a dedicated `idempotency_keys` table in our database. If the key already exists and has a stored result, we return that cached result immediately without touching Stripe. No second charge.
 
-We store results for 7 days — long enough for any reasonable client retry scenario, short enough to not grow forever. This table is separate from our main payments table because it gets hit on every single request and we want to optimize its read performance.
+We store results for 7 days -- long enough for any reasonable client retry scenario, short enough to not grow forever. This table is separate from our main payments table because it gets hit on every single request and we want to optimize its read performance.
 
 **Layer 2: The payment state machine**
 
-Each payment moves through states: `PENDING → PROCESSING → COMPLETED` or `FAILED` or `REFUNDED`.
+Each payment moves through states: `PENDING -> PROCESSING -> COMPLETED` or `FAILED` or `REFUNDED`.
 
-State transitions are atomic — we use a database transaction with a row lock. The transition from PENDING to PROCESSING can only happen once, which prevents two workers from picking up the same payment simultaneously. If two servers race to process the same payment, one gets the lock and the other sees `PROCESSING` already and backs off.
+State transitions are atomic -- we use a database transaction with a row lock. The transition from PENDING to PROCESSING can only happen once, which prevents two workers from picking up the same payment simultaneously. If two servers race to process the same payment, one gets the lock and the other sees `PROCESSING` already and backs off.
 
 **Layer 3: Calling Stripe**
 
@@ -5827,7 +5827,7 @@ When we call Stripe, four things happen:
 
 First: we set a 10-second timeout. Stripe's P99 latency is around 2 seconds, so 10 seconds is generous but bounded. Without a timeout, a slow Stripe response holds our thread forever.
 
-Second: we retry up to 3 times with exponential backoff — 100ms, 200ms, 400ms — with ±25% jitter so a batch of simultaneous failures do not all retry at the exact same moment.
+Second: we retry up to 3 times with exponential backoff -- 100ms, 200ms, 400ms -- with +/-25% jitter so a batch of simultaneous failures do not all retry at the exact same moment.
 
 Third: we pass OUR idempotency key to Stripe. Stripe supports this natively. This means even if we call Stripe twice with the same key, Stripe will process the charge exactly once and return the cached result on the second call. Our idempotency protection flows all the way through to the payment processor.
 
@@ -5837,27 +5837,27 @@ Fourth: a circuit breaker monitors Stripe's error rate over a 30-second rolling 
 
 When Stripe's circuit is open, we have a choice of fallbacks:
 
-Option A: queue the payment for processing once the circuit closes, tell the user "payment processing — please wait."
+Option A: queue the payment for processing once the circuit closes, tell the user "payment processing -- please wait."
 
 Option B: fail immediately with a clear user-facing message: "Payment temporarily unavailable, please try again in a moment."
 
 Option C: if we have a backup payment processor configured, route there.
 
-For a financial application, I would lean toward Option A or B — queuing is safer than routing to an untested fallback processor without rigorous testing of that path.
+For a financial application, I would lean toward Option A or B -- queuing is safer than routing to an untested fallback processor without rigorous testing of that path.
 
 **Layer 5: Monitoring**
 
 Five metrics I am alerting on:
 
-Payment success rate — should be above 99.9%. Alert at 99.5%.
+Payment success rate -- should be above 99.9%. Alert at 99.5%.
 
-Payment latency P99 — should be under 3 seconds. Alert at 5 seconds.
+Payment latency P99 -- should be under 3 seconds. Alert at 5 seconds.
 
-Idempotency key hit rate — normally under 1% of requests. A spike means a client is in a retry storm or has a bug where it is generating duplicate requests.
+Idempotency key hit rate -- normally under 1% of requests. A spike means a client is in a retry storm or has a bug where it is generating duplicate requests.
 
-Circuit breaker state — alert immediately when the Stripe circuit opens. This is an incident.
+Circuit breaker state -- alert immediately when the Stripe circuit opens. This is an incident.
 
-Retry rate per attempt — first-attempt failures should be under 5%. Higher than that means Stripe is having a sustained problem."
+Retry rate per attempt -- first-attempt failures should be under 5%. Higher than that means Stripe is having a sustained problem."
 
 ---
 
@@ -5867,15 +5867,15 @@ Retry rate per attempt — first-attempt failures should be under 5%. Higher tha
 
 The user retries with the same idempotency key.
 
-We check our idempotency table — the key is not there (we crashed before saving it).
+We check our idempotency table -- the key is not there (we crashed before saving it).
 
-We call Stripe with the same idempotency key — Stripe returns the cached result from the first charge. No second charge occurs at Stripe.
+We call Stripe with the same idempotency key -- Stripe returns the cached result from the first charge. No second charge occurs at Stripe.
 
 We save the result to our DB.
 
 We return success to the user.
 
-No double charge. The idempotency key flowing through both our system and Stripe's system protected us even through a complete server crash. This is why idempotency keys need to be consistent across retries — not randomly generated each time."
+No double charge. The idempotency key flowing through both our system and Stripe's system protected us even through a complete server crash. This is why idempotency keys need to be consistent across retries -- not randomly generated each time."
 
 ---
 
@@ -5889,7 +5889,7 @@ These are the six things interviewers see most often. Knowing them helps you avo
 
 What the interviewer hears: "This person does not know which errors are retryable."
 
-The problem: a `400 Bad Request` means your request is wrong. Retrying it 5 times will return the same `400` five times — it will never fix itself. A `500 Internal Server Error` might be caused by your request hitting a bug in the server — retrying could trigger the bug 5 times.
+The problem: a `400 Bad Request` means your request is wrong. Retrying it 5 times will return the same `400` five times -- it will never fix itself. A `500 Internal Server Error` might be caused by your request hitting a bug in the server -- retrying could trigger the bug 5 times.
 
 The right answer: specify exactly which codes you retry on. Safe retries: `408 Request Timeout`, `429 Too Many Requests` (after the Retry-After delay), `502 Bad Gateway`, `503 Service Unavailable`, `504 Gateway Timeout`. Do not retry: `400`, `401`, `403`, `404`, `422`.
 
@@ -5899,9 +5899,9 @@ The right answer: specify exactly which codes you retry on. Safe retries: `408 R
 
 What the interviewer hears: "Close, but not production-ready."
 
-The problem: without jitter, if 1,000 clients all experience the same timeout at time T=0, they all wait exactly 1 second, and they all retry at T=1000ms simultaneously. You have just created a synchronized retry wave — the second spike is as bad as the first.
+The problem: without jitter, if 1,000 clients all experience the same timeout at time T=0, they all wait exactly 1 second, and they all retry at T=1000ms simultaneously. You have just created a synchronized retry wave -- the second spike is as bad as the first.
 
-Jitter adds a random offset, typically ±25% of the backoff duration. Instead of all 1,000 clients retrying at exactly T=1000ms, they retry in a spread window between T=750ms and T=1250ms. The wave becomes a drizzle.
+Jitter adds a random offset, typically +/-25% of the backoff duration. Instead of all 1,000 clients retrying at exactly T=1000ms, they retry in a spread window between T=750ms and T=1250ms. The wave becomes a drizzle.
 
 ---
 
@@ -5909,7 +5909,7 @@ Jitter adds a random offset, typically ±25% of the backoff duration. Instead of
 
 What the interviewer hears: "Queues help, but this person has not thought about queue behavior under sustained load."
 
-The problem: a queue is a buffer, not a capacity increase. If traffic is consistently 10× your processing capacity, the queue fills. Once it fills, you are rejecting requests — but now with added latency for the requests that did get through (they had to wait in the queue). A queue buys time for auto-scaling to kick in. It does not solve sustained overload.
+The problem: a queue is a buffer, not a capacity increase. If traffic is consistently 10x your processing capacity, the queue fills. Once it fills, you are rejecting requests -- but now with added latency for the requests that did get through (they had to wait in the queue). A queue buys time for auto-scaling to kick in. It does not solve sustained overload.
 
 The complete answer: queue + load shedding + capacity planning. Know when to start shedding requests so the queue never fills completely.
 
@@ -5926,15 +5926,15 @@ A circuit breaker without a fallback is a feature that turns your service into a
 **Mistake 5: Solving exactly-once delivery with "check then write" without atomicity**
 
 ```python
-# THIS IS BROKEN — race condition
+# THIS IS BROKEN -- race condition
 if not already_processed(order_id):    # Two servers check simultaneously
     process_payment(order_id)           # Both see "not processed"
-    mark_processed(order_id)            # Both process — double charge
+    mark_processed(order_id)            # Both process -- double charge
 ```
 
 Two servers check simultaneously, both see "not processed," both process the payment, and you have a double charge. The window between check and mark is the race condition.
 
-The fix is atomic check-and-insert. In PostgreSQL, use a UNIQUE constraint on the idempotency key and an `INSERT ... ON CONFLICT` statement. In Redis, use `SETNX` (Set if Not eXists). The database or cache enforces atomicity — only one writer wins.
+The fix is atomic check-and-insert. In PostgreSQL, use a UNIQUE constraint on the idempotency key and an `INSERT ... ON CONFLICT` statement. In Redis, use `SETNX` (Set if Not eXists). The database or cache enforces atomicity -- only one writer wins.
 
 ---
 
@@ -5948,22 +5948,22 @@ Timeouts must be set relative to the caller's timeout. Your downstream timeout m
 
 ## Key Numbers to Know for Interviews
 
-Memorize these. Interviewers will notice if your numbers are wildly off — "10 retries with 5-second backoff" signals you have not operated a real production system.
+Memorize these. Interviewers will notice if your numbers are wildly off -- "10 retries with 5-second backoff" signals you have not operated a real production system.
 
 | Metric | Typical Value | Why It Matters |
 |---|---|---|
 | Max retry attempts | 3-5 | More than 5 retries means the error is probably not transient |
 | Base backoff duration | 100ms | Minimum time for a service to breathe and recover |
 | Max backoff duration | 30 seconds | Users will not wait longer; beyond this, the problem is not transient |
-| Jitter range | ±25% of backoff | Enough to spread retry waves without making backoff unpredictable |
+| Jitter range | +/-25% of backoff | Enough to spread retry waves without making backoff unpredictable |
 | Circuit breaker error threshold | 50% error rate | If half your requests are failing, something is clearly broken |
 | Circuit open duration | 30-60 seconds | Time for a service to restart and warm up |
-| Token bucket burst capacity | 2-10× sustained rate | Allows normal bursts; stops traffic spikes from overwhelming |
+| Token bucket burst capacity | 2-10x sustained rate | Allows normal bursts; stops traffic spikes from overwhelming |
 | Token refill rate | Your actual measured sustained req/sec | Match to what you have actually measured, not what you hope for |
-| P99 latency alert threshold | 3-5× your normal P99 | "Something is slow" without being a full crisis |
+| P99 latency alert threshold | 3-5x your normal P99 | "Something is slow" without being a full crisis |
 | Idempotency key TTL | 24 hours to 7 days | Long enough for any reasonable retry scenario |
-| Thread pool size (I/O-heavy) | CPU cores × 10 | Most time is spent waiting on I/O, so more threads than cores is fine |
-| Thread pool size (CPU-heavy) | CPU cores × 2 | CPU-bound work does not benefit from more threads than cores |
+| Thread pool size (I/O-heavy) | CPU cores x 10 | Most time is spent waiting on I/O, so more threads than cores is fine |
+| Thread pool size (CPU-heavy) | CPU cores x 2 | CPU-bound work does not benefit from more threads than cores |
 
 ---
 
@@ -5979,17 +5979,17 @@ Memorize these. Interviewers will notice if your numbers are wildly off — "10 
 
 **Question 1: The Thread Pool Math**
 
-Your checkout service calls the payment API. Normally, the payment API responds in 50ms. Today it is having issues and takes 3,000ms (3 seconds) per call — 60× its normal latency. You have 50 threads in your checkout service's thread pool. Checkout requests arrive at 10 per second.
+Your checkout service calls the payment API. Normally, the payment API responds in 50ms. Today it is having issues and takes 3,000ms (3 seconds) per call -- 60x its normal latency. You have 50 threads in your checkout service's thread pool. Checkout requests arrive at 10 per second.
 
 **Part A:** How quickly does your 50-thread pool fill up? Show the math.
 
 *Hint: Each thread is held for 3 seconds instead of 0.05 seconds. At 10 requests/second arriving, how many threads are "in use" at any given moment?*
 
-At normal latency: 10 requests/sec × 0.05 sec/request = 0.5 threads in use on average. Plenty of headroom.
+At normal latency: 10 requests/sec x 0.05 sec/request = 0.5 threads in use on average. Plenty of headroom.
 
-At degraded latency: 10 requests/sec × 3 sec/request = 30 threads in use on average.
+At degraded latency: 10 requests/sec x 3 sec/request = 30 threads in use on average.
 
-But arrivals are not perfectly spread — after 5 seconds, you have processed 50 requests, and all 50 threads are tied up waiting for the payment API. New requests find no available threads.
+But arrivals are not perfectly spread -- after 5 seconds, you have processed 50 requests, and all 50 threads are tied up waiting for the payment API. New requests find no available threads.
 
 Time to fill the pool: approximately 5 seconds.
 
@@ -6009,7 +6009,7 @@ You are reviewing code that retries an email send 5 times with 1-second fixed in
 
 **Part B:** How do you make email sends actually idempotent? What does the email service need to track, and what does it check before sending each email?
 
-*Think about: what would be a good "idempotency key" for an email? Something like `{user_id}-{template_id}-{order_id}-{date}` — specific enough that the same email to the same user for the same event on the same day is only sent once.*
+*Think about: what would be a good "idempotency key" for an email? Something like `{user_id}-{template_id}-{order_id}-{date}` -- specific enough that the same email to the same user for the same event on the same day is only sent once.*
 
 ---
 
@@ -6024,11 +6024,11 @@ Current situation:
 
 **Part A:** How many retry requests per second does your current policy generate? Does this exceed your 10% budget?
 
-*Math: 500 failures × 3 retries = 1,500 retry requests/second. Your 10% budget = 1,000 requests/second. You are over budget.*
+*Math: 500 failures x 3 retries = 1,500 retry requests/second. Your 10% budget = 1,000 requests/second. You are over budget.*
 
 **Part B:** At what error rate does a 3-retry policy start consuming more than 10% of your 10,000 req/sec capacity?
 
-*Set up the equation: (error_rate × 10,000) × 3 retries = 1,000 (your budget). Solve for error_rate.*
+*Set up the equation: (error_rate x 10,000) x 3 retries = 1,000 (your budget). Solve for error_rate.*
 
 **Part C:** Given your answer to Part B, what should you do if the error rate exceeds that threshold? List two options beyond "just retry fewer times."
 
@@ -6053,7 +6053,7 @@ Your service experiences a latency spike: 90% of requests time out.
 You are choosing between two retry configurations for a service with 1% normal error rate:
 
 **Config A:** 5 retries, 100ms fixed backoff, no jitter
-**Config B:** 3 retries, exponential backoff (100ms → 200ms → 400ms), ±25% jitter
+**Config B:** 3 retries, exponential backoff (100ms -> 200ms -> 400ms), +/-25% jitter
 
 Under **normal conditions** (1% error rate): which configuration gives better user experience? Compare total retry time in the worst case for each.
 
@@ -6061,15 +6061,15 @@ Under **overload conditions** (30% error rate, 500 servers all retrying simultan
 
 ---
 
-**Question 6: Timeout vs. Circuit Breaker — Different Problems**
+**Question 6: Timeout vs. Circuit Breaker -- Different Problems**
 
 A common interview mistake is saying "I'll use a timeout AND a circuit breaker" without explaining why you need both. They solve different problems.
 
-**Part A:** Describe a scenario where a timeout alone is insufficient — where the timeout fires correctly but the system still degrades. 
+**Part A:** Describe a scenario where a timeout alone is insufficient -- where the timeout fires correctly but the system still degrades. 
 
 *Hint: think about what happens when timeouts fire repeatedly, one after another, without the system learning from the pattern.*
 
-**Part B:** Describe a scenario where a circuit breaker alone is insufficient — where the circuit breaker does exactly what it is designed to do, but you still need a timeout.
+**Part B:** Describe a scenario where a circuit breaker alone is insufficient -- where the circuit breaker does exactly what it is designed to do, but you still need a timeout.
 
 *Hint: think about what happens before the circuit breaker has seen enough failures to trip.*
 
@@ -6101,7 +6101,7 @@ An idempotency key is stored with a 7-day TTL. What happens in each of these sce
 
 **Scenario A:** A client retries after 8 days with the same idempotency key. The TTL has expired and the key is gone.
 
-Is this safe? What should the server do — reject the request, process it fresh, or something else? What is the risk?
+Is this safe? What should the server do -- reject the request, process it fresh, or something else? What is the risk?
 
 **Scenario B:** Two different users both happen to send a request with the idempotency key value `"purchase-123"` (they both chose this key independently).
 
@@ -6129,7 +6129,7 @@ The idempotency check happens at the very start. If the server crashes after ste
 
 **Part C:** What is the correct approach? When should the idempotency key be stored, and with what status?
 
-*Think about: you need to store it early enough to prevent duplicate processing, but with a status that tells the retry what happened — was it completed? was it in progress and maybe completed?*
+*Think about: you need to store it early enough to prevent duplicate processing, but with a status that tells the retry what happened -- was it completed? was it in progress and maybe completed?*
 
 ---
 
@@ -6141,13 +6141,13 @@ Example: a client sends "transfer $100 from Account A to Account B" with key=`tx
 
 **Part A:** Is this an idempotency problem or a business logic problem? Where in the system does this belong?
 
-**Part B:** What mechanism enforces business constraints like "Account A can only transfer $500 per day to Account B"? This is separate from idempotency — what is it called, and where does it live?
+**Part B:** What mechanism enforces business constraints like "Account A can only transfer $500 per day to Account B"? This is separate from idempotency -- what is it called, and where does it live?
 
 ---
 
 **Question 11: The Credit Transfer**
 
-You are building a "transfer credits between users" feature. The operation debits User A and credits User B. Both must succeed or neither should — this is a transaction.
+You are building a "transfer credits between users" feature. The operation debits User A and credits User B. Both must succeed or neither should -- this is a transaction.
 
 **Part A:** Design the idempotency key for this transfer.
 
@@ -6181,18 +6181,18 @@ Write the explanation you would give this developer. Cover:
 
 **Question 13: Little's Law in Practice**
 
-Little's Law states: average number of requests in the system = arrival rate × average time in system. Written as: `L = λ × W`.
+Little's Law states: average number of requests in the system = arrival rate x average time in system. Written as: `L = lambda x W`.
 
 Your API currently:
-- Serves 5,000 requests/second (λ = 5,000)
+- Serves 5,000 requests/second (lambda = 5,000)
 - Has 20ms average latency (W = 0.020 seconds)
-- Average concurrent requests in flight: L = 5,000 × 0.020 = 100
+- Average concurrent requests in flight: L = 5,000 x 0.020 = 100
 
 You add a new feature that doubles latency to 40ms. You do not change server capacity.
 
 **Part A:** What is the new average number of concurrent requests in the system?
 
-**Part B:** Your servers have a 100-thread thread pool. At 20ms latency, you had 100 concurrent requests — exactly at the limit. What happens at 40ms latency?
+**Part B:** Your servers have a 100-thread thread pool. At 20ms latency, you had 100 concurrent requests -- exactly at the limit. What happens at 40ms latency?
 
 **Part C:** At what average latency does the system start dropping requests? (Use Little's Law and your thread pool size to find the maximum W before L exceeds 100.)
 
@@ -6226,7 +6226,7 @@ A competitor writes a blog post showing their app always displays recommendation
 
 **Part A:** Explain to a non-technical product manager (in plain language, no jargon) why this is the correct trade-off. What would happen if you kept showing recommendations but stopped shedding?
 
-**Part B:** The product team says "recommendations must always work — this is a business requirement." What are the two changes you could make to honor this requirement? What does each cost?
+**Part B:** The product team says "recommendations must always work -- this is a business requirement." What are the two changes you could make to honor this requirement? What does each cost?
 
 *Hint: you can either reclassify the priority (with consequences) or increase capacity so you never need to shed this tier.*
 
@@ -6244,7 +6244,7 @@ Option C: Accept the upload into the upload step, but slow down the upload data 
 
 For each: what is the user experience? What are the risks? Which do you choose and why?
 
-**Part B:** A user has been uploading a 4GB video for 35 minutes. The upload completes. They get an error: "Transcoding queue full, please try again later." The user is furious — they spent 35 minutes uploading and now they have nothing.
+**Part B:** A user has been uploading a 4GB video for 35 minutes. The upload completes. They get an error: "Transcoding queue full, please try again later." The user is furious -- they spent 35 minutes uploading and now they have nothing.
 
 How should the system have been designed differently to prevent this specific situation? What information should the user have seen during the upload, and when?
 
@@ -6287,13 +6287,13 @@ For each mechanism:
 
 **Question 19: The 2am Database Maintenance**
 
-A database runs a full table scan maintenance job (`ANALYZE TABLE`) at 2am during low traffic. The table lock it acquires causes all write operations to block for 60 seconds. Your architecture: application servers → write-through cache → database. The cache has no read fallback when writes fail.
+A database runs a full table scan maintenance job (`ANALYZE TABLE`) at 2am during low traffic. The table lock it acquires causes all write operations to block for 60 seconds. Your architecture: application servers -> write-through cache -> database. The cache has no read fallback when writes fail.
 
 Map out the cascading failure:
 
 **Part A:** In the first 60 seconds, what fails in what order? Be specific about which services are affected and how.
 
-*Walk through it step by step: at T=0 the lock is acquired. At T=1, the first write request hits the database and blocks. At T=5, 5 seconds × (write req/sec) requests are queued on the database, all holding connections. At T=30, your application server's thread pool is filling up because threads are waiting for database responses that are not coming. At T=60, the lock releases — but now what?*
+*Walk through it step by step: at T=0 the lock is acquired. At T=1, the first write request hits the database and blocks. At T=5, 5 seconds x (write req/sec) requests are queued on the database, all holding connections. At T=30, your application server's thread pool is filling up because threads are waiting for database responses that are not coming. At T=60, the lock releases -- but now what?*
 
 **Part B:** After the lock releases (60 seconds later), what happens next? Does everything recover immediately or is there a "recovery failure"?
 
@@ -6311,7 +6311,7 @@ Map out the cascading failure:
 
 **Question 20: The Timeout Chain**
 
-You have this dependency chain: Mobile app → API Gateway → Order Service → Inventory Service → Database. Every service has a 30-second timeout. A single database query takes 35 seconds (one bad query, then it resolves).
+You have this dependency chain: Mobile app -> API Gateway -> Order Service -> Inventory Service -> Database. Every service has a 30-second timeout. A single database query takes 35 seconds (one bad query, then it resolves).
 
 **Part A:** How long does the user's mobile app wait before seeing an error? Walk through the timeout chain.
 
@@ -6329,7 +6329,7 @@ The downstream service consistently responds in 600ms (it is slow but not failin
 
 **Part A:** Calculate the total elapsed time for all 3 attempts. (Remember: each attempt waits 600ms for the response, PLUS the backoff between attempts.)
 
-**Part B:** You are retrying a service that responds in 600ms — but it is responding successfully on the first attempt. It is just slow. Are retries helping or hurting? Explain.
+**Part B:** You are retrying a service that responds in 600ms -- but it is responding successfully on the first attempt. It is just slow. Are retries helping or hurting? Explain.
 
 **Part C:** At what downstream response latency does retrying start being genuinely harmful? (Hint: consider what happens to your own service's response time, and how many threads are tied up during a retry sequence.)
 
@@ -6339,7 +6339,7 @@ The downstream service consistently responds in 600ms (it is slow but not failin
 
 **Question 22: Circular Dependencies Under Load**
 
-Two microservices have a subtle circular dependency: Service A calls Service B for some operations, and Service B calls Service A for other operations. Under normal conditions, these are different code paths — there is no infinite loop.
+Two microservices have a subtle circular dependency: Service A calls Service B for some operations, and Service B calls Service A for other operations. Under normal conditions, these are different code paths -- there is no infinite loop.
 
 Under high load, Service A's circuit breaker opens (Service B is struggling). Service A starts returning its fallback response... which happens to trigger Service B to call Service A for additional data... which returns the fallback... which triggers Service B to call Service A again...
 
@@ -6357,11 +6357,11 @@ A CDN serves 95% of your traffic. Your origin servers handle the remaining 5%. T
 
 **Part A:** Walk through the failure sequence. Immediately after CDN failure, what is the traffic load on your origin servers? What fails first on the origin side, and in what order?
 
-*The math is stark: if origin normally serves 5% of traffic, and 100% of traffic suddenly hits origin, origin receives 20× its normal load instantaneously. Unlike auto-scaling (which takes minutes), this happens in the same second the CDN goes down. Work through the cascade: web servers fill their thread pools, database connection pools exhaust, cache hit rates stay the same (cache is fine) — but can the application even get to the cache when it has no threads? In what order does each layer fall over?*
+*The math is stark: if origin normally serves 5% of traffic, and 100% of traffic suddenly hits origin, origin receives 20x its normal load instantaneously. Unlike auto-scaling (which takes minutes), this happens in the same second the CDN goes down. Work through the cascade: web servers fill their thread pools, database connection pools exhaust, cache hit rates stay the same (cache is fine) -- but can the application even get to the cache when it has no threads? In what order does each layer fall over?*
 
 **Part B:** Design the "CDN failure playbook." What do you do in the first 5 minutes? Your answer should include: who is notified, what technical actions are taken, and what user-facing communication goes out.
 
-*A good playbook has time-stamps. "Minute 0: alert fires. Minute 1: on-call engineer acknowledges, checks CDN status page. Minute 2: if CDN confirms outage, page the CDN vendor AND begin internal mitigation. Minute 3: ..." — write at least 5 specific steps.*
+*A good playbook has time-stamps. "Minute 0: alert fires. Minute 1: on-call engineer acknowledges, checks CDN status page. Minute 2: if CDN confirms outage, page the CDN vendor AND begin internal mitigation. Minute 3: ..." -- write at least 5 specific steps.*
 
 **Part C:** What should have been in place before this incident that would either prevent the outage or dramatically reduce the time to recovery?
 
@@ -6371,7 +6371,7 @@ A CDN serves 95% of your traffic. Your origin servers handle the remaining 5%. T
 
 **Question 24: The Cache Stampede**
 
-You added Redis as a cache in front of your database. Cache hit rate: 95%. Redis has a planned maintenance restart — the restart takes 5 minutes.
+You added Redis as a cache in front of your database. Cache hit rate: 95%. Redis has a planned maintenance restart -- the restart takes 5 minutes.
 
 Walk through the complete incident timeline:
 
@@ -6400,19 +6400,19 @@ Walk through the complete incident timeline:
 Design the retry and error handling for a push notification service. Context: push notifications are sent to iOS and Android devices. Characteristics:
 - Delivery is not guaranteed (device might be offline, user might have uninstalled the app)
 - The platform's own infrastructure (APNs for iOS, FCM for Android) can deliver duplicates under some failure conditions
-- Notifications are time-sensitive — a "your order has shipped" notification sent 3 days later is confusing and useless
+- Notifications are time-sensitive -- a "your order has shipped" notification sent 3 days later is confusing and useless
 
 **Part A:** Should push notification sends be idempotent? Define what "idempotent push notification" means in this context. Given the time-sensitivity constraint, what is the appropriate idempotency window (TTL)?
 
 **Part B:** Design the retry strategy. What is the maximum retry window before you give up on a notification? How does the time-sensitivity constraint affect your backoff timing? What do you do with notifications that could not be delivered within the window?
 
-**Part C:** The APNs (Apple Push Notification service) sometimes returns a "DeviceTokenNotForTopic" error — meaning this device token is no longer registered for your app. Should you retry this? What should you do instead?
+**Part C:** The APNs (Apple Push Notification service) sometimes returns a "DeviceTokenNotForTopic" error -- meaning this device token is no longer registered for your app. Should you retry this? What should you do instead?
 
 ---
 
 **Question 26: Async File Processing**
 
-You are designing an API for processing uploaded files — images, documents, spreadsheets. Processing takes 30 seconds to 5 minutes depending on file size.
+You are designing an API for processing uploaded files -- images, documents, spreadsheets. Processing takes 30 seconds to 5 minutes depending on file size.
 
 **Part A:** Explain specifically why synchronous HTTP (client sends request, waits for response, response contains the result) is wrong for this use case. What are the failure modes that make it unsuitable?
 
@@ -6456,7 +6456,7 @@ Diagnose what is happening. Write your diagnosis in order of investigation:
 **Step 1:** What is the most likely root cause based on these metrics together?
 **Step 2:** What do you look at first to confirm or deny your hypothesis?
 **Step 3:** The circuit breaker going half-open 3 times per hour means it is not staying closed. What does this tell you about the downstream service?
-**Step 4:** The 15% retry rate combined with 2% error rate — what math does not add up, and what does that tell you?
+**Step 4:** The 15% retry rate combined with 2% error rate -- what math does not add up, and what does that tell you?
 **Step 5:** What is your recommended immediate action while you investigate?
 
 ---
@@ -6467,7 +6467,7 @@ A third-party geocoding API converts addresses to latitude/longitude coordinates
 
 **Part A:** Design the caching strategy. What is a good cache key for geocoding? What is an appropriate TTL (addresses change over time, but not often)? Where does the cache live?
 
-**Part B:** The idempotency challenge: User types their address as "123 Main St" — you geocode it and cache the result. User then updates to "123 Main St, Apt 4" — this is a different string, so it would miss the cache and trigger a new geocoding request. But the coordinates are identical (apartment numbers do not affect lat/long). How do you handle this without paying for a geocoding call?
+**Part B:** The idempotency challenge: User types their address as "123 Main St" -- you geocode it and cache the result. User then updates to "123 Main St, Apt 4" -- this is a different string, so it would miss the cache and trigger a new geocoding request. But the coordinates are identical (apartment numbers do not affect lat/long). How do you handle this without paying for a geocoding call?
 
 **Part C:** Design the "address normalization" layer. Before geocoding (or cache lookup), normalize the address string. What normalizations make sense? (Case, whitespace, common abbreviations like "St" vs "Street".) How does this interact with the cache key?
 
@@ -6487,13 +6487,13 @@ You are building a new payments service from scratch. You have 6 months and a te
 
 Prioritize these in the order you would implement them over 6 months. For each item, write one sentence explaining why it is in that position in the list.
 
-*There is no single correct answer — but your reasoning should reflect real understanding of which failures are most dangerous, which protections are prerequisites for others, and which problems require operational experience to configure correctly.*
+*There is no single correct answer -- but your reasoning should reflect real understanding of which failures are most dangerous, which protections are prerequisites for others, and which problems require operational experience to configure correctly.*
 
 ---
 
 # Homework Exercises (10 Exercises)
 
-*These exercises are designed to be done, not just read. Set a timer. Write actual answers. The goal is fluency — you should be able to talk through these answers comfortably in a 45-minute interview.*
+*These exercises are designed to be done, not just read. Set a timer. Write actual answers. The goal is fluency -- you should be able to talk through these answers comfortably in a 45-minute interview.*
 
 ---
 
@@ -6503,7 +6503,7 @@ Your service calls three external APIs in sequence to build a single response:
 
 - **Auth API:** average 5ms latency, P99 10ms, fails less than 0.1% of requests
 - **Product API:** average 50ms latency, P99 200ms, fails 2% of requests  
-- **Recommendation API:** average 200ms latency, P99 2,000ms, fails 15% of requests (this is non-critical — users can see the page without recommendations)
+- **Recommendation API:** average 200ms latency, P99 2,000ms, fails 15% of requests (this is non-critical -- users can see the page without recommendations)
 
 **Part A:** For each API, specify:
 - Maximum retry attempts
@@ -6537,7 +6537,7 @@ Design the full idempotency key system for a payment API.
 
 `check_and_claim_idempotency_key(key, user_id, ttl)`:
 - If the key exists for this user: return the stored result
-- If the key does not exist: atomically insert it with status "pending" and return "new request — proceed"
+- If the key does not exist: atomically insert it with status "pending" and return "new request -- proceed"
 - Handle the race condition: two requests with the same key arrive simultaneously
 
 `store_idempotency_result(key, user_id, result, status)`:
@@ -6565,7 +6565,7 @@ Here is the event log for 60 seconds:
 |---|---|---|---|
 | T=0 to T=10 | 100 | 10 | 10% |
 | T=10 to T=20 | 100 | 60 | 60% |
-| T=20 to T=50 | — | — | (circuit is open — no requests pass through) |
+| T=20 to T=50 | -- | -- | (circuit is open -- no requests pass through) |
 | T=50 | 1 test request | 0 (success) | 0% |
 | T=50 to T=60 | 100 | 5 | 5% |
 
@@ -6573,9 +6573,9 @@ Here is the event log for 60 seconds:
 
 **Part B:** During the OPEN period (T=20 to T=50), all client requests receive an immediate error without hitting the downstream service. Compare two scenarios:
 
-Scenario 1: Without a circuit breaker — all requests pass through to the failing service, which is responding with 60% errors and 3-second latency on the failures.
+Scenario 1: Without a circuit breaker -- all requests pass through to the failing service, which is responding with 60% errors and 3-second latency on the failures.
 
-Scenario 2: With the circuit breaker open — all requests receive an immediate error (< 1ms).
+Scenario 2: With the circuit breaker open -- all requests receive an immediate error (< 1ms).
 
 For each scenario: what is the average response time for clients? How many threads are tied up at peak? Which is better for the overall system?
 
@@ -6612,12 +6612,12 @@ Write a post-mortem for this incident:
 **Incident Timeline:**
 - Monday 9:00am: Traffic nominal (5,000 req/sec)
 - 9:15am: Redis cache restarts (planned maintenance, expected 2-minute restart)
-- 9:15am: Cache miss rate goes from 5% to 100% — database receives 10× normal query load
+- 9:15am: Cache miss rate goes from 5% to 100% -- database receives 10x normal query load
 - 9:16am: Database latency climbs from 10ms to 2,000ms
 - 9:17am: API server threads fill up (all 100 threads waiting for slow database responses)
 - 9:17am: Clients begin retrying (configured for 3 retries, no backoff delay)
-- 9:18am: Database receiving approximately 30× normal query load from client retries amplified by application retries
-- 9:18am: Database crashes (OOM — out of memory)
+- 9:18am: Database receiving approximately 30x normal query load from client retries amplified by application retries
+- 9:18am: Database crashes (OOM -- out of memory)
 - 9:18am: Complete site outage begins
 - 9:45am: Database restarted and stabilized
 - 9:50am: Redis re-populated with warm cache data
@@ -6635,7 +6635,7 @@ List at least 4 things that turned a 2-minute Redis restart into a 42-minute out
 Write 5 specific, implementable action items. Each should name: what exactly is being implemented, who owns it, and what failure mode it prevents.
 
 **Part D: Self-Recovery Analysis**
-If engineers had done nothing at all — no intervention — how long would the site have taken to recover on its own? Walk through the sequence of events that would have led to recovery (or would it have stayed down indefinitely?).
+If engineers had done nothing at all -- no intervention -- how long would the site have taken to recover on its own? Walk through the sequence of events that would have led to recovery (or would it have stayed down indefinitely?).
 
 ---
 
@@ -6654,7 +6654,7 @@ Design backpressure for a video transcoding service:
 **Part B:** During a 2,000 uploads/hour peak (lasting 3 hours), design:
 - The queue structure (what information is stored per job? what is the maximum queue size before you start rejecting uploads?)
 - The user communication (what do you tell users whose videos are queued? how do you set expectations?)
-- The priority system (which videos get transcoded first — newest, oldest, or users with premium accounts?)
+- The priority system (which videos get transcoded first -- newest, oldest, or users with premium accounts?)
 
 **Part C:** A user uploads a video during peak. Write the exact API response they receive when their upload is accepted but queued. Include: HTTP status code, key response fields, what the user should expect, and when they should check back.
 
@@ -6672,10 +6672,10 @@ Build a token bucket rate limiter for a multi-tenant API:
 
 **Part B:** Write the rate check pseudocode. Your algorithm must handle:
 - Concurrent requests from different API servers hitting the same tenant simultaneously
-- Burst allowance: allow up to 2× the sustained rate for up to 30 seconds
+- Burst allowance: allow up to 2x the sustained rate for up to 30 seconds
 - Rate limit changes: when a tenant upgrades their plan mid-month, the new limit takes effect immediately
 
-*Pay special attention to atomicity — this must be a single atomic operation to prevent race conditions across 10 servers.*
+*Pay special attention to atomicity -- this must be a single atomic operation to prevent race conditions across 10 servers.*
 
 **Part C:** Redis goes down completely. What happens to your API's rate limiting? Design the degraded behavior: 
 - Option A: fail open (allow all requests, no rate limiting)
@@ -6712,7 +6712,7 @@ After the timer: review your own answer. What did you not cover? What would you 
 
 Read this scenario:
 
-*"A major cloud provider experienced a cascading failure when a metadata service (which provides authentication credentials to virtual machines) had a performance degradation. Virtual machine instances, which refresh credentials every few minutes, began experiencing timeouts when calling the metadata service. Their retry logic kicked in — each VM retried the credential refresh 3 times immediately, with no backoff. This 3× amplification on an already-struggling service caused further degradation. New virtual machines could not start because they could not retrieve their initial credentials. The metadata service, receiving 3× normal load from retries plus new-machine requests, became completely unavailable. The outage lasted 4 hours before the retry storm subsided enough for the service to stabilize."*
+*"A major cloud provider experienced a cascading failure when a metadata service (which provides authentication credentials to virtual machines) had a performance degradation. Virtual machine instances, which refresh credentials every few minutes, began experiencing timeouts when calling the metadata service. Their retry logic kicked in -- each VM retried the credential refresh 3 times immediately, with no backoff. This 3x amplification on an already-struggling service caused further degradation. New virtual machines could not start because they could not retrieve their initial credentials. The metadata service, receiving 3x normal load from retries plus new-machine requests, became completely unavailable. The outage lasted 4 hours before the retry storm subsided enough for the service to stabilize."*
 
 **Part A:** Draw (or describe in text) the dependency graph that caused this cascade. Label each node with: what it does, what it depends on, and how it behaves when the dependency is slow.
 
@@ -6722,7 +6722,7 @@ Read this scenario:
 
 ---
 
-## Exercise 10: Full Resilience Design — Fintech Transfer
+## Exercise 10: Full Resilience Design -- Fintech Transfer
 
 You are designing a money transfer feature from scratch. Users can transfer money between accounts.
 
@@ -6750,7 +6750,7 @@ Design the complete resilience story across all five layers:
 - What is the failure rate threshold that opens the circuit?
 - What is the measurement window?
 - How long does the circuit stay open before attempting half-open?
-- What is your fallback behavior when the circuit is open? (You cannot just return an error — what do you tell the user and what do you do with their transfer request?)
+- What is your fallback behavior when the circuit is open? (You cannot just return an error -- what do you tell the user and what do you do with their transfer request?)
 
 **Part D: Backpressure Mechanism**
 - What rate limiting mechanism do you use at the API gateway level?
@@ -6758,13 +6758,13 @@ Design the complete resilience story across all five layers:
 - What is your burst allowance?
 - At what point do you start returning 429 errors vs. queuing requests?
 
-**Part E: Monitoring — 5 Most Important Metrics**
+**Part E: Monitoring -- 5 Most Important Metrics**
 
 For each metric: what is it measuring, what is the normal range, and at what value does the alert fire?
 
-**Part F: Runbook — "Transfer Success Rate Below 95%"**
+**Part F: Runbook -- "Transfer Success Rate Below 95%"**
 
-Write the first 10 steps of the on-call runbook for this alert. Steps should be specific and actionable — not "investigate the issue" but "go to dashboard X, check metric Y, if value is Z then do W."
+Write the first 10 steps of the on-call runbook for this alert. Steps should be specific and actionable -- not "investigate the issue" but "go to dashboard X, check metric Y, if value is Z then do W."
 
 ---
 
@@ -6782,11 +6782,11 @@ This endpoint does a lot of work: it authenticates the user, finds nearby driver
 
 Before designing anything, list every external call:
 
-1. Auth Service — validates the user's session token
-2. Driver Location Service — finds drivers within 2 miles
-3. Payment Service — charges the saved card
-4. Trip Database — creates the trip record
-5. Driver Notification Service — sends push to the driver's phone
+1. Auth Service -- validates the user's session token
+2. Driver Location Service -- finds drivers within 2 miles
+3. Payment Service -- charges the saved card
+4. Trip Database -- creates the trip record
+5. Driver Notification Service -- sends push to the driver's phone
 
 Each of these is a promise that can be broken. Designing the happy path without designing the failure path for each of these is incomplete.
 
@@ -6798,11 +6798,11 @@ Not every dependency has the same importance to the user. Classify them:
 
 | Dependency | Can the ride happen without it? | Classification |
 |---|---|---|
-| Auth Service | No — we cannot serve an unauthenticated user | Critical — hard fail if unavailable |
-| Driver Location Service | No — we cannot match a driver without location data | Critical — hard fail if unavailable |
-| Payment Service | No — ride cannot proceed without payment authorization | Critical — hard fail if unavailable |
-| Trip Database | No — we need a record of the trip for both parties | Critical — hard fail if unavailable |
-| Driver Notification Service | Yes — driver has the app open anyway, they will see the match | Non-critical — degrade gracefully |
+| Auth Service | No -- we cannot serve an unauthenticated user | Critical -- hard fail if unavailable |
+| Driver Location Service | No -- we cannot match a driver without location data | Critical -- hard fail if unavailable |
+| Payment Service | No -- ride cannot proceed without payment authorization | Critical -- hard fail if unavailable |
+| Trip Database | No -- we need a record of the trip for both parties | Critical -- hard fail if unavailable |
+| Driver Notification Service | Yes -- driver has the app open anyway, they will see the match | Non-critical -- degrade gracefully |
 
 This classification drives every resilience decision that follows.
 
@@ -6821,29 +6821,29 @@ This classification drives every resilience decision that follows.
 - Timeout: 500ms (location lookup involves geo-spatial queries)
 - Retry: 2 attempts, 100ms backoff. Retry on 502/503/504.
 - Idempotency: read-only, no idempotency key needed
-- Circuit breaker: threshold 50% error rate, open for 60 seconds. Fallback: use last-known driver locations from cache (may be up to 30 seconds stale — acceptable)
+- Circuit breaker: threshold 50% error rate, open for 60 seconds. Fallback: use last-known driver locations from cache (may be up to 30 seconds stale -- acceptable)
 - Monitoring: error rate, P99 latency, cache staleness
 
 **Payment Service:**
 - Timeout: 8 seconds (payment gateways are slower; 8s is below the user's browser timeout of ~10s)
-- Retry: 3 attempts, exponential backoff (200ms, 400ms, 800ms), ±25% jitter. Retry on 408/502/503/504 ONLY. Do NOT retry on 400/402/422.
-- Idempotency: **YES — critical.** Key: `ride-request-{user_id}-{request_timestamp_minute}`. Stored in a dedicated idempotency table. TTL: 24 hours. Passed to payment gateway as well.
-- Circuit breaker: threshold 20% error rate (payment is too important to tolerate high error rates), open for 60 seconds. Fallback: queue the payment attempt, show user "payment processing — your ride will start shortly"
+- Retry: 3 attempts, exponential backoff (200ms, 400ms, 800ms), +/-25% jitter. Retry on 408/502/503/504 ONLY. Do NOT retry on 400/402/422.
+- Idempotency: **YES -- critical.** Key: `ride-request-{user_id}-{request_timestamp_minute}`. Stored in a dedicated idempotency table. TTL: 24 hours. Passed to payment gateway as well.
+- Circuit breaker: threshold 20% error rate (payment is too important to tolerate high error rates), open for 60 seconds. Fallback: queue the payment attempt, show user "payment processing -- your ride will start shortly"
 - Monitoring: success rate, P99 latency, idempotency hit rate (spike = client bug), circuit state
 
 **Trip Database:**
 - Timeout: 1 second (database writes should be fast)
 - Retry: 3 attempts, 100ms/200ms/400ms backoff. Retry on connection errors and deadlocks.
-- Idempotency: YES — the trip record uses the same idempotency key as the payment. If the server crashes after creating the payment but before creating the trip, the retry will find the payment already processed (via idempotency) and create only the trip record.
-- Circuit breaker: threshold 40% error rate, open for 30 seconds. Fallback: queue the write to a separate durable log, apply asynchronously. Alert immediately — this is a data integrity risk.
+- Idempotency: YES -- the trip record uses the same idempotency key as the payment. If the server crashes after creating the payment but before creating the trip, the retry will find the payment already processed (via idempotency) and create only the trip record.
+- Circuit breaker: threshold 40% error rate, open for 30 seconds. Fallback: queue the write to a separate durable log, apply asynchronously. Alert immediately -- this is a data integrity risk.
 - Monitoring: write success rate, P99 write latency, queue depth (if using async fallback)
 
 **Driver Notification Service:**
 - Timeout: 2 seconds
 - Retry: 2 attempts, 500ms backoff. Retry on 503/504.
-- Idempotency: YES, but for a different reason — duplicate push notifications (driver receives "new ride!" twice) are confusing. Key: `driver-notif-{trip_id}-{driver_id}`. TTL: 10 minutes.
-- Circuit breaker: threshold 50% error rate, open for 30 seconds. **Fallback: do nothing.** The driver's app polls for assignments every 5 seconds — they will see the ride without the push.
-- Monitoring: delivery rate, P99 latency, circuit state. NOTE: circuit breaker being open here should NOT page the on-call engineer — it should only log. This is non-critical.
+- Idempotency: YES, but for a different reason -- duplicate push notifications (driver receives "new ride!" twice) are confusing. Key: `driver-notif-{trip_id}-{driver_id}`. TTL: 10 minutes.
+- Circuit breaker: threshold 50% error rate, open for 30 seconds. **Fallback: do nothing.** The driver's app polls for assignments every 5 seconds -- they will see the ride without the push.
+- Monitoring: delivery rate, P99 latency, circuit state. NOTE: circuit breaker being open here should NOT page the on-call engineer -- it should only log. This is non-critical.
 
 ---
 
@@ -6879,7 +6879,7 @@ Formula: successful_ride_creations / ride_request_attempts
 
 **Panel 2: Payment Success Rate**
 Normal: 99.8%+. Alert at 99.5%. Page at 99%.
-This is separate from ride success rate — a payment failure is more severe than a driver matching failure.
+This is separate from ride success rate -- a payment failure is more severe than a driver matching failure.
 
 **Panel 3: P99 End-to-End Latency**
 Normal: under 3 seconds. Alert at 5 seconds. Page at 8 seconds.
@@ -6911,12 +6911,12 @@ The single most common interview mistake: "I'll retry on any error." Here is the
 
 | HTTP Error Code | Retry? | Reasoning |
 |---|---|---|
-| `429 Too Many Requests` | YES — after `Retry-After` delay | The server is explicitly telling you to try later |
+| `429 Too Many Requests` | YES -- after `Retry-After` delay | The server is explicitly telling you to try later |
 | `503 Service Unavailable` | YES | Server temporarily down or overloaded |
 | `502 Bad Gateway` | YES | Proxy or load balancer lost connection to backend |
 | `504 Gateway Timeout` | YES | Proxy timed out waiting for backend |
-| `408 Request Timeout` | YES | Request timed out — likely transient |
-| `500 Internal Server Error` | MAYBE (once, with caution) | Could be a transient crash — but could also be your request triggering a bug. Retry once only. |
+| `408 Request Timeout` | YES | Request timed out -- likely transient |
+| `500 Internal Server Error` | MAYBE (once, with caution) | Could be a transient crash -- but could also be your request triggering a bug. Retry once only. |
 | `400 Bad Request` | NO | Your request is malformed. Retrying returns the same `400`. |
 | `401 Unauthorized` | NO | Wrong credentials. Credentials do not fix themselves by retrying. |
 | `403 Forbidden` | NO | Correct credentials, insufficient permissions. |
@@ -6946,16 +6946,16 @@ When you need to limit load, choose the right mechanism for the situation:
 Use this before shipping any API endpoint that changes state:
 
 ```
-□ Every state-changing endpoint requires an Idempotency-Key header
-□ Keys are stored in a database with TTL (7 days is a good default)
-□ The idempotency result is stored ATOMICALLY with the operation
+[ ] Every state-changing endpoint requires an Idempotency-Key header
+[ ] Keys are stored in a database with TTL (7 days is a good default)
+[ ] The idempotency result is stored ATOMICALLY with the operation
   (same DB transaction, not a separate write after the fact)
-□ "Check then claim" is implemented as an atomic INSERT with
-  unique constraint — not a read followed by a write
-□ Replay responses include Idempotency-Replayed: true header
-□ Keys are namespaced by user/tenant to prevent cross-user collisions
-□ A TTL cleanup job runs regularly (daily) without table locks
-□ The system is tested for the crash-between-steps scenario
+[ ] "Check then claim" is implemented as an atomic INSERT with
+  unique constraint -- not a read followed by a write
+[ ] Replay responses include Idempotency-Replayed: true header
+[ ] Keys are namespaced by user/tenant to prevent cross-user collisions
+[ ] A TTL cleanup job runs regularly (daily) without table locks
+[ ] The system is tested for the crash-between-steps scenario
 ```
 
 ---
@@ -6963,29 +6963,29 @@ Use this before shipping any API endpoint that changes state:
 ## Circuit Breaker State Reference
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    CLOSED (normal)                   │
-│  • All requests pass through to downstream          │
-│  • Failures are counted in rolling window           │
-│  • Transition to OPEN when error rate > threshold   │
-└──────────────────────┬──────────────────────────────┘
-                       │ error rate > 50%
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                     OPEN (tripped)                   │
-│  • NO requests reach downstream service             │
-│  • All requests fail immediately (< 1ms)            │
-│  • Fallback behavior executes                       │
-│  • Wait for open_duration (30-60 seconds)           │
-└──────────────────────┬──────────────────────────────┘
-                       │ after open_duration
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                  HALF-OPEN (testing)                 │
-│  • ONE test request allowed through                 │
-│  • Success → transition back to CLOSED              │
-│  • Failure → return to OPEN (reset timer)           │
-└─────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|                    CLOSED (normal)                   |
+|  - All requests pass through to downstream          |
+|  - Failures are counted in rolling window           |
+|  - Transition to OPEN when error rate > threshold   |
++----------------------+------------------------------+
+                       | error rate > 50%
+                       v
++-----------------------------------------------------+
+|                     OPEN (tripped)                   |
+|  - NO requests reach downstream service             |
+|  - All requests fail immediately (< 1ms)            |
+|  - Fallback behavior executes                       |
+|  - Wait for open_duration (30-60 seconds)           |
++----------------------+------------------------------+
+                       | after open_duration
+                       v
++-----------------------------------------------------+
+|                  HALF-OPEN (testing)                 |
+|  - ONE test request allowed through                 |
+|  - Success -> transition back to CLOSED              |
+|  - Failure -> return to OPEN (reset timer)           |
++-----------------------------------------------------+
 ```
 
 **When the circuit is OPEN, the fallback is everything.** Common fallbacks:
@@ -6994,7 +6994,7 @@ Use this before shipping any API endpoint that changes state:
 - Queue the operation for later processing
 - Return a clear error with estimated recovery time
 
-A circuit breaker with no fallback just converts "downstream error" to "our error" — it does not help users.
+A circuit breaker with no fallback just converts "downstream error" to "our error" -- it does not help users.
 
 ---
 
@@ -7009,7 +7009,7 @@ For every external service call in your system, verify all five points:
 
 **2. Retry**
 - Is backoff exponential (not fixed)?
-- Is jitter added (±25%)?
+- Is jitter added (+/-25%)?
 - Is there a maximum retry count (3-5)?
 - Are retries only on the right error codes (not 400s)?
 - Is the retry budget considered (what % of capacity do retries consume)?
@@ -7042,14 +7042,14 @@ If you cannot check all 5 boxes for an external call, you have a gap in your res
 | Max retry attempts | 3-5 | You set more than 5 |
 | Initial backoff | 100ms | You set less than 50ms |
 | Max backoff | 30 seconds | You set more than 60 seconds |
-| Jitter range | ±25% | You have no jitter at all |
+| Jitter range | +/-25% | You have no jitter at all |
 | Circuit error threshold | 50% | You set above 80% (too slow to trip) |
 | Circuit open duration | 30-60 seconds | You set less than 15 seconds |
 | Idempotency key TTL | 24 hours to 7 days | You set less than 1 hour |
-| Rate limit burst | 2-10× sustained rate | Your burst equals your sustained rate |
-| P99 alert threshold | 3-5× normal P99 | Your alert never fires OR fires constantly |
-| Thread pool (I/O heavy) | CPU cores × 10 | You guessed without measuring |
-| Thread pool (CPU heavy) | CPU cores × 2 | You set it the same as I/O heavy |
+| Rate limit burst | 2-10x sustained rate | Your burst equals your sustained rate |
+| P99 alert threshold | 3-5x normal P99 | Your alert never fires OR fires constantly |
+| Thread pool (I/O heavy) | CPU cores x 10 | You guessed without measuring |
+| Thread pool (CPU heavy) | CPU cores x 2 | You set it the same as I/O heavy |
 
 ---
 
@@ -7059,17 +7059,17 @@ If you cannot check all 5 boxes for an external call, you have a gap in your res
 
 Retries, idempotency, and backpressure are not three separate topics that happen to appear in the same chapter. They are one complete story about how systems stay alive and correct under pressure.
 
-Retries handle the reality that distributed systems have transient failures — network hiccups, brief overloads, momentary outages. Without retries, every transient failure becomes a user-visible error. With retries, most transient failures are invisible to the user.
+Retries handle the reality that distributed systems have transient failures -- network hiccups, brief overloads, momentary outages. Without retries, every transient failure becomes a user-visible error. With retries, most transient failures are invisible to the user.
 
 Idempotency makes retries safe. Without idempotency, retries on state-changing operations cause double-charges, duplicate orders, and corrupted data. With idempotency keys, retrying a payment is no more dangerous than trying it once. The key links the attempt to its result, regardless of how many times the attempt is made.
 
-Backpressure prevents retries from becoming the cause of the next failure. Without backpressure, a wave of retries during an overload creates a retry storm that amplifies the original problem into a full outage. With backpressure — token buckets, load shedding, circuit breakers — the system stays alive at degraded capacity instead of collapsing entirely.
+Backpressure prevents retries from becoming the cause of the next failure. Without backpressure, a wave of retries during an overload creates a retry storm that amplifies the original problem into a full outage. With backpressure -- token buckets, load shedding, circuit breakers -- the system stays alive at degraded capacity instead of collapsing entirely.
 
 You need all three. Missing any one breaks the chain. Retries without idempotency cause data corruption. Idempotency without retries means every transient failure reaches the user. Retries and idempotency without backpressure means your protective mechanism can become the thing that takes you down.
 
 ## Seeing the Problem Before It Happens
 
-The hardest part of resilience engineering is not implementing any of these patterns — it is recognizing when you have missed one. Double-charges are invisible in your metrics until a customer calls. Retry storms look like "high traffic" in your dashboards until you check the retry rate breakdown. Cascading failures look like "Service X is having issues" until you trace the full dependency chain and see that Service X was actually fine — it was Service Y's slowness that filled X's thread pool that blocked X's callers.
+The hardest part of resilience engineering is not implementing any of these patterns -- it is recognizing when you have missed one. Double-charges are invisible in your metrics until a customer calls. Retry storms look like "high traffic" in your dashboards until you check the retry rate breakdown. Cascading failures look like "Service X is having issues" until you trace the full dependency chain and see that Service X was actually fine -- it was Service Y's slowness that filled X's thread pool that blocked X's callers.
 
 Building the monitoring to see these problems is as important as implementing the solutions. A 20% retry rate on a service is a symptom that demands investigation, not a configuration value to tune. A circuit breaker opening three times per hour is telling you something is wrong, not a threshold to raise. An idempotency key hit rate of 5% (normally below 1%) is a client bug hiding in your metrics.
 
@@ -7081,27 +7081,27 @@ Every engineer who has survived a 3am double-charge incident, a retry storm taki
 
 This chapter gives you the intellectual foundation for that intuition before you need the hard-won production experience. When you are next designing a system, carry three questions into every design session:
 
-**"What happens if this call fails?"** — the answer should include: retry policy, circuit breaker threshold, and fallback behavior. If you find yourself saying "we'll add error handling later," that is the gap.
+**"What happens if this call fails?"** -- the answer should include: retry policy, circuit breaker threshold, and fallback behavior. If you find yourself saying "we'll add error handling later," that is the gap.
 
-**"What happens if this call succeeds but we never find out?"** — the answer should include: idempotency key design, state machine transitions, and crash recovery behavior. If you find yourself saying "that probably won't happen," that is the gap.
+**"What happens if this call succeeds but we never find out?"** -- the answer should include: idempotency key design, state machine transitions, and crash recovery behavior. If you find yourself saying "that probably won't happen," that is the gap.
 
-**"What happens if we receive 10× traffic right now?"** — the answer should include: which features degrade first, what the token bucket parameters are, and how long the system stays alive while auto-scaling catches up. If you find yourself saying "we'll scale up," that is the gap.
+**"What happens if we receive 10x traffic right now?"** -- the answer should include: which features degrade first, what the token bucket parameters are, and how long the system stays alive while auto-scaling catches up. If you find yourself saying "we'll scale up," that is the gap.
 
 Answering these three questions before you write the first line of code is the difference between a system that survives its first real incident and one that teaches you these patterns the hard way.
 
 ## A Final Note on Intuition vs. Knowledge
 
-There is a difference between knowing these patterns and having intuition for them. Knowledge is what you have after reading this chapter — you can define a token bucket, explain what jitter does, describe the circuit breaker state machine. That knowledge is necessary but not sufficient.
+There is a difference between knowing these patterns and having intuition for them. Knowledge is what you have after reading this chapter -- you can define a token bucket, explain what jitter does, describe the circuit breaker state machine. That knowledge is necessary but not sufficient.
 
-Intuition is what you have after you have designed a system, watched it fail in production in a way you did not predict, traced the cascade back to a missing idempotency key or a retry policy with no jitter, fixed it at 3am, and then spent the next month explaining what happened to everyone who asked. Intuition means the question "what happens when this call fails?" is not a checklist item — it is an automatic reflex that fires before you have finished drawing the box on the whiteboard.
+Intuition is what you have after you have designed a system, watched it fail in production in a way you did not predict, traced the cascade back to a missing idempotency key or a retry policy with no jitter, fixed it at 3am, and then spent the next month explaining what happened to everyone who asked. Intuition means the question "what happens when this call fails?" is not a checklist item -- it is an automatic reflex that fires before you have finished drawing the box on the whiteboard.
 
-You build intuition through practice: through the 30 questions, the 10 exercises, the timed mock interviews, the habit of tracing failure paths before happy paths. Each practice session is a low-stakes version of the 3am incident. The goal is to have the reflex so firmly established that when you sit across from an interviewer and they say "walk me through what happens during a cascading failure in your design," you already know — because you designed for it before they had to ask.
+You build intuition through practice: through the 30 questions, the 10 exercises, the timed mock interviews, the habit of tracing failure paths before happy paths. Each practice session is a low-stakes version of the 3am incident. The goal is to have the reflex so firmly established that when you sit across from an interviewer and they say "walk me through what happens during a cascading failure in your design," you already know -- because you designed for it before they had to ask.
 
 ---
 
 ## Bonus: Common Interview Phrases That Signal L6 Thinking
 
-In an interview, the words you choose matter. Here is a list of phrases that signal you have thought carefully about resilience — and the phrases that signal you have not.
+In an interview, the words you choose matter. Here is a list of phrases that signal you have thought carefully about resilience -- and the phrases that signal you have not.
 
 ### Phrases That Signal Strong Thinking
 
@@ -7115,12 +7115,12 @@ This signals you understand WHY idempotency exists, not just what it is.
 This signals you think about timeouts in context, not in isolation.
 
 **"A circuit breaker is only useful if I have a fallback. Let me design the fallback first, then configure the breaker."**
-This is a rare signal — most candidates describe circuit breakers without mentioning fallbacks.
+This is a rare signal -- most candidates describe circuit breakers without mentioning fallbacks.
 
-**"A 15% retry rate is not something to tune around — it is a signal that 15% of my first-attempt requests are failing. The real question is why."**
+**"A 15% retry rate is not something to tune around -- it is a signal that 15% of my first-attempt requests are failing. The real question is why."**
 This signals you treat metrics as symptoms to investigate, not parameters to configure.
 
-**"This queue helps during a spike, but it does not increase capacity. If traffic is sustainably 3× my throughput, the queue just delays the rejection. I need load shedding too."**
+**"This queue helps during a spike, but it does not increase capacity. If traffic is sustainably 3x my throughput, the queue just delays the rejection. I need load shedding too."**
 This signals you understand the limits of queuing.
 
 **"Let me trace through what happens if THIS service calls THAT service and that service is slow..."**
@@ -7131,7 +7131,7 @@ Actually tracing the cascade in your own design, unprompted, is a strong signal.
 ### Phrases That Signal Gaps
 
 **"I'll add retry logic."**
-Without specifying which errors, how many attempts, what backoff, whether idempotency is needed — this is incomplete.
+Without specifying which errors, how many attempts, what backoff, whether idempotency is needed -- this is incomplete.
 
 **"We can handle spikes by auto-scaling."**
 Auto-scaling takes minutes. This does not address what happens in the first 3 minutes.
@@ -7146,7 +7146,7 @@ Without saying what the fallback is, this is not a complete answer.
 Any time you dismiss a failure scenario as unlikely, the interviewer hears: "I have not thought about this."
 
 **"We'll add monitoring later."**
-Monitoring is not optional — it is how you know whether any of your other choices are working.
+Monitoring is not optional -- it is how you know whether any of your other choices are working.
 
 ---
 
@@ -7184,24 +7184,24 @@ Many candidates struggle with the math portion of retry budget questions. Here i
 **Part A: How many retry requests per second?**
 
 First calculate failures per second:
-10,000 req/sec × 5% error rate = 500 failures/second
+10,000 req/sec x 5% error rate = 500 failures/second
 
 Each failure gets up to 3 retries. In the worst case (all retries also fail), you send:
-500 (original failures) × 3 retries = 1,500 retry requests/second
+500 (original failures) x 3 retries = 1,500 retry requests/second
 
 Your 10% retry budget:
-10,000 req/sec × 10% = 1,000 retry requests/second allowed
+10,000 req/sec x 10% = 1,000 retry requests/second allowed
 
 Verdict: 1,500 retry req/sec exceeds your 1,000 req/sec budget. You are over budget.
 
 **Part B: At what error rate does the budget tip?**
 
-Set up the equation. You want: (error_rate × 10,000) × 3 retries ≤ 1,000
+Set up the equation. You want: (error_rate x 10,000) x 3 retries <= 1,000
 
 Rearranging:
-error_rate × 30,000 ≤ 1,000
-error_rate ≤ 1,000 / 30,000
-error_rate ≤ 3.33%
+error_rate x 30,000 <= 1,000
+error_rate <= 1,000 / 30,000
+error_rate <= 3.33%
 
 Answer: if your error rate exceeds 3.33%, a 3-retry policy generates more than 10% retry overhead.
 
@@ -7209,7 +7209,7 @@ Answer: if your error rate exceeds 3.33%, a 3-retry policy generates more than 1
 
 It means your retry policy is designed for a world where your error rate is below 3.33%. At 5% error rate, you have two options:
 
-Option 1: Reduce retries to 2 (instead of 3). New math: 500 × 2 = 1,000 — exactly at budget.
+Option 1: Reduce retries to 2 (instead of 3). New math: 500 x 2 = 1,000 -- exactly at budget.
 
 Option 2: Fix the root cause. Why is your error rate 5%? That is the real problem. Tuning retries is the wrong answer when the right answer is "stop failing 500 requests per second."
 
@@ -7233,7 +7233,7 @@ State at T=10: **CLOSED**
 **T=10 to T=20 (60% error rate):**
 100 requests, 60 failures. Error rate = 60%. This exceeds the 50% threshold. The circuit OPENS.
 
-The exact moment depends on implementation — most circuit breakers trip mid-window when the threshold is crossed, not at the end. By T=20, the circuit is definitely open.
+The exact moment depends on implementation -- most circuit breakers trip mid-window when the threshold is crossed, not at the end. By T=20, the circuit is definitely open.
 
 State at T=20: **OPEN**
 
@@ -7252,22 +7252,22 @@ State at T=50 (after test): **CLOSED**
 
 State at T=60: **CLOSED**
 
-**Part B — Comparing with vs. without circuit breaker:**
+**Part B -- Comparing with vs. without circuit breaker:**
 
 During the OPEN period (T=20 to T=50), 30 seconds of traffic is being served.
 
-Assume 100 concurrent users. Without a circuit breaker, those users hit the failing downstream service. That service is responding with 60% errors and — this is key — the errors take 3 seconds to arrive (the service is timing out, not immediately failing). 
+Assume 100 concurrent users. Without a circuit breaker, those users hit the failing downstream service. That service is responding with 60% errors and -- this is key -- the errors take 3 seconds to arrive (the service is timing out, not immediately failing). 
 
 Without circuit breaker:
-- Average response time: 0.4 × (fast response, maybe 100ms) + 0.6 × (3,000ms timeout) = 40ms + 1,800ms = 1,840ms average
-- Threads held per second: 100 users × 3 seconds per failure = up to 300 threads held simultaneously (if thread pool is 100, you have thread exhaustion and all requests start queueing)
+- Average response time: 0.4 x (fast response, maybe 100ms) + 0.6 x (3,000ms timeout) = 40ms + 1,800ms = 1,840ms average
+- Threads held per second: 100 users x 3 seconds per failure = up to 300 threads held simultaneously (if thread pool is 100, you have thread exhaustion and all requests start queueing)
 
 With circuit breaker open:
 - Average response time: < 1ms (immediate failure, no network call made)
 - Threads held: 0 (the failure is returned before acquiring any downstream connection)
 - Thread pool: fully available for other work
 
-The circuit breaker's OPEN state is strictly better for the system during a dependency outage. The cost is that 100% of requests fail instead of 40% — but they fail instantly and free resources instead of failing slowly and holding resources.
+The circuit breaker's OPEN state is strictly better for the system during a dependency outage. The cost is that 100% of requests fail instead of 40% -- but they fail instantly and free resources instead of failing slowly and holding resources.
 
 This is the counterintuitive insight: **more errors, faster, is better than fewer errors, slower**, during an outage. The fast failures preserve your thread pool, which lets other parts of your system keep functioning.
 
@@ -7278,19 +7278,685 @@ This is the counterintuitive insight: **more errors, faster, is better than fewe
 The 30 questions and 10 exercises are designed to be worked in a specific order depending on your experience level.
 
 **If you are new to distributed systems (Part A and B of this chapter are still fresh):**
-Start with Section A (Questions 1-6) and Section B (Questions 7-12). These build the foundational math and mental models. Do not try to answer from memory — work through each calculation explicitly. The habit of showing math in interviews is itself a signal of rigor.
+Start with Section A (Questions 1-6) and Section B (Questions 7-12). These build the foundational math and mental models. Do not try to answer from memory -- work through each calculation explicitly. The habit of showing math in interviews is itself a signal of rigor.
 
 **If you have some experience but interviews are uncomfortable:**
-Section C (Questions 13-18) and the Exercises are your focus. These require synthesizing multiple concepts in one answer. Practice saying your answer out loud — the words matter as much as the logic. Most technical candidates know the answer but cannot articulate it under pressure.
+Section C (Questions 13-18) and the Exercises are your focus. These require synthesizing multiple concepts in one answer. Practice saying your answer out loud -- the words matter as much as the logic. Most technical candidates know the answer but cannot articulate it under pressure.
 
 **If you are preparing for L6/staff-level interviews specifically:**
 Section D (Questions 19-24) and Section E (Questions 25-30) are where L5 and L6 candidates diverge. L5 answers correctly but incompletely. L6 answers include the second-order effects, the monitoring, the degraded modes, and the "what I would have done differently" analysis. Practice adding one more layer of depth to each answer than feels comfortable.
 
 **For all levels:**
-Exercise 8 (the timed interview practice) should be done multiple times — ideally weekly. The first time will feel rough. The third time will feel natural. The fifth time you will be filling in details you did not think to mention in the first four attempts. Fluency under time pressure is a skill that only comes from practice, not from reading.
+Exercise 8 (the timed interview practice) should be done multiple times -- ideally weekly. The first time will feel rough. The third time will feel natural. The fifth time you will be filling in details you did not think to mention in the first four attempts. Fluency under time pressure is a skill that only comes from practice, not from reading.
 
 ---
 
 *End of Chapter 23, Part D.*
 
 *Chapter 23 complete: Part A (Core Concepts and Analogies), Part B (Deep Dives and Real Incidents), Part C (Design Patterns and Production Implementation), Part D (Interview Calibration, Practice Questions, and Quick Reference).*
+
+---
+
+## Supplemental Brainstorming: Chapter 23 -- Backpressure, Retries, and Idempotency
+
+### Cross-chapter: Leader Election lock retry (Q46 from Ch22)
+
+**Question 46 -- Lock acquisition retry during leader re-election (Ch22 + Ch23)**
+
+Raft re-election takes 150-500ms. All etcd writes fail during this window.
+Your service acquires a lock before each payment request. Traffic: 2,000 req/sec.
+
+- During a 300ms window, 600 requests fail. At t=300ms, all attempt acquisition simultaneously. What happens to the new etcd leader in the next 100ms?
+- Design retry with full jitter: base=50ms, cap=2000ms, sleep=random(0, min(cap, base * 2^attempt)). For 1,000 clients across 3 attempts, what fraction succeed within the first 300ms re-election window?
+- A downstream circuit breaker opens after 50 consecutive requests with latency > 500ms. Lock acquisition waits 300ms during re-election (under the 500ms threshold). The post-election thundering herd adds 200ms of queuing, pushing total latency to exactly 500ms. How close is this to the circuit breaker threshold? What is the margin?
+- Follow-up: Retry budget = 10% of 2,000 req/sec = 200 retries/sec. During re-election, all requests retry: 2,000 retries/sec -- 10x over budget. When the budget is exhausted, what does a request do: fail fast, queue, or shed load?
+
+---
+
+### Section A: Advanced Patterns (Q31-Q37)
+
+**Question 31 -- Idempotency keys for payment APIs: the Stripe model**
+
+Stripe requires an Idempotency-Key header (UUID) on every POST request.
+A retry with the same key returns the cached response without creating a new charge.
+The idempotency logic lives entirely on the server.
+
+- Walk through the server-side state machine:
+  (1) Request with key K arrives. Stripe atomically writes {K: "in_progress"}.
+  (2) A concurrent request with K finds "in_progress" and returns HTTP 409.
+  (3) After processing, Stripe atomically writes {K: result}.
+  (4) Future retries with K return the cached result.
+  Identify the failure window: if the server crashes after the charge succeeds
+  but before persisting the result, what does the next retry see?
+  How does Stripe mitigate this with transactional writes?
+- Keys expire after 24 hours. A mobile app retries every 60 seconds indefinitely.
+  At hour 25, it retries with the same key. The key is expired.
+  Stripe creates a new charge. The user is double-charged.
+  This is a client bug -- but it harms users.
+  What design constraint on the key format signals expiry risk to the client?
+  What should the client do when it receives a "key expired" error?
+- Key scoping: keys scoped globally risk cross-user collisions (astronomically rare
+  but not zero). Keys scoped per API key (per merchant) isolate the space.
+  Stripe scopes per API key. Given a merchant generating 10 million UUIDs per year,
+  what is the annual probability of a within-merchant collision using UUID v4?
+  Is UUID v4 sufficient?
+- Follow-up: Compare Stripe's application-layer idempotency (key stored in Redis/DB)
+  to database-layer idempotency (unique constraint on idempotency_key + ON CONFLICT DO NOTHING).
+  What does the database approach miss?
+  Specifically: the downstream card network call succeeds but the database INSERT fails --
+  does the unique constraint help in that scenario?
+
+---
+
+**Question 32 -- Bulkhead sizing using Little's Law**
+
+Your service calls Auth (p99=20ms), Inventory (p99=200ms), and Recommendations (p99=800ms)
+with thread-pool bulkheads. Total thread budget: 100 threads. Traffic: 50 requests/second,
+each requiring all three calls.
+
+- Naive allocation: 33 threads per pool.
+  Use Little's Law (L = lambda * W) to calculate utilization.
+  Recommendations: L = 50 * 0.8 = 40 threads needed, 33 allocated.
+  What happens? Calculate queue build-up rate over 10 seconds. What is the latency impact?
+- Correct allocation with Little's Law:
+  Auth needs 1 thread, Inventory needs 10, Recommendations needs 40. Total = 51.
+  You have 49 threads of headroom.
+  Recommendations degrades gracefully (empty results are acceptable).
+  Auth is critical (failure = all requests fail).
+  Propose a specific allocation that maximizes resilience and defend it.
+- Traffic doubles to 100 req/sec during a flash sale.
+  Recalculate: Auth needs 2, Inventory needs 20, Recommendations needs 80.
+  Your Recommendations pool is capped at your allocated amount.
+  What is the correct bulkhead behavior when the pool is full:
+  queue (adds latency), reject immediately (shed load), or selectively shed
+  only Recommendations while passing Auth and Inventory?
+- Follow-up: Resilience4j offers thread-pool bulkheads and semaphore bulkheads.
+  A semaphore bulkhead limits concurrency without dedicating threads.
+  Under what specific failure mode -- the dependency hangs and never returns --
+  does a semaphore bulkhead fail to protect your thread pool
+  while a thread-pool bulkhead succeeds?
+
+---
+
+**Question 33 -- Fast failure vs unbounded queueing: the math**
+
+Your service receives 1,000 req/sec. Each request takes 100ms. Steady-state threads: 100.
+A spike hits: 3,000 req/sec for 60 seconds. You compare two designs:
+Design A (unbounded queue) and Design B (queue limit of 200 requests).
+
+- Design A: excess requests queue at 2,000/sec.
+  After 60 seconds, queue depth = 120,000 requests.
+  After the spike ends (traffic returns to 1,000 req/sec):
+  all capacity is consumed by the backlog. Queue drains at 0 net req/sec.
+  How long until the queue is empty?
+  What is the end-to-end latency for a request that arrived at second 59?
+- Design B: at queue depth > 200, return HTTP 429 immediately.
+  The upstream has a circuit breaker: 50 consecutive 429s -> open for 30 seconds.
+  Walk through the timeline: at what point does the upstream circuit breaker open?
+  After it opens, what happens to the service's queue depth and recovery time?
+- Request deadline pattern: each request carries a deadline header (client timeout = 2 seconds).
+  Before dequeuing, the server checks if now > deadline and discards if so.
+  In Design A after the spike, requests in the queue are 120+ seconds old.
+  What fraction of processed requests produce useful responses (client has already timed out)?
+  What is the server's effective goodput -- useful work per CPU cycle?
+- Follow-up: gRPC propagates deadlines automatically across hops.
+  If a client sets a 2-second deadline and service A takes 1.5 seconds,
+  service B gets a 500ms deadline. With 500ms, can service B retry even once?
+  How should retry budgets be adjusted in a deep call stack with propagated deadlines?
+
+---
+
+**Question 34 -- Token bucket vs leaky bucket for database write backpressure**
+
+You rate-limit writes from an application tier to PostgreSQL (max sustainable: 1,000 writes/sec).
+Choose between token bucket and leaky bucket.
+
+- Token bucket: accumulate at 1,000 tokens/sec, burst capacity = 5,000.
+  A mobile client reconnects after 10 minutes offline and sends 4,000 writes at once.
+  The bucket has 5,000 tokens (capped, not 600,000 for 10 minutes).
+  The first 4,000 writes drain the bucket instantly.
+  Describe write rate to the database from t=0 to t=8 seconds.
+- Leaky bucket: writes drain at a constant 1,000/sec.
+  The same 4,000-write batch from the offline client queues.
+  How long to fully process? What is the queue depth at peak?
+  What is the latency of the last write in the batch?
+- The database cannot sustain more than 1,000 writes/sec for more than 2 seconds.
+  Under token bucket with 5,000 burst capacity, the offline client's burst
+  exceeds 1,000/sec for approximately 4 seconds. This violates the constraint.
+  What burst capacity setting makes token bucket equivalent to leaky bucket in safety?
+- Follow-up: Redis implements rate limiting via atomic Lua scripts.
+  Describe the Lua script for a token bucket:
+  what Redis data structures does it use, what is the algorithm in pseudocode,
+  and why must check-and-decrement be atomic
+  (why is a separate GET followed by DECR unsafe under concurrent requests)?
+
+---
+
+**Question 35 -- Adaptive timeouts: adjusting timeout based on real system state**
+
+Your service calls a payment processor. Baseline p99=500ms. Static timeout=1000ms.
+During an incident, response times spike to 8-12 seconds.
+Your static timeout means every request holds a thread for 1 full second before timing out.
+
+- At 500 req/sec during the incident, how many threads are held concurrently?
+  (Little's Law: 500 * 1.0 = 500 threads.)
+  If your thread pool has 100 threads, what happens within the first 200ms of the incident?
+  How does thread exhaustion cascade to other services sharing the pool?
+- Adaptive timeout algorithm: maintain a sliding window of the last 60 successful durations.
+  Every 10 seconds, compute p99 of the window. Set timeout = 2x p99.
+  Floor = 200ms. Ceiling = 3000ms.
+  During the incident, slow calls do not complete successfully, so the window empties.
+  What is the adaptive timeout when there are no successful calls in the window?
+  Is this a bug in the algorithm?
+- After recovery, new calls complete in 200ms.
+  But the window still has stale slow entries. It takes 60 successful calls to flush.
+  At 500 req/sec, that is 0.12 seconds -- fast.
+  But for a high-frequency trading service where 200ms vs 1000ms timeout matters,
+  design a faster decay: minimum window size, exponentially weighted moving average (EWMA),
+  decay factor.
+- Follow-up: Compare adaptive timeouts to circuit breakers.
+  The circuit breaker stops ALL traffic after 50% error rate over 10 seconds.
+  Adaptive timeout lets traffic through but reduces wait time.
+  Under what failure scenario does adaptive timeout outperform circuit breaker?
+  Under what pattern does circuit breaker win?
+
+---
+
+**Question 36 -- Retry budget pattern: preventing retry amplification**
+
+Your order service calls 5 downstream services: inventory, pricing, fraud, payment, notification.
+Each service independently retries up to 3 times with exponential backoff.
+Total incoming traffic: 1,000 orders/second.
+
+- In a partial outage, 20% of requests fail on the first attempt.
+  Calculate the maximum RPC volume per downstream service:
+  1,000 original + (200 failures * 3 retries) = 1,600 RPS.
+  If downstream services are already at 80% capacity (1,000 RPS = 80% of max),
+  what happens when they receive 1,600 RPS?
+- Retry amplification across tiers: the frontend also retries (up to 2 times).
+  The order service may receive up to 3,000 RPCs/sec (original + 2 retry waves).
+  Each RPC to payment retries up to 3 times.
+  Total payment RPCs: up to 9,000 RPS.
+  Generalize: with F frontend retries, S service retries, across T tiers,
+  what is the maximum RPC amplification at the deepest tier?
+  Calculate for F=2, S=3, T=5.
+- Retry budget: cap retries at 10% of total traffic = 100 retries/sec.
+  When budget is exhausted, fail fast (no retry).
+  Two allocation strategies:
+  (A) first-come-first-served (first 100 retrying requests win),
+  (B) random probability (each failing request retries with probability = budget/total).
+  What is the behavioral difference under a retry storm?
+  Which prevents starvation of fresh requests more effectively?
+- Follow-up: Google's "client-side throttling" approach: clients track request-to-success ratio
+  and proactively throttle themselves when success_rate < 0.9.
+  This limits ORIGINAL requests, not just retries.
+  How do client-side throttling and retry budgets complement each other?
+  Design a combined policy for your order service.
+
+---
+
+**Question 37 -- Hedged requests: reducing tail latency with duplicate RPCs**
+
+Bigtable's client sends a hedged read: if no response arrives within p95 (50ms),
+a second identical RPC goes to a different tablet server. The first response wins.
+
+- At 10,000 reads/sec with p95=50ms: approximately 5% trigger hedges = 500 hedged RPCs/sec.
+  Total volume: 10,500 RPS (5% increase).
+  At baseline p99=200ms (without hedging), what is the new p99 with hedging?
+  Reason: the hedge fires at 50ms, the second server responds by its p50 (~20ms later).
+  Hedged tail latency = 50 + 20 = 70ms instead of 200ms.
+  What fraction of the slowest 5% now complete at ~70ms?
+- Safety for writes: a hedged "increment counter" RPC goes to two replicas simultaneously.
+  Both execute the increment. The counter increments twice.
+  What property must a write operation have to be safely hedgeable?
+  Give two examples of writes safe to hedge and two that are not.
+- Speculative execution: the loser is NOT cancelled. Both RPCs complete.
+  A hedged "create payment" with idempotency_key=abc123 goes to R1 and R2.
+  R1 responds first (payment_id=999). R2 processes 50ms later, finds the key exists,
+  returns payment_id=999 (idempotency hit). Is the outcome correct?
+  What must the storage layer provide for this to work?
+- Follow-up: Hedging helps when tail latency is caused by straggler replicas (one doing GC).
+  It INCREASES load in a uniformly slow (overloaded) system.
+  Design the "hedge enable" condition: what metrics do you monitor
+  (per-replica p99 vs fleet-average p99), and at what threshold do you disable hedging?
+
+---
+
+
+### Standalone: Circuit Breaker Composition and Metastable Failure (Q43-Q44)
+
+**Question 43 -- Circuit breaker and bulkhead interaction under cascading degradation (Ch23)**
+
+Your checkout service calls Tax Calculation (critical, p99=50ms), Inventory (critical, p99=150ms),
+and Personalized Recommendations (non-critical, p99=600ms).
+Circuit breaker: opens at 50% error rate over 10 seconds.
+Bulkheads: Tax=10 threads, Inventory=20 threads, Recommendations=30 threads.
+
+- Recommendations becomes slow: p99=10 seconds.
+  At 100 req/sec, how quickly does the Recommendations bulkhead fill?
+  (30 threads / 100 new req/sec = 0.3 seconds to fill.)
+  The circuit breaker is still closed (requests are slow, not erroring).
+  Does a bulkhead-full rejection count as an error against the circuit breaker?
+  If yes, how many rejections in 10 seconds trigger the open state?
+- After the circuit breaker opens, Recommendations returns an empty fallback.
+  30 bulkhead threads are freed. Inventory is unaffected.
+  Now Inventory also slows (p99=3 seconds). The Inventory bulkhead fills in 0.2 seconds.
+  Checkout cannot complete without Inventory (it is critical).
+  What does checkout return when Inventory's bulkhead is full?
+- The half-open probe for Recommendations: after 60 seconds, one probe request goes through.
+  The probe hits the still-slow ML model and takes 10 seconds.
+  The circuit re-opens for another 60 seconds.
+  Design a better probe: a lightweight health endpoint (always responds in <100ms)
+  vs a reduced-timeout probe (500ms). What is the risk of a false positive
+  (probe succeeds at 500ms but full requests still take 10 seconds)?
+- Follow-up: Resilience4j separates circuit breaker, bulkhead, and timeout as composable decorators.
+  Composition order matters: timeout(bulkhead(circuit_breaker(call))) vs
+  circuit_breaker(timeout(bulkhead(call))).
+  In which order does a timeout correctly contribute to the circuit breaker's error rate?
+  Draw the composition and explain.
+
+---
+
+**Question 44 -- Metastable failure and breaking the retry feedback loop (Ch23)**
+
+Your API gateway is in a metastable failure state.
+Normal traffic: 5,000 req/sec, 100ms latency.
+Current state: 4,000 req/sec are retries (upstream clients timed out and retried).
+The retries consume all capacity. Fresh requests time out. Their clients retry.
+Total inbound: 8,000+ req/sec. The trigger (flash sale) ended 20 minutes ago.
+
+- Prove the metastability: define the stable equilibrium (5,000 req/sec, no retries)
+  and the metastable equilibrium (8,000+ req/sec, all retries).
+  What is the positive feedback loop? Under what conditions can the system self-recover?
+  Under what conditions does it require manual intervention?
+- Load shedding to break the loop: the API gateway reads a Retry-Count header.
+  At 70% utilization, reject all requests with Retry-Count >= 2.
+  At 85%, reject all with Retry-Count >= 1.
+  At 95%, reject all except Retry-Count=0.
+  If 4,000 of 8,000 requests are retries (Retry-Count >= 1), how many are shed at 85%?
+  Does this free enough capacity to serve fresh requests without timeouts?
+- Admission control: reject new requests when CPU > 80%, with probability
+  proportional to (CPU - 80%) / 20%.
+  At CPU=90%, reject 50%. At CPU=95%, reject 75%.
+  Prove this creates a stable equilibrium: if rejection reduces load by 50%
+  and 50% of traffic was retries, what is the new effective inbound rate?
+  Does the system converge?
+- Follow-up: Goodput = (requests resulting in 2xx) / (total inbound).
+  In the metastable state, goodput may be 15% (1,200 successes / 8,000 inbound).
+  Design the goodput SLO: target, evaluation window, alert threshold,
+  and automated mitigation (enable load shedding first, then scale, then circuit-break).
+
+---
+
+---
+
+## Production Incident 4: Stripe's Retry Storm During a 2020 Network Blip
+
+**Company:** Stripe
+**Year:** 2020
+**System:** Stripe's payment API -- the HTTP layer that processes charge requests from merchants
+
+---
+
+### What Happened (analogy first)
+
+Picture a highway with one lane closed for construction. Traffic backs up. After 30 minutes, the construction crew finishes and reopens the lane. Every car that had been waiting now tries to merge onto the highway at exactly the same moment. The highway, which was handling 1,000 cars per hour at normal capacity, gets hit by 4,000 cars at once -- all the backed-up ones plus the new arrivals who see the road is open again. The highway jams again immediately. The jam lasts another 2 hours even though the construction is done.
+
+In Stripe's case, the "highway" was their payment processing API. The "construction" was a 30-second period of elevated latency caused by a network blip between two data centers. The "backed-up cars" were retry requests from every SDK client that had timed out during those 30 seconds.
+
+Stripe's client SDKs (used by tens of thousands of merchants) implemented exponential backoff without jitter. Exponential backoff means: first retry after 1 second, second after 2 seconds, third after 4 seconds, fourth after 8 seconds. Without jitter, every client that timed out at the same moment retries at the same intervals. If 50,000 clients all experienced a timeout at T=0, then at T=1s, all 50,000 retry simultaneously. At T=2s, the ones that failed again all retry simultaneously again.
+
+The 30-second network blip was over. The API was healthy. But the retry wave was larger than the original traffic. Stripe's API handled ~200,000 requests per second under normal load. The retry storm generated ~800,000 requests per second at its peak. The API, overwhelmed by the retry wave, started returning errors again. Clients timed out again. They retried again. The self-sustaining cycle ran for 4 hours before the retry backoff windows spread out naturally.
+
+---
+
+### Technical Failure
+
+Exponential backoff without jitter creates synchronized retry waves. The math:
+
+- 50,000 clients experience timeout at T=0 (during the 30s blip).
+- All 50,000 have base backoff = 1 second, multiplier = 2, no jitter.
+- At T=1s: 50,000 retry. API was healthy. But 50,000 requests arriving simultaneously spike latency above threshold. 40,000 of them time out again.
+- At T=2s: 40,000 retry. Same problem. 35,000 time out.
+- At T=4s: 35,000 retry. The spike is still large enough to cause timeouts.
+- The distribution never spreads out because all clients are on identical backoff schedules.
+
+Normal Stripe traffic at T=0: 200,000 req/s.
+Retry storm peak: 200,000 (normal) + 600,000 (retries) = 800,000 req/s.
+API capacity ceiling: 300,000 req/s.
+
+The API overloaded, which caused new timeouts, which caused new retries from new clients, which added to the storm. This is a metastable failure: the trigger (the 30s network blip) was over, but the system was stuck in a high-retry equilibrium that was self-sustaining.
+
+---
+
+### ASCII Diagram
+
+```
+T=0  to T=30s: Network blip (elevated latency)
++--------------------------------------------------+
+| API                                              |
+| Capacity: 300,000 req/s                          |
+| Normal load: 200,000 req/s                       |
+| Blip: latency 2000ms, clients start timing out   |
++--------------------------------------------------+
+
+During blip: clients time out and schedule retries
+  Client batch A (100k clients): timeout at T=5s  --> retry at T=6s
+  Client batch B (100k clients): timeout at T=10s --> retry at T=11s
+  Client batch C (100k clients): timeout at T=20s --> retry at T=21s
+
+T=30s: Blip ends. API is healthy. But...
+
+T+1s (T=31s): Retry wave hits
++--------------------------------------------------+
+| Inbound: 200,000 (normal) + 300,000 (retries)   |
+|        = 500,000 req/s   >   300,000 capacity   |
+| Result: timeout rate spikes again                |
+| New clients timeout --> schedule new retries     |
++--------------------------------------------------+
+         |
+         v
+T+2s: Second retry wave (jitter-free, all at once)
++--------------------------------------------------+
+| Inbound: 200,000 (normal) + 400,000 (retries)   |
+|        = 600,000 req/s   >   300,000 capacity   |
+| Still overloaded. More timeouts. More retries.   |
++--------------------------------------------------+
+         |
+         v
+T+4s, T+8s, T+16s: Same pattern repeats
+(Each wave slightly smaller but still above capacity)
+
+With jitter (what SHOULD have happened):
++--------------------------------------------------+
+| Retry window spread over random [0, 2s] interval |
+| At any given second: ~50,000 retries/s (not 300k)|
+| Total inbound: 200,000 + 50,000 = 250,000 req/s  |
+|              < 300,000 capacity: API healthy      |
+| Retries drain. System recovers in ~2 minutes.    |
++--------------------------------------------------+
+
+TIMELINE COMPARISON:
+  Without jitter: API overloaded for 4 hours
+  With jitter:    API recovers in ~2 minutes
+```
+
+---
+
+### Root Cause
+
+Exponential backoff without jitter in Stripe's client SDK. All clients experienced the same trigger event (the 30-second blip) at the same time. Without random jitter on the backoff interval, all clients scheduled their first retry at T=1s, second at T=2s, and so on. The synchronized retry waves repeatedly exceeded API capacity.
+
+The secondary cause was the absence of a retry budget on the client side. Clients retried indefinitely. A retry budget (e.g., "max 3 retries per request, then fail fast") would have capped the maximum retry amplification.
+
+---
+
+### Fix Applied
+
+**SDK change (deployed within 2 weeks):**
+
+Changed backoff formula from:
+```
+wait = base * (2 ^ attempt)
+```
+to:
+```
+wait = random_uniform(0, min(cap, base * (2 ^ attempt)))
+```
+
+Where `cap = 32 seconds` (maximum backoff). This is "full jitter" -- the actual retry delay is a uniform random value between 0 and the calculated backoff. AWS published this analysis as the "Exponential Backoff And Jitter" blog post in 2015; Stripe's SDK adopted it.
+
+**Retry budget added:**
+```
+max_retries = 3
+retry_on: [429, 500, 502, 503, 504]
+do_not_retry_on: [400, 401, 402, 403, 404, 409]  # permanent errors
+```
+
+**Server-side defense (deployed within 4 weeks):**
+
+Added a `Retry-After` header to 429 responses, specifying a jittered backoff window. Clients that respect `Retry-After` spread out their retry timing even if local jitter is misconfigured.
+
+---
+
+### Staff Engineer Lessons (3-4 bullets)
+
+- **Synchronized retries amplify failures; jitter prevents synchronization.** The mathematical effect of full jitter is that retry arrivals approximate a Poisson process rather than a spike. At scale (millions of clients), synchronized retries can generate 10x the normal traffic in a single second. Jitter is not a nicety -- it is a correctness requirement for any retry implementation used by many concurrent clients.
+- **Metastable failures do not resolve themselves.** The original trigger (the 30-second blip) had resolved. The system was still broken 4 hours later because the retry behavior had created a self-sustaining overload loop. Recognizing metastability means asking: "If the original cause goes away, does the system recover? Or is there a positive feedback loop keeping it overloaded?" If the answer is the latter, you need active intervention (load shedding, circuit breaking, or a manual retry drain) not just fixing the root cause.
+- **Design the retry contract at both ends.** Stripe's fix required changes to both the client SDK (jitter and retry budget) and the server (Retry-After headers). Retries are a protocol between caller and callee. The callee should signal "when to retry" and the caller should respect it. Neither side alone can fully control the retry behavior; both must participate.
+- **Test retry behavior explicitly under load.** The synchronized retry failure was latent in Stripe's SDK for years before this incident. Load tests typically test sustained load, not recovery from a transient spike. Add a specific test: simulate 30 seconds of API unavailability followed by recovery, with 10,000 concurrent clients, and measure the retry amplification ratio. The target ratio should be less than 2x normal traffic at any point during recovery.
+
+---
+
+## Production Incident 5: Amazon SQS Visibility Timeout Misconfiguration (2019-era)
+
+**Company:** Amazon (internal service; pattern widely documented in AWS support cases and postmortems)
+**Year:** 2019 (approximate)
+**System:** Lambda + SQS pipeline for order processing -- messages consumed from an SQS queue by Lambda functions, written to an RDS database
+
+---
+
+### What Happened (analogy first)
+
+Imagine a library checkout system. When you check out a book, the library marks it as "borrowed -- unavailable to others" for 2 weeks. This prevents someone else from checking out the same book while you have it. But here is the catch: the library computer assumes you will return the book in 2 weeks. If it takes you 3 weeks to actually read and return it, the library will have marked it available again at week 2 and loaned it to someone else. Now two people have the same book checked out. Two people think they have it exclusively.
+
+In Amazon's case, the "book" was an SQS message representing a customer order. The "2 weeks" was a visibility timeout of 3 seconds. The "time to read the book" was the Lambda function's processing time, which was up to 5 seconds. Because the processing took longer than the visibility timeout, the message became visible again in the queue before Lambda finished. A second Lambda invocation picked it up. Both Lambdas wrote the order to the database. The database had no deduplication. The order appeared twice.
+
+The specific numbers: Lambda function timeout was set to 5 seconds. SQS visibility timeout was set to 3 seconds. Every message that took more than 3 seconds to process was re-enqueued and processed 2-5 times. At normal throughput of 40,000 orders per day, roughly 12,000 orders (30%, the ones in the 3-5 second processing tail) were duplicated. Over 6 hours before the issue was discovered, approximately 3,600 duplicate order records were written.
+
+---
+
+### Technical Failure
+
+SQS visibility timeout and Lambda function timeout are independent configuration values. They must be coordinated by the operator. The SQS documentation recommends setting the visibility timeout to 6x the function timeout to account for retries and processing variation. For a 5-second Lambda timeout, the visibility timeout should have been 30 seconds.
+
+At 3 seconds, the failure is deterministic for any message that takes more than 3 seconds to process:
+
+1. Lambda receives message M from SQS. SQS marks M invisible for 3 seconds.
+2. Lambda begins processing M. Time passes.
+3. At T=3s, SQS visibility timeout expires. M becomes visible again in the queue.
+4. A second Lambda instance picks up M. SQS marks M invisible for another 3 seconds.
+5. Lambda instance 1 finishes at T=4s. Writes order record to RDS. Deletes M from SQS.
+6. Lambda instance 2 is at T=1s of its own processing cycle (it started at T=3s). SQS sees M was deleted (step 5). But instance 2 is already executing -- it has the message in memory. It continues.
+7. Lambda instance 2 finishes at T=7s. Writes the same order record to RDS again.
+
+The SQS delete in step 5 prevents a third Lambda from picking up the message, but instance 2 was already running when the delete happened. The delete is not a cancellation signal -- it is a permanent removal of the message from the queue. Instance 2 has no way to know the message was deleted while it was processing.
+
+---
+
+### ASCII Diagram
+
+```
+CONFIG (wrong):
+  Lambda timeout:          5 seconds
+  SQS visibility timeout:  3 seconds   <-- MUST be > Lambda timeout
+
+Timeline for message M (processing takes 4 seconds):
+
+Real time:  0    1    2    3    4    5    6    7    8
+            |    |    |    |    |    |    |    |    |
+
+SQS Queue:
+  T=0:  M arrives in queue (visible)
+        |
+        v
+Lambda-1:
+  T=0:  picks up M
+        SQS marks M invisible (3s timeout starts)
+        +----+----+----+----+
+        | processing M      |  completes at T=4
+        +----+----+----+----+
+                            |
+                  T=4: writes order to RDS
+                  T=4: deletes M from SQS
+
+SQS Queue:
+  T=3:  visibility timeout expires!
+        M becomes visible again (Lambda-1 is still running!)
+        |
+        v
+Lambda-2:
+  T=3:  picks up M (it's visible!)
+        SQS marks M invisible (new 3s timeout)
+        +----+----+----+----+
+        | processing M      |  completes at T=7
+        +----+----+----+----+
+                            |
+                  T=7: writes SAME order to RDS (DUPLICATE)
+                  T=7: tries to delete M -- but M already deleted
+                       SQS returns "message not found" (ignored)
+
+RDS Database at T=7:
++-----------------------------------+
+| order_id=42 customer=Alice  x 2   |  <-- DUPLICATE ROW
+| order_id=43 customer=Bob    x 1   |
+| order_id=44 customer=Carol  x 3   |  <-- TRIPLE (slow processing)
++-----------------------------------+
+
+CORRECT CONFIG:
+  Lambda timeout:          5 seconds
+  SQS visibility timeout:  30 seconds  (6x rule)
+
+With correct config:
+  T=0:  Lambda-1 picks up M, SQS hides M for 30s
+  T=4:  Lambda-1 finishes, deletes M
+  T=30: visibility would expire -- but M already deleted
+  Result: M processed exactly once
+
+DETECTION:
+  Metric to watch: ApproximateNumberOfMessagesNotVisible (SQS)
+  Alert if (messages not visible) > (Lambda concurrency * expected proc time)
+  Any ratio > 1.5 suggests messages are being re-delivered during processing
+```
+
+---
+
+### Root Cause
+
+SQS visibility timeout (3 seconds) was shorter than the Lambda function's maximum processing time (up to 5 seconds). This is a configuration mismatch, not a code bug. The root cause at the process level: there was no automated validation that checked the relationship between these two values. Both were set independently by different teams (infrastructure team set the SQS queue, application team set the Lambda timeout) without a shared review step.
+
+The secondary cause: the RDS database had no uniqueness constraint or idempotency check on the order record. A proper idempotency implementation would have rejected the duplicate write: `INSERT INTO orders (id, ...) ON CONFLICT (id) DO NOTHING`. The database acting as the final idempotency boundary would have limited the blast radius to a no-op duplicate write rather than a duplicate record.
+
+---
+
+### Fix Applied
+
+**Immediate (within 1 hour):** Set SQS visibility timeout to 30 seconds (6x the Lambda timeout of 5 seconds). This stopped new duplicates from being created.
+
+**Data correction (6 hours):** Identified 3,600 duplicate order records by querying for `(order_id, created_at)` pairs that appeared more than once within a 30-second window. De-duplicated by keeping the record with the lowest `row_id` and soft-deleting the rest. Verified against the upstream order event log to confirm which record was the authoritative first-processing.
+
+**Code fix (deployed within 1 week):**
+```sql
+-- Added uniqueness constraint to prevent duplicate writes
+ALTER TABLE orders ADD CONSTRAINT orders_external_id_unique UNIQUE (external_order_id);
+
+-- Lambda code changed to use upsert
+INSERT INTO orders (external_order_id, customer_id, amount, ...)
+VALUES (:id, :cust, :amount, ...)
+ON CONFLICT (external_order_id) DO NOTHING;
+```
+
+**Process fix:** Added a deployment checklist item for Lambda + SQS pipelines:
+```
+SQS visibility timeout >= 6 * Lambda function timeout
+If Lambda timeout = N seconds, set visibility timeout = 6*N seconds minimum
+Alert: if visibility_timeout < function_timeout, block deployment
+```
+
+---
+
+### Staff Engineer Lessons (3-4 bullets)
+
+- **Idempotency at the database layer is the last line of defense.** Configuration mismatches will happen. Lambda timeouts change when someone adds a slow external call. SQS timeout is set once and forgotten. The correct design assumes that any message can be delivered more than once and makes the processing operation safe to repeat. An `ON CONFLICT DO NOTHING` clause costs nothing to add during development and prevents an entire class of production incidents.
+- **Visibility timeout and function timeout are a contract, not independent knobs.** Treat the relationship `visibility_timeout >= 6 * function_timeout` as an invariant that must be checked by automated tooling, not by humans reading documentation. Add it to your infrastructure-as-code validation layer (e.g., a Terraform custom validation rule or a pre-deploy CI check). If this relationship is not enforced automatically, it will drift.
+- **The SQS delete-message call is not a cancellation signal.** Many engineers assume that if Lambda-1 deletes the message, Lambda-2 (which picked it up after the visibility timeout) will "know" to stop. It does not. SQS has no channel to communicate back to a running Lambda invocation. Deletion only prevents future reads -- it does not interrupt current processing. Design your consumers to be idempotent because they will run to completion regardless of what happens in SQS after pickup.
+- **Duplicate processing rate is a leading indicator, not a lagging one.** The incident ran for 6 hours before discovery because there was no metric for "messages processed more than once per queue entry." Add this metric: compare SQS `NumberOfMessagesDeleted` against your application-level write count. If writes > deletes by a ratio above 1.02 (2% overhead for retries), investigate. This metric would have surfaced the misconfiguration within minutes of deployment.
+
+---
+
+## L5 vs L6 Calibration: Backpressure, Retries, and Idempotency
+
+| Dimension | L5 (Senior Engineer) | L6 (Staff Engineer) |
+|-----------|----------------------|---------------------|
+| **Retry configuration** | Sets max retries and backoff multiplier; uses exponential backoff; knows to not retry on 4xx | Implements full retry contract: exponential backoff with full jitter, per-request retry budget, retry-safe vs non-safe operation distinction, `Retry-After` header respect, retry amplification analysis (what is the worst-case RPS if N clients all retry simultaneously?) |
+| **Idempotency design** | Adds idempotency keys to payment APIs; uses `ON CONFLICT DO NOTHING` for simple cases | Designs idempotency end-to-end: key generation (client-side UUID, not server-assigned), key storage TTL (how long is a key valid?), idempotency across async boundaries (the key must survive message redelivery), partial completion detection (what if the operation succeeded but the response was lost?), and idempotency for non-database side effects (emails, Kafka events) |
+| **Circuit breaker tuning** | Configures circuit breaker with threshold percentages; knows open/half-open/closed states | Derives circuit breaker parameters from SLO math: error threshold that opens breaker, half-open probe count, minimum throughput before breaker can open (prevents spurious opens at low traffic). Knows that circuit breakers on internal services need different thresholds than on external dependencies. Can explain why a circuit breaker on a database connection pool behaves differently than one on an HTTP client |
+| **Bulkhead sizing** | Knows bulkheads separate thread pools for different downstream dependencies | Derives bulkhead sizes from capacity analysis: if Service A handles 1,000 req/s and calls Service B for 60% of requests, the bulkhead for Service B connections should be sized for 600 req/s at p99 latency, not for 1,000 req/s. Over-sizing bulkheads defeats their purpose. Under-sizing causes unnecessary rejections |
+| **Load shedding policy** | Knows to return 429 when overloaded; has a concurrency limit | Designs load shedding by priority: which requests are shed first (retries before fresh, low-value before high-value), what signal triggers shedding (CPU, queue depth, latency p99), what the shed request receives (429 with Retry-After vs 503 without), and how to measure the effectiveness (goodput metric: successful responses / total inbound) |
+| **Backpressure mechanism** | Uses a queue with a max depth; returns error when queue is full | Designs end-to-end backpressure: the downstream slowdown signal must propagate upstream to the originating client. Pull-based systems (Kafka consumers) do this naturally; push-based HTTP systems require explicit signals (429, slow response, connection refusal). Knows that dropping the signal at any intermediate layer (e.g., a proxy that buffers and hides 429s) defeats backpressure |
+| **Timeout strategy** | Sets a single timeout value per service call | Implements timeout hierarchy: connect timeout (fast), read timeout (medium), operation timeout (budget for the full request including retries). Knows that aggressive timeouts cause retry amplification and that lenient timeouts cause head-of-line blocking. Derives timeout values from SLO budget: if user-facing SLO is 200ms at p99 and the call chain has 3 hops, each hop budget is approximately 60ms |
+| **Queue vs synchronous choice** | Uses queues for "fire and forget" and sync for "need the answer now" | Makes the queue/sync decision based on failure mode analysis: sync coupling fails both caller and callee on dependency outage; queue decoupling allows caller to succeed even when callee is down, but introduces eventual consistency and ordering complexity. Explicitly designs for the "callee is down for 4 hours -- what is in the queue and what is the processing backlog when it returns?" scenario |
+| **Metastable failure awareness** | Knows that retry storms are bad; has seen them | Can formally identify a metastable failure: define the stable equilibrium, the metastable equilibrium, the positive feedback loop between them, and the conditions under which the system self-recovers vs requires intervention. Designs the "escape hatch": the specific manual action (drain retries, enable load shedding, circuit break an upstream) that breaks the feedback loop |
+| **Retry budget** | Uses max retry count (e.g., 3 retries); familiar with the concept | Implements retry budget as a percentage of total traffic: "retries may consume at most 10% of outbound capacity." This prevents a scenario where a wave of failing requests consumes all available connections on retries, leaving no capacity for new requests. Knows the Google SRE recommendation: retry budgets work better than per-request retry counts at high traffic volumes |
+| **Hedged requests** | Has heard of hedged requests; knows the concept from Tail at Scale paper | Implements hedged requests with a concrete delay: send the request, if no response in P95 latency, send a second request to a different instance, use whichever responds first, cancel the other. Knows when hedging is appropriate (idempotent reads, latency-sensitive paths) and when it is harmful (writes, non-idempotent operations, systems at near-capacity where the extra request would tip into overload) |
+| **Incident response under overload** | Knows to scale up or restart services; can reduce traffic manually | Executes the overload incident playbook in order: (1) identify the feedback loop, (2) enable load shedding at the entry point to shed retries first, (3) wait for in-flight requests to drain (do not restart mid-flight), (4) verify goodput is recovering before removing load shedding, (5) find and fix the root cause before re-enabling full traffic. Knows that scaling up during a retry storm often makes it worse (more capacity = more retries handled = more timeouts = more retries) |
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+Same problem at four levels: Service A calls Service B. Service B starts failing. What does Service A do?
+
+### Intern Level: "Keep retrying until it works"
+
+The intern adds a retry loop: "If the call fails, wait 1 second and try again. Repeat up to 10 times."
+
+Think of this like knocking on a door repeatedly. If nobody answers after 10 knocks, you stop. Reasonable for a person. Catastrophic for a distributed system.
+
+At 10,000 requests/second calling Service B, and Service B goes down, Service A generates 10,000 retries/second. Each retry fails in 1 second (timeout). Service B gets 10,000 new requests while still processing 10,000 retried requests. Service B's load is now 20,000/second. It was already failing at 10,000. The retries make recovery impossible.
+
+### Mid-Level (L4): "Use exponential backoff"
+
+L4 adds exponential backoff: "Wait 1s, then 2s, then 4s, then 8s." This reduces retry volume over time. Service B gets a chance to recover.
+
+Better. But L4 missed: all 10,000 clients backed off to the same schedule. At t=8 seconds: all 10,000 clients hit their 8-second backoff at the same moment. A synchronized thundering herd floods Service B with 10,000 simultaneous retries.
+
+### Senior (L5): "Exponential backoff with jitter + circuit breaker"
+
+L5 adds jitter (random delay) to desynchronize retries: sleep = random(0, min(cap, base * 2^attempt)). Now 10,000 clients are spread across the backoff window instead of synchronized.
+
+L5 also adds a circuit breaker: "If 50% of calls in the last 10 seconds fail, stop calling Service B entirely for 60 seconds. Return a cached response or graceful degradation." This protects Service B during recovery: instead of receiving 10,000 retries, it receives 0 until the circuit closes.
+
+```
+L5 RETRY STACK:
+  Attempt 1: immediate
+  Attempt 2: sleep random(0, 1s)
+  Attempt 3: sleep random(0, 2s)
+  Attempt 4: sleep random(0, 4s)
+  Max 4 attempts, max sleep 30s
+
+  Circuit breaker:
+  - Closed (normal): all requests pass through
+  - Open (triggered): all requests fail fast, no calls to B
+  - Half-open (testing): 1 request/10s to test recovery
+  - Back to Closed: if the probe succeeds
+```
+
+### Staff (L6): "The retry policy is a system contract, not a per-service setting"
+
+L6 does everything L5 does, then asks: "Who else is calling Service B? If 20 upstream services each retry independently, our per-service circuit breaker misses the aggregate view. Service B could be within each individual circuit breaker threshold while being overloaded by 20 services simultaneously."
+
+L6 adds: "We need a retry budget at the platform level. Every service is allowed N% of its requests to be retries. The budget is enforced by the service mesh (Envoy/Istio). When a service exhausts its retry budget, new requests fail fast instead of adding more load."
+
+L6 also thinks about idempotency: "Our retry policy is only safe if Service B's operations are idempotent. Payment processing is NOT idempotent by default -- retrying a charge creates a duplicate charge. Before we enable retries on ANY service call, we must verify the endpoint is idempotent. This is a code review checklist item."
+
+```
+L6 RETRY DESIGN CHECKLIST:
+  [ ] Is the operation idempotent? (if not, NO retries)
+  [ ] Jitter added to backoff? (if not, thundering herd risk)
+  [ ] Circuit breaker configured? (open threshold, reset time)
+  [ ] Retry budget set at platform level?
+  [ ] Downstream service knows our retry policy? (SLA depends on it)
+  [ ] DLQ or fallback for exhausted retries?
+  [ ] Metastable failure scenario analyzed?
+      (can our retries prevent B from recovering?)
+```
+
+### The Pattern
+
+- Intern: retry loop (amplifies failures)
+- L4: exponential backoff (thundering herd risk)
+- L5: backoff + jitter + circuit breaker (standard production pattern)
+- L6: platform-level retry budget + idempotency verification + metastable failure analysis
+
+---

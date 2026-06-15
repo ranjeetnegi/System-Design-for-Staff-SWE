@@ -5187,3 +5187,40 @@ projection, evaluate partition increase and plan the repartitioning carefully.
 - Follow-up: the product team tells you the launch will have a marketing push that may spike
   to 10x expected traffic for 2 hours on day 1. Design the burst handling strategy that does
   not require pre-provisioning 10x capacity permanently.
+
+---
+
+### Cross-chapter: Kafka controller re-election and leader election (from Ch22)
+
+**Question 44 -- Kafka controller re-election and producer/consumer impact (Ch22 + Ch34)**
+
+In KRaft mode, a 3-node Kafka controller quorum uses Raft. A controller node failure triggers re-election.
+
+- Producer impact: a producer writes to partition P0 at 10,000 msg/sec. P0's leader is broker B1. Controller re-election takes 300ms. B1 remains partition leader during re-election. Why does the producer NOT see errors in the common case? Under what specific scenario WOULD a producer see errors during controller re-election?
+- Compound failure: during re-election, broker B3 crashes (unrelated). B3 was leader for P1. The new controller must reassign P1's leader to B2 -- but cannot do so during the 300ms re-election window. Producers to P1 get LEADER_NOT_AVAILABLE. Walk through producer retry behavior: retry count, backoff, worst-case latency spike.
+- Consumer reads from P1 (leader: B3, crashed). Walk through recovery: metadata refresh, new fetch from B2. Is there duplicate delivery? A message gap? What determines which?
+- Follow-up: In the ZooKeeper era, all 100 brokers raced to create /controller (thundering herd). KRaft limits voting to the 3-5 controller quorum nodes. Quantify the election RPC volume difference for a 100-broker cluster with a 3-node KRaft quorum.
+
+---
+
+---
+
+### Cross-chapter from Ch21: Kafka Partitions vs. Database Shards
+
+**Question 45 — Ch21 + Ch34: Kafka Partitions vs. Database Shards**
+
+Kafka partitions data across broker nodes for write parallelism. Database sharding distributes data across server nodes for write and read scale. Both can develop "hot key" problems. The solutions differ significantly.
+
+- State the hot key problem in database sharding with a specific example and quantified impact. Then state the hot key problem in Kafka partitioning with a specific example and quantified impact. They are superficially similar — what is the fundamental structural difference in why they occur?
+- A database hot shard causes: CPU saturation, write-lock contention, growing replication lag on that shard's replica, and eventually query timeouts for all reads on that shard — not just hot-key reads. A Kafka hot partition causes: consumer lag on that partition's consumer thread. Why is the Kafka impact more contained? Name two specific architectural properties of Kafka that prevent a hot partition from cascading to affect reads on other partitions.
+- The standard mitigation for a database hot shard is shard splitting — add a new shard and move a portion of the hot shard's key range. For a Kafka hot partition, the standard mitigation is to increase the partition count and re-hash. Why is the Kafka mitigation operationally easier? What property of Kafka's append-only, immutable partition design makes repartitioning simpler than database resharding?
+- Follow-up: A streaming pipeline consumes from a Kafka topic (32 partitions) and writes aggregated results to a PostgreSQL database sharded across 8 shards. One Kafka partition handles messages for a single high-volume customer (10× average message rate). This maps to one database shard that becomes the bottleneck. You cannot repartition the Kafka topic without reprocessing all historical data. Design the mitigation at the database layer. How do you reduce load on the hot shard without changing the Kafka topology or the partition key?
+
+> *Discussion notes:*
+> - *Fundamental structural difference: in a database, a hot shard is a storage and locking problem — too many operations compete for the same pages and rows, causing lock contention and I/O saturation. In Kafka, a hot partition is a consumer throughput problem — one consumer thread cannot process messages fast enough. There is no lock contention between consumers.*
+> - *Why Kafka hot partitions are more contained: (1) Kafka partitions are independent append-only logs — a slow consumer on partition 3 holds no lock or resource that affects partition 4's consumer or producer. (2) Kafka storage is sequential I/O per partition — a hot partition saturates one disk's sequential write bandwidth, but other partitions on other broker nodes are fully unaffected.*
+> - *Why Kafka repartitioning is operationally simpler: increasing Kafka partition count creates new empty partitions. Old data stays in the old partitions forever (immutable). New messages distribute across the expanded partition set. No data movement, no double-write phase, no consistency verification. Database shard splitting requires data movement — that is the source of all the complexity.*
+> - *Hot shard mitigation in the database layer (without Kafka topology changes): introduce a write buffer in Redis. The hot consumer writes aggregated results to Redis (O(1) per message). A separate batch writer reads from Redis in bulk every 100ms (1,000 rows per batch) and writes to PostgreSQL with a single INSERT ON CONFLICT DO UPDATE. This converts 1,000 single-row writes into 1 bulk write — 100× write amplification reduction on the hot shard.*
+
+---
+

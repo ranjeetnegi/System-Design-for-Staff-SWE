@@ -7773,3 +7773,16 @@ Waiting until the system is built to think about cost. The cheapest time to chan
 *This supplement provides complete topic coverage for Chapter 38: Cost Efficiency and Sustainable System Design.*
 *Sections A-F map 1:1 to the 35 chapter topics plus 8 cross-cutting areas listed in the chapter introduction.*
 *Use the quick-reference frameworks during timed practice (25-minute mock interview format) until the reasoning becomes automatic.*
+
+---
+
+### Cross-chapter from Ch26: Infrastructure cost of QUORUM consistency
+
+**Question 38 -- Ch26 + Ch38: infrastructure cost of QUORUM consistency**
+
+Cassandra's QUORUM consistency requires that reads and writes touch W+R > N replicas. At QUORUM with N=3, every read touches 2 nodes and every write touches 2 nodes. At ONE consistency, every operation touches 1 node. The cost difference is not just latency -- it is cross-node network traffic, which incurs egress costs in cloud environments.
+
+- At 100K reads/second with QUORUM (each read touches 2 nodes): cross-node read operations = 200K/second. At ONE consistency: 100K/second. If cross-node traffic costs $0.01 per GB and each read response is 1KB: calculate the annual cost difference.
+- QUORUM also increases tail latency: a QUORUM read waits for the slowest of 2 nodes. If P99 latency for a single node is 10ms and 5% of nodes are slow (50ms), how often does a QUORUM read hit a slow node? Calculate the QUORUM P99.
+- Follow-up: Your service has a 100ms SLA. With QUORUM reads, your P99 is 85ms. With ONE reads, your P99 is 40ms. A new business requirement says certain user reads (those affecting billing) must be strongly consistent. Describe the two-consistency-level strategy: QUORUM for billing reads, ONE for display reads. What percentage of your traffic is billing reads? Use that to calculate weighted average cost.
+

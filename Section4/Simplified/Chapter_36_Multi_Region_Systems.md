@@ -8360,3 +8360,207 @@ Your SLA guarantees RTO of 15 minutes and RPO of 1 minute for a regional failure
 
 ---
 
+
+---
+
+### Cross-chapter: etcd multi-region quorum topology (from Ch22)
+
+**Question 45 -- etcd topology for multi-region quorum tolerance (Ch22 + Ch36)**
+
+5-node etcd cluster. Raft quorum: 3 of 5. Topology: US-East (E1, E2), US-West (W1, W2), EU-West (EU1).
+
+- Partition 1: US-East isolated. Remaining: W1, W2, EU1. Do they have quorum? Can they elect a leader and commit writes? What do E1 and E2 do?
+- Partition 2: US-West isolated. Remaining: E1, E2, EU1. Quorum? Now add: EU1 crashes. Only E1 and E2 remain. Do they have quorum? What does etcd return when a client writes?
+- A 3+3+1 = 7-node topology (quorum: 4 of 7) tolerates any single region failure. Prove it: walk through each case (lose US-East: 3 gone, 4 remain; lose US-West: 3 gone, 4 remain; lose EU-West: 1 gone, 6 remain).
+- Follow-up: etcd supports "learner" nodes -- they replicate the log but do not vote. A learner in AP-Southeast-1 serves reads locally without affecting quorum. What consistency guarantee do learner reads provide? What do they NOT provide?
+
+---
+
+### Cross-chapter: Multi-region payment idempotency (from Ch23)
+
+**Question 42 -- Multi-region idempotency for payments (Ch23 + Ch36)**
+
+A payment request hits US-East (circuit breaker: open due to CPU spike).
+The load balancer fails it over to EU-West. EU-West processes the payment successfully.
+The client's HTTP client times out before receiving the response.
+The client retries. The retry hits US-East (now recovered).
+US-East has no record of the EU-West payment. US-East charges the card again.
+
+- Identify the idempotency gap: this is not a retry bug or a database bug --
+  it is a multi-region state isolation problem.
+  What consistency model does the idempotency store need to prevent this?
+  Strong consistency? Read-your-writes? Causal? Why is eventual consistency insufficient?
+- Candidate global idempotency stores:
+  (a) DynamoDB Global Tables: last-writer-wins, ~1 second replication lag.
+  (b) Google Spanner: external consistency (linearizability), 10-20ms commit latency.
+  (c) CockroachDB: serializable isolation, ~20-50ms cross-region commit latency.
+  For each: does it prevent the double-charge scenario? At what latency cost per payment API call?
+- Sticky routing as an alternative: hash idempotency_key to a region at the global load balancer.
+  All retries for the same key go to the same region.
+  What infrastructure component enforces this routing?
+  What happens if the designated region is down -- fail open (route anywhere) or fail closed?
+  What is the consequence of each for the double-charge problem?
+- Follow-up: Stripe stores idempotency state in a globally replicated database.
+  The extra 10-20ms write latency is the price of correctness.
+  For a payment API with a p99 target of 500ms, how significant is 20ms overhead?
+  What is the business argument for absorbing this cost
+  vs accepting rare (1-in-100,000) duplicate charges?
+
+---
+
+### Cross-chapter: End-to-end payments resilience across multi-region (from Ch23)
+
+**Question 45 -- End-to-end resilience design for a payments microservice (Ch23 + Ch28 + Ch36)**
+
+Design the complete resilience stack for a payment microservice calling:
+(1) Fraud Detection (critical, p99=100ms, max tolerable latency=300ms),
+(2) Payment Processor API (critical, p99=500ms, idempotent, max tolerable=2000ms),
+(3) Notification Service (non-critical, p99=200ms, fire-and-forget acceptable).
+
+- Timeout and retry configuration for each dependency.
+  Justify each timeout against the max tolerable latency constraint.
+  For the Payment Processor: why must retries use the SAME idempotency key as the original?
+  What happens if you generate a new UUID on each retry?
+- Idempotency end-to-end: the client sends idempotency_key=K1.
+  The payment service creates a derived key for the Processor:
+  K1_processor = hash(K1 + "payment_processor").
+  The payment service also stores K1 in its own idempotency table.
+  On client retry with K1: the service finds K1 in its table (first attempt succeeded)
+  and returns the cached response WITHOUT calling the Processor again.
+  What does the service store alongside K1 to reconstruct the response?
+  What if the first attempt is still in-flight (status: "pending")?
+- Cascading failure: Fraud Detection becomes slow (p99=5 seconds).
+  Walk through bulkhead filling, circuit breaker opening, and fallback activating.
+  While the circuit is open, what does the service do:
+  fail the payment (refuse to process without fraud check), or approve with degraded mode
+  (log for async review)?
+  Argue both positions from a risk perspective.
+- Follow-up: Define the SLO: availability target (99.9%), error budget (0.1%),
+  latency target (p99 < 2 seconds).
+  If Fraud Detection's circuit is open for 10 minutes and the service processes payments
+  without fraud checks, are those 10 minutes counted against the availability SLO?
+  Argue: "the service was available (payments processed)" vs
+  "the service was degraded (fraud checks bypassed = business error)."
+  What does your SLO definition say?
+
+---
+
+### Cross-chapter from Ch20: Authentication Consistency in Active-Active
+
+**Question 41 — Ch20 + Ch36: Authentication Consistency in Active-Active Multi-Region**
+
+You run an active-active deployment in two regions: EU-West and US-East. Both regions accept reads and writes. Cross-region async replication has 200ms mean lag and 800ms P99. A user in London updates their password at EU-West's primary (time T=0). The new password hash is committed. At T+100ms, the user's mobile app sends an automatic session refresh request — cellular routing sends it to US-East. US-East's replica has not received the new password hash yet (still 100ms within the 200ms mean lag window). Authentication fails.
+
+- List three distinct strategies to prevent this false authentication failure. For each strategy, describe the mechanism in two sentences, the latency cost in the normal case where no password change has occurred in the past 10 minutes, and the single most dangerous failure mode of that strategy.
+- One strategy is to synchronously replicate only the authentication table (password hashes, MFA settings, session invalidation list) to all regions, while keeping all other data on async replication. The cross-region round-trip is 90ms. Current password change latency: 40ms. What is the new password change latency? How does this affect the user experience of changing a password, and is this latency acceptable for a security operation?
+- A second strategy uses a globally-low-latency coordination service — similar to Cloudflare Workers KV or DynamoDB Global Tables — to store only the security-critical credentials. This service replicates in under 50ms P50 but up to 300ms P99.9. Your user attempts authentication at T+100ms. What is the probability that the credential store is not yet consistent at that moment? At T+500ms? At T+1000ms? What user-facing retry logic handles the small probability of failure at T+100ms?
+- Follow-up: The user does not change their password — they disable two-factor authentication because their phone was stolen. The async lag means US-East still requires MFA for up to 200ms after the change. During those 200ms, the attacker using the stolen phone could authenticate with the old phone's MFA token. Is this window a meaningful security risk? What is the expected probability of an attacker exploiting a 200ms window? Does your answer change if MFA changes should be treated as security-critical and therefore synchronously replicated, even at 90ms additional latency?
+
+> *Discussion notes:*
+> - *Strategy 1 (synchronous cross-region for auth table): adds 90ms to password changes. Failure mode: during a partition between EU-West and US-East, password changes fail globally. Strong consistency for security writes creates an availability problem.*
+> - *Strategy 2 (global credential store): failure mode is global scope — if the credential store degrades, all auth fails everywhere rather than just in one region. Requires extremely high availability SLA.*
+> - *Strategy 3 (signed session token forwarding): the client carries a signed token with the write timestamp. US-East reads the token, detects a recent credential change, and escalates to the primary. Failure mode: token must be cryptographically signed to prevent forgery. If signing is skipped, an attacker can manufacture a token claiming any write timestamp.*
+> - *The correct answer for most systems: strategy 2 (global credential store) scoped only to the authentication table, not the entire user database. This is what services like Auth0, Okta, and Firebase Auth do internally.*
+> - *MFA 200ms window: not a meaningful risk in practice. An attacker must know the exact moment MFA was disabled AND send an auth request within 200ms. This combination requires real-time surveillance of the account. Synchronous replication for every MFA change is not justified by this risk at the typical threat model.*
+
+---
+
+
+### Cross-chapter from Ch20+Ch21: Password Update Across Three System Layers
+
+**Question 45 — Ch20 + Ch36 + Ch21: The Password Update Across Three System Layers**
+
+Setup: active-active multi-region deployment in EU-West and US-East. Within each region: one primary and two followers with async replication. Cross-region: async replication at 200ms mean lag. Authentication service reads user credentials from the nearest replica within its region.
+
+Sequence of events: A user changes their password in a browser in London (EU-West) at 10:00:00.000 AM. The write commits on the EU-West primary. At 10:00:00.150 AM (150ms later), the user's iOS app, on a cellular connection that routes to US-East, sends an automatic session token refresh that requires re-verifying the password hash. At 10:00:00.500 AM, the cross-region replication lag catches up and US-East has the new password.
+
+- At T+150ms: US-East's auth service queries its replica for the password hash. The replica received the new hash at approximately T+200ms (mean cross-region lag). At T+150ms, what does US-East return to the iOS app? Is this a system bug, a consistency model failure, or expected behavior under the configured async replication? Write the on-call runbook entry that distinguishes "expected behavior" from "system malfunction" for this symptom.
+- Design the minimum change to prevent the T+150ms failure without synchronously replicating all password changes cross-region. What is your mechanism? What additional component does it require? What is the latency overhead on every password change (which happens once every few months per user) vs. every authentication request (which happens multiple times per day per user)?
+- Your design introduces a "credential freshness token" stored in a globally-consistent key-value store. This store has 50ms P50 replication latency and 300ms P99.9. The user changes their password — the token is written at T=0, mean replication at T+50ms. The iOS app retry arrives at US-East at T+150ms. What is the probability the token is available at US-East by T+150ms? Assuming a log-normal distribution with P50=50ms and P99.9=300ms, approximately where is T+150ms in the distribution?
+- Follow-up: The globally-consistent key-value store has a 45-second outage due to a network partition. During this outage, your credential freshness tokens are unavailable. Authentication requests that involve a recent password change (within the last 5 minutes) cannot verify freshness. You have two fallback options: (a) deny all auth requests that cannot verify freshness — safe but causes user lockouts; (b) fall back to eventual consistency — allow auth based on whichever replica is available, accepting the risk of a stale-hash acceptance. Design the fallback decision rule: under what conditions does option (a) apply vs. option (b)? At what point does the risk of option (b) — a user authenticating with an old password — become unacceptable?
+
+> *Discussion notes:*
+> - *Runbook entry: classify as expected behavior if the auth failure duration is within the configured P99 cross-region lag (800ms). Classify as system malfunction if the auth failure persists beyond 2x P99 lag (1,600ms). Page the on-call engineer if failures persist beyond 5 seconds.*
+> - *Credential freshness token mechanism: on password change, write to global store: key = user_id, value = {hash: new_password_hash, timestamp: T, ttl: 300s}. On every auth request, US-East checks the global store for a token for this user_id. If token exists and age < 300s, use the token's hash instead of the local replica's hash.*
+> - *Latency impact: 50ms P50 global store lookup per auth for users who changed their password in the last 5 minutes. Cache miss (no token, or token expired) returns in under 10ms. Fraction of users with an active token: assuming 1 password change per user per 6 months, and a 5-minute token TTL: 5min / (6 months x 43,200 min/month) = 0.002% of users at any moment. Overhead is negligible.*
+> - *45-second outage fallback decision: option (b) — fall back to eventual consistency — is acceptable if fewer than 0.01% of users are simultaneously in an active password-change window. The exploit requires: user changed password AND attacker sends auth with old password AND the credential store is down. All three conditions simultaneously. For most applications, this probability is below the risk threshold. Accept option (b) and log the fallback events.*
+
+---
+
+---
+
+## How to Use These Questions
+
+Work through Section A questions before Section B. Section A questions are self-contained — they can be answered using only the material in Chapter 20. Section B questions require you to hold two chapters in mind simultaneously. If you find yourself unsure how a cross-chapter question connects to the second chapter, go back and re-read the relevant section of that chapter before attempting the question again.
+
+Strong answers to these questions share three properties: they state a specific model or mechanism (not just "use strong consistency"), they give a specific number (latency in ms, cost in dollars, probability in percent), and they name the failure mode for the approach they recommend.
+
+The cross-chapter questions in Section B are intentionally harder than anything in the original Q1-Q30 set. They are the type of question an interviewer asks at the 35-40 minute mark of a 45-minute session, after the candidate has already demonstrated baseline competence. These questions are not designed to have a single correct answer — they are designed to surface how you reason under uncertainty. Focus on the structure of your reasoning, not on finding the "right" answer.
+
+---
+
+
+### Cross-chapter from Ch21: Sharding Under GDPR Data Residency
+
+**Question 44 — Ch21 + Ch36: Sharding Under GDPR Data Residency**
+
+Your user database is sharded by user_id hash across 8 shards, all in US-East. You have 20 million users: 14 million in North America, 4 million in the EU, 2 million in APAC. GDPR Article 44 prohibits transferring EU personal data outside the EU without adequate safeguards. Your current architecture stores EU user data on US servers, in violation of GDPR.
+
+- What is the specific GDPR violation in your current architecture? What is the legal risk classification — is this an Article 83(4) violation (up to 2% of global annual turnover) or an Article 83(5) violation (up to 4%)? What is the maximum fine exposure for a company with $500M annual revenue?
+- Design the migration from user_id hash sharding to a sharding strategy that supports EU data residency. Your new strategy must guarantee that EU users' personal data is written to and read from EU-resident infrastructure only. Describe the new shard key or composite key strategy, the routing logic change, and the migration plan for the 4 million existing EU users.
+- Your shard routing layer must enforce data residency as a hard constraint, not a soft preference. Design the enforcement mechanism: what prevents an application bug from routing an EU user's write to a US shard? This enforcement must be: machine-readable (not documentation), testable in CI, and auditable for compliance review.
+- Follow-up: An EU user and a US user collaborate on a shared document. The document is owned by the EU user — all writes go to EU infrastructure. The US user makes frequent edits. Each edit requires a write to EU infrastructure, adding 90ms of cross-region latency to every US-user edit. This latency is user-perceptible during real-time collaboration. Design the architecture that reduces the US user's edit latency while maintaining GDPR compliance. What data can live in US-East without violating GDPR, and what must always remain in EU-West?
+
+> *Discussion notes:*
+> - *GDPR violation: Article 46 (cross-border transfer without adequate safeguards). Falls under Article 83(5) — up to 4% of global annual turnover. For a $500M revenue company: maximum fine $20M.*
+> - *New shard key strategy: composite key (region_code, user_id_hash). EU users assigned region_code = 'eu' at registration, routed exclusively to EU-West shards. Existing EU users must be migrated: extract user_ids where country is in the EU, move their rows to EU-West shards.*
+> - *Enforcement at the proxy layer: use PgBouncer or a custom TCP proxy as the database gateway. An ACL maps connection source (EU-West application tier) to EU-West shards only. US-East application tier cannot establish connections to EU-West shards. This enforcement is at the network layer — auditable via firewall logs.*
+> - *Shared document collaboration — what can live where: document content and edit history are personal data (tied to the EU user's account) and must stay in EU-West. The US user's real-time edit operations (operational transforms, CRDTs) are mathematical deltas — they contain no personal data and can be processed in US-East.*
+> - *Reduced-latency collaboration architecture: US user's browser sends edits to a US-East edge service. The edge service strips any user-identifying context and forwards only the transform delta (e.g., "insert character 'x' at position 47") to EU-West. EU-West applies the delta and returns a document version number. The acknowledgment to the US user is the version number — no personal data crosses from EU to US. User-perceptible latency: US-East edge acknowledgment in under 10ms, vs. full 90ms round-trip without the edge service.*
+
+---
+
+
+### Cross-chapter from Ch21: Multi-Region Shard Rebalance Under Compliance
+
+**Question 48 — Ch21 + Ch36 + Ch20: Multi-Region Shard Rebalance Under Compliance**
+
+Setup: sharded user database across two regions — US-East (shards 1-4) and EU-West (shards 5-8). US users are on shards 1-4, EU users on shards 5-8. Each region maintains a full DR copy (async cross-region replication, 150ms mean lag, 800ms P99). A GDPR audit flags that the US-East DR copy contains EU user data (shards 5-8) — this is technically a cross-border data transfer.
+
+Simultaneously, shard 3 in US-East is at 92% disk capacity and needs to be split within 14 days.
+
+- The GDPR remediation requires removing EU user data from US-East's DR copy. The capacity emergency requires splitting shard 3. If these run concurrently, identify the specific race condition that can corrupt data. Describe the sequence of events in the race condition precisely.
+- Design the sequencing to prevent the race condition. Which operation must complete first, and what is the minimum safe gap between the completion of operation 1 and the start of operation 2? What is the go/no-go gate between the two operations?
+- During the shard 3 split (24-hour migration window), every write to a shard 3 key goes to: (a) the existing shard 3 primary, (b) the new shard 9 primary (double-write), (c) the EU-West DR copy's shard 3, and after the GDPR fix, no longer to (d). Draw the write topology during the migration window. How many write acknowledgments does a write to a shard 3 key require before returning success to the client?
+- Follow-up: The shard 3 split completes. The US-East routing table is updated to send certain user_ids to shard 9 instead of shard 3. The routing table update propagates to all US-East nodes in 30 seconds. During this 30-second propagation window, some US-East nodes still route to shard 3 for user_ids that should now go to shard 9. A user in this key range writes their profile during the propagation window. The write goes to shard 3 (old routing). The write is not on shard 9 (new routing). After propagation completes, the user reads their profile — the read goes to shard 9. They see the old profile. Describe the consistency model the user experienced during this 30-second window. Design the client-side retry logic that makes this failure transparent to the user.
+
+> *Discussion notes:*
+> - *Race condition: shard 3 split double-writes to shard 3 and shard 9. GDPR remediation simultaneously modifies EU-West DR replication topology. If DR replication is briefly interrupted during the topology change AND the shard 3 primary fails before replication resumes, writes from the double-write window are lost from EU-West's DR copy. Data loss window = interruption duration × write rate.*
+> - *Correct sequencing: complete GDPR remediation first. Verify new DR topology is stable (< 200ms lag for US shards to EU-West) for 48 hours. Only then start the shard 3 split. Go/no-go gate: automated check that DR replication lag for all US shards is below 200ms for 48 consecutive hours.*
+> - *Write topology during the 24-hour shard 3 split: each write to a shard 3 key goes to (1) shard 3 primary (synchronous, required for success), (2) shard 9 primary (asynchronous double-write), (3) EU-West DR copy of shard 3 (async, post-GDPR). The client receives success after shard 3 primary confirms. Shard 9 and DR are eventually consistent followers.*
+> - *30-second routing table propagation window consistency model: the user experienced eventual consistency. Their write was acknowledged and durably stored on shard 3. But reads during the propagation window may route to shard 9 (incorrect shard for this user_id during the window) and not find the write.*
+> - *Client-side retry logic: the write response includes the write's WAL LSN and the shard ID that accepted it. The next read request includes this in an X-Write-Token header. The routing layer checks: does the target shard have this LSN applied? If not (wrong shard or stale shard), escalate to the shard 3 primary directly. This is the read-your-writes mechanism applied to shard routing propagation.*
+
+---
+
+### Cross-chapter from Ch26: Per-feature CAP policy in multi-region active-active
+
+**Question 37 -- Ch26 + Ch36: per-feature CAP policy in a multi-region active-active system**
+
+An active-active multi-region system is inherently AP at the region level: if a network partition separates two regions, both continue serving (availability) but data diverges (consistency violated). The per-feature CAP policy determines which features you accept this trade-off for, and which you do not.
+
+- For a social platform with global active-active deployment, define the CAP policy for each feature: (a) user login/authentication, (b) posting new content, (c) reading the feed, (d) payment processing, (e) push notification delivery. For each: can this feature tolerate serving from a partitioned (stale) region?
+- For features you marked "must be CP": what is the user experience during a region-level partition? (They cannot perform that action.) How do you communicate this to the user? How long is acceptable unavailability?
+- Follow-up: User authentication must be CP (you cannot let a revoked user log in from a stale replica). But this means during a regional partition, users in the affected region cannot log in. Design an alternative: a "read-only mode" where authenticated sessions continue to work (AP) but new logins are blocked (CP). What are the security implications of this design?
+
+
+### Cross-chapter from Ch27: TrueTime and global linearizability in Spanner
+
+**Question 40 -- Ch27 + Ch36: TrueTime and global linearizability in Spanner**
+
+Google Spanner achieves external consistency (linearizability) globally across continents using TrueTime -- GPS-synchronized clocks with bounded uncertainty. Every timestamp in Spanner is a range [T_earliest, T_latest]. Before committing, Spanner waits until the uncertainty window passes (commit wait). This guarantees that any transaction committed after another is provably later, even across data centers.
+
+- Why does NTP (millisecond accuracy, 1-100ms uncertainty) fail for global linearizability, while GPS (microsecond accuracy, ~7ms uncertainty) succeed? The commit wait must be longer than the clock uncertainty. With NTP at 100ms uncertainty: commit wait = 100ms per transaction. At 10K writes/second: this is acceptable. At 1M writes/second: not acceptable.
+- CockroachDB uses HLC (not GPS) with maximum clock offset enforcement (500ms). How does CockroachDB achieve linearizability without TrueTime? (It reads timestamps from HLC and waits for the uncertainty window.) What is the latency overhead vs Spanner's GPS-based approach?
+- Follow-up: You are designing a global financial ledger. TrueTime (Spanner) gives you global linearizability with 7-10ms commit latency overhead. HLC (CockroachDB) gives you similar guarantees with 2-5ms overhead but requires bounded clock skew enforcement. For a ledger processing 100K global transactions/second: which approach do you choose? What is the cost difference? (Spanner: Google Cloud cost. CockroachDB: self-hosted or managed cost.) Calculate the latency and cost trade-off.
+

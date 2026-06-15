@@ -10224,3 +10224,149 @@ Full database architecture review .................. Q50
 ---
 
 *End of Supplemental Questions 26-50 for Chapter 28.*
+
+---
+
+### Cross-chapter: PostgreSQL write idempotency under client retry (from Ch23)
+
+**Question 41 -- PostgreSQL write idempotency under client retry (Ch23 + Ch28)**
+
+Your e-commerce API creates orders in PostgreSQL.
+A client submits an order. The INSERT takes 1,100ms. The client timeout is 1,000ms.
+The client gets a timeout error and retries. The original INSERT already succeeded.
+
+- Describe the failure mode: the database has the order; the client does not know.
+  A naive retry creates a second order row with a new auto-generated UUID.
+  What is the user-facing symptom?
+- Add idempotency at the database layer: the client generates idempotency_key before the first
+  attempt and includes it on every retry.
+  The API does: INSERT INTO orders (..., idempotency_key) VALUES (..., 'abc-123')
+  ON CONFLICT (idempotency_key) DO NOTHING.
+  After a conflict, the API must return the ORIGINAL row.
+  Write the SQL to fetch it. What HTTP status code does the API return: 200 or 201?
+  Argue for a specific choice.
+- Race condition: two retries arrive simultaneously (parallel network glitch).
+  Both check "does key abc-123 exist?" -- neither finds it (first attempt still in flight).
+  Both try to INSERT. PostgreSQL serializes: one succeeds, one hits DO NOTHING.
+  Both threads fetch the existing row. Is there any scenario where DO NOTHING
+  still causes a double charge?
+- Follow-up: The client sends the same idempotency key but with a DIFFERENT amount
+  (a bug changes the amount from 100 to 200 on retry).
+  Should the server silently return the original response (amount=100),
+  or return HTTP 422 (key reuse with different payload)?
+  What does Stripe do? What data must the server store alongside the key to detect this case?
+
+---
+
+---
+
+### Cross-chapter from Ch20: Per-Data-Type Consistency in Fintech
+
+**Question 40 — Ch20 + Ch28: Per-Data-Type Consistency in Fintech**
+
+You are designing the data layer for a fintech application. Three data types: (1) account balance — the current available balance, updated on every transaction; (2) transaction history — an append-only log of all debits and credits; (3) user preferences — display currency, notification settings, dark mode. Three database options on the table: PostgreSQL with serializable isolation, DynamoDB with tunable reads (eventual or strongly consistent, chosen per read request), Cassandra with tunable consistency levels (ONE, QUORUM, ALL, per operation).
+
+- For each data type, select the appropriate consistency model and the appropriate database option. You may not give the same answer for all three. Justify each choice in two sentences: what the model provides and what specific harm occurs if you choose a weaker model.
+- Transaction history is append-only — nothing is ever modified or deleted. A developer argues: "Eventual consistency is fine for append-only data — there are no conflicts to resolve." Construct the counter-argument. What specific scenario causes a user-visible problem when a user views their transaction history under eventual consistency, even if no writes conflict? (Hint: think about what happens when a user views their history immediately after initiating a transfer.)
+- You chose DynamoDB for transaction history with eventually consistent reads. A compliance auditor asks: "Can a user's transaction history ever show a transaction that never happened?" Address this question precisely. Does eventual consistency in DynamoDB create phantom transactions? What does eventual consistency actually mean for read correctness vs. read freshness?
+- Follow-up: A new regulatory requirement states that users disputing a transaction must see a consistent snapshot of their history for the duration of the dispute — meaning the history cannot appear to change between two reads taken 5 minutes apart during the same dispute session. Map this requirement to a consistency model. Which of the three database options can provide it? At what cost in terms of latency and throughput?
+
+> *Discussion notes:*
+> - *Account balance = PostgreSQL with serializable isolation (or DynamoDB strongly consistent reads). Stale balance reads cause either false overdraft or false rejection — both financial harm.*
+> - *Transaction history = DynamoDB with eventually consistent reads. Records are immutable once committed. The only staleness: a very recent transaction may not appear immediately. User sees it on next refresh. Cosmetically suboptimal, not financially harmful.*
+> - *User preferences = eventual consistency from any store — Redis would work. Stale display currency or dark mode causes zero harm.*
+> - *Append-only data counter-argument: a user initiates a $500 transfer at T=0. They view transaction history at T+800ms. The replica is 1.5s behind. Their history shows nothing. They assume the transfer failed and initiate it again. This is the "my payment didn't go through" support ticket — a read-your-writes failure masquerading as a transaction failure.*
+> - *Eventual consistency in DynamoDB does NOT create phantom transactions. Eventual means reads may be stale (missing recent writes), not incorrect (containing writes that never happened). A transaction that never committed will never appear.*
+> - *Dispute requirement maps to snapshot isolation: the history must be consistent at a fixed point in time, not changing between reads. PostgreSQL MVCC provides this natively. DynamoDB can approximate it with version-stamped conditional reads but requires application-level session management.*
+
+---
+
+
+### Cross-chapter from Ch20+Ch21: Choosing the Right Database per Consistency
+
+**Question 44 — Ch20 + Ch21 + Ch28: Choosing the Right Database per Consistency Requirement**
+
+You are architecting a new payments platform. Four data types: (1) pending transaction state — a transaction is in one of {initiated, processing, settled, failed} at any moment; (2) ledger entries — an append-only record of all balance changes; (3) user payment method preferences — saved cards, default card, billing address; (4) fraud signals — a lightweight score (0.0-1.0) computed per transaction and stored for audit review.
+
+Database options: PostgreSQL (serializable isolation, B-tree storage), DynamoDB (tunable per-request consistency, key-value), Cassandra (tunable per-operation with ONE/QUORUM/ALL, LSM-tree), Redis (in-memory, eventual across cluster nodes).
+
+- For each data type, select one database and one consistency level. State the database, the consistency setting, and one sentence explaining what breaks if you chose a weaker model.
+- Pending transaction state is the hardest. Two separate services (payment gateway and fraud detection) can both attempt to move a transaction from "processing" to "settled." Both read the current state, both see "processing," both attempt a write. Which database from the list above prevents this double-settlement at the database level? Which one requires the application to implement its own optimistic locking? Show the mechanism in each case — what SQL or API operation enforces mutual exclusion?
+- Ledger entries are append-only. A common reasoning is "eventual consistency is fine for immutable data." Construct the failure mode that proves this wrong. Specifically: a user initiates a $500 transfer at 3:00:00 PM. The ledger entry is written to the primary at 3:00:00. The user checks their transaction history (a ledger read) at 3:00:00.800, 800ms later. The replica used for this read is 1.5 seconds behind. What does the user see? What action might they take based on what they see? What is the downstream consequence?
+- Follow-up: Your Cassandra cluster for ledger entries is configured at QUORUM consistency with N=5 nodes, Replication Factor=3. QUORUM requires ceil((RF+1)/2) = 2 acknowledgments per write and per read. Two nodes fail simultaneously. Can you still write? Can you still read? Show the quorum math. What does Cassandra return to the client when quorum is not achievable — an error with a specific error code, a timeout, or does it return stale data silently?
+
+> *Discussion notes:*
+> - *Pending transaction state = PostgreSQL with serializable isolation + SELECT FOR UPDATE. This row-level lock prevents concurrent services from both reading "processing" and both writing "settled."*
+> - *DynamoDB alternative for pending state: use a conditional write (attribute_not_exists(status) OR status = "processing"). Prevents double-settlement at the application level without row locking. The application must implement the check — the database does not enforce it natively.*
+> - *Cassandra LWT (lightweight transactions, Paxos-backed conditional writes): can do conditional writes but costs 4× normal write latency and cannot span multiple rows. Not suitable for pending transaction state without careful design.*
+> - *Ledger entries = DynamoDB with strongly consistent reads for the most recent 24 hours, eventually consistent for historical queries. Failure mode for eventual: user initiates a $500 transfer, checks history immediately, sees nothing, initiates the transfer again. This is the "my payment didn't go through" support ticket — a read-your-writes failure.*
+> - *Quorum math: N=5, RF=3. QUORUM = ceil((RF+1)/2) = ceil(4/2) = 2 acknowledgments required. With 2 nodes failed: 3 nodes remain. Both writes (need 2 acks) and reads (need 2 acks) succeed. With 3 nodes failed: 2 nodes remain. Writes succeed (2 >= 2), but reads may fail if the 2 remaining nodes have divergent data. Cassandra returns WriteTimeout or ReadTimeout — never silently returns stale data when quorum cannot be achieved.*
+
+---
+
+
+### Cross-chapter from Ch21: Sharding vs. LSM-Tree Database Migration
+
+**Question 43 — Ch21 + Ch28: Sharding vs. LSM-Tree Database Migration**
+
+Your PostgreSQL primary processes 12,000 writes per second and is at 82% CPU. Engineers propose two options: (A) shard the users table across 4 PostgreSQL instances using user_id mod 4; (B) migrate to Apache Cassandra (LSM-tree storage engine) which can handle far higher write throughput on equivalent hardware.
+
+- For option A — sharding PostgreSQL — list four queries that work correctly against the sharded setup and three queries that break or require application-level workarounds. For each broken query, explain what the correct workaround is and its complexity cost.
+- For option B — migrating to Cassandra — explain at the storage engine level why an LSM-tree handles high write throughput better than a B-tree (PostgreSQL's storage). Be specific about what each engine does on a write: what I/O operations occur, what locking occurs, and what the throughput ceiling is determined by.
+- Option B requires giving up ACID guarantees that PostgreSQL provides. List three specific guarantees that PostgreSQL provides natively which must be re-implemented at the application layer after migrating to Cassandra. For each, describe the implementation cost and the risk of getting the re-implementation wrong.
+- Follow-up: Your team cannot decide. The CTO is risk-averse about Cassandra (irreversible migration cost) but the lead engineer is risk-averse about sharding (operational complexity compounds over time). You have 10 weeks to make the decision. Design a time-boxed experiment that produces the data needed to choose between the two options without fully committing to either. What do you build, what do you measure, and what specific data point constitutes a definitive recommendation for one option over the other?
+
+> *Discussion notes:*
+> - *Queries that work with user_id hash sharding: read user by user_id (single shard); update user profile by user_id (single shard); insert new user (route by hash); delete user by user_id (single shard).*
+> - *Queries that break: SELECT * FROM users ORDER BY created_at LIMIT 100 — must query all 4 shards, merge results, re-sort (scatter-gather). SELECT COUNT(*) WHERE country='US' — scatter-gather, sum. SELECT u.*, o.total FROM users JOIN orders — cross-shard join requires application-level assembly if orders are on different shards.*
+> - *LSM-tree write advantage at the mechanism level: PostgreSQL writes must find the correct page in the B-tree (random I/O), update it in-place, and write to the WAL. B-tree page splits cause write amplification. Cassandra writes go to a sequential in-memory MemTable and a sequential WAL only — no random I/O at write time. Compaction (reorganizing on-disk data) happens asynchronously in the background. This makes Cassandra's write path 5-10× faster on equivalent hardware for write-heavy workloads.*
+> - *Three ACID guarantees to re-implement for Cassandra: (1) Foreign key enforcement — Cassandra has no concept of foreign keys; the application must validate parent existence before inserting a child row. (2) Uniqueness constraints beyond the partition key — Cassandra only guarantees uniqueness within a partition key. For global uniqueness (e.g., unique email addresses), the application must use LWT (4× write latency) or accept the risk of duplicates. (3) Multi-row atomic transactions — use the saga pattern with compensating transactions; no equivalent to PostgreSQL's BEGIN/COMMIT spanning multiple tables.*
+> - *The 10-week experiment: shadow-write 10% of new writes to a Cassandra instance in parallel with PostgreSQL. Measure: write latency difference, read latency at QUORUM vs PostgreSQL primary, operational overhead of managing compaction. If Cassandra write P99 is 3× better and operational burden is manageable, migrate. If PostgreSQL sharding achieves sufficient throughput at the projected scale, stay.*
+
+---
+
+
+### Cross-chapter from Ch21: Read Replicas for Analytics vs. Operational Queries
+
+**Question 47 — Ch21 + Ch28: Read Replicas for Analytics vs. Operational Queries**
+
+Your team routes two types of traffic to the same pool of 4 read replicas: operational reads (user-facing, P99 latency SLO of 50ms) and analytics reads (internal dashboards, batch jobs, P99 latency tolerance of 60 seconds). The load balancer distributes these round-robin with no differentiation.
+
+- Describe the hidden contention in specific database terms. A 45-minute analytics query (full table scan, reading 800 million rows) lands on Replica 2. At minute 3, an operational read for a user profile (expected: 2ms) also routes to Replica 2. What database resource is contended? What is the operational read's actual latency? Name the PostgreSQL mechanism that causes this.
+- Design the isolation strategy with one additional replica. You now have 5 replicas total. What routing policy uses all 5? How do you prevent analytics queries from routing to the operational replicas — is this enforced at the load balancer, the database connection string level, or the application code level? What is the weakest link in your enforcement?
+- The analytics team accesses the analytics replica directly using their own PostgreSQL credentials. Design the database-level guardrails that protect the replica's replication health from long-running analytics queries. Specifically: which session settings do you configure on the analytics role, what are the values, and why is each necessary?
+- Follow-up: The analytics team's queries cause replication lag to increase from 500ms to 18 minutes on the analytics replica. The queries are the cause: they hold old snapshots that prevent autovacuum from removing dead tuples, which creates table bloat, which makes sequential scans progressively slower, which makes the queries run longer, which holds snapshots longer. This is a feedback loop. Identify each link in the feedback loop and design the intervention that breaks it. Your intervention must not require the analytics team to change their query patterns.
+
+> *Discussion notes:*
+> - *Contention mechanism: a long-running analytics query holds a PostgreSQL snapshot from the moment it started. This snapshot prevents autovacuum from removing dead tuple versions from tables being scanned. Operational reads on the same table must skip dead tuples — as dead tuples accumulate, effective table size grows, sequential reads degrade from 2ms to 200ms.*
+> - *Isolation strategy with 5 replicas: Replicas 1-3 serve operational reads. Replica 4 serves analytics reads. Replica 5 is a hot standby for the operational pool. Enforcement at the network layer: analytics replica IP is only reachable from the analytics team's subnet, not from the application tier — this is auditable via firewall rules.*
+> - *Session guardrails via ALTER ROLE: statement_timeout = '30min' (cancel queries exceeding 30 minutes), idle_in_transaction_session_timeout = '5min' (disconnect sessions holding idle transactions), lock_timeout = '10s' (cancel analytics queries that block on table locks), work_mem = '2GB' (in-memory sorts reduce disk spill). These are role-level defaults — the analytics user cannot override them.*
+> - *Feedback loop breakdown: analytics query holds snapshot → autovacuum blocked → dead tuples accumulate → sequential scans slow → query runs longer → snapshot held longer → more dead tuples. Each link amplifies the next.*
+> - *Intervention: set old_snapshot_threshold = '10min' on the analytics replica. PostgreSQL treats snapshots older than 10 minutes as non-blocking for autovacuum purposes. Autovacuum runs regardless of the analytics query's snapshot age. Bloat accumulation stops. Trade-off: analytics queries older than 10 minutes may receive a "snapshot too old" error — acceptable for analytics batch jobs, unacceptable for OLTP.*
+
+---
+
+
+---
+
+### Cross-chapter from Ch26: DynamoDB strongly consistent reads and cost
+
+**Question 35 -- Ch26 + Ch28: DynamoDB strongly consistent reads and cost**
+
+DynamoDB is AP by default (eventually consistent reads). You can request strongly consistent reads (CP behavior) at the cost of 2x read capacity unit consumption. This makes the CP vs AP choice a literal dollar cost decision, not just a theoretical one.
+
+- For a user profile service with three read patterns: (a) email lookup during login (must be fresh), (b) profile display on feed (can be slightly stale), (c) preference reads for ML recommendation (staleness of 5-10s is fine). For each: eventually consistent or strongly consistent? Calculate the RCU cost difference.
+- At 100K reads/second with all reads strongly consistent vs all eventually consistent: what is the annual AWS cost difference? (Assume $0.25 per million RCU, 1 RCU per 4KB item, average item 1KB.) Show the calculation.
+- Follow-up: A product manager says "make all DynamoDB reads strongly consistent to avoid any stale data." You pull up the cost calculation. At what read volume does the cost of strong consistency become a budget-level conversation? What is your recommendation for which reads genuinely need strong consistency?
+
+
+### Cross-chapter from Ch27: CRDTs vs optimistic locking for high-concurrency counters
+
+**Question 41 -- Ch27 + Ch28: CRDTs vs optimistic locking for high-concurrency counters**
+
+Chapter 28 covers database internals, including optimistic locking (read-modify-write with version check). Both CRDTs and optimistic locking solve the concurrent increment problem, but with different approaches. Optimistic locking retries on conflict (eventually consistent from the operation's perspective but requires retries). CRDTs never conflict (no retries, but higher metadata overhead).
+
+- At 1M like operations/second across 3 regions: compare the retry rate for optimistic locking (PostgreSQL counter with version check) vs the merge overhead for G-Counter CRDT. For optimistic locking: at 30% collision rate, 30% of operations require a retry. At 1M/second: 300K retries/second. For G-Counter: each operation is local, no retries, but every read requires summing 3 replica values.
+- Calculate the database load for each approach at 1M/second: (a) PostgreSQL optimistic locking: 1M primary writes + 300K retries = 1.3M write operations/second. (b) G-Counter: 1M writes spread across 3 replicas = 333K writes/replica, but 3x merge operations per read. Which scales better?
+- Follow-up: The business rule says "the like count displayed to users can be 5 seconds stale, but likes must never be lost." Which approach satisfies this requirement? Optimistic locking: retries can fail under extreme load, potentially dropping some like operations. G-Counter: never drops a like, but the count is eventually consistent (up to 5-second staleness during replication lag). G-Counter is the correct choice. Explain why to a non-technical stakeholder.
+

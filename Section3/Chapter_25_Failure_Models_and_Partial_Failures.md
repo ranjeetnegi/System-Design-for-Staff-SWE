@@ -1,11 +1,11 @@
 # Chapter 25: Failure Models and Partial Failures
 ## (Simplified Edition)
 
-*(Note to reader: This chapter is about what happens when your system is neither fully working nor completely dead — and why that middle ground is the most dangerous place to be. Most engineers spend 90% of their learning time on how to build systems that work. Staff Engineers spend an equal amount of time thinking about how systems fail. Not because they are pessimistic, but because failure is the default state of any system at scale. This chapter will teach you to think about failure the way a doctor thinks about a patient: not just "alive or dead," but "what exactly is wrong, where, by how much, and what are we doing about it right now?")*
+*(Note to reader: This chapter is about what happens when your system is neither fully working nor completely dead -- and why that middle ground is the most dangerous place to be. Most engineers spend 90% of their learning time on how to build systems that work. Staff Engineers spend an equal amount of time thinking about how systems fail. Not because they are pessimistic, but because failure is the default state of any system at scale. This chapter will teach you to think about failure the way a doctor thinks about a patient: not just "alive or dead," but "what exactly is wrong, where, by how much, and what are we doing about it right now?")*
 
 ---
 
-## At a Glance — What This Chapter Covers
+## At a Glance -- What This Chapter Covers
 
 ```
 +================================================================+
@@ -69,7 +69,7 @@ You check a health endpoint. It returns 200. System is up. You go home.
 
 This is a comforting fiction. Real systems do not work this way.
 
-**THE REALITY:** A system is almost always somewhere on a spectrum between "fully working" and "completely dead." That spectrum has infinite points between the two ends. Most incidents happen somewhere in the middle of that spectrum — not at the "completely dead" end.
+**THE REALITY:** A system is almost always somewhere on a spectrum between "fully working" and "completely dead." That spectrum has infinite points between the two ends. Most incidents happen somewhere in the middle of that spectrum -- not at the "completely dead" end.
 
 Here is what that spectrum looks like in practice:
 
@@ -95,7 +95,7 @@ HEALTH      appearing     ERRORS        ERRORS        FUNCTION      ALIVE
 
 Notice that question at the bottom: "Is it up?" has six different honest answers before you get to "No." Every single one of those answers describes a different user experience, a different severity level, and a different required response.
 
-The dangerous part is that from the outside — from a simple health check — many of these states look identical. Your load balancer might see a 200 OK from an instance that is at 20% function. Your monitoring dashboard might show "green" for a service that is silently dropping 40% of requests.
+The dangerous part is that from the outside -- from a simple health check -- many of these states look identical. Your load balancer might see a 200 OK from an instance that is at 20% function. Your monitoring dashboard might show "green" for a service that is silently dropping 40% of requests.
 
 That is why partial failures are so treacherous.
 
@@ -172,7 +172,7 @@ User trust              "The site is down,        "The site seems broken
                                                    (WORSE for retention)
 ```
 
-The last row is the one that surprises most engineers. A complete outage is bad, but users understand it. A partial failure that makes the site feel "sometimes broken" — that erodes trust faster and is harder to recover from.
+The last row is the one that surprises most engineers. A complete outage is bad, but users understand it. A partial failure that makes the site feel "sometimes broken" -- that erodes trust faster and is harder to recover from.
 
 ---
 
@@ -245,11 +245,11 @@ Listen carefully to the answer. It tells you a lot about how that engineer think
 
 **L5 Answer:** "All health checks are passing. No alerts firing. The system is up."
 
-**L6 Answer:** "Define up. Let me break it down: Search is serving at 100% request volume but P99 latency is 2x normal, which tells me something upstream is slow. Recommendations are serving data but it is 6 hours stale because the ML pipeline had a backlog. Checkout is at 100% with normal latency — that is the critical path and it is fine. User profile reads have a 2% error rate on one shard, but retry logic is handling it transparently. So: the critical path is healthy, two non-critical features are degraded, one is degraded-but-hidden. I would not page anyone right now but I want those three things on someone's radar before end of day."
+**L6 Answer:** "Define up. Let me break it down: Search is serving at 100% request volume but P99 latency is 2x normal, which tells me something upstream is slow. Recommendations are serving data but it is 6 hours stale because the ML pipeline had a backlog. Checkout is at 100% with normal latency -- that is the critical path and it is fine. User profile reads have a 2% error rate on one shard, but retry logic is handling it transparently. So: the critical path is healthy, two non-critical features are degraded, one is degraded-but-hidden. I would not page anyone right now but I want those three things on someone's radar before end of day."
 
 Same system. Completely different level of understanding.
 
-The L6 answer is not just more detailed. It reflects a different mental model. The L6 engineer is not asking "is it up?" — they are asking "what is the current health of each component, what is the user impact of any degradation, and what is my risk exposure?"
+The L6 answer is not just more detailed. It reflects a different mental model. The L6 engineer is not asking "is it up?" -- they are asking "what is the current health of each component, what is the user impact of any degradation, and what is my risk exposure?"
 
 ---
 
@@ -306,7 +306,7 @@ Error spike        "Error rate went from      "2% error rate. That is
                                               in 4 hours. Do we roll
                                               back now or is the fix
                                               faster? Who is getting
-                                              affected — all users
+                                              affected -- all users
                                               or a specific segment?"
 
 Service            "Service restarted,        "Service restarted. How
@@ -367,15 +367,15 @@ The key insight here is that your **response** should be proportional to the **l
 
 Most teams make one of two mistakes:
 
-**Mistake 1 — Alert on everything at Level 0/1:** Engineers get paged constantly for non-critical issues, alert fatigue sets in, and the genuinely important alerts get ignored.
+**Mistake 1 -- Alert on everything at Level 0/1:** Engineers get paged constantly for non-critical issues, alert fatigue sets in, and the genuinely important alerts get ignored.
 
-**Mistake 2 — Only alert at Level 4:** By the time you know about it, you have already been in a critical degradation for an hour and the damage is done.
+**Mistake 2 -- Only alert at Level 4:** By the time you know about it, you have already been in a critical degradation for an hour and the damage is done.
 
 The right approach is calibrated alerting: Level 0-1 goes to a ticket. Level 2 goes to a Slack notification. Level 3 pages the on-call. Level 4 wakes everyone up.
 
 ---
 
-## Part 3: Failure Type 1 — Process Crash
+## Part 3: Failure Type 1 -- Process Crash
 
 ### Why Process Crashes Are Not Simple
 
@@ -386,7 +386,7 @@ But that is the ideal case. The reality has a lot more steps, and those steps ha
 Here is what actually happens when a single process crashes:
 
 ```
-PROCESS CRASH TIMELINE — THE FULL PICTURE
+PROCESS CRASH TIMELINE -- THE FULL PICTURE
 ==========================================
 
 T+0ms        T+10ms        T+5s          T+10s         T+45s         T+300s
@@ -429,9 +429,9 @@ You might think: "If a process crashes, the health check will catch it immediate
 
 But health checks have intervals. A typical Kubernetes liveness probe has:
 
-- `initialDelaySeconds: 10` — wait 10 seconds after start before first check
-- `periodSeconds: 10` — check every 10 seconds
-- `failureThreshold: 3` — fail after 3 consecutive failures
+- `initialDelaySeconds: 10` -- wait 10 seconds after start before first check
+- `periodSeconds: 10` -- check every 10 seconds
+- `failureThreshold: 3` -- fail after 3 consecutive failures
 
 That means: a process can be dead for up to 30 seconds before Kubernetes acts on it. During those 30 seconds, the load balancer is still sending traffic to a dead pod.
 
@@ -456,7 +456,7 @@ But what they actually needed to know was: "Are you home AND can you open the do
 In systems, we call these liveness and readiness checks.
 
 ```
-LIVENESS vs. READINESS — WHAT EACH CATCHES
+LIVENESS vs. READINESS -- WHAT EACH CATCHES
 ============================================
 
 CHECK TYPE     QUESTION ASKED        CATCHES             MISSES
@@ -569,7 +569,7 @@ Imagine you have 10 instances of a service. Each instance has a local in-memory 
 
 Under normal load, maybe 90% of queries hit the cache. Only 10% go to the database. The database handles this load easily.
 
-Now, something happens — a bad deployment, a configuration change, a memory leak — and all 10 instances restart at roughly the same time.
+Now, something happens -- a bad deployment, a configuration change, a memory leak -- and all 10 instances restart at roughly the same time.
 
 ```
 THE RESTART STORM SEQUENCE
@@ -704,14 +704,14 @@ You have covered four major ideas in this part:
 
 **3. The degradation budget mindset.** L6 engineers do not ask "is it up?" They ask "what is the current state of each component, what is the user impact, and what is the response priority?" The five-scenario comparison table shows this in practice.
 
-**4. Process crash is not simple.** A single crash causes 5 minutes of degradation from the full timeline: crash → dropped requests → health check lag → orchestrator scheduling → instance startup → cache warmup. Shallow health checks give false confidence. Deep readiness checks catch what matters. Restart storms turn one crash into a complete outage — rolling restarts prevent them.
+**4. Process crash is not simple.** A single crash causes 5 minutes of degradation from the full timeline: crash -> dropped requests -> health check lag -> orchestrator scheduling -> instance startup -> cache warmup. Shallow health checks give false confidence. Deep readiness checks catch what matters. Restart storms turn one crash into a complete outage -- rolling restarts prevent them.
 
 ---
 
 *Part A2 will cover: Failure Type 2 (Dependency Failure), Failure Type 3 (Slow Dependencies and the Latency Cliff), and the Timeout Budget framework.*
 
 ---
-# Chapter 25: Failure Models and Partial Failures — Part A2
+# Chapter 25: Failure Models and Partial Failures -- Part A2
 ## (Simplified Edition)
 
 *(Continuing from Part A1, which covered what partial failures are and Failure Type 1: Process Crashes.
@@ -719,32 +719,32 @@ This file covers Failure Types 2, 3, and 4, then a full summary table of all fou
 
 ---
 
-## Quick Orientation — What We Are Covering Here
+## Quick Orientation -- What We Are Covering Here
 
 ```
 PART A2 ROADMAP
 ===============
 
   Failure Type 2: Network Partitions
-       ├─ Hard partition vs Soft partition
-       ├─ Why soft partitions are insidious
-       ├─ The soft partition timeline
-       └─ Secondary failures that follow
+       +- Hard partition vs Soft partition
+       +- Why soft partitions are insidious
+       +- The soft partition timeline
+       +- Secondary failures that follow
 
   Failure Type 3: Slow Nodes
-       ├─ The classroom analogy
-       ├─ Why slow is worse than dead
-       ├─ P50 vs P99 — why dashboards lie
-       └─ Common causes and how to spot them
+       +- The classroom analogy
+       +- Why slow is worse than dead
+       +- P50 vs P99 -- why dashboards lie
+       +- Common causes and how to spot them
 
   Failure Type 4: Dependency Failures
-       ├─ Five types of dependency failure
-       ├─ Gray failure — not up, not dead
-       ├─ How one failure cascades across a system
-       └─ Why the cascade happens (the mechanics)
+       +- Five types of dependency failure
+       +- Gray failure -- not up, not dead
+       +- How one failure cascades across a system
+       +- Why the cascade happens (the mechanics)
 
   Summary Table
-       └─ All 4 failure types side by side
+       +- All 4 failure types side by side
 ```
 
 ---
@@ -757,7 +757,7 @@ When two parts of your system cannot talk to each other over the network, you ha
 **network partition**.
 
 This sounds simple. In practice, it is one of the most misunderstood and dangerous
-failure modes in distributed systems — because it comes in two very different flavors,
+failure modes in distributed systems -- because it comes in two very different flavors,
 and only one of them is obvious.
 
 ---
@@ -766,13 +766,13 @@ and only one of them is obvious.
 
 Think about a phone call.
 
-**Hard partition** — someone physically cuts the telephone line. The call drops
+**Hard partition** -- someone physically cuts the telephone line. The call drops
 immediately. Both people know right away. You hear nothing, the connection error is
 instant, and you both hang up and try again. The failure is obvious. The recovery is
 clear.
 
-**Soft partition** — you are on a call with your friend, but every third word is
-garbled. "Hey, can you —zzzt— meet at —zzzt— okay?" You are not sure if they heard
+**Soft partition** -- you are on a call with your friend, but every third word is
+garbled. "Hey, can you --zzzt-- meet at --zzzt-- okay?" You are not sure if they heard
 you. They are not sure if you heard them. The call is technically still connected.
 Your phone shows full bars. But communication is broken in a way that is really hard
 to detect and even harder to fix.
@@ -781,20 +781,20 @@ Distributed systems experience both kinds. And the soft kind is the dangerous on
 
 ---
 
-### Hard Partition — The Cut Phone Line
+### Hard Partition -- The Cut Phone Line
 
 ```
 HARD PARTITION
 ==============
 
-  ┌─────────────┐                    ┌─────────────┐
-  │  Region US  │                    │  Region EU  │
-  │             │                    │             │
-  │  app-1      │                    │  app-4      │
-  │  app-2      │        ╳           │  app-5      │
-  │  app-3      │   (link cut)       │  app-6      │
-  │             │                    │             │
-  └─────────────┘                    └─────────────┘
+  +-------------+                    +-------------+
+  |  Region US  |                    |  Region EU  |
+  |             |                    |             |
+  |  app-1      |                    |  app-4      |
+  |  app-2      |        x           |  app-5      |
+  |  app-3      |   (link cut)       |  app-6      |
+  |             |                    |             |
+  +-------------+                    +-------------+
 
   Connections fail immediately.
   TCP timeout or RST packet received.
@@ -816,24 +816,24 @@ start fixing it.
 
 ---
 
-### Soft Partition — The Garbled Phone Call
+### Soft Partition -- The Garbled Phone Call
 
 ```
 SOFT PARTITION
 ==============
 
-  ┌─────────────┐                          ┌─────────────┐
-  │  Region US  │                          │  Region EU  │
-  │             │   ~~~░░~~░~~~░░~~░~~~    │             │
-  │  app-1      │  (30% packet loss)       │  app-4      │
-  │  app-2      │  ~~~░~~░░~~░~~~░~~░~~~   │  app-5      │
-  │  app-3      │                          │  app-6      │
-  │             │   ░ = lost packet        │             │
-  └─────────────┘   ~ = arrived packet     └─────────────┘
+  +-------------+                          +-------------+
+  |  Region US  |                          |  Region EU  |
+  |             |   ~~~..~~.~~~..~~.~~~    |             |
+  |  app-1      |  (30% packet loss)       |  app-4      |
+  |  app-2      |  ~~~.~~..~~.~~~.~~.~~~   |  app-5      |
+  |  app-3      |                          |  app-6      |
+  |             |   . = lost packet        |             |
+  +-------------+   ~ = arrived packet     +-------------+
 
-  Health checks: PASS  ✓
-  Ping: responds  ✓
-  Dashboard: GREEN  ✓
+  Health checks: PASS  Y
+  Ping: responds  Y
+  Dashboard: GREEN  Y
   Users experiencing errors: YES
   Engineers: confused
 ```
@@ -855,7 +855,7 @@ No alert fired. But the request took 3 times as long as normal.
 
 **Some requests work, some do not.** Because the packet loss is probabilistic,
 some requests go through fine. Some fail. This is not consistent enough to trip any
-specific alert threshold. Your error rate might go from 0.1% to 2% — bad, but not
+specific alert threshold. Your error rate might go from 0.1% to 2% -- bad, but not
 obviously catastrophic.
 
 **Engineers cannot reproduce it.** When an engineer opens a terminal and manually
@@ -874,51 +874,51 @@ SOFT PARTITION TIMELINE
 =======================
 
 T+0s    Packet loss begins (30% of packets dropped)
-         └─ Somewhere in the network. Could be a router. Could be a switch.
+         +- Somewhere in the network. Could be a router. Could be a switch.
             Nobody knows yet.
 
 T+0 to T+60s    Retries mask the problem
-         └─ App sends request → fails → retries → succeeds on second try
+         +- App sends request -> fails -> retries -> succeeds on second try
             Each successful request takes 2-3x longer than normal.
-            Error rate: 0.1% → 1.5% (below alert threshold of 5%)
-            Latency P99: 200ms → 600ms (painful but alert threshold is 1s)
+            Error rate: 0.1% -> 1.5% (below alert threshold of 5%)
+            Latency P99: 200ms -> 600ms (painful but alert threshold is 1s)
             Dashboard: YELLOW (mild warnings, no pages)
 
 T+60s    Thread pools start filling
-         └─ Requests take longer → caller threads held longer
-            Thread pool: 100 threads → 65 in use (normally 20)
+         +- Requests take longer -> caller threads held longer
+            Thread pool: 100 threads -> 65 in use (normally 20)
             New requests queue up. Queue depth rising.
 
 T+180s   Some requests start timing out
-         └─ Requests that retry twice and still fail finally time out
-            Error rate: 1.5% → 4.8% (still below 5% alert threshold)
-            P99 latency: 600ms → 900ms
+         +- Requests that retry twice and still fail finally time out
+            Error rate: 1.5% -> 4.8% (still below 5% alert threshold)
+            P99 latency: 600ms -> 900ms
             Queue depth: 200 deep and growing
 
 T+300s   "Mostly working" state
-         └─ System appears functional. Most requests succeed eventually.
+         +- System appears functional. Most requests succeed eventually.
             But every request is slower. Thread pools 85% full.
             Memory usage rising (queued requests consuming memory).
             Dashboard: ORANGE on some services
 
 T+600s   Engineer investigates
-         └─ On-call sees elevated P99 latency alerts.
+         +- On-call sees elevated P99 latency alerts.
             Manually tests: their test request succeeds in 180ms.
             "Looks fine from here." Marks alert as noise. Goes back to sleep.
             Thread pools: 90% full. Queue depth: 500+.
 
 T+1800s  Packet loss worsens (50% now)
-         └─ Something changed. More packets dropping.
+         +- Something changed. More packets dropping.
             Retry success rate drops. Errors spike.
-            Error rate: 4.8% → 23% (alert fires, engineer paged)
+            Error rate: 4.8% -> 23% (alert fires, engineer paged)
 
 T+1860s  Cascade begins
-         └─ Thread pools hit 100%. New requests rejected immediately.
+         +- Thread pools hit 100%. New requests rejected immediately.
             Callers of THIS service start filling THEIR thread pools.
             The cascade spreads outward.
 
 T+1900s  Full outage
-         └─ Multiple services rejecting requests.
+         +- Multiple services rejecting requests.
             Users see errors across the board.
             Incident declared. All hands on deck.
 ```
@@ -936,7 +936,7 @@ secondary problems that are often worse than the partition itself.
 **Split-brain.** If two parts of your system can no longer talk to each other, they
 each think they are the "real" one. Two servers both believe they are the primary
 database. Both start accepting writes. Now you have two diverged copies of your data.
-When the partition heals, reconciling them is extremely painful — and sometimes you
+When the partition heals, reconciling them is extremely painful -- and sometimes you
 cannot reconcile them at all.
 
 ```
@@ -944,14 +944,14 @@ SPLIT-BRAIN
 ===========
 
   Before partition:
-    Server A (primary) ──────────── Server B (replica)
+    Server A (primary) ------------ Server B (replica)
                          healthy
 
   During soft partition (servers cannot reliably communicate):
     Server A: "I haven't heard from B. I must still be primary."
     Server B: "I haven't heard from A. A must be down. I'll promote myself."
 
-    Server A (primary) ~~~░~~░~~   Server B (also primary!)
+    Server A (primary) ~~~.~~.~~   Server B (also primary!)
     Accepts writes              Accepts writes
     Data diverges               Data diverges
 ```
@@ -968,8 +968,8 @@ assumes the request failed and retries. Now the server processes the same reques
 twice. If that request was "charge this customer's credit card," you just charged
 them twice.
 
-**Consensus failures.** Systems that use voting — like distributed databases that
-require a majority of nodes to agree before committing a write — can fail to reach
+**Consensus failures.** Systems that use voting -- like distributed databases that
+require a majority of nodes to agree before committing a write -- can fail to reach
 quorum during a partition. Writes that would normally succeed start failing, even
 though most nodes are perfectly healthy.
 
@@ -980,15 +980,15 @@ are modifying the same resource at the same time.
 
 ---
 
-## Failure Type 3: Slow Nodes — "Worse Than Dead"
+## Failure Type 3: Slow Nodes -- "Worse Than Dead"
 
 ### The Classroom Analogy
 
 Picture a classroom with 10 students taking a test.
 
-Nine students finish in 10 minutes. One student — maybe they did not sleep well,
+Nine students finish in 10 minutes. One student -- maybe they did not sleep well,
 maybe they are having an anxiety attack, maybe they just really do not know the
-material — takes 5 hours to finish.
+material -- takes 5 hours to finish.
 
 The professor has a rule: everyone must turn in their test before the class can move
 on to the next assignment. So the entire class sits there, waiting, for 5 hours.
@@ -1010,19 +1010,19 @@ delay for everyone.
 10 NODES, 1 IN GC PAUSE
 ========================
 
-  Node 1: ████ 8ms
-  Node 2: █████ 11ms
-  Node 3: ████████████████████████████████████████ 5000ms  ← GC PAUSE
-  Node 4: ███ 7ms
-  Node 5: ████ 9ms
-  Node 6: ██████ 13ms
-  Node 7: ████ 8ms
-  Node 8: █████ 10ms
-  Node 9: ███ 6ms
-  Node 10: ████ 9ms
+  Node 1: #### 8ms
+  Node 2: ##### 11ms
+  Node 3: ######################################## 5000ms  <- GC PAUSE
+  Node 4: ### 7ms
+  Node 5: #### 9ms
+  Node 6: ###### 13ms
+  Node 7: #### 8ms
+  Node 8: ##### 10ms
+  Node 9: ### 6ms
+  Node 10: #### 9ms
 
-  P50 (median): 9ms    ← UNCHANGED. Looks healthy on dashboards.
-  P99 (worst 1%): 5000ms  ← 333x worse than normal.
+  P50 (median): 9ms    <- UNCHANGED. Looks healthy on dashboards.
+  P99 (worst 1%): 5000ms  <- 333x worse than normal.
 
   "The P50 line on your latency dashboard stays green.
    10% of your users are waiting 5 seconds for every request.
@@ -1030,8 +1030,8 @@ delay for everyone.
 ```
 
 Your monitoring dashboard shows a green P50 latency line. Your on-call engineer
-glances at it and thinks everything is fine. But 10% of your users — the ones whose
-requests happened to land on Node 3 — are sitting there watching a loading spinner
+glances at it and thinks everything is fine. But 10% of your users -- the ones whose
+requests happened to land on Node 3 -- are sitting there watching a loading spinner
 for five seconds.
 
 This is one of the most important reasons engineers at senior level always look at
@@ -1059,7 +1059,7 @@ serve each customer. The line backs up. People waiting in line cannot go to othe
 stores because they already committed to this one. New customers join the line without
 knowing it is going to take 45 minutes. The whole street gets backed up.
 
-**"A slow node is a vampire — drains resources while pretending to be alive."**
+**"A slow node is a vampire -- drains resources while pretending to be alive."**
 
 It consumes your caller's threads, memory, and time while showing "healthy" on every
 dashboard. Your load balancer keeps sending it traffic because as far as the load
@@ -1088,7 +1088,7 @@ what happens:
 - New requests queue up waiting for a free thread
 - If requests arrive faster than threads free up, the queue grows until you run out
   of memory
-- You are now not just slow — you are completely unable to accept new requests
+- You are now not just slow -- you are completely unable to accept new requests
 
 ```
 SLOW NODE THREAD EXHAUSTION
@@ -1109,7 +1109,7 @@ SLOW NODE THREAD EXHAUSTION
   Minute 2:  Queue depth 118,800. Memory critical.
   Minute 2.5: Out of memory. Service crashes.
 
-  ONE slow node → service crash in under 3 minutes.
+  ONE slow node -> service crash in under 3 minutes.
 ```
 
 ---
@@ -1123,7 +1123,7 @@ COMMON CAUSES OF SLOW NODES
 ============================
 
   Cause            | What Happens         | Detection         | Duration  | Frequency
-  ─────────────────┼──────────────────────┼───────────────────┼───────────┼──────────
+  -----------------+----------------------+-------------------+-----------+----------
   GC Pause         | JVM/Go runtime stops | P99 latency spike | 50ms-5s   | Every
   (garbage collect)| all threads briefly  | at intervals      |           | few min
                    |                      |                   |           |
@@ -1159,7 +1159,7 @@ Almost every service depends on other services. Your order service calls the pay
 service. Your payment service calls a bank API. Your frontend calls the auth service.
 Your auth service queries the user database.
 
-When any of those dependencies break down, your service can break down too — even
+When any of those dependencies break down, your service can break down too -- even
 if your code is perfectly correct and your servers are perfectly healthy.
 
 Dependency failures are particularly nasty because they look different on each side
@@ -1177,58 +1177,58 @@ Here are the five types of dependency failure you will encounter.
 FIVE TYPES OF DEPENDENCY FAILURE
 ==================================
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  Type 1: Hard Failure                                               │
-  │  ─────────────────────                                              │
-  │  What: Dependency returns 500 errors or connection refused          │
-  │  Signal: Explicit error codes (5xx, connection error)               │
-  │  Danger: Medium — at least you know                                 │
-  │  Detection: Easy. Errors show up in logs immediately.               │
-  └─────────────────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------------------+
+  |  Type 1: Hard Failure                                               |
+  |  ---------------------                                              |
+  |  What: Dependency returns 500 errors or connection refused          |
+  |  Signal: Explicit error codes (5xx, connection error)               |
+  |  Danger: Medium -- at least you know                                 |
+  |  Detection: Easy. Errors show up in logs immediately.               |
+  +---------------------------------------------------------------------+
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  Type 2: Brownout                                                   │
-  │  ─────────────────                                                  │
-  │  What: Dependency is slow AND returning elevated errors             │
-  │  Signal: P99 latency up, error rate up, but not 100% failing        │
-  │  Danger: HIGH — system limps along, masking total failure           │
-  │  Detection: Hard. Requires watching both latency AND error rate.    │
-  └─────────────────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------------------+
+  |  Type 2: Brownout                                                   |
+  |  -----------------                                                  |
+  |  What: Dependency is slow AND returning elevated errors             |
+  |  Signal: P99 latency up, error rate up, but not 100% failing        |
+  |  Danger: HIGH -- system limps along, masking total failure           |
+  |  Detection: Hard. Requires watching both latency AND error rate.    |
+  +---------------------------------------------------------------------+
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  Type 3: Throttling                                                 │
-  │  ──────────────────                                                 │
-  │  What: Dependency returns 429 (Too Many Requests)                  │
-  │  Signal: HTTP 429 responses, "rate limit exceeded" messages         │
-  │  Danger: HIGH — retrying makes it WORSE                            │
-  │  Detection: Medium. 429s are logged but often not alerted on.       │
-  │  Note: Naive retry logic will hammer the throttled dependency,      │
-  │        making your throttling worse, which makes you retry more,    │
-  │        which makes throttling worse. Exponential backoff required.  │
-  └─────────────────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------------------+
+  |  Type 3: Throttling                                                 |
+  |  ------------------                                                 |
+  |  What: Dependency returns 429 (Too Many Requests)                  |
+  |  Signal: HTTP 429 responses, "rate limit exceeded" messages         |
+  |  Danger: HIGH -- retrying makes it WORSE                            |
+  |  Detection: Medium. 429s are logged but often not alerted on.       |
+  |  Note: Naive retry logic will hammer the throttled dependency,      |
+  |        making your throttling worse, which makes you retry more,    |
+  |        which makes throttling worse. Exponential backoff required.  |
+  +---------------------------------------------------------------------+
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  Type 4: Stale Responses                                            │
-  │  ────────────────────────                                           │
-  │  What: Dependency returns 200 OK, but the data is old              │
-  │  Signal: 200 OK. Nothing looks wrong. Data is stale.               │
-  │  Danger: HIGH — invisible. No errors to alert on.                   │
-  │  Detection: Very hard. Requires data freshness checks.              │
-  │  Example: Price cache returns yesterday's prices as if they         │
-  │           are current. Orders placed at wrong prices.               │
-  └─────────────────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------------------+
+  |  Type 4: Stale Responses                                            |
+  |  ------------------------                                           |
+  |  What: Dependency returns 200 OK, but the data is old              |
+  |  Signal: 200 OK. Nothing looks wrong. Data is stale.               |
+  |  Danger: HIGH -- invisible. No errors to alert on.                   |
+  |  Detection: Very hard. Requires data freshness checks.              |
+  |  Example: Price cache returns yesterday's prices as if they         |
+  |           are current. Orders placed at wrong prices.               |
+  +---------------------------------------------------------------------+
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  Type 5: Silent Corruption                                          │
-  │  ──────────────────────────                                         │
-  │  What: Dependency returns 200 OK, but the data is WRONG            │
-  │  Signal: HTTP 200. No errors. Data is subtly incorrect.            │
-  │  Danger: EXTREME — corrupts your data silently                      │
-  │  Detection: Nearly impossible without end-to-end validation.        │
-  │  Example: User profile service returns User B's data when asked     │
-  │           for User A. Your system uses it. Wrong user sees          │
-  │           wrong data. Could be a privacy violation.                 │
-  └─────────────────────────────────────────────────────────────────────┘
+  +---------------------------------------------------------------------+
+  |  Type 5: Silent Corruption                                          |
+  |  --------------------------                                         |
+  |  What: Dependency returns 200 OK, but the data is WRONG            |
+  |  Signal: HTTP 200. No errors. Data is subtly incorrect.            |
+  |  Danger: EXTREME -- corrupts your data silently                      |
+  |  Detection: Nearly impossible without end-to-end validation.        |
+  |  Example: User profile service returns User B's data when asked     |
+  |           for User A. Your system uses it. Wrong user sees          |
+  |           wrong data. Could be a privacy violation.                 |
+  +---------------------------------------------------------------------+
 ```
 
 Notice the pattern: as you move down the list, the failure becomes less visible and
@@ -1237,7 +1237,7 @@ more dangerous. A hard failure (Type 1) is bad but detectable. Silent corruption
 
 ---
 
-### Gray Failure — Not Up, Not Dead
+### Gray Failure -- Not Up, Not Dead
 
 Types 4 and 5 are examples of a broader pattern called **gray failure**.
 
@@ -1246,14 +1246,14 @@ THE FAILURE SPECTRUM
 =====================
 
   CLEARLY UP                                              CLEARLY DOWN
-  ──────────────────────────────────────────────────────────────────────
-  ✓ Green       ░ Stale    ░ Slow    ░ Corrupt   ✗ Red
+  ----------------------------------------------------------------------
+  Y Green       . Stale    . Slow    . Corrupt   N Red
   200 OK        200 OK     200 OK    200 OK       500 Error
   Fresh data    Old data   5s delay  Wrong data   No response
 
-                └──────────────────────────┘
+                +--------------------------+
                          GRAY ZONE
-                   "Not up, not dead —
+                   "Not up, not dead --
                     the dangerous middle"
 ```
 
@@ -1273,18 +1273,18 @@ have no idea anything is happening.
 
 **Three gray failure examples:**
 
-Example A — Stale data with green health check:
+Example A -- Stale data with green health check:
 ```
-  Cache service health check: GET /health → 200 OK  ✓
+  Cache service health check: GET /health -> 200 OK  Y
   Cache service actual state: Last synced with database 4 hours ago
   Result: Every price, every inventory count, every user preference
           is 4 hours stale. Customers order out-of-stock items.
           Engineers see no errors.
 ```
 
-Example B — Partial corruption:
+Example B -- Partial corruption:
 ```
-  Recommendation service health check: → 200 OK  ✓
+  Recommendation service health check: -> 200 OK  Y
   Recommendation service actual state: A bug introduced yesterday
           corrupts 10% of recommendation responses (swaps user IDs)
   Result: 1 in 10 users sees recommendations meant for someone else.
@@ -1292,9 +1292,9 @@ Example B — Partial corruption:
           Engineers see no errors.
 ```
 
-Example C — Latency gray failure:
+Example C -- Latency gray failure:
 ```
-  Auth service health check: GET /health → 200 OK in 5ms  ✓
+  Auth service health check: GET /health -> 200 OK in 5ms  Y
   Auth service actual traffic: Every /authenticate call takes 5,000ms
   Result: Every page load in your app that requires authentication
           takes 5 seconds. Users think the app is broken.
@@ -1310,7 +1310,7 @@ In all three cases, the system is technically "up." Every monitoring signal says
 
 This is the most important thing to understand about dependency failures: they do not
 stay contained. A partial failure in one service can cause a complete failure in
-services that depend on it — and then their dependents — until the whole system is
+services that depend on it -- and then their dependents -- until the whole system is
 down.
 
 Here is a realistic example using a payment service going into brownout.
@@ -1327,25 +1327,25 @@ DEPENDENCY CASCADE TIMELINE
 ============================
 
   PAYMENT SERVICE enters brownout (50% slow, 50% normal)
-  ─────────────────────────────────────────────────────
+  -----------------------------------------------------
   Payment's own metrics: 50% degraded. Team aware, investigating.
 
   T+0s
-  ─────
+  -----
   Order service starts calling Payment service.
   50% of those calls now take 10 seconds.
   Order service has a 10-second timeout (unfortunately exactly equal to
-  the payment delay, so it never actually times out — just barely waits).
+  the payment delay, so it never actually times out -- just barely waits).
 
   Order service thread pool: 200 threads.
-  Normally each request takes 200ms → can handle 1,000 req/sec.
-  Now 50% take 10,000ms → effective throughput drops to ~100 req/sec.
+  Normally each request takes 200ms -> can handle 1,000 req/sec.
+  Now 50% take 10,000ms -> effective throughput drops to ~100 req/sec.
 
   Requests: 800/sec incoming. Threads freed: 100/sec.
   Queue growing at 700 requests per second.
 
   T+30s
-  ──────
+  ------
   Order service thread pool: 90% full.
   Order service response time: P99 = 8,000ms.
   Order service starts queuing requests faster than it clears them.
@@ -1354,7 +1354,7 @@ DEPENDENCY CASCADE TIMELINE
   Gateway's threads start backing up (same mechanics, one level up).
 
   T+60s
-  ──────
+  ------
   Order service thread pool: 100% full. New requests rejected: 503.
   Error rate for Order service: 60% (half fail immediately, half succeed).
 
@@ -1362,15 +1362,15 @@ DEPENDENCY CASCADE TIMELINE
   Gateway response time: P99 = 12,000ms.
 
   T+90s
-  ──────
+  ------
   Gateway thread pool: 100% full. Complete failure.
   Every user request: 503 Service Unavailable.
 
-  ┌───────────┐     ┌─────────────┐     ┌─────────────┐
-  │  Gateway  │────▶│  Order Svc  │────▶│  Payment    │
-  │ 100% fail │     │ 100% fail   │     │  50% slow   │
-  └───────────┘     └─────────────┘     └─────────────┘
-       ▲                  ▲                    ▲
+  +-----------+     +-------------+     +-------------+
+  |  Gateway  |---->|  Order Svc  |---->|  Payment    |
+  | 100% fail |     | 100% fail   |     |  50% slow   |
+  +-----------+     +-------------+     +-------------+
+       ^                  ^                    ^
     TOTAL              TOTAL            PARTIAL BROWNOUT
     OUTAGE             OUTAGE           (where it started)
 
@@ -1411,61 +1411,61 @@ You have now seen all four major failure types in distributed systems. Here they
 side by side, so you can recognize each one quickly and know what to do.
 
 ```
-ALL FOUR FAILURE TYPES — COMPARISON TABLE
+ALL FOUR FAILURE TYPES -- COMPARISON TABLE
 ==========================================
 
-  Type              │ Key Signal        │ Primary Danger     │ Detection Method
-  ──────────────────┼───────────────────┼────────────────────┼──────────────────────
-  Type 1:           │ Process missing   │ Obvious outage if  │ Process monitor,
-  Process Crash     │ from process list │ not replicated;    │ health check fails,
-                    │ Health check fail │ data loss if no    │ TCP connection
-                    │ Connection refused│ persistent storage │ refused
-  ──────────────────┼───────────────────┼────────────────────┼──────────────────────
-  Type 2:           │ Hard: conn errors │ Hard: manageable   │ Hard: connection
-  Network           │ Soft: elevated    │ Soft: INSIDIOUS.   │ errors, easy.
-  Partition         │ P99 latency with  │ Split-brain, stale │ Soft: requires
-                    │ green health      │ reads, duplicates, │ packet loss metrics,
-                    │ checks            │ silent data loss   │ correlation analysis
-  ──────────────────┼───────────────────┼────────────────────┼──────────────────────
-  Type 3:           │ P99 latency spike │ Thread exhaustion  │ P99/P999 latency
-  Slow Node         │ P50 unchanged     │ in caller services;│ dashboards (NOT P50),
-                    │ Health checks     │ invisible to most  │ per-node latency
-                    │ still pass        │ dashboards         │ breakdown, GC logs
-  ──────────────────┼───────────────────┼────────────────────┼──────────────────────
-  Type 4:           │ Varies by subtype │ Gray failure:      │ End-to-end synthetic
-  Dependency        │ Hard: 5xx errors  │ 200 OK responses   │ checks, data
-  Failure           │ Brownout: slow+   │ with wrong or      │ freshness metrics,
-                    │ elevated errors   │ stale data; no     │ client-side error
-                    │ Gray: 200 OK      │ alerts fire while  │ tracking, canary
-                    │ but wrong data    │ users suffer       │ analysis
+  Type              | Key Signal        | Primary Danger     | Detection Method
+  ------------------+-------------------+--------------------+----------------------
+  Type 1:           | Process missing   | Obvious outage if  | Process monitor,
+  Process Crash     | from process list | not replicated;    | health check fails,
+                    | Health check fail | data loss if no    | TCP connection
+                    | Connection refused| persistent storage | refused
+  ------------------+-------------------+--------------------+----------------------
+  Type 2:           | Hard: conn errors | Hard: manageable   | Hard: connection
+  Network           | Soft: elevated    | Soft: INSIDIOUS.   | errors, easy.
+  Partition         | P99 latency with  | Split-brain, stale | Soft: requires
+                    | green health      | reads, duplicates, | packet loss metrics,
+                    | checks            | silent data loss   | correlation analysis
+  ------------------+-------------------+--------------------+----------------------
+  Type 3:           | P99 latency spike | Thread exhaustion  | P99/P999 latency
+  Slow Node         | P50 unchanged     | in caller services;| dashboards (NOT P50),
+                    | Health checks     | invisible to most  | per-node latency
+                    | still pass        | dashboards         | breakdown, GC logs
+  ------------------+-------------------+--------------------+----------------------
+  Type 4:           | Varies by subtype | Gray failure:      | End-to-end synthetic
+  Dependency        | Hard: 5xx errors  | 200 OK responses   | checks, data
+  Failure           | Brownout: slow+   | with wrong or      | freshness metrics,
+                    | elevated errors   | stale data; no     | client-side error
+                    | Gray: 200 OK      | alerts fire while  | tracking, canary
+                    | but wrong data    | users suffer       | analysis
 
-  Type              │ Primary Defense
-  ──────────────────┼───────────────────────────────────────────────────────────────
-  Type 1:           │ Replication + health check monitoring +
-  Process Crash     │ automatic restart (systemd, Kubernetes) +
-                    │ persistent storage separate from process
-  ──────────────────┼───────────────────────────────────────────────────────────────
-  Type 2:           │ Hard: handled by load balancer failover
-  Network           │ Soft: aggressive packet loss monitoring per network segment,
-  Partition         │ distributed tracing to find slow paths, consensus protocols
-                    │ (Raft/Paxos) for split-brain, idempotent writes for duplicates
-  ──────────────────┼───────────────────────────────────────────────────────────────
-  Type 3:           │ Short timeouts (fail fast, do not wait 30s),
-  Slow Node         │ P99 latency alerts (not just P50),
-                    │ per-node latency monitoring,
-                    │ load balancer least-response-time routing,
-                    │ GC tuning + off-heap memory management
-  ──────────────────┼───────────────────────────────────────────────────────────────
-  Type 4:           │ Circuit breakers (stop calling failing dependencies),
-  Dependency        │ bulkheads (separate thread pools per dependency),
-  Failure           │ short timeouts (2s not 30s),
-                    │ fallback responses (serve stale rather than nothing),
-                    │ data integrity checks (do not trust 200 OK blindly)
+  Type              | Primary Defense
+  ------------------+---------------------------------------------------------------
+  Type 1:           | Replication + health check monitoring +
+  Process Crash     | automatic restart (systemd, Kubernetes) +
+                    | persistent storage separate from process
+  ------------------+---------------------------------------------------------------
+  Type 2:           | Hard: handled by load balancer failover
+  Network           | Soft: aggressive packet loss monitoring per network segment,
+  Partition         | distributed tracing to find slow paths, consensus protocols
+                    | (Raft/Paxos) for split-brain, idempotent writes for duplicates
+  ------------------+---------------------------------------------------------------
+  Type 3:           | Short timeouts (fail fast, do not wait 30s),
+  Slow Node         | P99 latency alerts (not just P50),
+                    | per-node latency monitoring,
+                    | load balancer least-response-time routing,
+                    | GC tuning + off-heap memory management
+  ------------------+---------------------------------------------------------------
+  Type 4:           | Circuit breakers (stop calling failing dependencies),
+  Dependency        | bulkheads (separate thread pools per dependency),
+  Failure           | short timeouts (2s not 30s),
+                    | fallback responses (serve stale rather than nothing),
+                    | data integrity checks (do not trust 200 OK blindly)
 ```
 
 ---
 
-## Putting It All Together — Why You Need to Know All Four
+## Putting It All Together -- Why You Need to Know All Four
 
 A senior engineer does not wait for a production incident to teach them about failure
 modes. They design systems that handle all four types from the start, because:
@@ -1487,8 +1487,8 @@ modes. They design systems that handle all four types from the start, because:
   from this chapter happens in production every single week at companies of all sizes.
 
 The good news: every one of these failure modes has known, well-understood defenses.
-The techniques — circuit breakers, bulkheads, short timeouts, P99 monitoring, packet
-loss metrics, idempotency keys — exist precisely because engineers have been burned
+The techniques -- circuit breakers, bulkheads, short timeouts, P99 monitoring, packet
+loss metrics, idempotency keys -- exist precisely because engineers have been burned
 by these exact failures for decades and built defenses.
 
 Part B of this chapter will cover those defenses in depth.
@@ -1497,46 +1497,46 @@ Part B of this chapter will cover those defenses in depth.
 
 ## Key Vocabulary Review
 
-**Network partition** — a failure where two parts of a system cannot communicate.
+**Network partition** -- a failure where two parts of a system cannot communicate.
 Can be hard (complete and obvious) or soft (partial and insidious).
 
-**Hard partition** — complete network failure. Connections refuse immediately.
+**Hard partition** -- complete network failure. Connections refuse immediately.
 Easy to detect and respond to.
 
-**Soft partition** — partial network failure. Some packets arrive, some are dropped.
+**Soft partition** -- partial network failure. Some packets arrive, some are dropped.
 Health checks pass. Retries mask the problem. Very dangerous.
 
-**Split-brain** — when two nodes both believe they are the primary, causing them
+**Split-brain** -- when two nodes both believe they are the primary, causing them
 to independently accept writes and diverge.
 
-**Slow node** — a node that is alive and responding, but much slower than normal.
+**Slow node** -- a node that is alive and responding, but much slower than normal.
 Worse than a dead node because it holds caller resources while pretending to be healthy.
 
-**GC pause** — a garbage collection pause in Java or Go runtime where all application
+**GC pause** -- a garbage collection pause in Java or Go runtime where all application
 threads are stopped briefly while memory is cleaned up. Can cause latency spikes.
 
-**P50 / P99 / P999** — percentile latency metrics. P50 is the median. P99 means
+**P50 / P99 / P999** -- percentile latency metrics. P50 is the median. P99 means
 99% of requests are faster than this value. P999 means 999 out of 1,000 requests are
 faster. P99 and P999 reveal slow nodes that P50 hides.
 
-**Brownout** — a degraded state where a service is slow and returning elevated
+**Brownout** -- a degraded state where a service is slow and returning elevated
 errors, but not completely down.
 
-**Throttling** — a dependency returning 429 (Too Many Requests) to tell you to
+**Throttling** -- a dependency returning 429 (Too Many Requests) to tell you to
 slow down. Retrying without backoff makes it worse.
 
-**Gray failure** — a failure where all monitoring signals show "healthy" but
+**Gray failure** -- a failure where all monitoring signals show "healthy" but
 users are experiencing real problems. Returns 200 OK with wrong or stale data.
 
-**Dependency cascade** — a situation where a partial failure in one service
+**Dependency cascade** -- a situation where a partial failure in one service
 causes complete failure in its callers, which causes failure in their callers,
 propagating through the whole system.
 
-**Circuit breaker** — a pattern where after a threshold of failures, a service
+**Circuit breaker** -- a pattern where after a threshold of failures, a service
 stops calling the failing dependency and returns fast errors instead, preventing
 thread exhaustion.
 
-**Bulkhead** — a pattern where separate thread pools are used for different
+**Bulkhead** -- a pattern where separate thread pools are used for different
 downstream dependencies, so that one slow dependency cannot block calls to other
 dependencies.
 
@@ -1545,13 +1545,13 @@ dependencies.
 *(End of Part A2. Part B will cover defenses: timeouts, circuit breakers,
 bulkheads, retry strategies, and chaos engineering.)*
 ---
-# Part B: The Defense Stack — Timeouts, Circuit Breakers, Bulkheads, and Load Shedding
+# Part B: The Defense Stack -- Timeouts, Circuit Breakers, Bulkheads, and Load Shedding
 
 ---
 
 ## Quick Recap from Part A
 
-Part A covered what failures look like — crashes, slowdowns, network drops, data corruption.
+Part A covered what failures look like -- crashes, slowdowns, network drops, data corruption.
 Part B is about **what you do about them**.
 
 Think of Part A as learning that fires exist.
@@ -1690,7 +1690,7 @@ Service A                    Service B (very slow)
 One slow dependency can freeze your entire service.
 Threads pile up waiting.
 Memory fills up.
-Your service dies — **because of someone else's slowness**.
+Your service dies -- **because of someone else's slowness**.
 
 With a timeout:
 
@@ -1755,7 +1755,7 @@ Timeline of a network call:
 The formula is simple:
 
 ```
-Read Timeout = P99 latency of the called service × 2 to 3
+Read Timeout = P99 latency of the called service x 2 to 3
 ```
 
 What is P99 latency?
@@ -1768,7 +1768,7 @@ So if your database normally responds in:
 - P99 = 80ms
 - P99.9 = 500ms
 
-Your read timeout should be: `80ms × 2 = 160ms` to `80ms × 3 = 240ms`
+Your read timeout should be: `80ms x 2 = 160ms` to `80ms x 3 = 240ms`
 
 You give it a little buffer above the P99.
 But you don't wait forever for the P99.9 outliers.
@@ -1806,7 +1806,7 @@ Why? Because 30-second timeouts mean threads are tied up for 30 SECONDS
 
 A 30-second timeout is not "safe."
 It is **dangerous**.
-Set your timeout to 2-3× P99, which might be 160ms.
+Set your timeout to 2-3x P99, which might be 160ms.
 That means at 1000 req/sec, you hold threads for max 160ms.
 At most 160 threads held at any moment.
 Way more manageable.
@@ -1850,7 +1850,7 @@ BAD setup (timeouts not propagated):
 Timeline:
 t=0s:   Request starts
 t=8s:   A gives up, returns error to client
-t=10s:  B and C finally timeout — but A already gave up!
+t=10s:  B and C finally timeout -- but A already gave up!
         B and C did 2 seconds of wasted work.
         Still holding DB connections, memory, threads.
 ```
@@ -1881,7 +1881,7 @@ No wasted work.
 
 Even better than chained timeouts is **deadline propagation**.
 
-Instead of each service setting its own timeout, you pass a **deadline** — an absolute time — from the very first request.
+Instead of each service setting its own timeout, you pass a **deadline** -- an absolute time -- from the very first request.
 
 ```
 Client sends request at time T=0, with deadline = T+10s
@@ -1949,7 +1949,7 @@ HTTP headers like `X-Request-Deadline` or `X-Timeout` carry it.
 | Setting         | Value             | Why                           |
 |-----------------|-------------------|-------------------------------|
 | Connection      | 1-5 seconds       | TCP should connect fast       |
-| Read            | P99 × 2-3         | Buffer for slow but real work |
+| Read            | P99 x 2-3         | Buffer for slow but real work |
 | Total           | Slightly > Read   | Hard ceiling                  |
 | Never set to    | 0 / null / infinite | Always a mistake            |
 
@@ -1962,7 +1962,7 @@ HTTP headers like `X-Request-Deadline` or `X-Timeout` carry it.
 In your house, every circuit has a breaker.
 
 When too many appliances run at once, the circuit draws too much current.
-The breaker **trips** — it cuts power to that circuit.
+The breaker **trips** -- it cuts power to that circuit.
 Your appliances stop working, but your house doesn't catch fire.
 
 When the problem is fixed, you walk to the breaker box.
@@ -1972,7 +1972,7 @@ Power comes on.
 **The circuit breaker protected the house by accepting short-term loss to prevent total disaster.**
 
 A software circuit breaker works the same way.
-When calls to a service keep failing, the circuit breaker **trips** — it stops making those calls.
+When calls to a service keep failing, the circuit breaker **trips** -- it stops making those calls.
 Instead of trying and failing and waiting for timeouts over and over, it **fails immediately**.
 After a wait period, it cautiously tries again.
 
@@ -2097,7 +2097,7 @@ User retries --> Service A --> Service B (still failing)
                     |               |
 All users retry--> 100 parallel calls to Service B
                     |               |
-                   100 threads × 10s timeout
+                   100 threads x 10s timeout
                    = 1000 thread-seconds of waste
                    Service A runs out of threads
                    Service A crashes too!
@@ -2159,7 +2159,7 @@ class CircuitBreaker:
                 self.last_trip_time = now()
                 raise
 
-        # State is CLOSED — normal operation
+        # State is CLOSED -- normal operation
         try:
             result = func(*args)
             self.record("success")
@@ -2208,7 +2208,7 @@ Request 4:  FAIL              Window: [OK OK OK OK OK OK FAIL FAIL FAIL FAIL] 40
 Request 5:  FAIL              Window: [OK OK OK OK OK FAIL FAIL FAIL FAIL FAIL] 50% fail
 
 50% >= 50% threshold!
-CIRCUIT OPENS at t=5 timeouts × 10s each = ~50 seconds after Stripe broke.
+CIRCUIT OPENS at t=5 timeouts x 10s each = ~50 seconds after Stripe broke.
 
 State: OPEN
   Request 6:  --> FAIL FAST (no call to Stripe, 0ms)
@@ -2249,11 +2249,11 @@ If the ship took on water in one compartment, the crew sealed it.
 The flooding was **contained**.
 
 The rest of the ship kept working.
-(Unfortunately the iceberg damaged too many compartments — but the design was right.)
+(Unfortunately the iceberg damaged too many compartments -- but the design was right.)
 
 **Bulkheads contain damage.
 One flooding section cannot sink the whole ship
-— unless too many sections flood at once.**
+-- unless too many sections flood at once.**
 
 In distributed systems, a bulkhead is **thread pool isolation**.
 Each dependency gets its own thread pool.
@@ -2370,7 +2370,7 @@ There are two ways to implement bulkheads:
 ```
 
 - Actual calls run on **separate threads** from the request thread.
-- Request thread is never blocked — it just waits for the pool result.
+- Request thread is never blocked -- it just waits for the pool result.
 - Full isolation: pool exhaustion doesn't block the request thread.
 - Slightly higher overhead (thread context switching).
 - Best for: high-volume, latency-sensitive paths.
@@ -2414,7 +2414,7 @@ How big should each pool be?
 Start with this formula:
 
 ```
-Pool size = (P99 latency in seconds) × (target concurrent requests) × (safety factor)
+Pool size = (P99 latency in seconds) x (target concurrent requests) x (safety factor)
 ```
 
 **Example:**
@@ -2424,9 +2424,9 @@ Each user might make a DB call.
 DB P99 latency = 50ms = 0.05 seconds.
 
 ```
-Pool size = 0.05s × 100 requests × 1.5 (safety)
+Pool size = 0.05s x 100 requests x 1.5 (safety)
           = 7.5
-          ≈ 10 threads
+          ~= 10 threads
 ```
 
 Only 10 threads can satisfy 100 concurrent requests because each thread only holds the DB for 50ms.
@@ -2442,10 +2442,10 @@ Total thread pool available: 200 threads
 | Dependency        | P99    | Target | Formula  | Pool   |
 |                   | Latency| Concur.|          | Size   |
 +-------------------+--------+--------+----------+--------+
-| Primary DB        | 20ms   |  100   | .02×100  |   50   |
-| Read Cache        | 5ms    |   80   | .005×80  |   30   |
-| External Payment  | 200ms  |   30   | .2×30    |   30   |
-| Internal APIs     | 10ms   |  200   | .01×200  |   90   |
+| Primary DB        | 20ms   |  100   | .02x100  |   50   |
+| Read Cache        | 5ms    |   80   | .005x80  |   30   |
+| External Payment  | 200ms  |   30   | .2x30    |   30   |
+| Internal APIs     | 10ms   |  200   | .01x200  |   90   |
 +-------------------+--------+--------+----------+--------+
 | TOTAL             |        |        |          |  200   |
 +-------------------+--------+--------+----------+--------+
@@ -2483,7 +2483,7 @@ You can still navigate, roughly.
 When signal returns, it updates.
 
 **That's a fallback.**
-When the live data source fails, serve something — anything — rather than nothing.
+When the live data source fails, serve something -- anything -- rather than nothing.
 
 ### The Four Types of Fallbacks
 
@@ -2559,7 +2559,7 @@ FALLBACK CHAIN: Recommendation Service
 |    "Check back later"     |
 +---------------------------+
           |
-          | (never fail here — this is always available)
+          | (never fail here -- this is always available)
           v
 +---------------------------+
 | User sees SOMETHING       |
@@ -2623,7 +2623,7 @@ For write operations, when the downstream fails, you have two real options:
 2. Queue the write. "Your order is being processed." (with retry logic)
 
 **Never silently drop a write or pretend it succeeded.**
-Users will be confused or worse — you'll have money problems.
+Users will be confused or worse -- you'll have money problems.
 
 ### Recommendation Service Full Example
 
@@ -2682,7 +2682,7 @@ The bouncer has two options:
 
 **Option A (no load shedding):**
 Let everyone in.
-Club is at 400 people — twice capacity.
+Club is at 400 people -- twice capacity.
 Bar can't serve people fast enough.
 Bathroom lines are 30 minutes.
 No one is having a good time.
@@ -2835,7 +2835,7 @@ The server gets breathing room.
 
 **Don't just return 500 (Internal Server Error).**
 500 says "I'm broken."
-429 says "I'm fine, just busy — try again soon."
+429 says "I'm fine, just busy -- try again soon."
 This helps clients behave correctly.
 
 ### Priority-Based Shedding Example
@@ -2999,7 +2999,7 @@ INCOMING REQUEST
 | - Cancel if timeout  |    <-- Free thread if too slow
 +----------------------+
       |
-      | (call returns — success or timeout/error)
+      | (call returns -- success or timeout/error)
       v
 +----------------------+
 | FALLBACK HANDLER     |
@@ -3225,7 +3225,7 @@ requests
 Full answer:
 
 1. Timeouts (immediate protection)
-   Set read timeout to P99 × 2-3. If DB is slow, timeout quickly.
+   Set read timeout to P99 x 2-3. If DB is slow, timeout quickly.
    Don't hold threads for 30 seconds.
 
 2. Circuit breaker (systematic protection)
@@ -3299,7 +3299,7 @@ The goal: everyone who wants to BUY can buy.
 +------------------+----------------------------+-------------------------+
 | Pattern          | Protects Against           | Key Setting             |
 +------------------+----------------------------+-------------------------+
-| Timeout          | Thread exhaustion from     | P99 × 2-3x, per call   |
+| Timeout          | Thread exhaustion from     | P99 x 2-3x, per call   |
 |                  | slow dependencies          |                         |
 +------------------+----------------------------+-------------------------+
 | Circuit Breaker  | Cascading failures from    | 50% error rate,         |
@@ -3307,10 +3307,10 @@ The goal: everyone who wants to BUY can buy.
 |                  |                            | 30s reset               |
 +------------------+----------------------------+-------------------------+
 | Bulkhead         | Failure spreading across   | Separate pool per dep.  |
-|                  | dependencies               | P99 × concurrency       |
+|                  | dependencies               | P99 x concurrency       |
 +------------------+----------------------------+-------------------------+
-| Fallback         | Bad user experience when   | Cached → static →       |
-|                  | dependencies fail          | default → error         |
+| Fallback         | Bad user experience when   | Cached -> static ->       |
+|                  | dependencies fail          | default -> error         |
 +------------------+----------------------------+-------------------------+
 | Load Shedding    | System crash from          | Tier-based, return 429  |
 |                  | overload                   | with Retry-After        |
@@ -3343,13 +3343,13 @@ Together: your service keeps running even when everything around it is on fire.
 THE DEFENSE STACK
 
 1. TIMEOUT
-   Set it: P99 latency × 2-3x (not 30 seconds "to be safe")
+   Set it: P99 latency x 2-3x (not 30 seconds "to be safe")
    Purpose: Free threads from slow dependencies
    Rule:    Propagate deadlines through service chains
    Never:   Set to "none" or "infinite"
 
 2. CIRCUIT BREAKER
-   Three states: CLOSED (normal) → OPEN (tripped) → HALF-OPEN (testing)
+   Three states: CLOSED (normal) -> OPEN (tripped) -> HALF-OPEN (testing)
    Trips when: 50%+ failures over 10-request window
    Resets when: 30s passes, probe succeeds
    Purpose: Stop calling broken services, fail fast instead
@@ -3357,18 +3357,18 @@ THE DEFENSE STACK
 3. BULKHEAD
    What: Separate thread pool per dependency
    Purpose: Slow DB can only fill DB pool, not Cache pool
-   Size: P99 latency × target concurrency × safety factor
+   Size: P99 latency x target concurrency x safety factor
    Types: Thread pool isolation (strong) vs semaphore (lighter)
 
 4. FALLBACK
-   Chain: live → cache → static → error
+   Chain: live -> cache -> static -> error
    Works for: reads (show stale data, defaults, degraded version)
    Does NOT work for: writes (never fake a payment or order)
    Test it: your fallback code must be tested before you need it
 
 5. LOAD SHEDDING
    Why: better to reject 10% than to crash and fail 100%
-   Priority tiers: Tier 0 (health) → Tier 1 (payments) → ... → Tier 4 (analytics)
+   Priority tiers: Tier 0 (health) -> Tier 1 (payments) -> ... -> Tier 4 (analytics)
    Shed Tier 4 first, never shed Tier 0 or Tier 1
    Return: 429 with Retry-After header
    Different from: rate limiting (per-user) vs load shedding (global)
@@ -3384,7 +3384,7 @@ USE ALL FIVE. They are layers, not alternatives.
 
 ---
 
-## 1. Graceful Degradation — Designing Failure Modes in Advance
+## 1. Graceful Degradation -- Designing Failure Modes in Advance
 
 ### The Core Idea
 
@@ -3398,7 +3398,7 @@ Graceful degradation means planning your failure modes *before* you need them. N
 
 Think about how airplanes are designed.
 
-A commercial airplane has two engines. If one engine fails at 35,000 feet, the plane does not crash. It can fly on one engine. It may divert to the nearest airport. It may turn off non-essential systems — the in-flight entertainment goes dark, some cabin lights go dim — to conserve power for the things that matter. The pilots land the plane safely.
+A commercial airplane has two engines. If one engine fails at 35,000 feet, the plane does not crash. It can fly on one engine. It may divert to the nearest airport. It may turn off non-essential systems -- the in-flight entertainment goes dark, some cabin lights go dim -- to conserve power for the things that matter. The pilots land the plane safely.
 
 Now imagine the airplane was NOT designed this way. Imagine the pilots discovered "how to fly on one engine" *during the emergency* while passengers were panicking. How would that go?
 
@@ -3422,13 +3422,13 @@ What happens when pieces fail?
 
 If you have NOT planned this, the answer is: chaos. Some pages 500. Some load half-broken. The checkout might silently fail. Users lose trust.
 
-If you HAVE planned this, you have a ladder — a pre-defined set of tiers that the system can drop into, each worse than the last but still controlled and predictable.
+If you HAVE planned this, you have a ladder -- a pre-defined set of tiers that the system can drop into, each worse than the last but still controlled and predictable.
 
 ```
 E-COMMERCE DEGRADATION LADDER
 ==============================
 
-TIER 0 — 100% HEALTHY
+TIER 0 -- 100% HEALTHY
 +--------------------------------------------------+
 |  - Personalized homepage ("Hi Ranjeet, welcome") |
 |  - ML recommendations ("You might also like...")  |
@@ -3441,7 +3441,7 @@ TIER 0 — 100% HEALTHY
               [Rec service fails]
                        |
                        v
-TIER 1 — 80% — RECOMMENDATIONS DOWN
+TIER 1 -- 80% -- RECOMMENDATIONS DOWN
 +--------------------------------------------------+
 |  - Personalized homepage still works             |
 |  - "Popular items" shown instead of ML recs      |
@@ -3454,7 +3454,7 @@ TIER 1 — 80% — RECOMMENDATIONS DOWN
          [Personalization service fails]
                        |
                        v
-TIER 2 — 60% — PERSONALIZATION DOWN
+TIER 2 -- 60% -- PERSONALIZATION DOWN
 +--------------------------------------------------+
 |  - Generic homepage (no "Hi Ranjeet")            |
 |  - "Popular items" still showing                 |
@@ -3466,7 +3466,7 @@ TIER 2 — 60% — PERSONALIZATION DOWN
         [New payment processor fails]
                        |
                        v
-TIER 3 — 40% — LIMITED PAYMENTS
+TIER 3 -- 40% -- LIMITED PAYMENTS
 +--------------------------------------------------+
 |  - Generic homepage                              |
 |  - Popular items                                 |
@@ -3479,7 +3479,7 @@ TIER 3 — 40% — LIMITED PAYMENTS
            [Core payment service fails]
                        |
                        v
-TIER 4 — 20% — BROWSE ONLY
+TIER 4 -- 20% -- BROWSE ONLY
 +--------------------------------------------------+
 |  - Full browse and search still works            |
 |  - Product pages still load                      |
@@ -3492,7 +3492,7 @@ TIER 4 — 20% — BROWSE ONLY
           [Database / core systems fail]
                        |
                        v
-TIER 5 — 0% — MAINTENANCE PAGE
+TIER 5 -- 0% -- MAINTENANCE PAGE
 +--------------------------------------------------+
 |  - Static HTML page only                         |
 |  - "We're doing maintenance. Back soon."         |
@@ -3520,10 +3520,10 @@ Draw the dependency graph. A recommendation widget depends on: the recommendatio
 **Question 2: What can I show if that dependency fails?**
 
 For each dependency failure, what is the fallback?
-- Dependency fails → show cached data from 24 hours ago
-- Dependency fails → show a generic version
-- Dependency fails → hide the feature entirely
-- Dependency fails → show static content
+- Dependency fails -> show cached data from 24 hours ago
+- Dependency fails -> show a generic version
+- Dependency fails -> hide the feature entirely
+- Dependency fails -> show static content
 
 Go through every feature. Fill in the fallback for every dependency. Now you have your ladder.
 
@@ -3549,7 +3549,7 @@ NORMAL STATE:
 |  personalize=ON  |    |    use saved cards    |
 +------------------+    +-----------------------+
 
-INCIDENT — ENGINEER FLIPS FLAG:
+INCIDENT -- ENGINEER FLIPS FLAG:
 +------------------+    +-----------------------+
 |  Feature Flag    |    |  Application Logic    |
 |  Store           |    |                       |
@@ -3583,7 +3583,7 @@ Spend thirty minutes now designing your ladder. Save yourself hours of chaos lat
 
 ---
 
-## 2. Thundering Herd — Recovery That Kills
+## 2. Thundering Herd -- Recovery That Kills
 
 ### The Core Idea
 
@@ -3599,7 +3599,7 @@ The light turns green.
 
 All two hundred cars accelerate at once. The intersection is immediately jammed. Cars trying to turn left are blocked. The queue clears the light but backs up the cross street. The "recovery" created a new traffic jam that takes another ten minutes to clear.
 
-This is a thundering herd. The sudden synchronized behavior of all those cars — all reacting to the same trigger at the same time — overwhelmed the system even though each individual car was doing the right thing.
+This is a thundering herd. The sudden synchronized behavior of all those cars -- all reacting to the same trigger at the same time -- overwhelmed the system even though each individual car was doing the right thing.
 
 ### Three Forms of Thundering Herd
 
@@ -3613,7 +3613,7 @@ In that exact moment, one hundred users are on the site. All one hundred request
 CACHE STAMPEDE
 ==============
 
-BEFORE EXPIRY — healthy:
+BEFORE EXPIRY -- healthy:
  Users --> [ Cache: HIT ] --> returns cached page
             (no DB hit)
 
@@ -3658,7 +3658,7 @@ The retries are synchronized because they all started at roughly the same time (
 
 ### Prevention: Cache Stampede
 
-**Method 1 — Probabilistic Early Expiry**
+**Method 1 -- Probabilistic Early Expiry**
 
 Instead of letting the cache entry expire and then scrambling to fill it, start refreshing it *before* it expires. The idea: when a request checks the cache and finds an entry that is close to expiring, there is a small random probability it will go ahead and refresh it early.
 
@@ -3672,7 +3672,7 @@ By T=60 minutes, the cache already has a fresh entry.
 No stampede ever happens.
 ```
 
-**Method 2 — Mutex / Single-Fill**
+**Method 2 -- Mutex / Single-Fill**
 
 When the cache misses, only ONE thread is allowed to go to the database. The other threads wait for that one thread to finish and populate the cache. Then all threads read from the cache.
 
@@ -3688,7 +3688,7 @@ WITH MUTEX:
                  --> 1 DB query total
 ```
 
-**Method 3 — Jitter on TTLs**
+**Method 3 -- Jitter on TTLs**
 
 Do not set the same TTL for all cache entries of the same type. Add random jitter.
 
@@ -3752,7 +3752,7 @@ The `random(0.5, 1.5)` is the jitter. It spreads retries across a window instead
 
 ---
 
-## 3. Cascading Failures — When One Failure Becomes Total Outage
+## 3. Cascading Failures -- When One Failure Becomes Total Outage
 
 ### The Domino Analogy
 
@@ -3785,7 +3785,7 @@ A slow dependency causes requests to time out. Those timed-out requests retry. N
 Here is a realistic cascade scenario. Walk through it carefully.
 
 ```
-CASCADING FAILURE — STEP BY STEP
+CASCADING FAILURE -- STEP BY STEP
 ==================================
 
 NORMAL STATE:
@@ -3856,7 +3856,7 @@ fill even faster.
 STEP 6: Complete outage
 All A instances have full thread pools.
 No requests can be served.
-Total outage — caused by ONE GC pause in C.
+Total outage -- caused by ONE GC pause in C.
 
 TIMELINE: C's GC pause: 3 seconds
           Total outage: 45 seconds later
@@ -3871,15 +3871,15 @@ The GC pause in C lasted 3 seconds. The outage lasted minutes. One slow service 
 
 The cascade above had four places it could have been broken. Each represents a protection mechanism:
 
-**Timeouts — Stop Waiting**
+**Timeouts -- Stop Waiting**
 
 If B had a timeout of 500ms on calls to C (instead of 10 seconds), B's threads would have freed up after half a second. The cascade would not have reached A. Threads would have returned errors, but they would have returned *quickly*. The pool would have stayed manageable.
 
-Rule: every synchronous call needs a timeout. No exceptions. The timeout should be shorter than you think — if your SLA is 1 second, your timeouts on dependencies should be 200-300ms.
+Rule: every synchronous call needs a timeout. No exceptions. The timeout should be shorter than you think -- if your SLA is 1 second, your timeouts on dependencies should be 200-300ms.
 
-**Circuit Breakers — Stop Calling**
+**Circuit Breakers -- Stop Calling**
 
-A circuit breaker monitors the error rate on calls to a dependency. When errors pass a threshold (say, 50% of calls failing), the circuit "trips" open. Further calls are rejected immediately without even trying to reach the dependency. After a recovery period, the circuit tries a few requests — if they succeed, it closes.
+A circuit breaker monitors the error rate on calls to a dependency. When errors pass a threshold (say, 50% of calls failing), the circuit "trips" open. Further calls are rejected immediately without even trying to reach the dependency. After a recovery period, the circuit tries a few requests -- if they succeed, it closes.
 
 ```
 CIRCUIT BREAKER STATES:
@@ -3901,7 +3901,7 @@ HALF-OPEN (testing recovery):
 
 If B had a circuit breaker on calls to C, the moment C started failing, the CB would have tripped. B's threads would not have filled. Cascade stops at C.
 
-**Bulkheads — Contain the Blast**
+**Bulkheads -- Contain the Blast**
 
 A bulkhead gives each downstream dependency its own thread pool. Calls to C use a pool of 10 threads. Calls to D use a different pool of 10 threads. If C is slow and fills its 10-thread pool, it does not affect calls to D.
 
@@ -3919,7 +3919,7 @@ B's thread pool for E: 10 threads  <-- E still gets served
 C's GC pause cannot consume resources meant for D and E.
 ```
 
-**Fallbacks — Serve a Degraded Response**
+**Fallbacks -- Serve a Degraded Response**
 
 When C is unavailable, instead of waiting and timing out, B can return a fallback response: cached data, a default value, an empty list, a degraded result. The user gets *something* instead of an error.
 
@@ -3949,7 +3949,7 @@ If you cannot answer these questions, the design is not ready.
 
 ---
 
-## 4. Metastable Failures — The Self-Perpetuating Outage
+## 4. Metastable Failures -- The Self-Perpetuating Outage
 
 ### The Forest Fire Analogy
 
@@ -3957,7 +3957,7 @@ A large forest fire generates its own weather. The heat creates updrafts. The up
 
 You remove the original match. The fire continues anyway. The conditions the fire created are now maintaining the fire.
 
-This is a metastable failure. The system entered a state where its own defensive responses are perpetuating the problem. You cannot just fix the original cause — the fix has to break the self-sustaining loop.
+This is a metastable failure. The system entered a state where its own defensive responses are perpetuating the problem. You cannot just fix the original cause -- the fix has to break the self-sustaining loop.
 
 ### What Makes a Failure Metastable
 
@@ -4019,7 +4019,7 @@ T=10: Service overwhelmed again
          LOOP CONTINUES
 ```
 
-The retries — designed as a recovery mechanism — are themselves preventing recovery. Every time the service tries to come up, the accumulated retries knock it back down.
+The retries -- designed as a recovery mechanism -- are themselves preventing recovery. Every time the service tries to come up, the accumulated retries knock it back down.
 
 ### Metastable Example 2: GC Spiral
 
@@ -4034,7 +4034,7 @@ GC SPIRAL (MEMORY PRESSURE LOOP)
     to free memory
               |
               v
-[3] GC pause — service freezes for hundreds of milliseconds
+[3] GC pause -- service freezes for hundreds of milliseconds
               |
               v
 [4] Requests during GC pause time out at clients
@@ -4059,13 +4059,13 @@ GC SPIRAL (MEMORY PRESSURE LOOP)
          BACK TO [3], WORSE EACH CYCLE
 ```
 
-The GC is trying to help — it is cleaning up memory. But the retries caused by GC pauses create more load which creates more memory pressure which triggers more GC. The cure is making the disease worse.
+The GC is trying to help -- it is cleaning up memory. But the retries caused by GC pauses create more load which creates more memory pressure which triggers more GC. The cure is making the disease worse.
 
 ### Why Normal Recovery Fails
 
 When you are in a metastable state, normal operational responses do not work:
 
-- **Adding capacity**: more instances join, they immediately get hammered by the retry backlog, they fall over too. The retry storm is not bounded by your capacity at normal load — it is amplified above normal load.
+- **Adding capacity**: more instances join, they immediately get hammered by the retry backlog, they fall over too. The retry storm is not bounded by your capacity at normal load -- it is amplified above normal load.
 
 - **Restarting instances**: fresh instances start cold, get hit by the full retry wave, potentially go down again before they can warm up.
 
@@ -4116,7 +4116,7 @@ OPTION 4: Circuit break the retry path
   - Breaks the client-side loop from the server side
 ```
 
-The key insight is that you are not fixing the original problem — you are breaking the feedback loop that is perpetuating the failure. Once the loop is broken, the system can recover at normal operating parameters.
+The key insight is that you are not fixing the original problem -- you are breaking the feedback loop that is perpetuating the failure. Once the loop is broken, the system can recover at normal operating parameters.
 
 ### The Metastable Failure Signature
 
@@ -4150,7 +4150,7 @@ This means:
 
 **"Normal recovery procedures don't work. You have to break the loop."**
 
-This is the mental model. When normal playbook steps are not working — more capacity, restarts, fixing the root cause — stop and ask: "Is there a feedback loop I have not broken yet?" Find the loop. Break it first. Then recover.
+This is the mental model. When normal playbook steps are not working -- more capacity, restarts, fixing the root cause -- stop and ask: "Is there a feedback loop I have not broken yet?" Find the loop. Break it first. Then recover.
 
 ---
 
@@ -4193,13 +4193,13 @@ When you review any system design for failure modes, ask:
 3. **What breaks the cascade and the metastable loop?** For every synchronous dependency: timeout, circuit breaker, bulkhead, fallback. For every potential overload spiral: load shedding, retry budget, server-side backpressure.
 
 Systems that handle failure well are not lucky. They were designed for failure before failure happened.
-# Chapter 25: Failure Models and Partial Failures — Part C2
+# Chapter 25: Failure Models and Partial Failures -- Part C2
 
 ## Real Incidents, Observability, and Scale Thresholds
 
 ---
 
-## Section 1: Real Incident 1 — DynamoDB Brownout Causing Cascading Checkout Failure
+## Section 1: Real Incident 1 -- DynamoDB Brownout Causing Cascading Checkout Failure
 
 ### What Is a Brownout?
 
@@ -4207,7 +4207,7 @@ A full outage is easy to detect. Everything stops. Alerts fire. Engineers get pa
 
 A brownout is harder. The service is still running. Most requests succeed. But some fail, and the ones that succeed are much slower than normal. A brownout is like a highway with two lanes closed out of ten. Traffic is still moving, but everything is backed up.
 
-This incident shows why brownouts are actually more dangerous than full outages — because they cause cascading failures in a way that a clean outage does not.
+This incident shows why brownouts are actually more dangerous than full outages -- because they cause cascading failures in a way that a clean outage does not.
 
 ---
 
@@ -4236,11 +4236,11 @@ This incident shows why brownouts are actually more dangerous than full outages 
 
 The order service stores every order in DynamoDB. When a user clicks "Place Order," the order service writes the order state to DynamoDB and reads it back to confirm the write. Under normal conditions, this takes about 50 milliseconds.
 
-The order service has a timeout setting of 30 seconds. That means: if DynamoDB does not respond within 30 seconds, give up and return an error. The engineers who set this timeout thought 30 seconds was conservative — DynamoDB is usually 50ms, so 30 seconds gives enormous room. They were wrong about why that matters.
+The order service has a timeout setting of 30 seconds. That means: if DynamoDB does not respond within 30 seconds, give up and return an error. The engineers who set this timeout thought 30 seconds was conservative -- DynamoDB is usually 50ms, so 30 seconds gives enormous room. They were wrong about why that matters.
 
 ---
 
-### The Incident — Step by Step
+### The Incident -- Step by Step
 
 ```
 TIMELINE OF THE BROWNOUT INCIDENT
@@ -4253,7 +4253,7 @@ T+0:02  Threads in Order Service start waiting (2-5s each)
         Thread pool begins filling.
 
 T+0:08  Thread pool 60% full. P99 spikes to 8s.
-        Error rate still low — NO ALERT fires yet.
+        Error rate still low -- NO ALERT fires yet.
 
 T+0:15  Thread pool 100% full. Order Service unresponsive.
         API Gateway threads start filling (gateway serves
@@ -4286,10 +4286,10 @@ Total duration: ~40 minutes  |  User impact: 40% checkout failure
 | Normal latency | 50ms |
 | Brownout latency | 2,000 - 5,000ms |
 | Original timeout | 30 seconds |
-| Thread pool behavior | Filled completely — threads held waiting 2-5s each |
-| Cascade path | DynamoDB slow → Order Service threads full → Order Service unresponsive → Gateway threads full → All endpoints slow |
+| Thread pool behavior | Filled completely -- threads held waiting 2-5s each |
+| Cascade path | DynamoDB slow -> Order Service threads full -> Order Service unresponsive -> Gateway threads full -> All endpoints slow |
 | First alert | P99 latency spike at T+0:08 |
-| Error rate alert | Fired at T+0:30 — 22 minutes later |
+| Error rate alert | Fired at T+0:30 -- 22 minutes later |
 | User impact | 40% of checkouts failed during 30-minute window |
 | Fix | Timeout to 3s, circuit breaker threshold to 5% |
 | Recovery | DynamoDB self-recovered, circuit closed |
@@ -4315,7 +4315,7 @@ MISSING: Circuit breaker (threshold was 10%, should be 5%)
 MISSING: Bulkhead (one shared thread pool for everything)
   DynamoDB calls filled the SAME pool used for all work.
   When DynamoDB swamped the pool, logging, health checks,
-  cache reads — everything stopped.
+  cache reads -- everything stopped.
   Dedicated 50-thread pool for DynamoDB = failure stays contained.
 ```
 
@@ -4353,11 +4353,11 @@ Alert: error rate > 1%      -->    Alert: P99 latency > 500ms
 
 In this incident, P99 latency spiked to 8 seconds at T+0:08. The error rate alert did not fire until T+0:30. The engineer had a 22-minute window where the system was clearly sick, but no alert fired.
 
-Think of it like a car engine. A high temperature gauge is the leading indicator. Waiting until smoke appears means the engine has already seized. P99 at 500ms would have fired 22 minutes earlier — turning a 30-minute checkout failure into a 5-minute one.
+Think of it like a car engine. A high temperature gauge is the leading indicator. Waiting until smoke appears means the engine has already seized. P99 at 500ms would have fired 22 minutes earlier -- turning a 30-minute checkout failure into a 5-minute one.
 
 ---
 
-## Section 2: Real Incident 2 — Thundering Herd After Full Fleet Restart
+## Section 2: Real Incident 2 -- Thundering Herd After Full Fleet Restart
 
 ### What Is a Thundering Herd?
 
@@ -4393,11 +4393,11 @@ A thundering herd in software is the same problem. Many services restart at the 
 
 The system serves ads. For every ad request, the ad server checks Redis for a cached auction result. Cache hit = fast. Cache miss = query PostgreSQL to run the auction, store result in Redis, return ad.
 
-Under normal operation, cache hit rate is ~95%. PostgreSQL only handles 5% of requests — the cache misses. The system runs fine with 50 instances because the database only sees 5% of load.
+Under normal operation, cache hit rate is ~95%. PostgreSQL only handles 5% of requests -- the cache misses. The system runs fine with 50 instances because the database only sees 5% of load.
 
 ---
 
-### The Incident — Step by Step
+### The Incident -- Step by Step
 
 ```
 TIMELINE OF THE THUNDERING HERD
@@ -4441,7 +4441,7 @@ Total downtime: ~8 minutes  |  Revenue loss: ~$200K
 | Cache | Redis, 5-minute TTL on auction results |
 | Database | PostgreSQL, max 100 connections |
 | Trigger | Full fleet restart: all 50 instances simultaneously |
-| Cache state after restart | Cold — 100% miss rate |
+| Cache state after restart | Cold -- 100% miss rate |
 | Database impact | All 50 instances hit PostgreSQL simultaneously |
 | Time to exhaust DB pool | 10 seconds |
 | User impact | 100% ad serving failure for 8 minutes |
@@ -4522,7 +4522,7 @@ TTL: 5 minutes              -->    TTL: 30 minutes
 BROKEN: Full fleet restart
 ===========================
 T+0:00  [Instance 1-50: ALL COLD]
-         ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+         vvvvvvvvvvvvvvvvvvvvvvvvvv
          PostgreSQL: 100 connections used in 10s
          PostgreSQL: REJECTS connections
          Ad serving: 100% failure
@@ -4530,9 +4530,9 @@ T+0:00  [Instance 1-50: ALL COLD]
 FIXED: Rolling restart
 =======================
 T+0:00  [Instances 1-5: cold]   [Instances 6-50: warm, serving]
-         ↓↓↓↓↓              (small DB spike, handled)
+         vvvvv              (small DB spike, handled)
 T+2:00  [Instances 1-5: warm]  [Instances 6-10: cold]  [11-50: warm]
-         ↓↓↓↓↓              (small DB spike, handled)
+         vvvvv              (small DB spike, handled)
 T+4:00  [Instances 1-10: warm] [Instances 11-15: cold] [16-50: warm]
          ...and so on
 
@@ -4547,13 +4547,13 @@ User impact: zero
 
 > **"A restart of all instances is an outage. Always roll."**
 
-This is one of the most common causes of self-inflicted outages. The team was trying to do something routine — deploy a new version. The deploy itself was fine. The restart strategy caused a catastrophic thundering herd.
+This is one of the most common causes of self-inflicted outages. The team was trying to do something routine -- deploy a new version. The deploy itself was fine. The restart strategy caused a catastrophic thundering herd.
 
 Every deploy checklist should include: rolling restart only. Never restart more than 10-20% of your fleet at once. And every instance should have a warm-up period before it receives live traffic.
 
 ---
 
-## Section 3: Observability for Partial Failures — Seeing What's Invisible
+## Section 3: Observability for Partial Failures -- Seeing What's Invisible
 
 ### The Package Tracking Analogy
 
@@ -4660,7 +4660,7 @@ THE FOUR GOLDEN SIGNALS
 
 ### Key Metrics for Partial Failures
 
-Standard metrics catch full outages. These metrics catch partial failures — the hard ones.
+Standard metrics catch full outages. These metrics catch partial failures -- the hard ones.
 
 | Metric | What It Reveals | Why Aggregate Metrics Miss It |
 |---|---|---|
@@ -4785,7 +4785,7 @@ Run synthetic monitors from multiple regions. Your service might be healthy in u
 
 ---
 
-## Section 4: Scale Thresholds — How Failure Patterns Change With Scale
+## Section 4: Scale Thresholds -- How Failure Patterns Change With Scale
 
 ### The Key Insight
 
@@ -4963,7 +4963,7 @@ This is the most important takeaway from the scale discussion. You cannot design
 
 The practical implication: do not over-engineer for scale you do not have. But do watch for the transition points. When you go from 3 services to 10, add bulkheads and distributed tracing. When you go from 10 to 50, consider a service mesh. When you hit 100, invest in chaos engineering.
 
-The teams that get into trouble are the ones who grow from V2 to V5 quickly — through a major product success or an acquisition — without adding the defenses that each scale transition requires.
+The teams that get into trouble are the ones who grow from V2 to V5 quickly -- through a major product success or an acquisition -- without adding the defenses that each scale transition requires.
 
 ```
 THE TRANSITION DANGER ZONE
@@ -5002,13 +5002,13 @@ significantly increase traffic.
 
 ---
 
-*Chapter 25, Part C2 — End*
+*Chapter 25, Part C2 -- End*
 # Chapter 25: Failure Models and Partial Failures
-## Part D1 — Anti-Patterns, Failure Scenario Design, and Chaos Engineering
+## Part D1 -- Anti-Patterns, Failure Scenario Design, and Chaos Engineering
 
 ---
 
-## Section 1: Anti-Patterns — The Mistakes That Cause 3 AM Pages
+## Section 1: Anti-Patterns -- The Mistakes That Cause 3 AM Pages
 
 An anti-pattern is a solution that feels right but makes things worse. Every item in this list has
 caused real production outages. Learn them so you don't repeat them.
@@ -5035,9 +5035,9 @@ def call_payment_service(order):
 
 **PROBLEM**
 
-Single user: 3 retries × 10s timeout = 30 seconds of waiting, then an error page.
+Single user: 3 retries x 10s timeout = 30 seconds of waiting, then an error page.
 
-At scale — retry storm:
+At scale -- retry storm:
 
 ```
 Payment service starts struggling at T=0.
@@ -5056,7 +5056,7 @@ waiter fields 300 orders instead of 100. The kitchen gets MORE backed up, not le
 
 **FIX**
 
-Exponential backoff with jitter — wait longer between retries, add randomness so all clients
+Exponential backoff with jitter -- wait longer between retries, add randomness so all clients
 don't retry at the exact same millisecond.
 
 ```python
@@ -5126,10 +5126,10 @@ limits keep spots turning over for everyone.
 Set timeouts based on real data, not instinct.
 
 ```
-Formula:  timeout = P99 latency × 3
+Formula:  timeout = P99 latency x 3
 
 P99 latency = slowest 1% of requests under normal load
-× 3         = buffer for occasional variance
+x 3         = buffer for occasional variance
 
 Example:
   DB query P99 = 200ms
@@ -5145,8 +5145,8 @@ Alert when P99 approaches 30% of your timeout:
 Timeout = 600ms
 Warning threshold = 180ms P99
 
-P99 > 180ms → Slack alert. Trend is bad, act before timeouts fire.
-P99 > 600ms → Timeouts firing → page on-call.
+P99 > 180ms -> Slack alert. Trend is bad, act before timeouts fire.
+P99 > 600ms -> Timeouts firing -> page on-call.
 ```
 
 ---
@@ -5162,7 +5162,7 @@ One thread pool handles all outgoing calls: database, cache, payment API, email.
 One slow dependency starves everything else.
 
 ```
-SHARED POOL — 200 threads total
+SHARED POOL -- 200 threads total
 
 Normal:
   [DB: ~20]  [Cache: ~10]  [Payment: ~5]  [Email: ~2]  [Free: 163]
@@ -5171,7 +5171,7 @@ DB starts slowing (maybe a long migration is running):
   [DB: 188 threads waiting]  [Cache: 6]  [Payment: 4]  [Email: 2]  [Free: 0]
 
 DB still slow:
-  [DB: 200 threads — ALL THREADS waiting for DB]
+  [DB: 200 threads -- ALL THREADS waiting for DB]
   Cache calls:    NO THREADS AVAILABLE
   Payment calls:  NO THREADS AVAILABLE
   API responses:  NO THREADS AVAILABLE
@@ -5180,7 +5180,7 @@ TOTAL FAILURE from ONE slow dependency.
 ```
 
 This is the "noisy neighbor" problem inside your own process. The slow DB took all the
-resources and starved cache and payment — even though those services were perfectly healthy.
+resources and starved cache and payment -- even though those services were perfectly healthy.
 
 **FIX**
 
@@ -5188,16 +5188,16 @@ Bulkhead pattern. Separate thread pools per dependency. A slow dependency can on
 own pool, not yours.
 
 ```
-BULKHEAD — Separate pools
+BULKHEAD -- Separate pools
 
   +--------------+  +--------------+  +---------------+
   |  DB Pool     |  |  Cache Pool  |  |  Payment Pool |
   |  50 threads  |  |  30 threads  |  |  20 threads   |
   +--------------+  +--------------+  +---------------+
 
-DB slows down → DB pool fills to 50 → DB calls fail fast (their pool is full)
-Cache pool:    still 30 threads → cache calls work fine
-Payment pool:  still 20 threads → checkouts work fine
+DB slows down -> DB pool fills to 50 -> DB calls fail fast (their pool is full)
+Cache pool:    still 30 threads -> cache calls work fine
+Payment pool:  still 20 threads -> checkouts work fine
 
 PARTIAL FAILURE. Other systems unaffected.
 ```
@@ -5215,7 +5215,7 @@ def get_user(user_id):
     return future.result(timeout=0.6)
 ```
 
-Name comes from ship bulkheads — watertight compartments that stop one breach from sinking the
+Name comes from ship bulkheads -- watertight compartments that stop one breach from sinking the
 whole ship. One compartment floods; the others stay dry.
 
 ---
@@ -5242,10 +5242,10 @@ Scenario: DB connection string is wrong after a config deployment.
 
 /health returns:  200 OK  (load balancer is happy, routes traffic here)
 Reality:
-  GET /product/123   → works (result is cached in Redis)
-  POST /order        → SILENTLY FAILS (needs DB write, DB unreachable)
-  PUT  /cart         → SILENTLY FAILS
-  DELETE /item       → SILENTLY FAILS
+  GET /product/123   -> works (result is cached in Redis)
+  POST /order        -> SILENTLY FAILS (needs DB write, DB unreachable)
+  PUT  /cart         -> SILENTLY FAILS
+  DELETE /item       -> SILENTLY FAILS
 
 Reads work. Writes fail. Health check says everything is fine.
 Engineers don't notice for 2 hours. Orders are lost.
@@ -5279,8 +5279,8 @@ def readiness():
     return checks, (200 if all_ok else 503)
 ```
 
-Two endpoints: `/health/live` (is the process alive? — shallow, for restart decisions) and
-`/health/ready` (can it handle traffic? — deep, for load balancer routing). A pod only gets
+Two endpoints: `/health/live` (is the process alive? -- shallow, for restart decisions) and
+`/health/ready` (can it handle traffic? -- deep, for load balancer routing). A pod only gets
 traffic when `/health/ready` returns 200. DB write failure pulls the pod from rotation immediately.
 
 ---
@@ -5332,7 +5332,7 @@ def get_recommendations(user_id):
     except (Timeout, ServiceUnavailable):
         return popular_items_cache.get_top_20()  # never fails, always fast
     except Exception:
-        return []  # feature disappears gracefully — no error thrown
+        return []  # feature disappears gracefully -- no error thrown
 ```
 
 ---
@@ -5370,7 +5370,7 @@ Original problem: 20% degraded.
 After restart: 100% down. You made it worse.
 ```
 
-This is a "thundering herd" — all instances woke up hungry at the same time and rushed the same
+This is a "thundering herd" -- all instances woke up hungry at the same time and rushed the same
 resource. The stampede killed the database.
 
 **FIX**
@@ -5402,7 +5402,7 @@ Same rule applies to deployments and config changes. Always roll changes gradual
 
 ### How to Approach This in an Interview
 
-When an interviewer says "design the failure model for X," they want structured thinking — not
+When an interviewer says "design the failure model for X," they want structured thinking -- not
 just "add circuit breakers." Use this eight-step framework.
 
 **Problem: Design the failure model for an e-commerce checkout flow.**
@@ -5432,36 +5432,36 @@ Five dependencies. Each can fail independently.
 
 ---
 
-#### Step 2: For Each Dependency — Three Failure Modes
+#### Step 2: For Each Dependency -- Three Failure Modes
 
 For every box, ask: slow? down? wrong data?
 
 ```
 Inventory Service:
-  Slow?       → Short timeout (500ms). Show "checking availability..."
-  Down?       → Allow purchase optimistically, verify async. If out of stock, refund.
-  Wrong data? → Cannot catch at checkout. Catch in fulfillment pipeline.
+  Slow?       -> Short timeout (500ms). Show "checking availability..."
+  Down?       -> Allow purchase optimistically, verify async. If out of stock, refund.
+  Wrong data? -> Cannot catch at checkout. Catch in fulfillment pipeline.
 
 Payment Service:
-  Slow?       → Payment gateway often takes 1-3s. Timeout at 3s. Show spinner.
-  Down?       → Hard failure. Store order as "pending". Show clear error. Use idempotency keys.
-  Wrong data? → "Declined" when card is valid, or "approved" without charging.
+  Slow?       -> Payment gateway often takes 1-3s. Timeout at 3s. Show spinner.
+  Down?       -> Hard failure. Store order as "pending". Show clear error. Use idempotency keys.
+  Wrong data? -> "Declined" when card is valid, or "approved" without charging.
                 Reconciliation job runs nightly to catch mismatches.
 
 Order Database:
-  Slow?       → Write is blocking. Timeout at 1s.
-  Down?       → Hard failure. Cannot take money without a record.
-  Wrong data? → Duplicate order IDs. Use unique constraints + idempotency.
+  Slow?       -> Write is blocking. Timeout at 1s.
+  Down?       -> Hard failure. Cannot take money without a record.
+  Wrong data? -> Duplicate order IDs. Use unique constraints + idempotency.
 
 Notification Service:
-  Slow?       → User does not need to wait for email. Make this async.
-  Down?       → Queue the notification. Send when service recovers.
-  Duplicate?  → User gets two emails. Annoying but not critical.
+  Slow?       -> User does not need to wait for email. Make this async.
+  Down?       -> Queue the notification. Send when service recovers.
+  Duplicate?  -> User gets two emails. Annoying but not critical.
 
 Recommendations:
-  Slow?       → Don't show personalized recs. Use cached popular list.
-  Down?       → Same fallback. Never critical path.
-  Wrong data? → Filter on checkout side. Never crash because recs returned null.
+  Slow?       -> Don't show personalized recs. Use cached popular list.
+  Down?       -> Same fallback. Never critical path.
+  Wrong data? -> Filter on checkout side. Never crash because recs returned null.
 ```
 
 ---
@@ -5469,12 +5469,12 @@ Recommendations:
 #### Step 3: Set Timeouts for Each Dependency
 
 ```
-Dependency          P99 Latency    Timeout (P99 × 3)    Notes
+Dependency          P99 Latency    Timeout (P99 x 3)    Notes
 --------------------+--------------+-------------------+------------------------------
 Inventory Service   150ms          500ms                Cached data. Fast.
 Payment Service     1,000ms        3,000ms              External network. Slower.
 Order Database      300ms          1,000ms              Local network. Medium.
-Notification Svc    200ms          N/A                  Async — no timeout needed.
+Notification Svc    200ms          N/A                  Async -- no timeout needed.
 Recommendations     60ms           200ms                Very short. Non-critical.
 ```
 
@@ -5491,8 +5491,8 @@ Order Database     | 30% errors      | 10 calls | 30 seconds    | 1 call
 Recommendations    | 80% errors      | 20 calls | 15 seconds    | 1 call
 ```
 
-Payment gets a tight threshold (20%) — payment errors are high signal. Recommendations get a
-loose threshold (80%) — non-critical, keep trying longer.
+Payment gets a tight threshold (20%) -- payment errors are high signal. Recommendations get a
+loose threshold (80%) -- non-critical, keep trying longer.
 
 ---
 
@@ -5502,8 +5502,8 @@ loose threshold (80%) — non-critical, keep trying longer.
 Dependency         | Primary                  | Fallback
 -------------------+--------------------------+----------------------------------
 Inventory Service  | Check live stock         | Assume in-stock, verify async
-Payment Service    | Charge in real-time      | No fallback — must fail clearly
-Order Database     | Write to primary DB      | No fallback — must fail clearly
+Payment Service    | Charge in real-time      | No fallback -- must fail clearly
+Order Database     | Write to primary DB      | No fallback -- must fail clearly
 Notification Svc   | Send inline              | Queue to SQS, deliver async
 Recommendations    | Personalized recs        | Cached top-20 popular items
 ```
@@ -5512,30 +5512,30 @@ Recommendations    | Personalized recs        | Cached top-20 popular items
 
 #### Step 6: Define Degradation Tiers
 
-This is what distinguishes a senior answer. Not just "circuit breaker open → error" — think in
+This is what distinguishes a senior answer. Not just "circuit breaker open -> error" -- think in
 tiers of graceful degradation.
 
 ```
-Tier 1 — Full Checkout (all healthy)
+Tier 1 -- Full Checkout (all healthy)
   Real-time inventory + payment + instant confirmation + personalized recs.
 
-Tier 2 — Recommendations degraded
+Tier 2 -- Recommendations degraded
   Recs service down. Popular items shown instead.
   User experience: 99% normal.
 
-Tier 3 — Inventory check degraded
+Tier 3 -- Inventory check degraded
   Inventory service down. Optimistic purchase, async verification.
   User experience: 98% normal. Tiny risk of out-of-stock handled by fulfillment.
 
-Tier 4 — Notifications degraded
+Tier 4 -- Notifications degraded
   Email/SMS delayed (from queue, not inline). Checkout still works.
   User experience: confirmation delayed by minutes.
 
-Tier 5 — Payment service down
+Tier 5 -- Payment service down
   Cannot charge card. Show clear error. Preserve cart. "Try again in a few minutes."
   Revenue impact. Page on-call immediately.
 
-Tier 6 — Order database down
+Tier 6 -- Order database down
   Cannot save record. Show clear error. Preserve cart.
   Revenue impact. Page on-call immediately.
 ```
@@ -5616,12 +5616,12 @@ Alert = Slack message. Investigate within 30 minutes.
 
 ---
 
-## Section 3: Chaos Engineering — Controlled Failure Injection
+## Section 3: Chaos Engineering -- Controlled Failure Injection
 
 ### The Fire Drill Analogy
 
 Schools run fire drills before there is an actual fire. When the real fire comes, you don't want
-people figuring out the route while panicking — you want them to already know: which door, which
+people figuring out the route while panicking -- you want them to already know: which door, which
 stairwell, where to meet outside. Chaos engineering is a fire drill for software systems.
 
 You intentionally inject failures in a controlled way. You find the gaps. You fix them. When a
@@ -5643,7 +5643,7 @@ Two outcomes, both valuable:
 Netflix pioneered this in 2011. Chaos Monkey randomly terminated EC2 instances in production during
 business hours. Before it existed, engineers said "our system is resilient." Chaos Monkey tested
 whether that was actually true, not just theoretically true. Engineers were forced to build systems
-that tolerated instance death — because if they didn't, their service would break repeatedly.
+that tolerated instance death -- because if they didn't, their service would break repeatedly.
 
 Netflix later expanded into the "Simian Army": Chaos Monkey (kills instances), Latency Monkey
 (injects latency), Chaos Gorilla (kills an entire AZ).
@@ -5728,11 +5728,11 @@ Step 5: Observe
   Did steady state hold? Any unexpected cascades? How long until recovery?
 
 Step 6: Analyze and Fix
-  Steady state held → document it. Evidence your system is resilient.
-  Steady state broke → gap found. Fix it. This is a win.
+  Steady state held -> document it. Evidence your system is resilient.
+  Steady state broke -> gap found. Fix it. This is a win.
 
 Step 7: Expand Scope
-  Gradually: staging → production off-hours → production any time.
+  Gradually: staging -> production off-hours -> production any time.
 ```
 
 ---
@@ -5742,25 +5742,25 @@ Step 7: Expand Scope
 Not every team is ready to run chaos in production on a Tuesday afternoon. Build up gradually.
 
 ```
-Level 1 — Kill Processes in Staging
+Level 1 -- Kill Processes in Staging
   Kill pods, restart processes in non-production.
   Nobody affected (no real users in staging).
   Goal: confirm deployment and restart mechanics work.
   Risk: very low. Every team should be here.
 
-Level 2 — Latency and Errors in Staging
+Level 2 -- Latency and Errors in Staging
   Inject latency, drop packets, return errors for dependencies in staging.
   Nobody affected.
   Goal: confirm circuit breakers, fallbacks, and timeout behavior.
   Risk: very low. All distributed systems teams should reach here.
 
-Level 3 — Kill Processes in Production (Off-Hours)
+Level 3 -- Kill Processes in Production (Off-Hours)
   Kill pods in production, but only at 2 AM Sunday.
   Real users affected, but low-traffic window limits blast radius.
   Goal: confirm production systems behave like staging. They often don't.
   Risk: medium. Requires proven staging resilience and good monitoring.
 
-Level 4 — Full Chaos in Production, Any Time
+Level 4 -- Full Chaos in Production, Any Time
   Netflix-style random failures during business hours.
   Real users, peak traffic.
   Goal: continuous validation of production resilience under real conditions.
@@ -5775,16 +5775,16 @@ without passing through the earlier levels. That is not chaos engineering. That 
 ### Key Principle: Make Failure Boring
 
 The goal is to run enough experiments that failures become routine events your system handles
-automatically — not emergencies that wake up engineers.
+automatically -- not emergencies that wake up engineers.
 
 ```
 Before chaos engineering:
-  Failure → engineers scramble → figure out fallback on the fly
-  → 2 hour outage → post-mortem → "we should have had a fallback"
+  Failure -> engineers scramble -> figure out fallback on the fly
+  -> 2 hour outage -> post-mortem -> "we should have had a fallback"
 
 After chaos engineering:
-  Failure → pre-tested fallback activates automatically
-  → alert fires → engineer checks dashboard → looks fine → back to sleep
+  Failure -> pre-tested fallback activates automatically
+  -> alert fires -> engineer checks dashboard -> looks fine -> back to sleep
 ```
 
 Boring failures. Automatic recovery. No 3 AM pages. That is the goal.
@@ -5793,18 +5793,18 @@ Boring failures. Automatic recovery. No 3 AM pages. That is the goal.
 
 ## Summary
 
-**Anti-Patterns** — Six patterns that cause outages: blind retries, generous timeouts, shared
+**Anti-Patterns** -- Six patterns that cause outages: blind retries, generous timeouts, shared
 thread pools, shallow health checks, skipped fallbacks, and simultaneous restarts. Each has a
 specific fix. Know them by heart.
 
-**Failure Scenario Design** — Eight-step framework: map dependencies, ask three failure-mode
-questions per dependency, set timeouts (P99 × 3), add circuit breakers, define fallbacks, define
+**Failure Scenario Design** -- Eight-step framework: map dependencies, ask three failure-mode
+questions per dependency, set timeouts (P99 x 3), add circuit breakers, define fallbacks, define
 degradation tiers, define load shedding order, define monitoring. Use this for any interview
 question about designing for failure.
 
-**Chaos Engineering** — Fire drills before the fire. Start in staging. Inject latency and
+**Chaos Engineering** -- Fire drills before the fire. Start in staging. Inject latency and
 process kills. Find gaps. Fix gaps. Work up to production off-hours. The goal is boring failures
-— handled automatically before a real incident tests you.
+-- handled automatically before a real incident tests you.
 
 ---
 
@@ -5837,19 +5837,19 @@ Here is the mental rubric the interviewer is running in their head:
 |                        |                                  |  retry budget so we don't amplify load"  |
 +------------------------+----------------------------------+------------------------------------------+
 | Slow dependency:       | "I'd increase the timeout so     | "Slow is worse than dead. I'd use an     |
-| Service B is slow but  |  we give it more time to         |  aggressive timeout — 200ms — open       |
+| Service B is slow but  |  we give it more time to         |  aggressive timeout -- 200ms -- open       |
 | not down. What do you  |  respond"                        |  circuit breaker after 5 failures in     |
 | do?                    |                                  |  10s, bulkhead so B's thread pool        |
 |                        |                                  |  can't starve other calls"               |
 +------------------------+----------------------------------+------------------------------------------+
 | Partial failure:       | "I'd set up an alert when        | "Error rate lags by minutes. I alert on  |
-| How do you detect      |  error rate goes above 1%"       |  P99 latency first — when P99 > 2x       |
+| How do you detect      |  error rate goes above 1%"       |  P99 latency first -- when P99 > 2x       |
 | problems early?        |                                  |  baseline, something is wrong even if    |
 |                        |                                  |  errors are still near zero"             |
 +------------------------+----------------------------------+------------------------------------------+
 | Recovery:              | "Restart the service and see     | "Rolling restart, not fleet restart.     |
 | Service is degraded.   |  if that fixes it"               |  Pre-warm cache before traffic hits.     |
-| How do you recover?    |                                  |  Watch for thundering herd — add jitter  |
+| How do you recover?    |                                  |  Watch for thundering herd -- add jitter  |
 |                        |                                  |  to reconnect timers. Watch for cascade  |
 |                        |                                  |  as load redistributes"                  |
 +------------------------+----------------------------------+------------------------------------------+
@@ -5879,7 +5879,7 @@ Think of these as phrase upgrades. If you catch yourself saying the L5 version, 
 |    |                                                    |  at a retry budget so we don't amplify a cascade"     |
 +----+----------------------------------------------------+-------------------------------------------------------+
 | 2  | "We'll set a timeout on that call"                 | "200ms for internal services, 1s for external APIs.   |
-|    |                                                    |  Slow is worse than dead — timeout fast and fail"     |
+|    |                                                    |  Slow is worse than dead -- timeout fast and fail"     |
 +----+----------------------------------------------------+-------------------------------------------------------+
 | 3  | "We'll alert on errors"                            | "Alert on P99 latency first. Error rate lags by       |
 |    |                                                    |  minutes. P99 is the early warning"                   |
@@ -5918,41 +5918,41 @@ What the interviewer hears: This engineer knows failure handling exists. They do
 
 "Let me think through this systematically.
 
-**Step 1 — Identify the failure types per dependency.**
+**Step 1 -- Identify the failure types per dependency.**
 Checkout calls: Payment service, Inventory service, User service, Fraud detection. Each can fail differently:
 - Payment: slow (most dangerous), partial (card declined vs service error), dead
 - Inventory: stale data is okay for a few seconds, full failure means we can't confirm stock
 - User service: we probably have session cache, full failure is survivable
-- Fraud: slow detection is worse than skipping it — I'd rather process the order
+- Fraud: slow detection is worse than skipping it -- I'd rather process the order
 
-**Step 2 — Timeout per dependency.**
+**Step 2 -- Timeout per dependency.**
 - Payment: 1000ms hard limit. Payment failing slowly is worse than failing fast.
 - Inventory: 200ms. If inventory is slow, use last-known cached value.
 - User: 100ms. Session data is in cache anyway.
 - Fraud: 150ms. Async fraud check post-payment is the fallback.
 
-**Step 3 — Circuit breakers.**
+**Step 3 -- Circuit breakers.**
 Each dependency gets its own breaker. Threshold: 5 failures in a 10-second window opens the breaker. Half-open after 30 seconds to probe recovery. This prevents a slow payment service from holding threads across all checkout workers.
 
-**Step 4 — Bulkheads.**
+**Step 4 -- Bulkheads.**
 Separate thread pools per dependency. Payment gets 30 threads. Fraud gets 10. User gets 5. Inventory gets 10. A slow fraud service saturating its pool does not touch payment threads.
 
-**Step 5 — Fallbacks.**
+**Step 5 -- Fallbacks.**
 - User service down: use session cache (TTL 5 minutes). Degrade gracefully.
 - Inventory down: proceed with order, verify inventory async, cancel and notify if out of stock.
 - Fraud down: flag for async review post-purchase, do not block checkout.
-- Payment down: no fallback — this is hard. Circuit open means we show 'payment unavailable' immediately rather than hanging for 30 seconds.
+- Payment down: no fallback -- this is hard. Circuit open means we show 'payment unavailable' immediately rather than hanging for 30 seconds.
 
-**Step 6 — Degradation tiers.**
+**Step 6 -- Degradation tiers.**
 - Tier 1: Full checkout, all features
 - Tier 2: No fraud check (async), checkout proceeds, flagged for review
 - Tier 3: Cached inventory, order confirmed pending inventory validation
 - Tier 4: Payment service degraded, show 'checkout temporarily unavailable' with estimated time
 
-**Step 7 — Monitoring.**
+**Step 7 -- Monitoring.**
 Alert on P99 payment latency > 500ms BEFORE error rate moves. Error rate lags by 2-5 minutes. Latency spike is the first signal.
 
-**Step 8 — Chaos testing plan.**
+**Step 8 -- Chaos testing plan.**
 Monthly: kill payment service, verify circuit breaker opens in under 15 seconds. Kill fraud service, verify checkout still completes. Inject 2-second delay into inventory, verify timeout fires at 200ms and cache fallback activates.
 
 This gives checkout a defense-in-depth model. Users can complete purchases even when 2 of 4 dependencies are degraded."
@@ -5965,7 +5965,7 @@ What the interviewer hears: This engineer has a system. They've thought about fa
 
 ### Staff Engineer One-Liners
 
-These are phrases worth memorizing. They are not just interview phrases — they communicate a mental model in a single sentence. When you drop these naturally in conversation, the interviewer updates their mental model of you.
+These are phrases worth memorizing. They are not just interview phrases -- they communicate a mental model in a single sentence. When you drop these naturally in conversation, the interviewer updates their mental model of you.
 
 ```
 1. "Slow is worse than dead."
@@ -6010,11 +6010,11 @@ These questions are for studying, not for the interviewer to ask you. Use them t
 
 **Q1. Why are partial failures harder to detect than complete failures?**
 
-A complete failure has a clear signal: the service is down, health checks fail, alerts fire. A partial failure looks like normal operation from some angles. 3 out of 10 nodes are slow. Errors are 0.5%, below the threshold. Users are having a bad experience, but the monitoring says "green." The danger of partial failure is that it hides in the noise. Detection requires looking at the right signals — percentiles, not averages; latency before errors; user-facing metrics before infrastructure metrics.
+A complete failure has a clear signal: the service is down, health checks fail, alerts fire. A partial failure looks like normal operation from some angles. 3 out of 10 nodes are slow. Errors are 0.5%, below the threshold. Users are having a bad experience, but the monitoring says "green." The danger of partial failure is that it hides in the noise. Detection requires looking at the right signals -- percentiles, not averages; latency before errors; user-facing metrics before infrastructure metrics.
 
 **Q2. Why is a slow node worse than a dead node?**
 
-A dead node gets removed from the load balancer quickly. Health checks fail, the node is marked unhealthy, traffic stops going there. A slow node keeps passing health checks. Traffic keeps going to it. Each request that hits the slow node ties up a thread waiting. Those threads fill up. New requests queue behind them. The queue fills the thread pool. The whole service starts responding slowly — even to requests that don't touch the slow node, because the thread pool is saturated. One slow node can degrade an entire fleet.
+A dead node gets removed from the load balancer quickly. Health checks fail, the node is marked unhealthy, traffic stops going there. A slow node keeps passing health checks. Traffic keeps going to it. Each request that hits the slow node ties up a thread waiting. Those threads fill up. New requests queue behind them. The queue fills the thread pool. The whole service starts responding slowly -- even to requests that don't touch the slow node, because the thread pool is saturated. One slow node can degrade an entire fleet.
 
 **Q3. What is a gray failure and why is it dangerous?**
 
@@ -6026,7 +6026,7 @@ Instead of asking "will this fail?" ask "how much degradation can I afford?" For
 
 **Q5. How does the Swiss cheese model apply to distributed systems?**
 
-The Swiss cheese model: each safety layer has holes (things it doesn't catch). A disaster happens when the holes in every layer line up. In distributed systems: your timeout catches most slow-dependency failures, but the circuit breaker catches the ones that slip through, but the bulkhead catches the ones that overwhelm the breaker, but the fallback catches what the bulkhead misses, but graceful degradation catches everything else. Each layer has gaps. Stack them so the gaps don't align. No single mechanism catches everything — that's why defense in depth matters.
+The Swiss cheese model: each safety layer has holes (things it doesn't catch). A disaster happens when the holes in every layer line up. In distributed systems: your timeout catches most slow-dependency failures, but the circuit breaker catches the ones that slip through, but the bulkhead catches the ones that overwhelm the breaker, but the fallback catches what the bulkhead misses, but graceful degradation catches everything else. Each layer has gaps. Stack them so the gaps don't align. No single mechanism catches everything -- that's why defense in depth matters.
 
 ---
 
@@ -6034,15 +6034,15 @@ The Swiss cheese model: each safety layer has holes (things it doesn't catch). A
 
 **Q6. When do you use a circuit breaker vs just a timeout?**
 
-Use a timeout for every call. Timeouts are not optional. Use a circuit breaker when you have a dependency that can become slow or partially unavailable in a sustained way. A circuit breaker avoids the cost of the timeout — instead of waiting 500ms on every request to a known-dead service, the breaker open means you fail immediately, no thread wasted. Timeouts handle individual request failures. Circuit breakers handle sustained dependency failures.
+Use a timeout for every call. Timeouts are not optional. Use a circuit breaker when you have a dependency that can become slow or partially unavailable in a sustained way. A circuit breaker avoids the cost of the timeout -- instead of waiting 500ms on every request to a known-dead service, the breaker open means you fail immediately, no thread wasted. Timeouts handle individual request failures. Circuit breakers handle sustained dependency failures.
 
 **Q7. How do you set timeout values?**
 
-Start with: what does the P99 latency of this dependency look like when it's healthy? If a healthy Postgres read is 50ms at P99, set the timeout at 100-200ms — 2-4x the healthy P99. This gives the service room to be temporarily slower without tripping false timeouts, but catches true degradation fast. For user-facing calls, work backwards from user experience: if the total budget for a page load is 1 second, and you have 4 serial hops, each hop gets ~200ms. Set timeouts to enforce that budget.
+Start with: what does the P99 latency of this dependency look like when it's healthy? If a healthy Postgres read is 50ms at P99, set the timeout at 100-200ms -- 2-4x the healthy P99. This gives the service room to be temporarily slower without tripping false timeouts, but catches true degradation fast. For user-facing calls, work backwards from user experience: if the total budget for a page load is 1 second, and you have 4 serial hops, each hop gets ~200ms. Set timeouts to enforce that budget.
 
 **Q8. How do you size a bulkhead thread pool?**
 
-Start with: how many concurrent requests do you expect to this dependency? Use Little's Law: concurrent requests = arrival rate * average latency. If you send 100 requests per second to a service with 50ms latency, you need 5 concurrent threads at steady state. Add a buffer — 2-3x — so you have 10-15 threads. Then ask: if this pool fills up, what is the cost? For a non-critical dependency, a small pool is fine — it fails fast. For a critical path dependency, size generously but still bounded.
+Start with: how many concurrent requests do you expect to this dependency? Use Little's Law: concurrent requests = arrival rate * average latency. If you send 100 requests per second to a service with 50ms latency, you need 5 concurrent threads at steady state. Add a buffer -- 2-3x -- so you have 10-15 threads. Then ask: if this pool fills up, what is the cost? For a non-critical dependency, a small pool is fine -- it fails fast. For a critical path dependency, size generously but still bounded.
 
 **Q9. What operations can have fallbacks and what can't?**
 
@@ -6083,18 +6083,18 @@ Failure modes:
 - Driver availability slow: use cached availability list, accept some stale data
 - Pricing slow: use default pricing tier, flag for audit
 - Maps slow: use cached route, accept slightly stale ETA
-- Notification slow: degrade gracefully — driver gets the ride, notification retries async
+- Notification slow: degrade gracefully -- driver gets the ride, notification retries async
 
 Critical path: match driver to rider. Everything else is enrichment. Design the system so the match can happen with GPS + availability. Everything else degrades.
 
 **Q12. Design fallbacks for a payment service.**
 
-Payment is the hard case — you cannot fabricate success. Fallbacks for payment:
+Payment is the hard case -- you cannot fabricate success. Fallbacks for payment:
 
 - Retry: yes, but with idempotency keys so retries don't double-charge
-- Circuit breaker: yes — fail fast, do not hold user connections open
+- Circuit breaker: yes -- fail fast, do not hold user connections open
 - Fallback to secondary payment processor: yes, if you have one contracted
-- Queue for async processing: careful — tell user "processing, will confirm" not "success"
+- Queue for async processing: careful -- tell user "processing, will confirm" not "success"
 - Degradation: no degradation of the actual payment. Degrade surrounding features (no real-time fraud check, no loyalty points calculation) but the payment itself must complete or fail cleanly
 
 The fallback design for payment is: fail fast and clearly rather than fail ambiguously.
@@ -6119,12 +6119,12 @@ Where a circuit breaker stops this: at step 2. Recommendations circuit opens aft
 Search calls: inverted index service, ranking service, autocomplete service, personalization service, spell-check service.
 
 Degradation tiers:
-- Tier 1: Full search — all features active
-- Tier 2: No personalization — same results for everyone, no user history factored in
-- Tier 3: No spell-check — user must type exact terms
-- Tier 4: No autocomplete — user types full query, submits
-- Tier 5: Default ranking only — no ML ranking, just recency + simple relevance
-- Tier 6: Search unavailable — show top 20 trending items as substitute
+- Tier 1: Full search -- all features active
+- Tier 2: No personalization -- same results for everyone, no user history factored in
+- Tier 3: No spell-check -- user must type exact terms
+- Tier 4: No autocomplete -- user types full query, submits
+- Tier 5: Default ranking only -- no ML ranking, just recency + simple relevance
+- Tier 6: Search unavailable -- show top 20 trending items as substitute
 
 At each tier, users lose something but they don't lose everything. The site still functions.
 
@@ -6132,7 +6132,7 @@ At each tier, users lose something but they don't lose everything. The site stil
 
 During a regional network partition, one region of the CDN loses connectivity to the origin or to other regions.
 
-What works: cached content in that region continues to be served. Static assets, previously cached pages — users in that region still get those with normal latency.
+What works: cached content in that region continues to be served. Static assets, previously cached pages -- users in that region still get those with normal latency.
 
 What breaks: cache misses. If content is not cached, the CDN edge cannot reach origin to fetch it. Requests fail or time out.
 
@@ -6144,13 +6144,13 @@ Staff mindset: a CDN is itself a degradation mechanism. When origin is unavailab
 
 ## Section 3: Homework Exercises
 
-These exercises are meant to be done away from this document. Close it, open a blank page, and work through them. The point is not to get a perfect answer — it is to practice the thinking pattern.
+These exercises are meant to be done away from this document. Close it, open a blank page, and work through them. The point is not to get a perfect answer -- it is to practice the thinking pattern.
 
 ---
 
 ### Exercise 1: Dependency Audit
 
-**The task:** Pick a service you know — it can be a side project, something from work (sanitized), or a fictional e-commerce checkout service.
+**The task:** Pick a service you know -- it can be a side project, something from work (sanitized), or a fictional e-commerce checkout service.
 
 **What to do:** List ALL external dependencies that service calls. For each dependency, answer three questions:
 
@@ -6159,7 +6159,7 @@ These exercises are meant to be done away from this document. Close it, open a b
 | DEPENDENCY                | TIMEOUT          | CIRCUIT BREAKER THRESHOLD   | FALLBACK                  |
 +---------------------------+------------------+-----------------------------+---------------------------+
 | Example: User service     | 100ms            | 5 failures / 10s window     | Session cache (5 min TTL) |
-| Example: Payment service  | 1000ms           | 3 failures / 10s window     | No fallback — fail fast   |
+| Example: Payment service  | 1000ms           | 3 failures / 10s window     | No fallback -- fail fast   |
 | Example: Recommendations  | 150ms            | 10 failures / 30s window    | Empty list (hide section) |
 | [Your dependency 1]       |                  |                             |                           |
 | [Your dependency 2]       |                  |                             |                           |
@@ -6195,10 +6195,10 @@ These exercises are meant to be done away from this document. Close it, open a b
 ```
 
 **Hints to get you started:**
-- Home feed is the core feature — it should survive until the last tier
-- Notifications and stories are enrichment — consider shedding them early
-- Search involves ML ranking and indexing — it has natural degradation tiers within itself
-- Direct messages are somewhere in the middle — higher value than stories, lower than feed
+- Home feed is the core feature -- it should survive until the last tier
+- Notifications and stories are enrichment -- consider shedding them early
+- Search involves ML ranking and indexing -- it has natural degradation tiers within itself
+- Direct messages are somewhere in the middle -- higher value than stories, lower than feed
 
 **Reflection:** How does this compare to what you think happens on real social media apps during incidents? (If you have ever noticed that Instagram shows "couldn't refresh" but the app still works for DMs, that is a degradation tier in action.)
 
@@ -6247,7 +6247,7 @@ With circuit breakers at B and C:
 - D fails: B's first 3 calls fail in under 5 seconds
 - B's circuit breaker opens: B returns immediately with error
 - A's call to B fails immediately (not after 500ms)
-- A can still call C and E — partial success
+- A can still call C and E -- partial success
 - Blast radius contained to B and D
 
 With fallback at B:
@@ -6294,7 +6294,7 @@ Work through each row. Write your answer before reading the guidance.
 |                               |                   | open for no good reason.                         |
 +-------------------------------+-------------------+--------------------------------------------------+
 | Internal auth service         | 50-100ms          | Should be cached. >100ms means cache miss        |
-|                               |                   | or service degraded. Fail fast — auth is         |
+|                               |                   | or service degraded. Fail fast -- auth is         |
 |                               |                   | on the hot path of every request.                |
 +-------------------------------+-------------------+--------------------------------------------------+
 | Kafka consume (poll)          | Configurable      | Kafka poll timeout sets how long to wait for     |
@@ -6307,18 +6307,18 @@ Work through each row. Write your answer before reading the guidance.
 
 ---
 
-### Exercise 5: Interview Practice — Twitter Home Timeline
+### Exercise 5: Interview Practice -- Twitter Home Timeline
 
 **The task:** Spend 5 minutes (set a timer) answering this question out loud:
 
 **"Design the failure model for Twitter's home timeline."**
 
 **What to cover in those 5 minutes:**
-1. Failure taxonomy — what are all the dependencies the home timeline calls? What can fail in each?
-2. Timeout values — one per dependency, with brief justification
-3. Circuit breakers — which dependencies get one and at what threshold?
-4. Degradation tiers — at least 3 tiers with feature list
-5. Key monitoring metrics — what 3 metrics would you alert on?
+1. Failure taxonomy -- what are all the dependencies the home timeline calls? What can fail in each?
+2. Timeout values -- one per dependency, with brief justification
+3. Circuit breakers -- which dependencies get one and at what threshold?
+4. Degradation tiers -- at least 3 tiers with feature list
+5. Key monitoring metrics -- what 3 metrics would you alert on?
 
 **Scoring guide (honest self-assessment):**
 
@@ -6409,28 +6409,28 @@ Review this list before every system design. Check yourself.
 
 ```
   [ ] x MISTAKE: No timeout on external calls
-  [✓] CORRECT: Every external call has a timeout. Sized to 2-5x healthy P99.
+  [Y] CORRECT: Every external call has a timeout. Sized to 2-5x healthy P99.
 
   [ ] x MISTAKE: One timeout for all dependencies
-  [✓] CORRECT: Each dependency has its own timeout based on its own P99.
+  [Y] CORRECT: Each dependency has its own timeout based on its own P99.
 
   [ ] x MISTAKE: Alerting only on error rate
-  [✓] CORRECT: Alert on P99 latency first. Error rate lags by minutes.
+  [Y] CORRECT: Alert on P99 latency first. Error rate lags by minutes.
 
   [ ] x MISTAKE: Retry without backoff or budget
-  [✓] CORRECT: Exponential backoff with jitter. Retry budget to limit amplification.
+  [Y] CORRECT: Exponential backoff with jitter. Retry budget to limit amplification.
 
   [ ] x MISTAKE: Single shared thread pool for all downstream calls
-  [✓] CORRECT: Bulkheads: each critical dependency has its own thread pool.
+  [Y] CORRECT: Bulkheads: each critical dependency has its own thread pool.
 
   [ ] x MISTAKE: Saying "handles failures gracefully" without specifics
-  [✓] CORRECT: Named degradation tiers with explicit feature list at each tier.
+  [Y] CORRECT: Named degradation tiers with explicit feature list at each tier.
 
   [ ] x MISTAKE: Designing recovery as "restart the service"
-  [✓] CORRECT: Rolling restart, cache pre-warm, watch for thundering herd.
+  [Y] CORRECT: Rolling restart, cache pre-warm, watch for thundering herd.
 
   [ ] x MISTAKE: Building failure handling during the incident
-  [✓] CORRECT: Failure model designed, documented, and chaos-tested before the incident.
+  [Y] CORRECT: Failure model designed, documented, and chaos-tested before the incident.
 ```
 
 ---
@@ -6460,7 +6460,7 @@ Run through these 7 questions the night before your interview. If you cannot ans
      [Cold cache after restart floods database. Pre-warm cache or jitter reconnects.]
 
   7. Can I name 3 operations that cannot have fallbacks and explain why?
-     [Financial transactions, authentication, durable writes — correctness mandatory.]
+     [Financial transactions, authentication, durable writes -- correctness mandatory.]
 ```
 
 ---
@@ -6473,7 +6473,7 @@ Staff Engineers know this is not the goal. The goal is narrower and more achieva
 
 **Staff Engineers don't eliminate failures. They eliminate surprises.**
 
-The goal isn't zero incidents — it's zero incidents that weren't designed for.
+The goal isn't zero incidents -- it's zero incidents that weren't designed for.
 
 When a circuit breaker opens and your service serves cached data for 2 minutes while a dependency recovers, that is not a failure. That is the system working as designed. When the payment service times out in 1 second and shows the user a clear error instead of a 30-second hang, that is the system working as designed.
 
@@ -6487,17 +6487,17 @@ That is the shift in mindset from L5 to L6. From reactive to designed. From hand
 
 ```
 +==============================================================================+
-|                    CHAPTER 25: FAILURE MODELS — MASTER VIEW                 |
+|                    CHAPTER 25: FAILURE MODELS -- MASTER VIEW                 |
 +==============================================================================+
 |                                                                              |
 |  FAILURE TAXONOMY                 DEFENSE STACK                             |
 |  +-----------------------+        +----------------------------------+       |
-|  | Process Crash         |        | Timeout         → Every call     |       |
-|  | Network Partition     |        | Circuit Breaker → Sustained fail |       |
-|  | Slow Node (worst)     |        | Bulkhead        → Isolate pools  |       |
-|  | Dependency Failure    |        | Fallback        → Cached default |       |
-|  | Gray Failure (hidden) |        | Load Shedding   → Shed early     |       |
-|  +-----------------------+        | Graceful Degrade→ Pre-define tiers|      |
+|  | Process Crash         |        | Timeout         -> Every call     |       |
+|  | Network Partition     |        | Circuit Breaker -> Sustained fail |       |
+|  | Slow Node (worst)     |        | Bulkhead        -> Isolate pools  |       |
+|  | Dependency Failure    |        | Fallback        -> Cached default |       |
+|  | Gray Failure (hidden) |        | Load Shedding   -> Shed early     |       |
+|  +-----------------------+        | Graceful Degrade-> Pre-define tiers|      |
 |                                   +----------------------------------+       |
 |                                                                              |
 |  KEY NUMBERS                      DEGRADATION LADDER                        |
@@ -6515,16 +6515,16 @@ That is the shift in mindset from L5 to L6. From reactive to designed. From hand
 |  Error rate   (lags by minutes)   "Design the 60% state before you need it" |
 |  Thread pool  (bulkhead signal)   "Slow is worse than dead"                 |
 |  Queue depth  (pressure signal)   "Every call without timeout = cascade"    |
-|                                   "Recovery can kill — rolling restart"     |
+|                                   "Recovery can kill -- rolling restart"     |
 |                                                                              |
 |  INTERVIEW SHORTCUT                                                          |
 |  L5: "retry + alert"                                                         |
-|  L6: timeout → circuit breaker → bulkhead → fallback → degradation tiers    |
-|       → P99 monitoring → chaos testing plan                                  |
+|  L6: timeout -> circuit breaker -> bulkhead -> fallback -> degradation tiers    |
+|       -> P99 monitoring -> chaos testing plan                                  |
 |                                                                              |
 |  FINAL PRINCIPLE:                                                            |
 |  Staff Engineers don't eliminate failures. They eliminate surprises.         |
-|  The goal isn't zero incidents — it's zero incidents not designed for.       |
+|  The goal isn't zero incidents -- it's zero incidents not designed for.       |
 +==============================================================================+
 ```
 
@@ -6532,3 +6532,936 @@ That is the shift in mindset from L5 to L6. From reactive to designed. From hand
 
 *End of Chapter 25, Part D2*
 *Chapter 25 complete: Parts A, B, C, D1, D2*
+## Supplemental Brainstorming: Chapter 25 -- Failure Models and Partial Failures
+*Questions 18-42: Complete topic coverage and cross-chapter integration.*
+
+---
+
+### Section A: Defense Stack Deep Dive (Q18-Q27)
+
+**Question 18 -- The degradation budget: defining acceptable failure rates**
+
+Before an incident happens, you need to define what percentage of requests can fail before the user impact is unacceptable. This is the degradation budget. Without it, during an incident, every decision about whether to shed load or degrade features becomes a guess.
+
+For a ride-sharing app, define the degradation budget for three features: dispatch (matching riders to drivers), real-time ETA updates, and surge pricing display.
+- What is the maximum acceptable error rate for dispatch before users abandon the app?
+- What is the maximum acceptable error rate for ETA updates? For surge pricing display?
+- How do you measure "user impact"? (Think: abandonment rate, retry rate, support ticket volume.)
+- How does the degradation budget translate into alert thresholds? (If the budget for dispatch errors is 0.1%, at what error rate do you page on-call?)
+- Follow-up: Your degradation budget for dispatch was set 18 months ago at 0.1% error rate. Traffic has 5x'd since then. Is 0.1% still the right threshold? How do you re-evaluate the budget as the system scales?
+
+---
+
+**Question 19 -- Timeout calculation from first principles**
+
+Setting a timeout is not about picking a round number. It is about knowing the healthy performance characteristics of a dependency and setting the timeout to distinguish "slow but healthy" from "broken."
+
+Your User Profile service has these latency characteristics at steady state: P50=8ms, P95=35ms, P99=80ms, P99.9=400ms.
+- If you set the timeout to 100ms, what percentage of healthy requests will time out?
+- If you set the timeout to 50ms, what percentage of healthy requests will time out?
+- Your page budget for the entire request is 500ms and you make 3 serial calls. How much budget does each call get?
+- The User Profile service went on-call last week because it was "slow." The P99 was 900ms. How would a 200ms timeout have protected you from that incident?
+- What is the difference between a connection timeout and a read timeout? Which one protects you from a slow network? Which from a slow server?
+- Follow-up: You set a 200ms timeout on the User Profile call. During a load test, 0.3% of requests hit the timeout even though the service is healthy. Product says that 0.3% failure rate is acceptable. Do you raise the timeout or accept the failure rate?
+
+---
+
+**Question 20 -- Circuit breaker state machine: all three states**
+
+A circuit breaker has three states: Closed (normal operation, all requests pass through), Open (dependency known-bad, requests fail immediately without trying), and Half-Open (probing whether the dependency has recovered). Draw out the full state machine and then answer:
+
+- In Closed state: what is the threshold for tripping to Open? (Define: what counts as a failure? Error rate? Count? Latency percentile?)
+- In Open state: all requests fail immediately. Is this always the right behavior? What if the circuit breaker trips due to a temporary network glitch that resolves in 100ms?
+- In Half-Open state: you let one request through. It succeeds. Do you immediately return to Closed? What if your success threshold should be 3 consecutive successes?
+- What happens if the circuit breaker opens but the downstream service recovers 2 seconds later? How long is your system serving degraded responses?
+- Should circuit breakers be per-instance (each pod has its own) or shared (all pods share state via Redis)? What are the failure mode implications of each?
+- Follow-up: You have 100 instances of Service A, each with its own circuit breaker for Service B. Service B degrades for 30 seconds. How many of Service A's circuit breakers trip? How many stay closed? What is the effective failure rate seen by users during those 30 seconds?
+
+---
+
+**Question 21 -- Bulkhead pattern: thread pool vs. connection pool vs. semaphore**
+
+The bulkhead pattern isolates failures by giving each dependency its own resource allocation. There are three isolation mechanisms: thread pool, connection pool, and semaphore. They differ in what they limit and what they cost.
+
+Your API gateway calls three backends: User Service, Product Service, and Payment Service.
+- Thread pool isolation: each backend gets its own thread pool of 20 threads. What happens when Payment Service is slow and its 20 threads are occupied? What happens to User Service requests?
+- Connection pool isolation: each backend gets its own HTTP connection pool of 50 connections. How is this different from thread pool isolation? Which provides stronger isolation?
+- Semaphore isolation: you limit concurrent calls to Payment Service to 30, regardless of thread. Why is this lighter-weight than thread pool isolation? What does it not protect against that thread pool isolation does?
+- What does "bulkhead size" mean for each type? How do you choose the right size?
+- Follow-up: Payment Service normally handles 100 requests/second. P99 latency is 200ms. Using Little's Law, how many concurrent connections/threads do you need for Payment Service at steady state? What is the appropriate bulkhead size for a 2x safety margin?
+
+---
+
+**Question 22 -- Load shedding: which requests to drop first**
+
+Your service is running at 95% CPU. Requests are queuing. You need to shed load to protect the critical path. You have a queue of incoming requests. Some are premium users, some are free users. Some are for the checkout flow, some are for the recommendation feed.
+
+- Define a four-tier request priority system for an e-commerce platform. What goes in Tier 1 (never shed)? What goes in Tier 4 (shed first)?
+- What request metadata do you use to make the shedding decision? (User tier, endpoint path, estimated cost, current queue depth?)
+- Should you shed randomly within a tier (to be fair) or deterministically (by user ID hash)? What are the implications of each?
+- HTTP 429 vs. HTTP 503: which status code do you return to shed traffic? What does each signal to the client?
+- At what point should you return 503 entirely instead of trying to selectively shed? (Think: if only 10% of requests can succeed, selective shedding adds complexity without saving the system.)
+- Follow-up: You implement load shedding but free users are shed 95% of the time during peak hours. Product reports customer complaints. Design a shedding policy that limits any tier's shed rate to 50% even under extreme load.
+
+---
+
+**Question 23 -- Cascading failure patterns: how service A's slowness kills service B**
+
+A cascading failure is not random -- it follows a predictable pattern. Understanding the pattern lets you break the cascade before it reaches its conclusion. Walk through the mechanics of a cascade starting from a single slow dependency.
+
+Starting point: Database replica 3 is experiencing disk I/O saturation. Query latency jumps from 5ms to 800ms on 20% of queries routed to it.
+- Step 1: Which services are immediately affected?
+- Step 2: How does the 800ms latency cause thread pool saturation in the services calling the database?
+- Step 3: Once those services' thread pools are saturated, what happens to the services that call them?
+- Step 4: How does user retry behavior amplify the problem?
+- Step 5: At what point does the cascade reach a "stable degraded state" vs. total collapse?
+- At which step could a circuit breaker have stopped the cascade?
+- Follow-up: The cascade started at 2 AM when traffic was low. By 9 AM, traffic is 5x higher and the cascade re-ignites. Why did the circuit breakers reset at 3 AM but fail to prevent the 9 AM cascade? (Think: circuit breaker half-open probe succeeded under low load, but reopened under high load.)
+
+---
+
+**Question 24 -- Chaos engineering: what to test, how to run game days, blast radius control**
+
+Chaos engineering is not about breaking things randomly. It is about testing specific failure hypotheses under controlled conditions. Before running a chaos experiment, you need a hypothesis: "We believe that if Service X fails, Service Y will degrade gracefully to Tier 2 rather than returning errors to users."
+
+Design a chaos engineering program for an e-commerce checkout service:
+- Name five specific chaos experiments you would run. For each, state the hypothesis and the expected observable outcome.
+- How do you control blast radius during a chaos experiment? (Think: traffic percentage, user segment, canary deployment.)
+- What is a "game day"? How do you structure a 4-hour game day? Who is in the room?
+- How do you define success for a chaos experiment? (Is it "nothing broke"? Or "the system degraded exactly as designed"?)
+- What is the rollback plan if a chaos experiment causes unplanned user impact?
+- Follow-up: Your chaos program shows that 3 out of 7 experiments result in user-visible failures that were supposed to be handled gracefully. What does this tell you about your system's actual resilience vs. designed resilience? How do you use this finding to prioritize engineering work?
+
+---
+
+**Question 25 -- The gray failure problem: detection without standard health checks**
+
+A gray failure is one where the service returns HTTP 200 but is partially broken in a way that users experience. Standard health checks pass. Standard error rate alerts stay green. But p99 latency is 3x normal and 15% of users see empty results instead of populated ones.
+
+Design a gray failure detection system for a search service that has this gray failure mode:
+- What metrics catch gray failures that error rate and uptime miss? (Name at least four specific metrics.)
+- How does distributed tracing help detect gray failures? What specifically would you see in a trace for the empty-results gray failure?
+- Synthetic monitoring: what is it and how does it catch gray failures that infrastructure monitoring misses?
+- What is the "canary query" pattern for search? How often do you run it?
+- How do you set alert thresholds for "empty result rate" without getting too many false positives during normal fluctuations?
+- Follow-up: The gray failure was caused by a configuration change that only affected 3 of 20 search index shards. Which shard was affected is not visible in aggregate metrics. How do you add per-shard visibility to your monitoring?
+
+---
+
+**Question 26 -- Health check design: liveness vs. readiness vs. startup probes**
+
+Kubernetes uses three types of probes: liveness (is the container alive?), readiness (is the container ready to receive traffic?), and startup (has the application finished initializing?). Getting these wrong causes more problems than they prevent.
+
+Your service has: a 30-second startup time (loading a 2GB ML model), a dependency on Redis (if Redis is down, 30% of requests fail), and a dependency on a database (if the database is down, 100% of requests fail).
+
+- What is the liveness probe checking? If it checks the database, what happens when the database is down? (Hint: all pods restart in a loop while the database is down.)
+- What is the readiness probe checking? When should a pod be taken out of the load balancer rotation?
+- How do you configure the startup probe to prevent the liveness probe from killing a pod during its 30-second model load?
+- Should the readiness probe check Redis? Should it check the database? What is the difference in impact?
+- What is "health check amplification"? (A failing dependency causes all pods to fail their readiness checks simultaneously, generating 1,000 health check requests per second to an already-degraded database.)
+- Follow-up: Design the exact Kubernetes probe configuration (liveness, readiness, startup) for this service. Specify: path, port, initialDelaySeconds, periodSeconds, failureThreshold for each.
+
+---
+
+**Question 27 -- Distinguishing transient from permanent failures in retry logic**
+
+Retrying a transient failure is good. Retrying a permanent failure wastes resources and delays failure detection. Exponential backoff with jitter prevents retry storms. But the retry strategy differs depending on whether the failure is transient or permanent.
+
+Your service calls a payment processor. You receive these responses: (a) HTTP 503 with Retry-After: 5, (b) HTTP 429 with Retry-After: 60, (c) HTTP 400 Bad Request, (d) HTTP 500 Internal Server Error, (e) connection timeout (no HTTP response).
+
+- For each response type (a) through (e), classify it as: retry immediately, retry with backoff, do not retry.
+- What is the retry-after header and when should you honor it exactly vs. use it as a hint?
+- A 500 Internal Server Error from a payment processor: is this transient or permanent? What additional information do you need to decide?
+- Design the retry policy for this payment call: max retries, backoff formula, jitter strategy, total timeout budget.
+- At what point does retrying a payment API call become indistinguishable from a DDoS attack on that API?
+- Follow-up: Your retry logic has max_retries=3, backoff=(2^attempt) seconds with 0-1s jitter. A sudden spike causes 10,000 calls to fail simultaneously. Calculate the retry storm: how many total requests hit the payment processor in the next 60 seconds?
+
+---
+
+### Section B: Cascades and Gray Failures (Q28-Q34)
+
+**Question 28 -- The degradation budget in practice: defining the ladder before the incident**
+
+A degradation ladder is pre-defined -- it is not designed during an incident. An incident is the wrong time to have a debate about whether to disable the recommendation feature. That decision should already be made, documented, and ideally automated.
+
+Design a complete degradation ladder for a bank's mobile app (features: account balance, transaction history, transfers, bill pay, ATM locator, personalized offers).
+- Define five tiers. For each tier: which features are active, which are disabled, and what is the trigger condition?
+- Which feature is the last one you disable before declaring the app completely down?
+- Which feature is the first one you disable when load starts climbing?
+- How do you automate the transition between tiers? (Think: feature flags, circuit breakers, manual operator action.)
+- How do you communicate each tier to users in the app UI? What message do you show when bill pay is disabled?
+- Follow-up: The bank's SLA guarantees 99.9% availability for account balance. The degradation ladder shows balance is Tier 2 (disabled during severe incidents). Is the SLA achievable? How do you resolve this conflict between the SLA commitment and the degradation design?
+
+---
+
+**Question 29 -- Blast radius analysis for a microservices graph**
+
+Blast radius analysis asks: if service X fails, which services are affected, in what order, and to what degree? This is best done before the incident, not during.
+
+Your service graph: Order Service calls Payment Service and Inventory Service (in parallel). Payment Service calls Fraud Service. Inventory Service calls Warehouse Service. All five services have no circuit breakers.
+
+- Draw the blast radius if Payment Service fails completely.
+- Draw the blast radius if Fraud Service becomes slow (P99=3s instead of 50ms).
+- Add circuit breakers at every call boundary. Re-draw the blast radius for both failure scenarios. How does it change?
+- What is "second-order blast radius"? (The failure of A takes down B, which creates excess load on C, which then fails.)
+- How do you account for retry amplification in blast radius analysis? (If Payment Service fails and Order Service retries 3 times, Payment Service receives 3x its normal load during recovery.)
+- Follow-up: The business wants to add a sixth service: Loyalty Points Service, called synchronously from Order Service after payment succeeds. What is the blast radius impact of adding this dependency? What would you recommend instead?
+
+---
+
+**Question 30 -- Slow node problem: why partial degradation is harder than complete failure**
+
+In a 10-node cluster, one node is responding in 4 seconds instead of 50ms. The load balancer uses round-robin, so 10% of requests go to the slow node. The slow node's health check passes because it is responding. Standard monitoring shows: error rate 0%, latency P50=55ms, P99=4,000ms.
+
+- Why is the slow node worse than a dead node in this scenario?
+- The P99 latency of 4,000ms hides the problem. What percentile latency do you need to alert on to catch a single slow node in a 10-node cluster? (Hint: if 10% of requests hit the slow node, what percentile is affected?)
+- How does the slow node consume thread pool resources compared to a dead node?
+- What change to the load balancer would prevent this problem? (Think: least-connections routing vs. round-robin.)
+- If you add slow_start to the load balancer, does it help? When does it hurt?
+- Follow-up: You identify the slow node, remove it from the rotation, and restart it. It comes back healthy. 20 minutes later it is slow again. This repeats. Design the investigation: what are the three most likely root causes of intermittent node slowness?
+
+---
+
+**Question 31 -- Cascading failure prevention: circuit breaker + load shedding combination**
+
+A slow node failure (Chapter 25 Type 3) causes cascading. The circuit breaker prevents calls to the slow node, but the load redistribution can overwhelm the remaining nodes. You need both circuit breaking and load shedding working together.
+
+Your cluster: 5 nodes, each handling 1,000 requests/second at 70% capacity. One node becomes slow. Its circuit breaker trips.
+- What is the new per-node load after the circuit breaker removes the slow node?
+- At 125% capacity per node, what happens to response time?
+- As response time increases, what happens to thread pool saturation?
+- Design the load shedding trigger: at what CPU or latency threshold do the 4 remaining nodes start shedding?
+- What should the nodes shed first: low-priority requests or requests from misbehaving clients?
+- Follow-up: All 4 remaining nodes begin shedding at 90% capacity. But the shed rate is 20% of requests. Users are retrying shed requests immediately. Calculate the new effective load on the 4 nodes after user retries.
+
+---
+
+**Question 32 -- Gray failure detection with distributed tracing**
+
+A gray failure in your recommendation service is causing 8% of feed requests to return empty recommendations instead of personalized ones. Standard health checks return 200. Error rate is 0% (empty results are not errors). Latency is normal.
+
+- Without distributed tracing, how long might this gray failure go undetected?
+- With distributed tracing: what would the traces for the failing 8% of requests look like vs. the successful 92%?
+- Design the specific trace attributes that would reveal the gray failure. (Hint: result_count, cache_hit_rate, model_version, shard_id.)
+- How do you set up sampling for traces that ensures the 8% failure cases are captured? (Think: tail-based sampling.)
+- What is the "error budget" for empty recommendations? At what rate of empty results do you declare an incident?
+- Follow-up: You find the gray failure was caused by a specific recommendation model version deployed to 2 of 25 servers. The deployment system did not flag it as a failure because the servers were responding successfully. Design the deployment health check that would have caught this.
+
+---
+
+**Question 33 -- The "thundering herd" problem during recovery**
+
+Your circuit breaker opens because Service B is overwhelmed. For 60 seconds, all requests to Service B fail fast. Then the circuit breaker transitions to Half-Open and lets one probe request through. It succeeds. The breaker closes. All 500 pending requests immediately flood Service B.
+
+- Describe the thundering herd: what happens to Service B in the first 5 seconds after the breaker closes?
+- Why can the thundering herd re-trip the circuit breaker and create an oscillation (closed -> open -> closed -> open)?
+- Design a recovery strategy that prevents the thundering herd: gradual traffic restoration.
+- What is "probabilistic circuit breaking" and how does it allow gradual traffic restoration instead of binary open/closed?
+- How does cache warming during the Half-Open phase reduce the thundering herd impact?
+- Follow-up: You implement gradual recovery: 5% of traffic for 10 seconds, then 25%, then 50%, then 100%. Service B handles 5% fine, 25% fine, but trips again at 50%. What does this tell you about Service B's current capacity? How do you adjust the recovery plan?
+
+---
+
+**Question 34 -- Monitoring the defense stack itself**
+
+Your circuit breakers, bulkheads, and timeout configurations are part of your resilience design. But if they are not monitored, you do not know whether they are working. Worse, a misconfigured circuit breaker can itself become a failure mode.
+
+Design the monitoring layer for the defense stack of a payment service:
+- What metrics do you collect from circuit breakers? (State, trip count, error rate, last state change.)
+- How do you alert on "circuit breaker is open for more than 5 minutes"? Why is that alarming?
+- What metrics do you collect from bulkheads? (Pool utilization, rejection rate, wait time.)
+- How do you detect a bulkhead that is too small? (Hint: sustained rejection rate > 0.)
+- What is the "defense stack test"? How often do you run it?
+- Follow-up: You notice that the payment service's circuit breaker for the fraud check dependency has tripped 47 times in the last 30 days. Each trip lasted under 60 seconds. No incidents were declared. Is this a healthy circuit breaker doing its job, or a sign of a deeper problem with the fraud check service?
+
+---
+
+### Section C: Cross-Chapter Integration (Q35-Q42)
+
+**Question 35 -- Slow node cascade with circuit breaker and load shedding (Ch25 + Ch23)**
+
+A slow node is responding in 8 seconds instead of 50ms. Your circuit breaker threshold is 5 seconds. It trips. Now 0% of requests reach the slow node. The load redistributes to the 4 remaining nodes -- each now gets 25% more traffic. Their latency climbs. Two more circuit breakers trip. Cascade.
+
+- At what point does redistributing load from a tripped circuit breaker cause the next node to trip?
+- Design the circuit breaker threshold that accounts for load redistribution: if tripping one breaker causes others to trip, what should the threshold be instead of a fixed 5-second latency?
+- Design the load shedding policy that the remaining 4 nodes should activate when they detect elevated load after the first breaker trips. Which requests do they shed?
+- Should the 4 remaining nodes shed before or after they trip their own circuit breakers? Why?
+- Backpressure to upstream: once shedding starts, how do you signal to the upstream caller to reduce their request rate?
+- Follow-up: After the cascade, 3 of 5 nodes have tripped their circuit breakers. 60% of traffic is being shed. The on-call engineer is paged. What is the first action they should take? (Hint: not "restart the slow node.")
+
+---
+
+**Question 36 -- etcd failure and distributed lock dependency (Ch25 + Ch22)**
+
+Your leader election service (etcd) becomes a dependency failure. 40% of your services use etcd for distributed locks. etcd is responding slowly -- p99 latency is 5 seconds. All services waiting to acquire locks are blocked. Services holding locks cannot renew them, causing lock expiry and reacquisition storms.
+
+- Map this to the Chapter 25 failure taxonomy. Is etcd a slow node failure? A dependency failure? A partial failure? (It may be more than one.)
+- Which services MUST have a lock to proceed and cannot operate without etcd? Which services use locks for optimization (preventing duplicate work) but can operate without them?
+- For the services that can operate without locks: design the degraded operation mode. What is the worst case if two instances do the same work without coordination?
+- For the services that cannot operate without locks: design the "fail closed" behavior. What do they do instead of blocking indefinitely on etcd?
+- How does etcd's own leader election interact with this scenario? (If the etcd leader is slow, does re-election help or make things worse?)
+- Follow-up: You add a 200ms timeout on all etcd lock operations. During normal operation, P99 etcd latency is 20ms. During the incident, P99 is 5s. With the 200ms timeout, how many lock acquisitions succeed vs. fail during the incident? What does this mean for the services that need the lock?
+
+---
+
+**Question 37 -- AP system behavior during network partition (Ch25 + Ch26)**
+
+During a network partition, your AP system (availability over consistency) continues serving requests with potentially stale data. From a failure model perspective, serving stale data is a partial failure -- the system is up, but some of its correctness guarantees are suspended.
+
+Design the user experience impact matrix for an e-commerce app during a partition that makes inventory data 60 seconds stale:
+- Which features are acceptable with 60-second stale inventory data? (Think: product catalog browsing, search results, wish list.)
+- Which features are NOT acceptable with stale inventory? (Think: add-to-cart, checkout.)
+- How do you communicate degradation to users without causing panic?
+- Design the "soft reservation" pattern: user can add to cart during stale data, but inventory is confirmed at checkout. What happens at checkout if the item is actually out of stock?
+- What is the "degradation budget" for this stale data scenario? At 60 seconds stale: acceptable. At 5 minutes stale: re-evaluate. At 30 minutes stale: shut down checkout entirely?
+- Follow-up: The network partition resolves. Stale data in the cache is now being corrected. During the reconciliation window (30 seconds), inventory counts are fluctuating. Should checkout be enabled or disabled during reconciliation? Defend your answer.
+
+---
+
+**Question 38 -- Slow region failover design (Ch25 + Ch36)**
+
+Region US-East is experiencing high latency: 300ms instead of 10ms -- a "slow region" failure. Your global load balancer routes 33% of traffic there. Users hitting US-East are experiencing 300ms+ page loads. Users in EU-West and APAC are fine.
+
+- Design the detection mechanism. What metric do you measure from the global load balancer's perspective to identify that US-East is slow?
+- At what latency threshold do you stop routing traffic to US-East? (Think: not too aggressive -- avoid flapping on brief spikes. Not too conservative -- do not let users suffer too long.)
+- What is "flapping"? How do you prevent the load balancer from routing to US-East, seeing it recover briefly, routing back, seeing it degrade again, and oscillating every 60 seconds?
+- After removing US-East from rotation, EU-West and APAC each get 50% of global traffic instead of 33%. Are they sized to handle 50%? What does this mean for your capacity planning?
+- When US-East recovers, how do you gradually restore traffic to it? (Think: 5% -> 25% -> 50% -> 33% with health gates at each step.)
+- Follow-up: The slow region failure lasted 45 minutes. Users' sessions were in US-East's Redis cluster. After failover to EU-West, those users are logged out. Design the session portability architecture that would have kept them logged in.
+
+---
+
+**Question 39 -- Kafka broker slowness and producer behavior (Ch25 + Ch33)**
+
+Your Kafka broker is slow: high CPU, elevated disk I/O, p99 produce latency of 2 seconds instead of 5ms. Producers are configured with acks=all, retries=3, retry.backoff.ms=100, request.timeout.ms=500ms. Some messages are timing out. Some are being retried. Some are succeeding slowly.
+
+- Map the Kafka broker slowness to the Chapter 25 failure taxonomy. Is this a slow node failure (Type 3)? A partial failure? Both?
+- With request.timeout.ms=500ms and broker latency of 2 seconds, what happens to every produce request?
+- With retries=3: after the first timeout, how long does the producer wait before retrying? How many total seconds does a single message spend before being dropped?
+- What is the risk of retries=3 with acks=all when the broker is slow? (Think: duplicate messages if the broker received the message but the ack timed out.)
+- At what producer configuration setting do you accept message loss in exchange for not blocking producers indefinitely?
+- Follow-up: You change to acks=1 to reduce producer latency during the incident. The broker is still slow. A broker crash happens while messages are written to the leader but not yet replicated. How many messages are lost? How do you recover them?
+
+---
+
+**Question 40 -- Chaos engineering ROI calculation (Ch25 + Ch38)**
+
+Chaos engineering requires intentionally failing components in production. This has a real cost: engineer time to design and run experiments, potential customer impact, potential SLA violations. But the benefit is also real: incidents found in experiments are cheaper than incidents found by users.
+
+Calculate the ROI for a chaos engineering program:
+- Cost per chaos experiment: 8 hours of engineering time, 0.5% user impact for 30 minutes. Assign a dollar cost to each component.
+- Expected output: each experiment either (a) confirms the system handles failure gracefully (no incident) or (b) finds a gap that would have been a major incident. Historical data shows 30% of experiments find a real gap.
+- Major incident cost: 4 hours of engineer time + $50,000 revenue loss + potential SLA penalty. Assign a dollar cost.
+- Run the math: if you run 20 experiments per quarter and 30% find real gaps, how many major incidents do you prevent? What is the net cost/benefit?
+- At what major incident rate (incidents per year) does chaos engineering become cost-positive?
+- Follow-up: Your chaos program runs for 6 months. You run 40 experiments. 12 find real gaps. But your major incident rate has not changed. What does this tell you about the relationship between your chaos experiments and your actual incident causes?
+
+---
+
+**Question 41 -- Gray failure detection with distributed tracing (Ch25 + Ch27)**
+
+Gray failures -- where a service is partially degraded but not completely down -- are the hardest to detect. Standard health checks return healthy. The error rate is 0%. But 12% of users experience empty search results, and distributed tracing is your best tool for finding why.
+
+Design a gray failure detection system using distributed tracing:
+- What attributes do you add to every trace span to enable gray failure detection? (Beyond the standard: service name, latency, status code.)
+- How do you use trace sampling to ensure you capture the 12% of failing traces without overwhelming your tracing backend?
+- Design the trace analysis query that identifies the gray failure: "find all traces where search returned 0 results and latency was under 200ms." What does a result set of 12% tell you?
+- How does distributed tracing help you identify which component in the call chain is responsible for the 0-result responses?
+- What is the difference between a trace that fails fast (0 results in 10ms) vs. a trace that succeeds slowly (correct results in 400ms)? Which is the gray failure?
+- Follow-up: You identify that the 0-result responses all come from traces that routed through search shard 7 of 20. Shard 7's health check is green. Design the shard-level health check that would have caught this: what does it test that a simple HTTP 200 check misses?
+
+---
+
+**Question 42 -- Full-system design: failure-tolerant order processing (synthesis)**
+
+This is a synthesis question across Ch24, Ch25, and the earlier chapters. Design the failure model for a complete order processing system with the following components: API Gateway, Order Service, Payment Service (calls external Stripe API), Inventory Service, Notification Service (sends email via SendGrid), and Kafka (carries order events between services).
+
+For each component, design the complete failure handling:
+- API Gateway: what are its failure modes? What health checks does it do on the Order Service?
+- Order Service: what timeout does it set on Payment Service? What circuit breaker threshold? What is the fallback if Payment Service is slow?
+- Payment Service: the Stripe API goes down for 2 minutes. What does Payment Service return to Order Service? Does it queue the payment for async retry?
+- Inventory Service: processes Kafka events. If it falls 10,000 messages behind, is this an emergency? Calculate the time lag.
+- Notification Service: sends email via SendGrid. SendGrid is down for 1 hour. Design the retry strategy without spamming users when SendGrid recovers.
+- Kafka: one broker is slow. Producers are timing out. Which services are immediately affected? Which have fallbacks?
+- Follow-up: A chaos engineering game day finds that if Payment Service is removed from rotation, Order Service's circuit breaker does not trip for 90 seconds (it waits for 10 failures). During those 90 seconds, 4,500 orders hit a slow Payment Service. Calculate the user impact. Redesign the circuit breaker threshold to reduce this to under 10 seconds.
+
+---
+
+*End of supplemental questions for Chapter 24 and Chapter 25.*
+
+*Ch24 supplemental: Q21-Q45 (25 questions). Ch24 total: Q1-Q15 brainstorming + Q1-Q5 interview practice + Q21-Q45 supplemental = 45 questions.*
+*Ch25 supplemental: Q18-Q42 (25 questions). Ch25 total: Q1-Q15 brainstorming + 2 implicit interview practice questions + Q18-Q42 supplemental = 42 questions.*
+
+---
+
+### Cross-chapter: Routing around slow nodes (from Ch23)
+
+**Question 39 -- Routing around slow nodes without false positives (Ch23 + Ch25)**
+
+A 10-node cache cluster uses consistent hashing. Node N7 is slow (GC issue):
+responding in 2,000ms vs the normal 20ms. Application timeout=500ms.
+Every request to N7 times out.
+
+- Retry on timeout: the client retries on a random different node.
+  N7 handles 10% of traffic. At 10,000 req/sec baseline,
+  1,000 req/sec retry away from N7. Each retry adds one RPC.
+  Those 1,000 retries spread across 9 healthy nodes: ~111 extra req/sec per node.
+  Healthy nodes go from 1,000 to 1,111 req/sec. Is this significant?
+  What if N7's shard carries 20% of traffic instead of 10%?
+- Passive health tracking: the client tracks success rate and p99 per node
+  over a 30-second sliding window. After 15 seconds of N7 timeouts (15,000 events),
+  N7's success rate drops to 0%. Client marks N7 "suspect" and routes
+  95% of its traffic elsewhere, sending 5% as probe traffic.
+  What is the worst-case detection lag from the first GC pause?
+- Active probing failure mode: every 5 seconds, the client sends a lightweight probe
+  with timeout=100ms to each node. N7 responds to the probe in 15ms
+  (GC only affects full reads, not simple health pings).
+  Active probing reports N7 as healthy. This is a false negative.
+  Redesign the probe: what should it exercise to detect application-level slowness?
+  If N7's probe latency = 2,000ms vs fleet average 20ms, what threshold triggers "suspect"?
+- Follow-up: The "canary request" pattern: route 1% of real traffic to each node periodically
+  and measure outcomes. This provides application-level accuracy.
+  What is the minimum sample size to detect a node with 50% error rate at 95% confidence?
+  Use the normal approximation for proportions.
+
+---
+
+---
+
+## Production Incident 3: Cloudflare's 2019 Global Outage from a CPU-Consuming Regex
+
+**Company:** Cloudflare | **Year:** 2019 | **System:** Web Application Firewall (WAF), global edge network
+
+---
+
+### What Happened (analogy first)
+
+Imagine a security guard at a building entrance whose job is to check each visitor's badge against a list of banned patterns. On a normal day the guard glances at each badge, finds no match in milliseconds, and waves people through. One day, someone adds a new rule to the guard's checklist that says: "If the badge contains any combination of these characters, in any order, check every possible combination before deciding." The rule is technically correct -- it will catch the right people -- but it causes the guard to spend 30 minutes examining every single badge, blocking the entire entrance. The building still has a "healthy" security guard. The guard is not sick. The guard is simply unable to let anyone through.
+
+This is what happened to Cloudflare on July 2, 2019. A Cloudflare engineer added a new WAF (Web Application Firewall) rule to protect against cross-site scripting attacks. The rule included a regular expression designed to match certain malicious HTTP request patterns. The regex contained a substring that caused catastrophic backtracking: an input pattern where the regex engine, following its standard NFA-based algorithm, explored an exponential number of possible match paths before concluding there was no match.
+
+On a typical HTTP request, this regex took microseconds. On specific malformed inputs (which are common in web traffic), it entered catastrophic backtracking and consumed 100% of a CPU core -- indefinitely. Because the WAF ran in-process on every Cloudflare edge node globally, and because the new rule was deployed to all nodes simultaneously via Cloudflare's automated rule deployment system, every edge node in Cloudflare's global network hit this condition within minutes of the rule going live.
+
+The result: Cloudflare's global edge network, which processes roughly 10% of all HTTP requests on the internet, dropped from normal operations to near-zero throughput within minutes. Cloudflare's own systems -- including the monitoring dashboards the team used to diagnose the problem -- were hosted behind Cloudflare's network and were also unreachable.
+
+---
+
+### The Failure Model
+
+Classification: **slow node failure** (gray failure) at global scale.
+
+This is the most dangerous failure type in the taxonomy because standard health checks did not detect it. Each edge node was:
+- Running (process alive)
+- Responding to health checks (HTTP 200 on the health endpoint)
+- Accepting new connections
+
+What the health checks could not see: the worker threads that process real HTTP requests were pinned at 100% CPU trying to evaluate the regex. The health check endpoint was served by a separate lightweight handler that bypassed the WAF (it would defeat the purpose of a health check if the WAF ran on health checks). So the node reported "healthy" while being unable to process a single real request.
+
+```
+FAILURE TYPE: Gray Failure (Slow Node, Not Crash)
+
+Standard health check: HTTP GET /health --> 200 OK (HEALTHY)
+Reality: worker threads = 100% CPU on regex backtracking
+
+What monitoring saw:    [HEALTHY] [HEALTHY] [HEALTHY] ... (all nodes)
+What users saw:         503 Service Unavailable (all requests failing)
+Contradiction duration: ~27 minutes before root cause identified
+```
+
+---
+
+### ASCII Diagram
+
+```
+BEFORE RULE DEPLOYMENT:
+  [User Request] --> [Edge Node] --> [WAF Check (fast)] --> [Origin]
+  CPU usage per node: ~40% (normal)
+  Health check: PASS
+
+AFTER RULE DEPLOYMENT (new regex active):
+  [User Request] --> [Edge Node] --> [WAF Check (catastrophic backtrack)]
+                                             |
+                                        CPU = 100%
+                                        (never completes for some inputs)
+                                             |
+                                    worker threads blocked
+                                    request queue fills
+                                    users get 502/504
+
+  HEALTH CHECK (runs separately):
+  [Monitor] --> /health --> [Edge Node lightweight handler] --> 200 OK
+                                         ^
+                                         | bypasses WAF
+                                    NO WAF CHECK
+                                    FALSE HEALTHY
+
+  MONITORING DASHBOARD:
+  All 180+ edge nodes: status = GREEN
+  Customer error rate:  99%+ 502s
+
+  TIME TO IDENTIFY: 27 minutes
+  METHOD: Engineer noticed high CPU alerts (not health check failure)
+          Cross-referenced with WAF deployment timestamp
+```
+
+---
+
+### Root Cause
+
+The immediate cause: a regex with catastrophic backtracking behavior deployed globally and simultaneously.
+
+The systemic causes:
+1. The WAF rule deployment pipeline had no staged rollout. Rules went to all nodes at once. A 1% canary deploy would have limited blast radius to 1% of traffic.
+2. The health check did not exercise the WAF code path. A health check that does not exercise the component being monitored is not a health check for that component -- it is a process-alive check.
+3. The regex was not tested against adversarial inputs. ReDoS (Regular Expression Denial of Service) vulnerability testing was not part of the WAF rule review process.
+
+---
+
+### Fix
+
+1. Cloudflare added a staged rollout for WAF rule deployments: 1% of traffic, then 5%, then 25%, then full. Each stage requires a human approval gate or an automated success rate check.
+
+2. Cloudflare added CPU utilization per request (not just per node) as a WAF rule evaluation metric. A single rule that consumes more than X microseconds of CPU per request triggers an automatic rollback.
+
+3. Cloudflare now runs all new WAF regexes through a static analysis tool that detects catastrophic backtracking potential before deployment. They open-sourced the tool.
+
+4. Cloudflare separated health check infrastructure from production edge nodes so that monitoring systems are not themselves behind the system they monitor.
+
+---
+
+### Staff Lessons
+
+- A health check that does not exercise the code path most likely to fail is not a health check -- it is a process-alive check. For every service, ask: "What would make this service unable to process requests without crashing?" Then make the health check exercise that path.
+- Catastrophic backtracking (ReDoS) is a real and underappreciated failure mode. Regex engines based on NFA backtracking can be driven to exponential time complexity by carefully crafted input. Static analysis tools for detecting this exist and should be part of any pipeline that adds or modifies regexes in a hot path.
+- Simultaneous global deploys are simultaneous global risk. For any change that touches every node in a global system, staged rollout is not optional. The blast radius of "change X goes to 1%" is orders of magnitude smaller than "change X goes to 100%."
+- Gray failures are harder to detect than crashes. A node that is running but not working looks healthy to most monitoring. Add semantic health checks (end-to-end synthetic requests that exercise the real code path) alongside process health checks.
+
+---
+
+## Production Incident 4: AWS us-east-1 Power Outage Cascade (2017)
+
+**Company:** Amazon Web Services | **Year:** 2017 | **System:** Amazon S3, us-east-1
+
+---
+
+### What Happened (analogy first)
+
+Imagine a restaurant kitchen with a fixed number of cooks. During a slow period, a manager decides to reduce costs by sending some cooks home early. The manager miscommunicates the instruction, and too many cooks go home -- more than was intended. Now the kitchen is understaffed for the afternoon lunch rush. Each remaining cook is overloaded. Orders pile up. When customers keep sending in orders despite the delay, the order-taking system (the front desk) keeps accepting them, piling more pressure on the already-overloaded kitchen. The overload makes each remaining cook slower. More orders back up. The lunch rush becomes a disaster that lasts until dinner.
+
+On February 28, 2017, an AWS engineer was investigating a high billing rate for S3 in us-east-1 and needed to take a subsystem offline for debugging. The engineer executed a command to remove a small number of servers from the S3 index subsystem (the component that maps object paths to physical locations). The command syntax was correct but the parameter specifying the number of servers to remove was entered incorrectly. A much larger number of servers was removed than intended.
+
+The S3 index subsystem was now below the minimum capacity needed to handle its workload. S3 requests that hit this subsystem began failing or timing out. S3 is a dependency of a large fraction of AWS services in us-east-1, including the S3 service itself (S3 uses S3 for internal metadata in some paths). The blast radius expanded rapidly: not just customer S3 access, but EC2 instance launches (AMIs stored in S3), Lambda function deployments (Lambda packages stored in S3), CloudWatch Metrics (metrics storage partially backed by S3), and the AWS Service Health Dashboard itself (a static website hosted on S3, which was now also down).
+
+---
+
+### The Failure Model
+
+Classification: **capacity reduction failure** triggering a **retry storm** and **dependency cascade**.
+
+This failure combines three patterns from the failure taxonomy:
+
+1. Capacity reduction (intentional, misconfigured): the triggering event was operational.
+2. Retry storm amplification: clients throughout AWS that depend on S3 retried their requests. Retries at scale add more load to an already-overloaded system.
+3. Dependency cascade: S3 is not a leaf service. It is a foundational dependency. Failure propagated up through the dependency graph to many other services.
+
+---
+
+### ASCII Diagram
+
+```
+TRIGGERING EVENT:
+  Engineer intends to remove 3 index servers for debugging.
+  Command executes with wrong parameter: removes ~100 servers.
+
+  S3 Index Subsystem:
+  Before: [srv1][srv2]...[srv200]  <-- healthy capacity
+  After:  [srv1][srv2]...[srv100]  <-- 50% capacity, below minimum threshold
+
+IMMEDIATE EFFECT:
+  S3 requests --> Index subsystem (overloaded) --> timeout/error
+  Error rate: 0% --> 80%+ in minutes
+
+RETRY STORM:
+  Client retries failed S3 request after 1 second.
+  At AWS scale: millions of clients, each retrying.
+  Overloaded index subsystem receives 3-5x more requests than before removal.
+  More overload --> more timeouts --> more retries --> more overload.
+
+DEPENDENCY CASCADE:
+  [S3 failing]
+       |
+       +---> [EC2 instance launch fails] (AMI lookup hits S3)
+       +---> [Lambda deploy fails] (function packages in S3)
+       +---> [CloudWatch degraded] (metrics partially in S3)
+       +---> [AWS Health Dashboard unreachable] (hosted on S3)
+       +---> [CloudFormation stacks stall] (template storage in S3)
+
+RECOVERY BLOCKER:
+  The AWS internal runbook for this scenario involves tools
+  that are themselves hosted in services that depend on S3.
+  Bootstrap problem: some recovery tooling was also degraded.
+  Full recovery took ~4 hours.
+```
+
+---
+
+### Root Cause
+
+The proximate cause: operator error. The command to remove servers had no confirmation step or upper bound safety check. The system accepted the instruction without verifying that the resulting capacity would be above the operational minimum.
+
+The systemic causes:
+1. No blast radius limit on operational commands. A command that removes capacity from a foundational service should require multi-person authorization (two-person rule) and should validate post-removal capacity before executing.
+2. No graceful degradation at the index subsystem level. The subsystem had no mechanism to shed load when overloaded -- it simply accepted all requests and slowed down for all of them, rather than fast-failing a fraction to protect responsiveness for the rest.
+3. Dependency graph not fully mapped for blast radius analysis. Several services that depended on S3 were not in the blast radius calculation because those dependencies were indirect or new.
+
+---
+
+### Fix
+
+1. AWS added minimum capacity enforcement to S3's operational tooling. Commands that would reduce capacity below a safety threshold require explicit override and multi-person approval.
+
+2. AWS hardened the S3 index subsystem for partial availability: when capacity drops, the subsystem activates aggressive load shedding (rate-limited error responses for lower-priority operations) to protect higher-priority operations.
+
+3. AWS audited and reduced the number of AWS internal services that depend on S3 in the hot path. Where possible, critical control plane paths (like the AWS console, health dashboard, and incident response tools) were migrated to infrastructure with independent failure domains from S3.
+
+4. AWS Service Health Dashboard now has a static fallback that does not depend on S3 for rendering during S3 impairment events.
+
+---
+
+### Staff Lessons
+
+- Operational tooling must enforce invariants, not just accept instructions. Any command that reduces capacity in a foundational service should validate the post-change state before committing. This is the "dry run with validation" pattern. The cost of adding a validation step to a CLI command is hours of engineering. The cost of skipping it is a 4-hour global outage.
+- Foundational dependencies amplify blast radius non-linearly. A failure in a leaf service affects users of that service. A failure in a foundational service (S3, DNS, a central database) affects every service that depends on it, including services you did not know had a dependency. Map your foundational service dependencies explicitly and update the map as new services are deployed.
+- Retry storms are a force multiplier on already-degraded systems. If your S3 library retries immediately on failure, and millions of clients all hit an error at the same moment, the combined retry load can be 10-100x normal. Design retry logic with exponential backoff and jitter (AWS's own Retry Behavior documentation recommends this for exactly this reason).
+
+---
+
+## Production Incident 5: PagerDuty's 2018 Alerting Service Failure During a Degraded State
+
+**Company:** PagerDuty | **Year:** 2018 | **System:** Core alerting and notification pipeline
+
+---
+
+### What Happened (analogy first)
+
+Imagine a city's 911 emergency dispatch center. The dispatchers take incoming emergency calls and route them to fire trucks, ambulances, and police cars. One day, the computer system the dispatchers use to log calls and dispatch responders slows to a crawl because of a database problem. Each dispatcher, rather than hanging up on callers or closing the system, waits for the slow computer to respond. Each dispatcher ties up a phone line waiting. Eventually all 50 phone lines are occupied by dispatchers waiting for the slow computer. New emergency calls ring busy. There is no recording, no callback system, no alert to management. The emergency dispatch center is failing silently -- it looks operational from the outside (the building is open, dispatchers are seated) but is functionally unable to route a single new emergency.
+
+PagerDuty is a service whose entire purpose is to send alerts when other systems fail. In 2018, PagerDuty experienced a cascading failure that resulted in alerts not being sent -- a particularly damaging failure mode for a company whose product is alerts.
+
+The chain of events: a database replica used by PagerDuty's event processing service began experiencing elevated query latency (a slow node failure, not a crash). The event processing service used a thread pool to handle incoming alert events. Each thread picked up an alert, queried the database to look up routing rules and escalation policies, and then dispatched the alert via email, SMS, or phone call.
+
+When the database slowed down, each thread's database query took 10-20x longer than normal. The threads did not time out -- the database connection timeout was set very conservatively (30 seconds) to avoid false timeouts on large queries. Each thread held its connection and waited. As new alerts arrived, new threads started. Within a few minutes, the thread pool was exhausted. New incoming alerts could not be dispatched because there were no available threads.
+
+There was no circuit breaker between the event processing service and the database. There was no fallback: if the database was unavailable, there was no in-memory cache of routing rules to use for basic dispatch. There was no bulkhead separating low-priority alerts from high-priority alerts: a flood of low-priority monitoring noise consumed all threads, starving critical P1 alerts.
+
+The failure was silent. PagerDuty's own system health dashboard showed the event processing service as "Running." Incoming alerts were accepted (the API returned 200 OK). The alerts simply sat in an internal queue, unprocessed, while all threads waited for the slow database.
+
+---
+
+### The Failure Model
+
+Classification: **slow dependency failure** (gray failure) causing **thread pool exhaustion** causing **silent processing failure**.
+
+This is a textbook dependency failure cascade:
+1. Slow dependency (database replica) causes resource accumulation (threads held).
+2. Resource accumulation (thread pool full) causes new request rejection.
+3. No circuit breaker means the accumulation is not detected until the pool is full.
+4. Silent acceptance (API returns 200) means the failure is not visible to senders.
+
+---
+
+### ASCII Diagram
+
+```
+NORMAL STATE:
+  [Incoming Alert] --> [Thread Pool (50 threads)] --> [DB: routing lookup (5ms)]
+                                                           |
+                                                  [Dispatch: email/SMS/call]
+  Thread utilization: ~20% (10 threads active)
+
+WHEN DATABASE REPLICA SLOWS (latency: 5ms --> 80ms --> 500ms --> timeout):
+
+  t=0:00  DB latency: 80ms. Threads take 80ms instead of 5ms.
+          Thread pool: 25 threads active (up from 10). Still OK.
+
+  t=0:02  DB latency: 300ms. 40 threads active.
+
+  t=0:05  DB latency: 2,000ms. 50 threads active. POOL EXHAUSTED.
+
+  t=0:05+ New incoming alerts:
+          [Alert P1: production down] --> [Thread Pool: FULL, no threads]
+                                              |
+                                         Queued internally
+                                         API returns: 200 OK  <-- SILENT FAILURE
+
+  t=0:05+ Health check:
+          [Monitor] --> /health --> 200 OK (process alive)
+          Threads: 50/50 occupied (waiting for DB)
+          New alerts dispatched: 0
+          Health check says: HEALTHY
+
+CIRCUIT BREAKER (if it existed):
+  After 5 consecutive DB failures or 3s latency threshold:
+  --> Open circuit, stop DB queries
+  --> Fallback: use cached routing rules (last known good state)
+  --> Dispatch alert with cached rules (slight staleness acceptable)
+  --> Alert ops team: "DB slow, using cache"
+  This would have prevented thread accumulation entirely.
+```
+
+---
+
+### Root Cause
+
+Three missing components combined to create the failure:
+
+1. No circuit breaker on the database connection. A circuit breaker would have detected the elevated latency, opened (stopped sending queries to the slow replica), and either failed fast or fallen back to a cache. Thread accumulation would not have occurred.
+
+2. No thread pool bulkheading by priority. All alert priorities shared the same thread pool. A P1 "production down" alert and a P5 "disk usage at 70%" alert competed for the same thread. Under load, P5 noise consumed P1 capacity.
+
+3. No end-to-end confirmation to alert senders. The API accepted the alert and returned 200 OK without confirming that the alert had been dispatched. Senders had no way to know their alert was stuck in a queue.
+
+---
+
+### Fix
+
+1. PagerDuty added a circuit breaker on the database connection with a 500ms latency threshold. When the threshold is exceeded, the circuit opens and the event processor falls back to a cached copy of routing rules stored in Redis. The cache is refreshed every 60 seconds. Staleness is acceptable: routing rules change rarely; missing one update for 60 seconds is an acceptable trade-off versus dropping alerts.
+
+2. PagerDuty separated thread pools by alert priority using the bulkhead pattern. P1/P2 critical alerts get a dedicated thread pool of 30 threads. P3/P4/P5 lower-priority alerts share a separate pool of 20 threads. A P5 alert flood cannot starve P1 processing.
+
+3. PagerDuty added dispatch confirmation: the API no longer returns 200 until the alert has been accepted into a durable queue with at-least-once dispatch guarantee. The dispatch worker acknowledges each alert only after it has successfully sent at least one notification channel.
+
+4. PagerDuty added a canary alert: a synthetic P1 alert is sent to a test escalation policy every 60 seconds. If the canary alert is not acknowledged within 5 minutes, a separate out-of-band alerting system (independent of the main pipeline) pages the on-call team.
+
+---
+
+### Staff Lessons
+
+- The monitoring system that is supposed to detect failures must be tested for its ability to operate during those same failures. PagerDuty's failure was partly a failure to eat their own dog food: their own alerting infrastructure was not resilient to the same class of failure it was designed to alert on. Build a canary that tests end-to-end alert delivery every few minutes, and route the canary's alert through a completely separate notification channel that does not depend on the system under test.
+- Thread pool exhaustion from slow dependencies is one of the most common and most damaging failure modes in synchronous service-to-database architectures. The circuit breaker pattern is the standard mitigation. Configure it before you go to production, not after the first incident.
+- Bulkheading is not optional for multi-tier priority systems. If one category of work can fill a shared resource pool and starve higher-priority work, you do not have a priority system -- you have a lottery. Separate resource pools (thread pools, connection pools, rate limit buckets) by priority class.
+- Silent 200 OK on queued work is a lie. A 200 OK should mean "I have committed to processing this." If processing has not occurred -- if the work is just sitting in an internal queue -- return 202 Accepted with a polling endpoint or a callback mechanism. The sender needs to know whether their alert was dispatched, not just received.
+
+---
+
+## L5 vs. L6 Calibration Table: Failure Models and Partial Failures
+
+| Dimension | L5 (Senior) | L6 (Staff) |
+|-----------|-------------|------------|
+| Failure Taxonomy Fluency | Classifies failures as crash, slow node, network partition, or dependency failure. Can identify the failure type from an incident description and explain why each type requires a different detection and mitigation strategy. | Can classify novel, ambiguous failures into the taxonomy under pressure during a live incident. Teaches the taxonomy to junior engineers. Builds runbooks and playbooks organized by failure type. Identifies when an incident involves multiple failure types simultaneously (as in the AWS S3 case: capacity reduction + retry storm + dependency cascade). |
+| Blast Radius Analysis | Analyzes the blast radius of a proposed change before deploying. Identifies which services depend on the component being changed. Uses a staged rollout to limit blast radius during deploys. | Maintains a live dependency map for foundational services. Designs blast radius containment into new systems at architecture review time. Defines maximum acceptable blast radius as a design constraint. Requires blast radius sign-off from affected team leads before any change to foundational infrastructure. |
+| Circuit Breaker Design | Implements a circuit breaker with configurable thresholds. Knows the three states: closed (normal), open (fast fail), half-open (testing recovery). Can tune error rate threshold and timeout for a specific service pair. | Designs the circuit breaker policy for a service mesh. Decides which metrics trigger the circuit (error rate, latency percentile, or both). Builds the fallback behavior (cache, degraded response, queue-and-retry) rather than just the fast fail. Reviews circuit breaker configurations across the platform for systemic gaps. |
+| Bulkhead Pattern | Implements separate thread pools or connection pools for different workload categories. Knows that shared pools allow one workload to starve another. Can size a bulkhead correctly for a given throughput and latency profile. | Designs the bulkhead topology for multi-tenant systems where one customer's traffic should not impact another's. Defines isolation boundaries between revenue-critical and non-critical workloads. Automates bulkhead enforcement so teams cannot accidentally share resource pools across priority boundaries. |
+| Timeout Selection | Sets timeouts at service boundaries. Knows that no timeout leads to thread accumulation. Uses p99 latency as a baseline for timeout values, not average latency. | Designs timeout budgets across call chains. Knows that a 5-second user-facing timeout with three synchronous downstream calls needs each downstream call to have a budget well under 1.5 seconds. Implements context propagation (deadline propagation) so downstream services know the remaining budget and can fail fast rather than spending time on work that will be cancelled anyway. |
+| Chaos Engineering | Runs chaos experiments in staging. Uses tools like Gremlin or Chaos Monkey to inject crashes and network delays. Reviews experiment results and files tickets for failures. | Designs the chaos engineering program: which failure modes to test, how frequently, in which environments (staging vs. canary production), and how to measure steady-state behavior before and after injection. Governs the program: no new service graduates from beta until it passes a defined chaos test suite. Escalates systemic fragility patterns identified across experiments. |
+| Gray Failure Detection | Knows that gray failures (slow nodes, partial availability) are harder to detect than crashes. Adds p99/p999 latency metrics alongside error rate to health dashboards. Knows that a health check should exercise real code paths, not just return "alive." | Designs the semantic health check system: synthetic end-to-end transactions that exercise the most failure-prone code paths, with results fed back as a first-class health signal. Defines the difference between "process health" and "service health" in on-call runbooks. Adds gray failure detection to SLO dashboards: a service that is slow for 10% of users is failing even if error rate is 0%. |
+| Degradation Budget | Defines an acceptable degraded state for a service (e.g., "search results may be stale for up to 60 seconds during dependency failure"). Implements a fallback that activates when the primary path fails. | Designs the degradation ladder: for a given service, defines what "80% healthy," "60% healthy," and "40% healthy" mean in terms of feature availability, and what triggers automatic activation of each degradation level. Presents the degradation budget to product leadership and gets explicit agreement on what is acceptable. |
+| Health Check Design | Writes health checks that call the primary database, cache, and key upstream dependencies. Returns 503 if any critical dependency is unhealthy. | Designs the health check taxonomy: liveness (is the process alive?), readiness (is it ready to serve traffic?), and deep health (are all dependencies responsive at expected performance?). Prevents the "health check hides failure" anti-pattern (as in the Cloudflare incident) by ensuring the health check exercises the actual request processing path. |
+| Cascade Prevention | Adds rate limiting and timeouts at service boundaries. Knows that a cascade happens when a slow dependency causes resource accumulation upstream. Uses load shedding to drop low-priority requests during overload. | Designs the system's cascade prevention stack: circuit breakers at every synchronous boundary, bulkheads for workload isolation, load shedding with priority-aware policies, and a "brown-out mode" that intentionally degrades non-critical features to protect critical ones. Runs tabletop exercises: "what happens if our primary database slows to 10x normal latency?" and verifies the answer before the scenario occurs in production. |
+| Load Shedding Policy | Implements a simple rate limiter (token bucket or leaky bucket) to cap request rate at a service's capacity. Knows that rejecting 10% of requests is better than degrading all 100% of requests. | Designs the load shedding policy with priority classes: P1 requests are never shed, P2 requests are shed at 80% load, P3 requests are shed at 60% load. Integrates load shedding with the circuit breaker so that shedding activates before the circuit opens. Communicates the shedding policy to dependent teams so they know which of their workloads are P1 vs. P3. |
+| Postmortem Quality | Writes postmortems with clear timelines, root cause analysis, and action items. Assigns owners to action items. Uses the five-whys method to get past surface causes. | Writes postmortems that identify systemic patterns across multiple incidents ("this is the third time in six months that a slow database caused thread pool exhaustion -- the root cause is not the database, it is the absence of circuit breakers as a platform standard"). Escalates the systemic finding to the appropriate owner. Uses postmortem data to prioritize reliability investments. Reviews postmortems from other teams and identifies cross-team learning opportunities. |
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+*Same problem at four levels: your checkout service depends on a payment processor. The payment processor starts responding slowly (3 seconds instead of 200ms). What do you do?*
+
+### Intern Level: "Set a longer timeout"
+
+The intern sees timeouts in the logs. Their fix: increase the timeout from 200ms to 5 seconds. "That should give the payment processor enough time."
+
+Think of this like a student who keeps missing deadlines, so they ask for more time. The deadline extension doesn't fix the root cause (the student's schedule), it just delays the same problem.
+
+With a 5-second timeout: each checkout request now blocks for 5 seconds before failing. At 500 requests/second, 500 threads are blocked waiting. After 5 seconds, 2,500 threads are blocked. Your web server's thread pool is 2,000. You're out of threads. Every new request is rejected -- not because payment is slow, but because checkout ran out of threads. A slow dependency cascaded into a complete service outage.
+
+### Mid-Level (L4): "Add a circuit breaker"
+
+L4 adds a circuit breaker: "If the payment processor fails 50% of requests over 10 seconds, stop calling it. Return a 'payment unavailable' error immediately."
+
+Better. The cascade stops. But: "payment unavailable" is a hard failure. For every user, checkout is completely broken during the circuit open period. For premium users with saved payment methods, can we try an alternative processor? For users with cart <$10, can we allow the order and collect payment async?
+
+L4 protected the system but gave up too much availability.
+
+### Senior (L5): "Tiered degradation, not binary fail/succeed"
+
+L5 builds a degradation ladder:
+
+```
+PAYMENT PROCESSOR HEALTH:
+  Green  (p99 < 200ms):  Normal flow, all payment methods
+  Yellow (p99 200-500ms): Disable 3D Secure (adds 1 round-trip), simplify flow
+  Orange (p99 500ms-2s):  Only saved payment methods (no new card entry), warn user
+  Red    (circuit open):  Offer delayed payment (invoice), premium users only
+
+  Each tier is pre-designed. Not improvised during the incident.
+```
+
+L5 also uses bulkheads: the payment processor gets its own thread pool (20 threads). Checkout's other dependencies (inventory check, user profile) use separate thread pools. If payment exhausts its 20 threads, inventory and profile are unaffected. Checkout can still check inventory and display the product -- just not complete payment.
+
+### Staff (L6): "Failure models have taxonomies -- design defenses for each type"
+
+L6 starts by classifying the failure: "A slow payment processor (3 seconds instead of 200ms) is Failure Type 3: the slow node. This is the WORST failure type because it's indistinguishable from a heavily loaded but healthy system. It doesn't trigger simple dead-node detection. It holds resources (threads, connections) while appearing alive."
+
+L6 designs a detection + response strategy specific to Type 3:
+
+"Detection: track p99 latency per dependency on a 30-second sliding window. Threshold for 'slow node' alert: p99 > 2x baseline for 60 consecutive seconds. This avoids false positives from momentary spikes."
+
+"Response: graduated. At p99 > 400ms: reduce timeout to 400ms and shed 20% of non-critical payment calls. At p99 > 800ms: open circuit for new card entries (highest latency path), keep saved card flow. At p99 > 1500ms: full circuit open, degrade to invoice flow."
+
+"Chaos engineering: we should have tested this exact failure mode before seeing it in production. Monthly game day: inject 3-second latency on the payment processor for 5 minutes. Measure: does the checkout service degrade gracefully? Does the circuit open at the right threshold? Does the thread pool hold?"
+
+```
+L6 FAILURE TAXONOMY -> DEFENSE MATRIX:
+  Type 1 (crash):       Detected fast, retries + failover
+  Type 2 (partition):   Circuit breaker, cached fallback
+  Type 3 (slow node):   p99 monitoring, thread pool isolation, graduated circuit
+  Type 4 (dep failure): Bulkhead, degradation tier, alternative dependency
+  Type 5 (gray):        Distributed tracing, synthetic monitoring, deep health checks
+```
+
+### The Pattern
+
+- Intern: increase timeout (amplifies cascade)
+- L4: circuit breaker (binary fail, too aggressive)
+- L5: degradation ladder + bulkheads (tiered response)
+- L6: failure type taxonomy, p99 detection, chaos engineering to verify design
+
+---
+
+# Homework Exercises: Chapter 25 -- Failure Models and Partial Failures
+
+## Exercise 1: Failure Taxonomy Classification
+
+For each scenario below, identify the failure type (crash, slow node, network partition, dependency failure, gray failure) and the correct immediate response:
+
+a) Redis responds to PING but SET commands take 30 seconds
+b) Service A cannot reach Service B, but Service B is healthy (network partition)
+c) PostgreSQL primary crashes, replica is 5 seconds behind
+d) A downstream payment API returns HTTP 200 but with empty response bodies
+e) CPU on one of 10 web servers is at 100% but it still responds slowly
+f) A CDN edge node serves stale content 48 hours old due to a cache header bug
+
+For each: name the failure type, describe what standard monitoring (CPU/memory/latency dashboards) would show, and design the specific detection mechanism that catches it before customers notice.
+
+---
+
+## Exercise 2: Circuit Breaker Configuration
+
+You have a checkout service calling three dependencies: inventory (critical), payment (critical), recommendations (non-critical, p99=600ms). Design the circuit breaker configuration for each:
+
+- Error rate threshold to open the circuit
+- Minimum request volume before the threshold applies
+- How long the circuit stays open before moving to half-open
+- Half-open probe strategy (how many requests, what success rate to close?)
+- What does checkout return to the user when each circuit is open?
+
+Draw the circuit breaker state machine for the payment dependency in ASCII:
+
+```
+         error rate > threshold
+[CLOSED] ----------------------> [OPEN]
+   ^                                |
+   |                         timer expires
+   |                                v
+   +------- probe succeeds --- [HALF-OPEN]
+            probe fails -> back to [OPEN]
+```
+
+Add the specific numbers (thresholds, timers) for payment and explain your choices.
+
+---
+
+## Exercise 3: Bulkhead Sizing
+
+Your checkout service has a thread pool of 200 threads. It calls four dependencies: payment, inventory, user profile, recommendations. Design the bulkhead allocation:
+
+- How many threads per dependency? (show reasoning: what is each dependency's criticality and p99?)
+- What happens when recommendations exhausts its thread pool -- does it affect payment?
+- At 1000 req/second with p99=200ms per dependency: is 200 total threads enough? (apply Little's Law: L = lambda * W)
+- If recommendations becomes slow (p99=5000ms), how long before its bulkhead fills at 100 req/second calling it?
+
+Show the calculation for Little's Law explicitly.
+
+---
+
+## Exercise 4: Load Shedding Policy
+
+Your API gateway is at 90% CPU. You need to shed 30% of traffic. Design the prioritization policy:
+
+- Which requests get highest priority? (health checks? authenticated? paying customers? admin?)
+- Which requests get shed first? (anonymous? read-only? batch?)
+- How do you detect that you should shed -- what exact signal triggers the policy? (CPU %? queue depth? p99 latency crossing a threshold?)
+- How do you shed gracefully -- what HTTP response do you return and what headers?
+- Design the load shedding as middleware -- list the checks in priority order
+
+```
+Request arrives at gateway
+      |
+      v
+  [Check: is this a health check?] -- yes --> PASS
+      |
+      no
+      v
+  [Check: CPU > 90%?] -- no --> PASS
+      |
+      yes
+      v
+  [Check: ___________] -- ___ --> PASS / SHED
+  ...
+```
+
+Complete the decision tree with at least 4 priority tiers.
+
+---
+
+## Exercise 5: Chaos Engineering Game Day Design
+
+Design a 2-hour chaos engineering game day for a payment service. The service calls: fraud detection, card network, bank API, and notification service.
+
+Specify 3 failure scenarios to inject:
+
+1. Name the failure, where it is injected, for how long
+2. Blast radius limit: maximum acceptable customer impact during this experiment
+3. Success criteria: what observable behavior proves the system handled it correctly?
+4. Rollback: how do you stop the experiment if it goes wrong?
+
+Also specify: what monitoring dashboard (which metrics, which panels) is open during the experiment? Name the person responsible for pulling the rollback trigger.
+
+---
+
+## Exercise 6: System Design -- Resilient Checkout Service
+
+Design a checkout service that handles all three conditions simultaneously:
+- Payment processor is slow (p99 > 2s, sometimes timing out)
+- Inventory service crashes completely
+- Recommendation service is permanently unavailable
+
+Requirements:
+- Checkout must complete for 95% of users even with one dependency down
+- Latency p99 must stay under 3s for the critical path
+- Define degradation tiers explicitly: what does the user see at tier 1, tier 2, tier 3?
+- Draw the ASCII architecture showing circuit breakers, bulkheads, and fallback paths
+
+```
+User Request
+     |
+     v
+[Checkout Service]
+     |
+     +--[bulkhead A]--> [Payment Processor]
+     |                       (circuit breaker: open after 5% errors)
+     |                       fallback: ____
+     |
+     +--[bulkhead B]--> [Inventory Service]
+     |                       (circuit breaker: open after 10% errors)
+     |                       fallback: ____
+     |
+     +--[bulkhead C]--> [Recommendations]
+                             (circuit breaker: open immediately if p99 > 500ms)
+                             fallback: ____
+```
+
+Fill in the fallback strategies and define what "checkout completes" means when each dependency is unavailable.
+
+---

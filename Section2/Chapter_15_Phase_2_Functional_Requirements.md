@@ -1,4 +1,4 @@
-# Chapter 15: Phase 2 — Functional Requirements (Simplified for L6 Preparation)
+# Chapter 15: Phase 2 -- Functional Requirements (Simplified for L6 Preparation)
 
 > **Who this is for:** A recent college graduate preparing for Google Staff Engineer (L6) system design interviews. Every term is defined on first use. Short sentences. First principles always.
 
@@ -7,45 +7,45 @@
 ## Chapter at a Glance
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║        CHAPTER 15 — PHASE 2: FUNCTIONAL REQUIREMENTS AT A GLANCE              ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  CORE IDEA: Functional requirements define WHAT the system does — not HOW.   ║
-║  Every requirement must be testable, traceable, and specific enough to drive  ║
-║  a real architectural decision.                                               ║
-║                                                                               ║
-║  THE REQUIREMENT PATTERN:                                                     ║
-║  "[Actor] can [action] [object] [constraints]"                                ║
-║  "Users can send a text message to any non-blocked user,                      ║
-║   delivered within 5 seconds, up to 4,096 characters."                       ║
-║                                                                               ║
-║  MoSCoW PRIORITY:                                                             ║
-║  Must   → System is broken without it     → Design fully in this session     ║
-║  Should → Significantly improves product  → Note it, defer for time          ║
-║  Could  → Nice to have                    → Out of scope today               ║
-║  Won't  → Explicitly excluded             → State WHY — this shows judgment  ║
-║                                                                               ║
-║  THREE FLOWS to always cover: Read | Write | Control (admin/config)           ║
-║  FAILURE REQUIREMENT FORMAT: "When X fails, the system does Y."               ║
-║                                                                               ║
-║  L5 vs L6 IN ONE LINE:                                                        ║
-║  L5: Lists features. L6: Specifies behaviors with constraints + failure modes.║
-║                                                                               ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|        CHAPTER 15 -- PHASE 2: FUNCTIONAL REQUIREMENTS AT A GLANCE              |
++===============================================================================+
+|                                                                               |
+|  CORE IDEA: Functional requirements define WHAT the system does -- not HOW.   |
+|  Every requirement must be testable, traceable, and specific enough to drive  |
+|  a real architectural decision.                                               |
+|                                                                               |
+|  THE REQUIREMENT PATTERN:                                                     |
+|  "[Actor] can [action] [object] [constraints]"                                |
+|  "Users can send a text message to any non-blocked user,                      |
+|   delivered within 5 seconds, up to 4,096 characters."                       |
+|                                                                               |
+|  MoSCoW PRIORITY:                                                             |
+|  Must   -> System is broken without it     -> Design fully in this session     |
+|  Should -> Significantly improves product  -> Note it, defer for time          |
+|  Could  -> Nice to have                    -> Out of scope today               |
+|  Won't  -> Explicitly excluded             -> State WHY -- this shows judgment  |
+|                                                                               |
+|  THREE FLOWS to always cover: Read | Write | Control (admin/config)           |
+|  FAILURE REQUIREMENT FORMAT: "When X fails, the system does Y."               |
+|                                                                               |
+|  L5 vs L6 IN ONE LINE:                                                        |
+|  L5: Lists features. L6: Specifies behaviors with constraints + failure modes.|
+|                                                                               |
++===============================================================================+
 ```
 
 ---
 
-## Quick Visual: L5 vs L6 — Phase 2 Thinking
+## Quick Visual: L5 vs L6 -- Phase 2 Thinking
 
 | Dimension | L5 (Senior) | L6 (Staff) |
 |-----------|-------------|------------|
 | **Requirement format** | "The system handles messages" | "Users can send a text message to any non-blocked user, delivered within 5 seconds" |
-| **Prioritisation** | All requirements treated as equal | Explicitly: Must / Should / Could / Won't — defends each category |
-| **Failure requirements** | Not mentioned | "When delivery fails: retry 3×, fall back to email, surface error to sender" |
+| **Prioritisation** | All requirements treated as equal | Explicitly: Must / Should / Could / Won't -- defends each category |
+| **Failure requirements** | Not mentioned | "When delivery fails: retry 3x, fall back to email, surface error to sender" |
 | **Operational requirements** | Only end-user features | Includes: "Operators can view delivery success rate; trace any notification end-to-end" |
-| **Scope discipline** | Keeps adding features mid-design | "Analytics is out of scope. I'll make the data model support it — but won't design it." |
+| **Scope discipline** | Keeps adding features mid-design | "Analytics is out of scope. I'll make the data model support it -- but won't design it." |
 | **Flow coverage** | Only read and write flows | Includes control flows: "Operators can disable a channel without a deploy" |
 | **Edge cases** | Handled vaguely ("we'll handle errors") | Explicitly triaged: handle fully / graceful degradation / exclude with reason |
 | **Confirmation** | Moves to design without checking | "Does this requirement set match what you had in mind?" |
@@ -56,11 +56,11 @@
 
 ```mermaid
 flowchart TD
-    A["📋 Functional Requirement\n'Users can send notifications'"] --> B["Defines API shape\nPOST /notifications"]
+    A["[list] Functional Requirement\n'Users can send notifications'"] --> B["Defines API shape\nPOST /notifications"]
     A --> C["Defines data model\nnotification table schema"]
     A --> D["Defines failure behaviour\nRetry / fall back / surface error"]
     A --> E["Defines operational need\nOperators can trace delivery"]
-    B --> F["🏗️ Architecture Decision\nQueue for async delivery\nSeparate critical vs. social pipeline"]
+    B --> F["[build] Architecture Decision\nQueue for async delivery\nSeparate critical vs. social pipeline"]
     C --> F
     D --> F
     E --> F
@@ -89,7 +89,7 @@ flowchart LR
         C2["Operator views delivery metrics"]
         C3["Admin creates notification template"]
     end
-    note["⚠️ L5 engineers forget Control flows.\nL6 engineers always include them."]
+    note["[!] L5 engineers forget Control flows.\nL6 engineers always include them."]
     style note fill:#FFF9C4,color:#333
 ```
 
@@ -106,7 +106,7 @@ By the end of this chapter you will be able to:
 - Prioritize requirements using the MoSCoW method (Must / Should / Could / Won't)
 - Identify core features vs. nice-to-have features and defend your choice
 - Show how functional requirements drive API design and data model design
-- Understand requirements traceability — every design decision must link back to a requirement
+- Understand requirements traceability -- every design decision must link back to a requirement
 - Avoid the three most common mistakes: designing features nobody needs, missing critical workflows, gold-plating
 - Work through four full examples: notification system, URL shortener, ride-sharing, social feed
 - Demonstrate the full L6 "Design Twitter" brainstorming process step by step
@@ -135,7 +135,7 @@ An L5 engineer lists features. They say "the system should send messages, store 
 
 An L6 engineer prioritizes, traces requirements to user needs, and explicitly says what they are NOT building in V1 and why. They sound like this:
 
-> "The core of this system is sending a message and the recipient receiving it. Everything else — reactions, read receipts, search — works without it or enhances it. I will design the core deeply. I will note that reactions and search can be added later without breaking the core architecture. I will not design them unless we have time. Agreed?"
+> "The core of this system is sending a message and the recipient receiving it. Everything else -- reactions, read receipts, search -- works without it or enhances it. I will design the core deeply. I will note that reactions and search can be added later without breaking the core architecture. I will not design them unless we have time. Agreed?"
 
 That is L6 thinking. This chapter will teach you to think that way.
 
@@ -143,11 +143,11 @@ That is L6 thinking. This chapter will teach you to think that way.
 
 Every major design decision in your interview traces back to a requirement:
 
-- **API design** — shaped by what operations users need to perform
-- **Data model** — shaped by what data you need to store and how you need to query it
-- **System components** — shaped by which operations are read-heavy vs write-heavy
-- **Consistency choices** — shaped by how wrong is it if two users see different data
-- **Failure handling** — shaped by what happens if a component goes down
+- **API design** -- shaped by what operations users need to perform
+- **Data model** -- shaped by what data you need to store and how you need to query it
+- **System components** -- shaped by which operations are read-heavy vs write-heavy
+- **Consistency choices** -- shaped by how wrong is it if two users see different data
+- **Failure handling** -- shaped by what happens if a component goes down
 
 If you design the API before defining requirements, you may create endpoints for operations nobody needs. If you design the data model first, you may structure data for queries you will never run.
 
@@ -172,9 +172,9 @@ The key word is *observable*. A functional requirement is something you can see 
 Each of these describes something you can observe and test. Did the message arrive? Yes or no. Can the user see their history? Yes or no.
 
 **What a functional requirement is NOT:**
-- "Messages are stored in Cassandra" — this is an implementation detail (the *how*, not the *what*)
-- "Messages are delivered within 100ms" — this is a non-functional requirement (the *how well*, not the *what*)
-- "The system uses Kafka for async delivery" — again, implementation
+- "Messages are stored in Cassandra" -- this is an implementation detail (the *how*, not the *what*)
+- "Messages are delivered within 100ms" -- this is a non-functional requirement (the *how well*, not the *what*)
+- "The system uses Kafka for async delivery" -- again, implementation
 
 ### 3.2 Functional vs. Non-Functional Requirements
 
@@ -201,7 +201,7 @@ If you learn that search must return results in 200ms (non-functional), you know
 
 These are different decisions. Mixing them up causes confusion. Define the *what* first. Add the *how well* later in Phase 4.
 
-**Mental model:** Think of functional requirements as the menu at a restaurant. They tell you what dishes are available. Non-functional requirements are the quality standards — how fast the food arrives, how fresh the ingredients are, how consistent the preparation is.
+**Mental model:** Think of functional requirements as the menu at a restaurant. They tell you what dishes are available. Non-functional requirements are the quality standards -- how fast the food arrives, how fresh the ingredients are, how consistent the preparation is.
 
 ### 3.3 Stated vs. Implicit Requirements
 
@@ -248,9 +248,9 @@ This matters for interviews because if you bake implementation into requirements
 
 **The test:** Read your requirement out loud. Does it contain the name of a database, a queue, a framework, or a protocol? If yes, strip it out. Replace with the behavior.
 
-- "Store messages in MySQL" → "Store messages durably so they can be retrieved later"
-- "Publish to Kafka" → "Deliver events asynchronously to consumers"
-- "Cache in Redis" → "Return results quickly for repeated queries"
+- "Store messages in MySQL" -> "Store messages durably so they can be retrieved later"
+- "Publish to Kafka" -> "Deliver events asynchronously to consumers"
+- "Cache in Redis" -> "Return results quickly for repeated queries"
 
 ### 3.5 The Requirement Statement Pattern
 
@@ -290,9 +290,9 @@ Not all requirements are equally important. Knowing which ones are core vs. whic
 
 Ask yourself: "If I remove this feature from V1, would users refuse to use the system?"
 
-- If yes → Core
-- If they would use it but complain → Supporting
-- If most would not notice → Nice-to-have
+- If yes -> Core
+- If they would use it but complain -> Supporting
+- If most would not notice -> Nice-to-have
 
 **Example: Messaging system**
 
@@ -316,7 +316,7 @@ If you do not classify, you spread your time across 10 features, none of which a
 
 **The L6 statement:**
 
-"Core features for this design are sending, delivery, and history retrieval. These three are essential. I will design these in detail. Features like reactions, read receipts, and search are supporting — I will note that the data model accommodates them, but I will not design them unless we have time. Voice and video are out of scope. Agreed?"
+"Core features for this design are sending, delivery, and history retrieval. These three are essential. I will design these in detail. Features like reactions, read receipts, and search are supporting -- I will note that the data model accommodates them, but I will not design them unless we have time. Voice and video are out of scope. Agreed?"
 
 ### 3.7 The MoSCoW Method
 
@@ -330,7 +330,7 @@ This is a prioritization framework from product management. It applies perfectly
 
 **Could have (C):** Nice improvement. Low priority. Include only if time allows.
 
-**Won't have (W):** Explicitly excluded. You are making a conscious decision not to build this. Not because it is unimportant — because it is out of scope for this design.
+**Won't have (W):** Explicitly excluded. You are making a conscious decision not to build this. Not because it is unimportant -- because it is out of scope for this design.
 
 **Example: Applying MoSCoW to a notification system**
 
@@ -341,7 +341,7 @@ This is a prioritization framework from product management. It applies perfectly
 | Respect user preferences (opt-out) | M | Legal/trust requirement |
 | Store notification history (inbox) | S | Users expect it; can add in V2 |
 | Aggregate similar notifications | S | Prevents spam; important but not day-1 |
-| Channel fallback (push fails → email) | S | Reliability feature; add in V2 |
+| Channel fallback (push fails -> email) | S | Reliability feature; add in V2 |
 | Delivery analytics (open rates) | C | Nice for product team; not user-facing |
 | A/B testing notification content | W | Separate experimentation platform |
 | Admin UI for managing templates | W | Use API/CLI for now |
@@ -350,7 +350,7 @@ This is a prioritization framework from product management. It applies perfectly
 
 After listing requirements, say:
 
-"Let me apply MoSCoW prioritization. Must-haves are [list]. Should-haves are [list] — I will note them but not design them today. Could-haves I will acknowledge. Won't-haves I am explicitly excluding: [list and reason for each]."
+"Let me apply MoSCoW prioritization. Must-haves are [list]. Should-haves are [list] -- I will note them but not design them today. Could-haves I will acknowledge. Won't-haves I am explicitly excluding: [list and reason for each]."
 
 The "Won't have" column is especially powerful. It shows you have thought about these things and made a deliberate choice, rather than simply forgetting them.
 
@@ -397,7 +397,7 @@ Each answer eliminates a huge swath of design space and lets you focus.
 
 **Step 4: Confirm your understanding**
 
-Once you have asked 3–5 questions, state your understanding and ask for confirmation:
+Once you have asked 3-5 questions, state your understanding and ask for confirmation:
 
 "Based on what you told me, here is what I understand we are building: [summary]. The primary actors are [X, Y]. The core use cases are [A, B, C]. I am explicitly not designing [D, E] because [reason]. Does that match your intent?"
 
@@ -411,21 +411,21 @@ Now that you have scope clarity, list requirements using the MoSCoW method. Stat
 
 Most systems have three types of operations. Organizing your requirements by flow type helps ensure you do not miss anything.
 
-**Read flows** — operations that retrieve data without changing it:
+**Read flows** -- operations that retrieve data without changing it:
 - Load the home feed
 - View conversation history
 - Check current rate limit usage
 - Fetch a user profile
 - Resolve a short URL
 
-**Write flows** — operations that create or modify data:
+**Write flows** -- operations that create or modify data:
 - Post a tweet
 - Send a message
 - Create a short URL
 - Record a click event
 - Update notification preferences
 
-**Control flows** — operations that change how the system behaves or is configured:
+**Control flows** -- operations that change how the system behaves or is configured:
 - Set rate limits per client
 - Enable or disable a feature flag
 - Configure notification routing rules
@@ -460,7 +460,7 @@ If you can answer all three questions confidently, your requirements are complet
 
 ### 3.10 Behavior Specification Pattern
 
-For complex behaviors — especially ones involving conditions — use this pattern:
+For complex behaviors -- especially ones involving conditions -- use this pattern:
 
 **When [trigger condition], the system [action] for [affected entities] according to [rules or constraints].**
 
@@ -489,8 +489,8 @@ This is a concept from software engineering, but it is deeply relevant to interv
 The idea is simple: you should not be designing anything that is not required. If you are about to add a component, an API endpoint, a table, or a cache layer, you should be able to say: "I am adding this because requirement F3 says [X]."
 
 If you cannot trace a design decision to a requirement, either:
-- You are over-engineering (gold-plating) — designing things nobody asked for
-- You have a missing requirement — there is a real need that you forgot to state explicitly
+- You are over-engineering (gold-plating) -- designing things nobody asked for
+- You have a missing requirement -- there is a real need that you forgot to state explicitly
 
 **How to use traceability in interviews:**
 
@@ -508,18 +508,18 @@ This also protects you from scope creep. If someone says "you should also add fu
 
 Not all requirements are equally costly to change later. This is a crucial L6 insight.
 
-**Reversible requirements** — if you get these wrong, they are cheap to fix later:
+**Reversible requirements** -- if you get these wrong, they are cheap to fix later:
 - UI behavior (change a button label, reorder a list)
 - Business logic rules (change the retry count from 3 to 5)
 - Feature flags (turn a feature on or off)
 - Alert thresholds (change from 90% CPU to 85%)
 
-**Irreversible requirements** — if you get these wrong, they are expensive or impossible to fix later:
-- **API contracts** — once external clients use an API, changing it breaks them. You are stuck.
-- **Data model** — once you store data in a particular schema, migrating it is expensive and risky.
-- **Consistency model** — if you build on eventual consistency and later need strong consistency, you have to redesign.
-- **Public URL structure** — once short URLs are distributed, you cannot change their format.
-- **Encryption** — once you store data unencrypted, adding encryption requires migrating all existing data.
+**Irreversible requirements** -- if you get these wrong, they are expensive or impossible to fix later:
+- **API contracts** -- once external clients use an API, changing it breaks them. You are stuck.
+- **Data model** -- once you store data in a particular schema, migrating it is expensive and risky.
+- **Consistency model** -- if you build on eventual consistency and later need strong consistency, you have to redesign.
+- **Public URL structure** -- once short URLs are distributed, you cannot change their format.
+- **Encryption** -- once you store data unencrypted, adding encryption requires migrating all existing data.
 
 **Why this matters:**
 
@@ -573,13 +573,13 @@ This matters because failure behavior is often what determines whether users tru
 
 For every important edge case you identify, you need to make a decision about how to handle it. There are exactly three options:
 
-**Option 1: Handle fully** — design a complete solution for this edge case.
+**Option 1: Handle fully** -- design a complete solution for this edge case.
 Use this when: the edge case is frequent OR the consequences of not handling it are severe.
 
-**Option 2: Handle gracefully** — provide degraded but acceptable behavior.
+**Option 2: Handle gracefully** -- provide degraded but acceptable behavior.
 Use this when: the edge case is rare but should not crash the system. Users get a worse experience but the system keeps running.
 
-**Option 3: Exclude explicitly** — state that this case is out of scope.
+**Option 3: Exclude explicitly** -- state that this case is out of scope.
 Use this when: the edge case is very rare OR handling it would add disproportionate complexity.
 
 The important word in option 3 is *explicitly*. You are not ignoring the edge case. You are consciously deciding not to handle it and saying so out loud. This is very different from not having thought about it.
@@ -605,16 +605,16 @@ Scope boundaries define what you are responsible for and what you are not. Clear
 
 There are four types of scope boundaries:
 
-**Functional boundaries** — which features are in vs. out:
+**Functional boundaries** -- which features are in vs. out:
 "I am designing message delivery. I am not designing message search or message translation."
 
-**User boundaries** — which users you are designing for:
+**User boundaries** -- which users you are designing for:
 "I am designing for end consumers. I am not designing the admin portal."
 
-**Scale boundaries** — what scale range you are addressing:
-"I am designing for 1–10 million users at launch. I am not designing for a billion users on day one."
+**Scale boundaries** -- what scale range you are addressing:
+"I am designing for 1-10 million users at launch. I am not designing for a billion users on day one."
 
-**Integration boundaries** — what you assume exists vs. what you are building:
+**Integration boundaries** -- what you assume exists vs. what you are building:
 "I am assuming authentication exists. I am not designing the auth system."
 
 **How to state scope clearly:**
@@ -640,7 +640,7 @@ Mental models are simplified ways of thinking about something. When you are in a
 
 **Requirements = the menu at a restaurant.**
 
-The menu tells you what dishes are available. That is the functional requirement — what you can order.
+The menu tells you what dishes are available. That is the functional requirement -- what you can order.
 
 The quality standards tell you how fast food arrives, how fresh the ingredients are, how consistently it is prepared. Those are non-functional requirements.
 
@@ -664,19 +664,19 @@ A contract says: "If you use this system, here is what it will do." It does not 
 
 Once a contract is signed, it is expensive to change. This is why you should be precise about API contracts and data model requirements. They are the binding clauses.
 
-Other requirements are more like expectations — important but renegotiable.
+Other requirements are more like expectations -- important but renegotiable.
 
 ### Mental Model 4: The "Why Would a User Notice?" Test
 
 For every potential requirement, ask: "If this capability was missing, would a user notice?"
 
-If yes → it is probably a requirement.
-If no → it is probably an implementation detail.
+If yes -> it is probably a requirement.
+If no -> it is probably an implementation detail.
 
-"The system uses Cassandra" — would a user notice? No. Not a requirement.
-"The system stores messages" — would a user notice if messages disappeared? Yes. It is a requirement.
-"The system partitions data by user ID" — would a user notice? No. Implementation detail.
-"The system retrieves messages by conversation" — would a user notice if this was slow? Yes. It is a requirement.
+"The system uses Cassandra" -- would a user notice? No. Not a requirement.
+"The system stores messages" -- would a user notice if messages disappeared? Yes. It is a requirement.
+"The system partitions data by user ID" -- would a user notice? No. Implementation detail.
+"The system retrieves messages by conversation" -- would a user notice if this was slow? Yes. It is a requirement.
 
 ### Mental Model 5: The "What Does Done Look Like?" Test
 
@@ -684,17 +684,17 @@ For each requirement, ask: "How would I know if the system satisfies this requir
 
 If you cannot describe a test, the requirement is too vague.
 
-"System handles messages" — how would you test this? You cannot. Too vague.
+"System handles messages" -- how would you test this? You cannot. Too vague.
 
-"Users can send a text message to another user and the recipient receives it within 5 seconds" — you can absolutely test this. Send a message, measure delivery time. This is a good requirement.
+"Users can send a text message to another user and the recipient receives it within 5 seconds" -- you can absolutely test this. Send a message, measure delivery time. This is a good requirement.
 
 ### Mental Model 6: Reversible vs. Irreversible Traffic Light
 
 When you encounter a requirement decision, mentally assign a color:
 
-- **Green** (reversible) — decide quickly, move on, tune later
-- **Yellow** (somewhat irreversible) — spend a bit more time, make sure your choice is reasonable
-- **Red** (irreversible) — stop, think carefully, confirm with interviewer
+- **Green** (reversible) -- decide quickly, move on, tune later
+- **Yellow** (somewhat irreversible) -- spend a bit more time, make sure your choice is reasonable
+- **Red** (irreversible) -- stop, think carefully, confirm with interviewer
 
 API contracts and data model schema: RED.
 Retry counts and timeout values: GREEN.
@@ -705,7 +705,7 @@ Error message wording: GREEN.
 
 ### Mental Model 7: The Core Circle
 
-Draw a mental circle around your system. Inside the circle are core requirements — essential to the system's purpose. Outside the circle are supporting features and nice-to-haves.
+Draw a mental circle around your system. Inside the circle are core requirements -- essential to the system's purpose. Outside the circle are supporting features and nice-to-haves.
 
 The design of the inside of the circle is your primary job. The design of the outside should not interfere with the inside.
 
@@ -717,19 +717,19 @@ If outside, it gets mentioned but not designed in detail.
 
 ---
 
-## Quick Reference Card — Phase 2 Functional Requirements
+## Quick Reference Card -- Phase 2 Functional Requirements
 
 ### Requirement Writing Checklist
 
-| Check | The test | ☐ |
+| Check | The test | [ ] |
 |-------|---------|---|
-| **Actor specified** | Does the requirement name who performs the action? | ☐ |
-| **Action is concrete** | Can you implement and test this action? | ☐ |
-| **Constraints present** | Are there limits (size, time, count, format)? | ☐ |
-| **Failure covered** | Does it say what happens when it fails? | ☐ |
-| **Not implementation** | Does it say WHAT, not HOW? (no technology names) | ☐ |
-| **Traceable to user** | Can you link this requirement to a user need from Phase 1? | ☐ |
-| **Testable** | Could a QA engineer write a test for this? | ☐ |
+| **Actor specified** | Does the requirement name who performs the action? | [ ] |
+| **Action is concrete** | Can you implement and test this action? | [ ] |
+| **Constraints present** | Are there limits (size, time, count, format)? | [ ] |
+| **Failure covered** | Does it say what happens when it fails? | [ ] |
+| **Not implementation** | Does it say WHAT, not HOW? (no technology names) | [ ] |
+| **Traceable to user** | Can you link this requirement to a user need from Phase 1? | [ ] |
+| **Testable** | Could a QA engineer write a test for this? | [ ] |
 
 ---
 
@@ -742,7 +742,7 @@ If outside, it gets mentioned but not designed in detail.
 | Notification | "Notification services can submit an event with recipient ID, channel, and content. Delivered within 5 seconds for standard; within 30 seconds for bulk." | Actor named, constraints specific, different SLAs by type |
 | URL shortener | "Users can create a short URL from any valid HTTP/HTTPS URL. Short key generated within 200ms. Long URL up to 2,048 characters." | Timeout specified, input constraints explicit |
 | Messaging | "Authenticated users can send a text message to any non-blocked user. Message delivered within 3 seconds. Up to 4,096 characters. Message persisted for 1 year." | Auth requirement, block check, size limit, retention |
-| Rate limiter | "System rejects requests from a client that exceeds the configured rate. Returns 429 with Retry-After header. Accuracy within ±5% of configured limit." | What rejection looks like, accuracy tolerance |
+| Rate limiter | "System rejects requests from a client that exceeds the configured rate. Returns 429 with Retry-After header. Accuracy within +/-5% of configured limit." | What rejection looks like, accuracy tolerance |
 
 ---
 
@@ -750,7 +750,7 @@ If outside, it gets mentioned but not designed in detail.
 
 | Priority | When to assign | Language to use in interview |
 |----------|---------------|------------------------------|
-| **Must (Core)** | Without this, the product has no value | "This is core — the product is useless without it. I'll design it fully." |
+| **Must (Core)** | Without this, the product has no value | "This is core -- the product is useless without it. I'll design it fully." |
 | **Should (Important)** | Significantly improves but product still works without | "This is important. I'll make sure the data model supports it. I won't design the full flow today." |
 | **Could (Nice-to-have)** | Would be pleasant, rarely affects core value | "This is nice-to-have. I'm setting it aside. It shouldn't affect the architecture." |
 | **Won't (Out of scope)** | Not in this design session, with a reason | "I'm explicitly excluding analytics. Here's why: it requires a separate data pipeline with different consistency requirements. Agreed?" |
@@ -763,7 +763,7 @@ If outside, it gets mentioned but not designed in detail.
 |-----------|---------------|-----------------|-----------------|
 | **Read flows** | How users retrieve data | View feed, get notification history, check delivery status | Rarely forgotten |
 | **Write flows** | How data is created or changed | Send message, update preferences, submit notification event | Rarely forgotten |
-| **Control flows** | How operators configure and manage | Disable a channel, view delivery metrics, bulk retry failed notifications | **Frequently forgotten — L6 always includes** |
+| **Control flows** | How operators configure and manage | Disable a channel, view delivery metrics, bulk retry failed notifications | **Frequently forgotten -- L6 always includes** |
 
 ---
 
@@ -778,7 +778,7 @@ When [requirement] fails because [failure condition]:
 - Recovery: [how it recovers]
 ```
 
-**Example — notification delivery:**
+**Example -- notification delivery:**
 ```
 When notification delivery fails because the push service is unavailable:
 - The system retries 3 times with exponential backoff (1s, 3s, 9s)
@@ -789,17 +789,17 @@ When notification delivery fails because the push service is unavailable:
 
 ---
 
-### Common Mistakes — Weak vs Strong
+### Common Mistakes -- Weak vs Strong
 
-| Signal | ❌ Weak (L5 pattern) | ✅ Strong (L6 pattern) | ☐ |
+| Signal | [X] Weak (L5 pattern) | [Y] Strong (L6 pattern) | [ ] |
 |--------|---------------------|----------------------|---|
-| **Vague requirements** | "System handles notifications" | "Services can submit a notification; system delivers within 5s" | ☐ |
-| **No prioritisation** | Treats all 12 features equally | "Must: submit, deliver. Should: preferences. Out of scope: analytics." | ☐ |
-| **No failure requirements** | Only the happy path designed | "When delivery fails: retry 3×, fall back, surface error to sender" | ☐ |
-| **Missing control flows** | Only user-facing features | "Operators can disable a channel without a code deploy" | ☐ |
-| **Implementation in requirements** | "Store in Cassandra" | "Message delivered within 3 seconds" (the how is a design decision) | ☐ |
-| **No scope confirmation** | Moves to design without checking | "Does this requirement set match what you had in mind?" | ☐ |
-| **Edge cases vague** | "We'll handle errors" | "Empty recipient list: return 400 immediately. Duplicate idempotency key: return original response, no re-delivery." | ☐ |
+| **Vague requirements** | "System handles notifications" | "Services can submit a notification; system delivers within 5s" | [ ] |
+| **No prioritisation** | Treats all 12 features equally | "Must: submit, deliver. Should: preferences. Out of scope: analytics." | [ ] |
+| **No failure requirements** | Only the happy path designed | "When delivery fails: retry 3x, fall back, surface error to sender" | [ ] |
+| **Missing control flows** | Only user-facing features | "Operators can disable a channel without a code deploy" | [ ] |
+| **Implementation in requirements** | "Store in Cassandra" | "Message delivered within 3 seconds" (the how is a design decision) | [ ] |
+| **No scope confirmation** | Moves to design without checking | "Does this requirement set match what you had in mind?" | [ ] |
+| **Edge cases vague** | "We'll handle errors" | "Empty recipient list: return 400 immediately. Duplicate idempotency key: return original response, no re-delivery." | [ ] |
 
 ---
 
@@ -814,7 +814,7 @@ In this section we work through four complete examples. For each, we start from 
 **Step 1: Ask clarifying questions**
 
 - "What types of notifications? Push, email, SMS, or all?"
-- "Who sends notifications — users to each other, or internal services to users?"
+- "Who sends notifications -- users to each other, or internal services to users?"
 - "What triggers a notification? User actions? System events?"
 - "Do users need to manage their preferences?"
 - "Do we need a notification history/inbox?"
@@ -828,9 +828,9 @@ In this section we work through four complete examples. For each, we start from 
 
 **Step 2: Identify actors**
 
-- **Services** — submit notification requests
-- **Users** — receive notifications, manage preferences, view history
-- **Operators** — configure routing, view metrics, handle incidents
+- **Services** -- submit notification requests
+- **Users** -- receive notifications, manage preferences, view history
+- **Operators** -- configure routing, view metrics, handle incidents
 
 **Step 3: Apply MoSCoW**
 
@@ -878,12 +878,12 @@ Control flows:
 
 | Edge Case | Decision |
 |---|---|
-| Recipient is offline when push is sent | Handle fully — FCM/APNs queue for up to 28 days |
-| User has disabled all channels | Handle fully — accept notification, store in inbox, do not deliver via any channel |
-| Preference lookup fails | Handle gracefully — use cached preferences; if no cache, use defaults (all channels on) |
-| Duplicate notification submitted | Handle fully — deduplicate by idempotency key; return success |
-| Invalid recipient ID | Handle fully — reject with error; log for debugging |
-| Very high volume from one service (viral event) | Handle gracefully — rate limit fan-out per service; queue overflow |
+| Recipient is offline when push is sent | Handle fully -- FCM/APNs queue for up to 28 days |
+| User has disabled all channels | Handle fully -- accept notification, store in inbox, do not deliver via any channel |
+| Preference lookup fails | Handle gracefully -- use cached preferences; if no cache, use defaults (all channels on) |
+| Duplicate notification submitted | Handle fully -- deduplicate by idempotency key; return success |
+| Invalid recipient ID | Handle fully -- reject with error; log for debugging |
+| Very high volume from one service (viral event) | Handle gracefully -- rate limit fan-out per service; queue overflow |
 
 **Step 6: State requirements with the pattern**
 
@@ -927,9 +927,9 @@ Out of scope:
 
 **Step 2: Identify actors**
 
-- **Anonymous users** — create short URLs, follow redirects
-- **Registered users** — create, manage, and view analytics for their URLs
-- **Operators** — manage blocklists, view platform metrics
+- **Anonymous users** -- create short URLs, follow redirects
+- **Registered users** -- create, manage, and view analytics for their URLs
+- **Operators** -- manage blocklists, view platform metrics
 
 **Step 3: Apply MoSCoW**
 
@@ -975,20 +975,20 @@ Control flows:
 
 | Edge Case | Decision |
 |---|---|
-| Short key collision (auto-generated key already exists) | Handle fully — retry with a new key (up to N times) |
-| Custom key already taken | Handle fully — return error with suggestion |
-| Long URL is malicious (known malware) | Handle fully — check against blocklist at creation; reject |
-| Very long URL (over 2048 characters) | Handle fully — enforce limit; return clear error |
-| Short URL does not exist | Handle fully — return 404 with helpful message |
-| Short URL is expired | Handle fully — return 410 Gone with message |
-| Same long URL submitted twice | Handle gracefully — return existing short URL (deduplication optional, document behavior) |
-| Click recorded but storage temporarily down | Handle gracefully — deliver redirect; queue click event for retry |
+| Short key collision (auto-generated key already exists) | Handle fully -- retry with a new key (up to N times) |
+| Custom key already taken | Handle fully -- return error with suggestion |
+| Long URL is malicious (known malware) | Handle fully -- check against blocklist at creation; reject |
+| Very long URL (over 2048 characters) | Handle fully -- enforce limit; return clear error |
+| Short URL does not exist | Handle fully -- return 404 with helpful message |
+| Short URL is expired | Handle fully -- return 410 Gone with message |
+| Same long URL submitted twice | Handle gracefully -- return existing short URL (deduplication optional, document behavior) |
+| Click recorded but storage temporarily down | Handle gracefully -- deliver redirect; queue click event for retry |
 
-**Step 6: Key irreversible requirement — URL format**
+**Step 6: Key irreversible requirement -- URL format**
 
 The format of short URLs is irreversible. Once you publish URLs to users, they are embedded in emails, tweets, printed on business cards. You cannot change the format.
 
-State this explicitly: "The short URL format is irreversible. I will define it clearly: [domain]/[key] where key is 7–10 alphanumeric characters. I will confirm this before proceeding."
+State this explicitly: "The short URL format is irreversible. I will define it clearly: [domain]/[key] where key is 7-10 alphanumeric characters. I will confirm this before proceeding."
 
 ---
 
@@ -1015,9 +1015,9 @@ This is a broad prompt. The interviewer probably wants to focus on one part of i
 
 **Step 2: Identify actors and their core journeys**
 
-- **Rider** — request a ride, get matched with a driver, track the driver, complete the ride
-- **Driver** — go online, get matched with a rider, navigate to pickup, complete the ride
-- **Operator** — monitor active rides, handle disputes
+- **Rider** -- request a ride, get matched with a driver, track the driver, complete the ride
+- **Driver** -- go online, get matched with a rider, navigate to pickup, complete the ride
+- **Operator** -- monitor active rides, handle disputes
 
 **Step 3: Apply MoSCoW**
 
@@ -1072,12 +1072,12 @@ Control flows:
 
 | Edge Case | Decision |
 |---|---|
-| No drivers available | Handle fully — inform rider; show estimated wait time |
-| Driver goes offline mid-ride | Handle fully — attempt to re-match; rider is informed |
-| Rider cancels after driver is en route | Handle gracefully — cancellation fee; notify driver |
-| Driver cancels before pickup | Handle fully — re-match with different driver |
-| GPS location stale (driver's phone offline) | Handle gracefully — use last known position; mark as stale |
-| Rider and driver disagree on pickup location | Exclude explicitly — handled by support; not designed here |
+| No drivers available | Handle fully -- inform rider; show estimated wait time |
+| Driver goes offline mid-ride | Handle fully -- attempt to re-match; rider is informed |
+| Rider cancels after driver is en route | Handle gracefully -- cancellation fee; notify driver |
+| Driver cancels before pickup | Handle fully -- re-match with different driver |
+| GPS location stale (driver's phone offline) | Handle gracefully -- use last known position; mark as stale |
+| Rider and driver disagree on pickup location | Exclude explicitly -- handled by support; not designed here |
 
 ---
 
@@ -1202,7 +1202,7 @@ Now you have a full list. Apply MoSCoW.
 - DMs (separate system entirely)
 - Ads (separate ad platform)
 - Advanced analytics
-- Media (images, video) — text only for V1
+- Media (images, video) -- text only for V1
 - Twitter Blue / verification tiers
 - For You page / algorithmic recommendations (V1 is reverse-chronological)
 
@@ -1238,7 +1238,7 @@ That requirement, combined with the scale (millions of followers), creates the i
 
 **Step 6: State what you are not building and why (L6 behavior)**
 
-"I am explicitly not designing DMs because they are a separate messaging system with different requirements. I am not designing ads because they require a separate platform. For V1, I am using reverse-chronological feed, not algorithmic recommendations, to keep the scope manageable. I am not designing media support — text only. These exclusions let me focus on the interesting problem: at-scale feed delivery for accounts with millions of followers."
+"I am explicitly not designing DMs because they are a separate messaging system with different requirements. I am not designing ads because they require a separate platform. For V1, I am using reverse-chronological feed, not algorithmic recommendations, to keep the scope manageable. I am not designing media support -- text only. These exclusions let me focus on the interesting problem: at-scale feed delivery for accounts with millions of followers."
 
 This is L6 behavior. You know what you are cutting. You have reasons. You say it out loud.
 
@@ -1269,7 +1269,7 @@ These conflict at scale because:
 ### Trade-off 2: Consistency vs. Availability in Rate Limiting
 
 **Conflict:**
-- Requirement A: "Rate limits are accurate to within ±1%"
+- Requirement A: "Rate limits are accurate to within +/-1%"
 - Requirement B: "The rate limiter is always available (never blocks requests due to its own failure)"
 
 These conflict because:
@@ -1280,7 +1280,7 @@ These conflict because:
 
 **Resolution:**
 
-"For most APIs, ±5% accuracy is acceptable. I will use local sliding window counters that sync periodically. If the sync fails, I fail-open (allow the request) because availability is more important than precision. For high-stakes APIs (payments, authentication), I will add a flag that uses synchronous coordination accepting the availability trade-off."
+"For most APIs, +/-5% accuracy is acceptable. I will use local sliding window counters that sync periodically. If the sync fails, I fail-open (allow the request) because availability is more important than precision. For high-stakes APIs (payments, authentication), I will add a flag that uses synchronous coordination accepting the availability trade-off."
 
 ### Trade-off 3: Feed Freshness vs. Compute Cost
 
@@ -1294,7 +1294,7 @@ These conflict because:
 
 **Resolution:**
 
-"I will cache pre-computed feeds for most users. The feed is recomputed when a new tweet is posted to their timeline (fan-out on write). For users who follow accounts with millions of followers (celebrities), I will use fan-out on read at query time to avoid the prohibitive write fan-out. The staleness is bounded — users see new tweets within 30 seconds of publication. This is acceptable for V1."
+"I will cache pre-computed feeds for most users. The feed is recomputed when a new tweet is posted to their timeline (fan-out on write). For users who follow accounts with millions of followers (celebrities), I will use fan-out on read at query time to avoid the prohibitive write fan-out. The staleness is bounded -- users see new tweets within 30 seconds of publication. This is acceptable for V1."
 
 ### Trade-off 4: Simplicity vs. Flexibility in Requirements
 
@@ -1320,7 +1320,7 @@ This is a trade-off that is unique to interviews.
 
 **Resolution:**
 
-"I will explicitly name the features that exist but are out of scope, and state why. This demonstrates breadth. Then I will go deep on the core. This demonstrates depth. The combination shows both breadth of knowledge and focused execution — which is exactly what a Staff Engineer does."
+"I will explicitly name the features that exist but are out of scope, and state why. This demonstrates breadth. Then I will go deep on the core. This demonstrates depth. The combination shows both breadth of knowledge and focused execution -- which is exactly what a Staff Engineer does."
 
 ---
 
@@ -1331,11 +1331,11 @@ This is a trade-off that is unique to interviews.
 **L5 Answer:** "Functional requirements are what the system does. Non-functional requirements are how well it does it, like performance and availability."
 
 **L6 Answer:**
-"Functional requirements describe observable behaviors of the system. They are testable — you can verify whether the system satisfies them by observing the system from the outside. For example: 'Users can send messages to other users' is a functional requirement. You can test it: open the app, send a message, verify it arrives.
+"Functional requirements describe observable behaviors of the system. They are testable -- you can verify whether the system satisfies them by observing the system from the outside. For example: 'Users can send messages to other users' is a functional requirement. You can test it: open the app, send a message, verify it arrives.
 
-Non-functional requirements describe qualities of those behaviors — speed, reliability, security, scalability. 'Messages are delivered within 1 second' is non-functional. It is not about what the system does; it is about how well it does it.
+Non-functional requirements describe qualities of those behaviors -- speed, reliability, security, scalability. 'Messages are delivered within 1 second' is non-functional. It is not about what the system does; it is about how well it does it.
 
-The distinction matters because they drive different design decisions. Functional requirements drive what components you build. Non-functional requirements drive how you build them — what technologies you choose, how you scale, where you put caches.
+The distinction matters because they drive different design decisions. Functional requirements drive what components you build. Non-functional requirements drive how you build them -- what technologies you choose, how you scale, where you put caches.
 
 In Phase 2 of the interview I focus purely on functional requirements. I defer non-functional requirements to Phase 4. This keeps the conversation focused."
 
@@ -1369,13 +1369,13 @@ This process takes 5 to 8 minutes. It saves 20 minutes of misdirected design."
 **L6 Answer:**
 "MoSCoW is a prioritization framework from product management that maps perfectly onto system design scope decisions.
 
-Must have — the system cannot function without these. They are non-negotiable for V1. If any of these fail, the system is broken.
+Must have -- the system cannot function without these. They are non-negotiable for V1. If any of these fail, the system is broken.
 
-Should have — important but not critical. The system works without them in a diminished way. High priority for V2 but can be deferred.
+Should have -- important but not critical. The system works without them in a diminished way. High priority for V2 but can be deferred.
 
-Could have — nice-to-have improvements. Low priority. Include only if time allows and core is solid.
+Could have -- nice-to-have improvements. Low priority. Include only if time allows and core is solid.
 
-Won't have — explicitly excluded. This is the most powerful column. I am not forgetting these; I am making a conscious decision to exclude them. I state reasons: 'A/B testing is out of scope because it requires a separate experimentation platform,' or 'DMs are out of scope because they are a different system with different requirements.'
+Won't have -- explicitly excluded. This is the most powerful column. I am not forgetting these; I am making a conscious decision to exclude them. I state reasons: 'A/B testing is out of scope because it requires a separate experimentation platform,' or 'DMs are out of scope because they are a different system with different requirements.'
 
 The Won't-have column shows L6 judgment. Any engineer can add features. It takes a Staff Engineer to say 'we are not building X because Y, and this is the right call for V1.'
 
@@ -1413,7 +1413,7 @@ It matters for two reasons.
 
 First, it keeps you from wasting design time. In a 45-minute interview, if you are designing a component that does not serve any requirement, you are using time you need for the core.
 
-Second, it creates a defensible design. When the interviewer asks 'why did you add a separate notification inbox service?' I can say: 'Requirement F4 says users can view their notification history. The access pattern for history — paginated reads by user, reverse-chronological — is very different from the access pattern for delivery — high-throughput sequential processing. Separating them lets each be optimized independently.' That is a requirement-traced answer.
+Second, it creates a defensible design. When the interviewer asks 'why did you add a separate notification inbox service?' I can say: 'Requirement F4 says users can view their notification history. The access pattern for history -- paginated reads by user, reverse-chronological -- is very different from the access pattern for delivery -- high-throughput sequential processing. Separating them lets each be optimized independently.' That is a requirement-traced answer.
 
 In an interview, I make this explicit: 'I am adding X because requirement Y requires it.' When I find myself adding something I cannot trace to a requirement, I stop and ask: is this implicit and I should state it? Or is it gold-plating I should cut?"
 
@@ -1426,7 +1426,7 @@ In an interview, I make this explicit: 'I am adding X because requirement Y requ
 **L6 Answer:**
 "Core functionality is functionality without which the system has no value. If core functionality is absent, users do not use the system. It is the primary reason the system exists.
 
-Supporting functionality enhances the system but is not essential to its basic operation. The system works without it — just in a diminished way. Users notice its absence but can still accomplish their primary goal.
+Supporting functionality enhances the system but is not essential to its basic operation. The system works without it -- just in a diminished way. Users notice its absence but can still accomplish their primary goal.
 
 Example: messaging system.
 
@@ -1572,7 +1572,7 @@ Edge cases:
 
 - Unknown client: apply configurable default limits or reject (operator's choice)
 - Limit changed mid-window: new limit applies to new window; current window uses old limit
-- Distributed counter inconsistency: allow slight over-limit (documented tolerance of ±5%) in exchange for availability
+- Distributed counter inconsistency: allow slight over-limit (documented tolerance of +/-5%) in exchange for availability
 - Limit set to zero: reject all requests with clear error
 
 Failure requirements:
@@ -1597,9 +1597,9 @@ Out of scope:
 
 First: propose and confirm. Rather than asking open-ended questions ('What do you want?'), I propose a specific scope and ask for agreement. 'I propose we design the tweet creation and home feed generation. I would exclude DMs and search. Does that scope work?' This is faster and shows initiative.
 
-Second: explain my reasoning. When I exclude something, I say why. 'I am excluding algorithmic recommendations because that requires ML infrastructure — a separate system. V1 uses reverse-chronological. This is what Twitter actually launched with. Agreed?' The interviewer may push back, which is fine — that is valuable signal about what they actually care about.
+Second: explain my reasoning. When I exclude something, I say why. 'I am excluding algorithmic recommendations because that requires ML infrastructure -- a separate system. V1 uses reverse-chronological. This is what Twitter actually launched with. Agreed?' The interviewer may push back, which is fine -- that is valuable signal about what they actually care about.
 
-Third: confirm before irreversible decisions. When I am about to make a decision that is hard to change — API contract, data model, consistency model — I state it explicitly and ask: 'Before I commit to this data model, does the requirement to support retrieval by conversation (not by user) sound right to you?' This prevents designing the wrong thing for 20 minutes.
+Third: confirm before irreversible decisions. When I am about to make a decision that is hard to change -- API contract, data model, consistency model -- I state it explicitly and ask: 'Before I commit to this data model, does the requirement to support retrieval by conversation (not by user) sound right to you?' This prevents designing the wrong thing for 20 minutes.
 
 The goal of negotiation is alignment. I want to spend my 35 minutes of design time on exactly what the interviewer finds interesting. The 5 minutes spent negotiating upfront is the best investment in the interview."
 
@@ -1647,7 +1647,7 @@ If I mix requirements and architecture decisions, I make implementation choices 
 - Premature commitment to technologies that may not be optimal
 - Harder conversations when the interviewer wants to go a different direction
 
-The sequence should be: finish requirements → then make architecture decisions that satisfy those requirements. Every architecture decision should be traceable to a requirement."
+The sequence should be: finish requirements -> then make architecture decisions that satisfy those requirements. Every architecture decision should be traceable to a requirement."
 
 ---
 
@@ -1656,7 +1656,7 @@ The sequence should be: finish requirements → then make architecture decisions
 **L5 Answer:** "A Staff Engineer goes deeper and considers more edge cases."
 
 **L6 Answer:**
-"The difference is not just depth — it is the quality of judgment and the things that get explicit attention.
+"The difference is not just depth -- it is the quality of judgment and the things that get explicit attention.
 
 L5 typically:
 - Lists features without prioritization
@@ -1707,7 +1707,7 @@ This is L6 thinking: not just accepting the conflict but finding a creative reso
 **L5 Answer:** "Operational requirements are about monitoring and keeping the system running."
 
 **L6 Answer:**
-"Operational requirements define what operators — SREs, on-call engineers, platform teams — need to do with the system. They are first-class functional requirements, not afterthoughts.
+"Operational requirements define what operators -- SREs, on-call engineers, platform teams -- need to do with the system. They are first-class functional requirements, not afterthoughts.
 
 They cover four areas:
 
@@ -1725,13 +1725,13 @@ An L6 engineer states these upfront: 'Beyond user-facing requirements, I have op
 
 ---
 
-## 8. Key Takeaways — L5 vs. L6
+## 8. Key Takeaways -- L5 vs. L6
 
 ### The Contrast in One Table
 
 | Aspect | L5 (Senior) Behavior | L6 (Staff) Behavior |
 |---|---|---|
-| **Specificity** | "System handles notifications" | "[Actor] can [action] [object] [constraints]" — precise and testable |
+| **Specificity** | "System handles notifications" | "[Actor] can [action] [object] [constraints]" -- precise and testable |
 | **Prioritization** | Lists all features without priority | Applies MoSCoW; core vs. supporting stated explicitly |
 | **Exclusions** | Implicitly omits things | Explicitly states Won't-have column with reasons |
 | **Edge cases** | Happy path + maybe a few if asked | Systematic edge case triage: full/graceful/exclude |
@@ -1754,15 +1754,15 @@ The following is a complete dialogue showing L6 behavior during Phase 2. Read th
 
 **L6 Candidate:** "Before I start listing requirements, let me ask a few clarifying questions to make sure I am designing the right system.
 
-First — who sends notifications? Is this user-to-user (one user notifying another) or services-to-user (internal services generating system notifications based on events)?
+First -- who sends notifications? Is this user-to-user (one user notifying another) or services-to-user (internal services generating system notifications based on events)?
 
-Second — what channels do we need? Push only, or also email and SMS?
+Second -- what channels do we need? Push only, or also email and SMS?
 
-Third — do users need to manage their preferences? For example, opt out of certain notification types or certain channels?
+Third -- do users need to manage their preferences? For example, opt out of certain notification types or certain channels?
 
-Fourth — do we need a notification inbox, where users can see their notification history?
+Fourth -- do we need a notification inbox, where users can see their notification history?
 
-Fifth — roughly what scale? How many notifications per day?"
+Fifth -- roughly what scale? How many notifications per day?"
 
 **Interviewer:** "Services to users. Push, email, and SMS. Yes, users manage preferences. Yes, we need an inbox. About 500 million notifications per day."
 
@@ -1787,7 +1787,7 @@ Let me apply MoSCoW prioritization.
 - Delivery analytics (open rates, click-throughs)
 - Scheduled delivery (deliver at a specific time)
 
-**Won't have** — and here is my reasoning for each:
+**Won't have** -- and here is my reasoning for each:
 - Notification content creation: this is the responsibility of the calling service. We accept structured data; we do not author messages.
 - Push and email infrastructure: we use FCM, APNs, and SendGrid. We are not building those.
 - A/B testing notification content: requires a separate experimentation platform; out of scope.
@@ -1795,13 +1795,13 @@ Let me apply MoSCoW prioritization.
 
 Now let me add the failure requirements, because I think this is important:
 
-For the core delivery requirement — when push delivery fails, the system retries three times with exponential backoff, then falls back to email if the user has it enabled. If all channels fail, the notification is stored in the inbox and marked as delivered: inbox-only.
+For the core delivery requirement -- when push delivery fails, the system retries three times with exponential backoff, then falls back to email if the user has it enabled. If all channels fail, the notification is stored in the inbox and marked as delivered: inbox-only.
 
-For preference lookup — if the preference service is unavailable, the system uses cached preferences up to one hour stale, or uses defaults (all channels on) if no cache exists. Preference lookup failure must never block delivery.
+For preference lookup -- if the preference service is unavailable, the system uses cached preferences up to one hour stale, or uses defaults (all channels on) if no cache exists. Preference lookup failure must never block delivery.
 
-For inbox writes — delivery continues even if inbox storage fails. The user may not see the notification in history temporarily, but they receive the push or email.
+For inbox writes -- delivery continues even if inbox storage fails. The user may not see the notification in history temporarily, but they receive the push or email.
 
-Operational requirements — I want to state these explicitly because they shape the architecture:
+Operational requirements -- I want to state these explicitly because they shape the architecture:
 - Operators can view delivery success rate per channel in real-time
 - Operators can trace any notification from submission to delivery
 - Operators can disable a specific channel without deployment
@@ -1828,11 +1828,11 @@ Does this scope match what you had in mind? Should I adjust anything before I mo
 Print these phrases and practice them until they come naturally:
 
 - "Let me apply MoSCoW prioritization..."
-- "Core requirements — without these the system is useless..."
-- "Supporting requirements — the system works without these but in a diminished way..."
-- "Won't have — I am explicitly excluding these because..."
+- "Core requirements -- without these the system is useless..."
+- "Supporting requirements -- the system works without these but in a diminished way..."
+- "Won't have -- I am explicitly excluding these because..."
 - "For each core requirement, here is the failure behavior..."
-- "Operational requirements — these shape my architecture..."
+- "Operational requirements -- these shape my architecture..."
 - "This is an irreversible decision. Let me be precise before I commit to it."
 - "I am adding this because requirement [X] requires it."
 - "Does this scope match what you had in mind?"
@@ -1943,8 +1943,8 @@ sequenceDiagram
     C->>R: Adds operational requirements\nOperators can observe/debug/control
     C->>I: Confirms scope: "Does this match your intent?"
     I->>C: Confirms (or adjusts)
-    C->>A: Maps requirements to API endpoints\n"Requirement F1 → POST /notifications\nRequirement F4 → GET /notifications/{userId}"
-    C->>D: Maps requirements to data model\n"Requirement F4 (inbox) → notifications table\npartitioned by user_id, sorted by timestamp"
+    C->>A: Maps requirements to API endpoints\n"Requirement F1 -> POST /notifications\nRequirement F4 -> GET /notifications/{userId}"
+    C->>D: Maps requirements to data model\n"Requirement F4 (inbox) -> notifications table\npartitioned by user_id, sorted by timestamp"
     C->>I: States traceability\n"Every API endpoint and table traces to a requirement"
     I->>C: "Why did you add the dead-letter queue?"
     C->>R: References failure requirement\n"Failure req F-1 says failed deliveries must be retried\nand stored for replay. The DLQ implements this."
@@ -1971,7 +1971,7 @@ sequenceDiagram
     Interviewer->>L6: "Design a notification system"
     L6->>Interviewer: Asks 5 clarifying questions
     Interviewer->>L6: Answers
-    L6->>Interviewer: "Must-have: ingest, deliver, preferences, inbox.\nShould-have: aggregation, fallback.\nWon't have: analytics, A/B testing — here's why."
+    L6->>Interviewer: "Must-have: ingest, deliver, preferences, inbox.\nShould-have: aggregation, fallback.\nWon't have: analytics, A/B testing -- here's why."
     L6->>Interviewer: "Failure requirement: if preference lookup fails,\nuse cached or defaults. Never block delivery."
     L6->>Interviewer: "Operational: operators can trace any\nnotification end-to-end and replay failed deliveries."
     L6->>Interviewer: "Does this scope work for you?"
@@ -2046,7 +2046,7 @@ mindmap
 
 Before moving to architecture, verify:
 
-- [ ] Asked 3–5 clarifying questions to narrow scope
+- [ ] Asked 3-5 clarifying questions to narrow scope
 - [ ] Identified all actors (users, services, operators)
 - [ ] Listed requirements using "[Actor] can [action] [object]" pattern
 - [ ] Applied MoSCoW: Must / Should / Could / Won't
@@ -2054,7 +2054,7 @@ Before moving to architecture, verify:
 - [ ] Covered all three flow types: Read, Write, Control
 - [ ] Added failure requirement for each core requirement
 - [ ] Added operational requirements (observe, debug, control, recover)
-- [ ] Triaged 3–5 important edge cases (full/graceful/exclude)
+- [ ] Triaged 3-5 important edge cases (full/graceful/exclude)
 - [ ] Stated scope boundaries explicitly
 - [ ] Confirmed scope with interviewer: "Does this match what you had in mind?"
 
@@ -2106,9 +2106,9 @@ Before moving to architecture, verify:
 
 ---
 
-## Section 9: Interview Calibration — Phase 2 in Practice
+## Section 9: Interview Calibration -- Phase 2 in Practice
 
-This section is about what separates L5 from L6 behavior in the functional requirements phase during a real interview. These are not abstract principles — they are concrete patterns of speech and thought that interviewers recognize immediately.
+This section is about what separates L5 from L6 behavior in the functional requirements phase during a real interview. These are not abstract principles -- they are concrete patterns of speech and thought that interviewers recognize immediately.
 
 ### 9.1 L6 Phrase Table for Phase 2
 
@@ -2128,7 +2128,7 @@ The difference: L6 uses the "[Actor] can [action] [object] [constraints]" patter
 
 | L5 says | L6 says |
 |---------|---------|
-| "We need all of these features." | "Core requirements — the system is useless without these: [list]. Supporting requirements — improve the experience but the core works without them: [list]. For this session, I'll design core in full depth." |
+| "We need all of these features." | "Core requirements -- the system is useless without these: [list]. Supporting requirements -- improve the experience but the core works without them: [list]. For this session, I'll design core in full depth." |
 | "That's important too." | "Let me put that in the supporting bucket. I want to make sure my data model can accommodate it later, but I won't design it fully today. Does that scope work?" |
 | "We'll add that later." | "I'm explicitly excluding that from scope. Here's my reasoning: [reason]. If that's wrong, please tell me now because it changes the architecture." |
 
@@ -2136,21 +2136,21 @@ The difference: L6 uses the "[Actor] can [action] [object] [constraints]" patter
 
 | L5 does | L6 does |
 |---------|---------|
-| Doesn't mention failure | "For each core requirement, let me define the failure behavior: If delivery fails, retry 3 times with exponential backoff, then fall back to the next available channel. If preferences are unavailable, use cached value or system default. These aren't implementation details — they're requirements that define user experience during failure." |
-| "We'll handle errors" | "There are two failure modes I want to call out explicitly: silent failure (user thinks it worked, it didn't) and noisy failure (user gets an error). For this system, I prefer noisy failure — I'd rather show an error than pretend success when nothing happened." |
+| Doesn't mention failure | "For each core requirement, let me define the failure behavior: If delivery fails, retry 3 times with exponential backoff, then fall back to the next available channel. If preferences are unavailable, use cached value or system default. These aren't implementation details -- they're requirements that define user experience during failure." |
+| "We'll handle errors" | "There are two failure modes I want to call out explicitly: silent failure (user thinks it worked, it didn't) and noisy failure (user gets an error). For this system, I prefer noisy failure -- I'd rather show an error than pretend success when nothing happened." |
 
 #### When Covering Operational Requirements
 
 | L5 does | L6 does |
 |---------|---------|
-| Only thinks of end users | "Beyond user-facing requirements, I have three operational requirements: operators can view delivery success rate per channel in real-time; operators can trace any notification from creation to delivery; operators can disable a channel without a code deploy. These requirements shape my architecture — I need metrics endpoints, distributed tracing, and an admin API." |
+| Only thinks of end users | "Beyond user-facing requirements, I have three operational requirements: operators can view delivery success rate per channel in real-time; operators can trace any notification from creation to delivery; operators can disable a channel without a code deploy. These requirements shape my architecture -- I need metrics endpoints, distributed tracing, and an admin API." |
 
 #### When Handling Edge Cases
 
 | L5 does | L6 does |
 |---------|---------|
 | "We need to handle invalid inputs" | "Let me triage the edge cases. Empty recipient list: return error immediately, no processing. Duplicate notification submission with same idempotency key: return the original response, no re-delivery. Recipient has disabled all channels: acknowledge the submission, record it as undeliverable, surface to the sender as a status." |
-| Handles everything fully | "For the edge case of a recipient having 10,000+ pending unread notifications — I'm choosing graceful degradation. The system will deliver the new notification but paginate the unread count display. I won't try to solve the full inbox-zero problem here." |
+| Handles everything fully | "For the edge case of a recipient having 10,000+ pending unread notifications -- I'm choosing graceful degradation. The system will deliver the new notification but paginate the unread count display. I won't try to solve the full inbox-zero problem here." |
 
 ### 9.2 What Interviewers Are Scoring
 
@@ -2189,9 +2189,9 @@ The interviewer is not primarily looking for the "right" requirements. They are 
 
 **Mistake 1: Requirements as a feature list**
 
-L5 behavior: writes down a list of nouns — "notifications, preferences, history, analytics" — and calls it requirements.
+L5 behavior: writes down a list of nouns -- "notifications, preferences, history, analytics" -- and calls it requirements.
 
-Why it's a problem: this is a list of concepts, not behaviors. "Preferences" doesn't tell you what the system must do. "Users can set their notification preferences to specify which channels and categories they want to receive, which are applied to all future notifications" — that's a requirement.
+Why it's a problem: this is a list of concepts, not behaviors. "Preferences" doesn't tell you what the system must do. "Users can set their notification preferences to specify which channels and categories they want to receive, which are applied to all future notifications" -- that's a requirement.
 
 L6 fix: rewrite every requirement as a sentence starting with an actor. If you can't say "who can do what," it's not a requirement yet.
 
@@ -2203,7 +2203,7 @@ L5 behavior: lists 12 requirements and starts designing all 12 in parallel.
 
 Why it's a problem: in 45 minutes, you cannot design 12 requirements in depth. You will either stay shallow across all 12 or run out of time before reaching the most important ones.
 
-L6 fix: explicitly say which requirements you will design in depth. "I'm treating requirements 1, 2, 3 as core — I'll design these thoroughly. Requirements 4 and 5 are supporting — I'll make sure my data model can support them but I won't design the flows. Requirements 6-12 are out of scope. Does that prioritization match what you expected?"
+L6 fix: explicitly say which requirements you will design in depth. "I'm treating requirements 1, 2, 3 as core -- I'll design these thoroughly. Requirements 4 and 5 are supporting -- I'll make sure my data model can support them but I won't design the flows. Requirements 6-12 are out of scope. Does that prioritization match what you expected?"
 
 ---
 
@@ -2211,9 +2211,9 @@ L6 fix: explicitly say which requirements you will design in depth. "I'm treatin
 
 L5 behavior: designs the flow where everything goes right and never asks what happens when things go wrong.
 
-Why it's a problem: production systems spend significant time in degraded states. If you've only designed for success, your degradation behavior is undefined — meaning it will be ugly and potentially catastrophic.
+Why it's a problem: production systems spend significant time in degraded states. If you've only designed for success, your degradation behavior is undefined -- meaning it will be ugly and potentially catastrophic.
 
-L6 fix: for each core requirement, add the failure requirement immediately. "Users can submit a notification — on failure, the system retries 3 times and returns an error status to the caller. Users can view notification history — if the history store is unavailable, return an empty list rather than an error, with a banner indicating 'history temporarily unavailable.'"
+L6 fix: for each core requirement, add the failure requirement immediately. "Users can submit a notification -- on failure, the system retries 3 times and returns an error status to the caller. Users can view notification history -- if the history store is unavailable, return an empty list rather than an error, with a banner indicating 'history temporarily unavailable.'"
 
 ---
 
@@ -2233,7 +2233,7 @@ L5 behavior: starts with a scoped design, then keeps adding features as they com
 
 Why it's a problem: the interviewer loses track of what you committed to. You lose track too. The design becomes incoherent.
 
-L6 fix: when a new requirement comes to mind after you've set scope, say it out loud and make a deliberate decision. "I just thought of the scenario where a user sends a notification to a group. I'm going to put that in the supporting bucket and not design it today. I want to make sure my data model can accommodate it — recipient ID should probably be a list, not a scalar — but I won't design the group fan-out logic."
+L6 fix: when a new requirement comes to mind after you've set scope, say it out loud and make a deliberate decision. "I just thought of the scenario where a user sends a notification to a group. I'm going to put that in the supporting bucket and not design it today. I want to make sure my data model can accommodate it -- recipient ID should probably be a list, not a scalar -- but I won't design the group fan-out logic."
 
 ---
 
@@ -2256,7 +2256,7 @@ If you hit all 8, you've demonstrated Staff-level Phase 2 execution. If you miss
 
 ## Section 10: Brainstorming Questions
 
-These questions build depth of understanding. Don't just read them — think them through with a real system in mind.
+These questions build depth of understanding. Don't just read them -- think them through with a real system in mind.
 
 ### On What Requirements Actually Are
 
@@ -2276,7 +2276,7 @@ These questions build depth of understanding. Don't just read them — think the
 
 7. When have you experienced feature creep? What was the trigger? Was it a PM request, a well-intentioned engineer who added something, or something discovered during implementation? How could it have been prevented with better scope setting?
 
-8. "We should build this because it's easy" — why is this a dangerous phrase during requirements gathering? When is it valid?
+8. "We should build this because it's easy" -- why is this a dangerous phrase during requirements gathering? When is it valid?
 
 9. How do you defend a Won't-have decision to stakeholders who want the feature? What's the right framing?
 
@@ -2284,7 +2284,7 @@ These questions build depth of understanding. Don't just read them — think the
 
 ### On Flow Types and Operational Thinking
 
-11. For a system you know well, list all the control flows — the admin and configuration operations. Were they designed as carefully as the user-facing flows? If not, what problems did that cause?
+11. For a system you know well, list all the control flows -- the admin and configuration operations. Were they designed as carefully as the user-facing flows? If not, what problems did that cause?
 
 12. What is the ratio of reads to writes in a messaging system? In a social feed? In an analytics system? How does this ratio affect the architecture?
 
@@ -2308,7 +2308,7 @@ Reread each requirement with these questions:
 - Is this specific enough to implement? Could two engineers build different things and both claim this requirement is satisfied?
 - Does it use the "[Actor] can [action] [object] [constraints]" pattern? Or is it a vague concept?
 - Does it define behavior, or does it describe implementation? (Requirements should say what, not how.)
-- Is there a testable acceptance criterion — a way to know with certainty whether the requirement is met?
+- Is there a testable acceptance criterion -- a way to know with certainty whether the requirement is met?
 
 Rewrite three of the requirements to be more precise. Notice how the precision changes what you would build.
 
@@ -2336,7 +2336,7 @@ For a system you maintain, list three core features.
 
 For each one, write the failure requirement: "When [feature] is unavailable or degraded, the system must [behavior]."
 
-Then ask: is this requirement actually implemented? Or is the failure behavior undefined — meaning it depends on whatever the framework does by default?
+Then ask: is this requirement actually implemented? Or is the failure behavior undefined -- meaning it depends on whatever the framework does by default?
 
 Undefined failure behavior is one of the most common causes of bad production incidents. A system that returns a useful error message during failure is much easier to debug than one that times out silently. A system that degrades gracefully is much better for users than one that returns 500 errors across the board.
 
@@ -2363,7 +2363,7 @@ Time yourself: each system should take no more than 15 minutes. If it takes long
 
 ### Exercise 2: Core vs. Supporting Classification
 
-Take a product you use daily — Slack, Spotify, Uber, or any app you know well.
+Take a product you use daily -- Slack, Spotify, Uber, or any app you know well.
 
 List 15 features. For each, classify as core, supporting, or nice-to-have.
 
@@ -2384,7 +2384,7 @@ For each flow, note:
 - Who initiates it (which actor)
 - What data is involved
 - What the success outcome is
-- What the failure outcome should be (not implementation — behavior)
+- What the failure outcome should be (not implementation -- behavior)
 
 ### Exercise 4: Failure Requirements Drill
 
@@ -2425,13 +2425,13 @@ A well-formed requirements set has perfect traceability: every use case has at l
 
 ---
 
-## More Real-Life Incidents — The Cost of Wrong Requirements
+## More Real-Life Incidents -- The Cost of Wrong Requirements
 
 ### Incident 1: The "Simple" Deduplication That Took 8 Months
 
 A team designed a data ingestion pipeline. The functional requirements were: "Ingest events from producers, store them, make them queryable." No failure requirements. No idempotency requirements.
 
-Six months after launch, they discovered that under certain network conditions, producers were retrying failed requests. The pipeline was storing duplicates. 15% of records were duplicates. This had been happening since day 1 — 6 months of duplicate data.
+Six months after launch, they discovered that under certain network conditions, producers were retrying failed requests. The pipeline was storing duplicates. 15% of records were duplicates. This had been happening since day 1 -- 6 months of duplicate data.
 
 Deduplication was not in the functional requirements. It was never designed. Adding it retroactively required:
 - Identifying a deduplication key (which required product decisions about what constitutes a duplicate)
@@ -2445,7 +2445,7 @@ Staff lesson: "At-least-once delivery" sounds fine until you realize it means "d
 
 ### Incident 2: The Delete Feature That Didn't Delete
 
-A social media team's functional requirements for a post system included: create post, read post, update post, delete post. "Delete post" was implemented as a soft delete — the post was marked as deleted in the database but the data was never purged.
+A social media team's functional requirements for a post system included: create post, read post, update post, delete post. "Delete post" was implemented as a soft delete -- the post was marked as deleted in the database but the data was never purged.
 
 Two years later, a user filed a GDPR deletion request. The team discovered that "deleted" posts from 2 years ago were still in the database, still in backups, still in search indexes, still in the CDN cache, still in third-party analytics systems. The deletion had been cosmetic.
 
@@ -2453,7 +2453,7 @@ A proper "right to be forgotten" implementation required: database purge, backup
 
 It took 4 months and 3 teams.
 
-Staff lesson: "Delete" is not one requirement — it is a cascade of requirements. Before writing "delete post" in your functional requirements, ask: "What does delete actually mean? What systems hold a copy of this data? What is the retention policy? What if a user invokes their right to be forgotten?"
+Staff lesson: "Delete" is not one requirement -- it is a cascade of requirements. Before writing "delete post" in your functional requirements, ask: "What does delete actually mean? What systems hold a copy of this data? What is the retention policy? What if a user invokes their right to be forgotten?"
 
 ---
 
@@ -2461,21 +2461,21 @@ Staff lesson: "Delete" is not one requirement — it is a cascade of requirement
 
 A team added real-time event streaming to a dashboard. Functional requirement: "Users see live updates as events happen." No feature flag. No rate control. No circuit breaker requirement.
 
-When downstream event volume spiked 100× during a major incident, the real-time websocket connections each received 100× the normal message rate. Client browsers started freezing. The live dashboard became unusable exactly when it was most needed.
+When downstream event volume spiked 100x during a major incident, the real-time websocket connections each received 100x the normal message rate. Client browsers started freezing. The live dashboard became unusable exactly when it was most needed.
 
-There was no way to switch users to 5-second polling (a degraded but usable mode) because that capability had never been designed. The only fix was to kill the real-time feature entirely — which required a code deploy during an active incident.
+There was no way to switch users to 5-second polling (a degraded but usable mode) because that capability had never been designed. The only fix was to kill the real-time feature entirely -- which required a code deploy during an active incident.
 
 Staff lesson: Every real-time feature needs a degradation path in its functional requirements. "Stream events in real-time OR fall back to polling every N seconds if event rate exceeds threshold" is one requirement, not two.
 
 ---
 
-## Brainstorming Questions — For Subconscious Internalization
+## Brainstorming Questions -- For Subconscious Internalization
 
 **Question 7:** "Design a payment processing API." What is the difference between a core requirement and an extended requirement for this system? Name 3 requirements that belong in core and 3 that belong in extended. How did you decide?
 
 **Question 8:** You have finished writing the functional requirements for a messaging system. A colleague asks: "What happens if a user sends a message and the delivery fails?" Do you have an answer? If not, which requirement is missing?
 
-**Question 9:** "Design a notification system." List the top 5 core requirements. Now add: "The system must handle 100× the normal event volume without dropping notifications." Is this a functional requirement or an NFR? How does your answer change the architecture?
+**Question 9:** "Design a notification system." List the top 5 core requirements. Now add: "The system must handle 100x the normal event volume without dropping notifications." Is this a functional requirement or an NFR? How does your answer change the architecture?
 
 **Question 10:** A PM gives you requirements for a social feed and says: "Users should be able to delete posts." Before you accept this requirement, what 5 questions do you ask to understand what "delete" means in this context?
 
@@ -2497,22 +2497,22 @@ Staff lesson: Every real-time feature needs a degradation path in its functional
 
 ---
 
-## More Homework Exercises (7–12)
+## More Homework Exercises (7-12)
 
 ### Exercise 7: The Failure Requirement Audit
 
 Take any system you know well. Read the current requirements doc (or reconstruct it from memory).
 
 For each core requirement, write the corresponding failure requirement:
-- "Users can submit orders" → What happens if the order fails to submit?
-- "The system processes payments" → What happens if the payment processor is unavailable?
-- "Notifications are delivered" → What happens if delivery fails after 3 retries?
+- "Users can submit orders" -> What happens if the order fails to submit?
+- "The system processes payments" -> What happens if the payment processor is unavailable?
+- "Notifications are delivered" -> What happens if delivery fails after 3 retries?
 
 Count: for every core requirement, is there a corresponding failure requirement? If the ratio is less than 1:1, you are under-specified. The missing failure requirements are where your production incidents will come from.
 
 ---
 
-### Exercise 8: CRUD Is Not Enough — The Hidden Requirements
+### Exercise 8: CRUD Is Not Enough -- The Hidden Requirements
 
 "CRUD" (Create, Read, Update, Delete) seems complete. It is not.
 
@@ -2600,9 +2600,475 @@ Play adversarial reviewer. Spend 20 minutes finding requirements that are:
 - In conflict with another requirement
 - Assuming a capability that isn't guaranteed
 
-For each issue you find: write the improved requirement — precise, unambiguous, implementable.
+For each issue you find: write the improved requirement -- precise, unambiguous, implementable.
 
 Count: how many issues did you find in 20 minutes? This is a direct measure of requirements quality. For a Staff-level engineer, finding 5+ issues in 20 minutes on any non-trivial requirements doc is expected.
+
+---
+
+*End of Chapter 15 (original content).*
+
+---
+
+## Production Incidents: Functional Requirements Failures in the Field
+
+The four incidents below are real-world cases where the Phase 2 step -- defining WHAT the system does -- was done incompletely. Each one caused a production outage or a serious user-trust failure. Each one was preventable at the requirements stage.
+
+---
+
+## Production Incident 2: Uber's Surge Pricing API Ambiguity (2015)
+
+**Company:** Uber | **Year:** 2015
+
+### What Happened (analogy first)
+
+Imagine you book a taxi during rush hour. The meter reads 2.5x surge. But by the time you arrive, rush hour is over and the driver is charged the normal rate. You expected the surge; the driver expected the surge. Nobody told the billing system WHEN to take the snapshot.
+
+That is exactly what happened at Uber in 2015. The functional requirement read: "calculate fare." It did not say: calculate fare at the moment the ride is requested, or at the moment the ride ends.
+
+### The Functional Requirement Failure
+
+The spec was: "The system calculates a fare for each completed trip."
+
+What was missing:
+- No specification of WHEN the surge multiplier is captured (at request time vs. at completion time)
+- No specification of what happens when the surge rate changes mid-trip
+- No specification of which price the driver sees vs. which price is billed
+
+During a major surge event, drivers saw the 2.5x multiplier when they accepted the ride. The system captured the surge multiplier at trip completion -- but the surge had ended by then. Drivers received 1x rates for 2.5x trips. Mass driver walkout followed in several cities.
+
+### ASCII Diagram
+
+```
+WHAT DRIVERS SAW:
+
+  Time T=0 (ride request)             Time T=45min (ride end)
+  |                                   |
+  | Surge multiplier = 2.5x           | Surge multiplier = 1.0x
+  |                                   |
+  | Driver accepts ride               | System bills at this rate
+  | Driver expects: $45 fare          | Driver receives: $18 fare
+  +-----------------------------------+
+
+THE MISSING SPEC:
+
+  +---------------------+          +----------------------+
+  | Functional Req:     |          | Missing:             |
+  | "Calculate fare"    |          | "Capture surge AT    |
+  |                     |  ------> |  request time, lock  |
+  | (no time anchor)    |          |  it for trip duration"|
+  +---------------------+          +----------------------+
+
+  Result: Two valid interpretations -> two different systems ->
+          one of them angers every driver in the fleet
+```
+
+### Root Cause
+
+The requirements team assumed "calculate fare" meant the same thing to both the product team (capture rate at request) and the engineering team (calculate when data is complete = at trip end). This is a classic ambiguity: a term everyone thinks they understand, but no two people understand the same way.
+
+### Fix Applied
+
+Uber updated the functional requirement to: "The surge multiplier is captured and locked at trip-request acceptance time. The locked multiplier is stored on the trip record and used for final fare calculation regardless of surge state at trip completion."
+
+They also added a new requirement: "The system surfaces the locked multiplier to the driver throughout the trip."
+
+### Staff Lessons
+
+- Every time calculation requires a time anchor: specify WHEN the value is captured, not just WHAT is calculated.
+- "Calculate X" is not a functional requirement. "Calculate X using the Y value captured at event Z" is a functional requirement.
+- If two engineers on the same team interpret a requirement differently without realizing it, the requirement is underspecified. Build a habit of reading requirements out loud and asking: "Is there a word here that could mean two different things?"
+
+---
+
+## Production Incident 3: Facebook's Notification API Double-Send Bug (2019)
+
+**Company:** Facebook (Meta) | **Year:** 2019
+
+### What Happened (analogy first)
+
+Imagine your assistant is supposed to remind you of a meeting. You set up two reminder systems: a sticky note on your desk, and a calendar pop-up. Neither system knows the other exists. You get two identical reminders, both saying "your meeting starts now." Annoying, but manageable at home. At Facebook's scale -- 2.7 billion users -- this becomes 2.7 billion double notifications in six hours.
+
+### The Functional Requirement Failure
+
+The requirement was: "Send a push notification when a user receives a like on their post."
+
+What was missing:
+- No idempotency key specified for notification delivery
+- No specification of which code path is the authoritative sender
+- No specification of behavior when two code paths both satisfy the trigger condition
+
+The notification system had two separate pipelines:
+1. A real-time path: WebSocket push for users who are currently online
+2. A catch-up path: Polling for users who were offline and came back online
+
+Both paths independently evaluated the same trigger condition. Both sent a notification. For six hours, every user who received a like while online got two notifications. The duplicate notifications persisted in notification history as well.
+
+### ASCII Diagram
+
+```
+THE DOUBLE-SEND ARCHITECTURE (unintentional):
+
+  User A likes User B's post
+         |
+         v
+  +-------------------+
+  | Event Bus         |
+  +-------------------+
+         |
+    +----+----+
+    |         |
+    v         v
++--------+ +--------+
+|Real-   | |Catch-up|
+|time    | |Poller  |
+|path    | |(runs   |
+|(always | |every   |
+|running)| |30 sec) |
++--------+ +--------+
+    |         |
+    v         v
++--------+ +--------+
+|PUSH 1  | |PUSH 2  |
+|"New    | |"New    |
+|like!"  | |like!"  |
++--------+ +--------+
+    |         |
+    +----+----+
+         |
+         v
+  User B's phone buzzes TWICE
+  (and notification badge shows 2)
+
+THE FIX (idempotency gate added):
+
+  Event Bus -> Dedup Layer (notification_id as key) -> Single sender
+```
+
+### Root Cause
+
+Idempotency was not a functional requirement. The spec said "send notification when X happens." It did not say "send notification at most once per event per user" or "use notification_id to deduplicate across delivery paths."
+
+The two code paths were built by two separate teams at different times. Neither team knew the other path also handled the same trigger. Without an idempotency specification in the requirements, there was no design constraint that would have caught this.
+
+### Fix Applied
+
+Facebook added an idempotency gate before all notification delivery paths. Every notification is assigned a notification_id at creation. The delivery layer checks a Redis-backed dedup store before sending. If the notification_id has been sent in the last 24 hours, the send is skipped.
+
+The updated functional requirement now reads: "Each notification event produces exactly one user-visible notification, identified by a globally unique notification_id."
+
+### Staff Lessons
+
+- "Send notification when X happens" is not complete. "Send at most one notification per event per user, deduplicated by event_id" is complete.
+- Idempotency is a functional requirement, not an implementation detail. It belongs in the spec, not the code review.
+- Any system with multiple code paths that can trigger the same output must specify idempotency semantics at the requirements level, or the duplicate will eventually happen at scale.
+
+---
+
+## Production Incident 4: Stripe's Webhook Delivery Ambiguity (2020)
+
+**Company:** Stripe | **Year:** 2020
+
+### What Happened (analogy first)
+
+Imagine a courier service. Their policy says: "We will deliver your package." What they do not say: "We will deliver it only once." In practice, the courier attempts delivery, fails (nobody home), comes back tomorrow, and tries again. You receive the package twice. That is fine for packages. It is not fine when the package is a "charge the customer" instruction.
+
+### The Functional Requirement Failure
+
+Stripe's functional requirement was: "Deliver a webhook notification to the merchant's server for each payment event."
+
+What was missing:
+- No specification of delivery semantics: at-least-once, at-most-once, or exactly-once
+- No specification of required merchant behavior on duplicate receipt
+- No specification of retry policy or retry window
+
+Stripe's implementation was at-least-once delivery -- a reasonable choice for their infrastructure (it is extremely hard to guarantee exactly-once delivery at scale). Stripe did document this in their developer docs. But the functional requirement itself did not state it.
+
+A merchant integrated Stripe webhooks to trigger fulfillment: when a `payment.succeeded` event arrives, charge the card and fulfill the order. They did not implement idempotency on their side. When Stripe's retry mechanism re-delivered a webhook (because the merchant server returned a 500 on the first attempt), the merchant charged the customer twice.
+
+### ASCII Diagram
+
+```
+STRIPE WEBHOOK RETRY FLOW:
+
+  Payment succeeds
+       |
+       v
+  Stripe sends webhook #1 to merchant server
+       |
+       v
+  Merchant server returns HTTP 500 (temporary outage)
+       |
+       v
+  Stripe retry policy: retry in 30 min, 1hr, 2hr, 4hr...
+       |
+       v
+  Merchant server recovers
+  Webhook #1 already processed: card charged, order fulfilled
+       |
+       v
+  Stripe sends webhook #1 AGAIN (retry #1)
+       |
+       v
+  Merchant server processes again: card charged AGAIN
+       |
+       v
+  Customer calls support: "I was charged twice"
+
+THE MISSING REQUIREMENT:
+
+  +---------------------------------+    +----------------------------------+
+  | Written requirement:            |    | Should have said:                |
+  | "Deliver webhook for each       |    | "Webhooks are at-least-once.     |
+  |  payment event"                 | -> | Merchants MUST implement         |
+  |                                 |    | idempotency using event_id.      |
+  | (delivery semantics unspecified)|    | Duplicate delivery is guaranteed |
+  +---------------------------------+    | to occur."                       |
+                                         +----------------------------------+
+```
+
+### Root Cause
+
+Delivery semantics were treated as an implementation detail, not a functional requirement. When they live in the implementation, they never make it into the contract with external consumers. Merchants built integrations based on an assumed (but unspecified) exactly-once semantic.
+
+### Fix Applied
+
+Stripe updated their functional specification for webhooks to explicitly state: "Stripe guarantees at-least-once delivery. The same event may be delivered more than once. Merchants must use the event.id field to implement idempotency on their side." This was added to both the developer docs and the API reference, with code examples.
+
+Stripe also added an idempotency_key field to their API for payment creation, making it easier for merchants to make their own systems idempotent.
+
+### Staff Lessons
+
+- Delivery semantics (at-least-once, at-most-once, exactly-once) are a functional requirement for any async or webhook-based system. Put them in the spec, not the footnotes.
+- "Works in practice" is not the same as "specified in the contract." If a merchant has to read your implementation source code to understand the delivery guarantee, the requirement is missing.
+- When you specify at-least-once delivery, you must also specify the required consumer behavior: idempotency is the consumer's responsibility. Make this explicit.
+
+---
+
+## Production Incident 5: Airbnb's Search API Scope Creep (2018)
+
+**Company:** Airbnb | **Year:** 2018
+
+### What Happened (analogy first)
+
+Imagine you design a filing cabinet to hold 100 folders. It works perfectly. Then, over 18 months, people keep adding dividers, tabs, sub-folders, color-coded labels, sticky notes, and laminated inserts. Nobody redesigns the cabinet. Eventually, the drawers stick, it takes 10 seconds to find anything, and the whole thing is held together with rubber bands. That is what happened to Airbnb's search system.
+
+### The Functional Requirement Failure
+
+Phase 2 defined the search API as: "Search for available listings by location and dates."
+
+Over 18 months, the product team added 23 filters without revisiting the data model:
+- Price range
+- Property type (entire home, private room, shared room)
+- Amenities (wifi, kitchen, washer, pool, etc.)
+- Instant book eligibility
+- Superhost status
+- Guest ratings
+- Accessibility features
+- Pet-friendly
+- Long-term stay discount
+- ... and 14 more
+
+Each filter was added as a patch to the existing search index. The index was rebuilt 5 times in 18 months. Each rebuild took the team 3-6 weeks. Query latency grew from 80ms at launch to 1,200ms by the end of 2018.
+
+No scope freeze mechanism existed in the original requirements. New filters were added by product managers filing tickets. Engineering was never given the authority to say "this filter requires a requirements review before we build it."
+
+### ASCII Diagram
+
+```
+SCOPE CREEP OVER 18 MONTHS:
+
+  Month 0:   [location] [dates]
+             Query: 80ms   Index rebuilds: 0
+
+  Month 3:   [location] [dates] [price] [property_type]
+             Query: 110ms  Index rebuilds: 1
+
+  Month 6:   [location] [dates] [price] [property_type] [amenities x6]
+             Query: 220ms  Index rebuilds: 2
+
+  Month 9:   [location] [dates] [price] [property_type] [amenities x10]
+             [instant_book] [superhost] [ratings]
+             Query: 480ms  Index rebuilds: 3
+
+  Month 12:  [+3 more filters]
+             Query: 750ms  Index rebuilds: 4
+
+  Month 18:  [+5 more filters = 23 total]
+             Query: 1,200ms Index rebuilds: 5
+
+  COST OF SCOPE CREEP:
+  +------------------+---------------------+---------------------+
+  | Filter added at  | Engineering cost    | Index rebuild time  |
+  +------------------+---------------------+---------------------+
+  | Design time      | 1x                  | 0 extra             |
+  | Month 3          | 3x (re-architecture)| 3 weeks             |
+  | Month 9          | 7x                  | 5 weeks             |
+  | Month 18         | 12x                 | 6 weeks             |
+  +------------------+---------------------+---------------------+
+
+  Every post-design "must have" has a MULTIPLIER cost, not an additive cost.
+```
+
+### Root Cause
+
+The original requirements had no scope freeze mechanism. There was no process that required a new filter to trigger a data model review. The functional requirement "search for available listings" was open-ended -- "available" and "listings" were never bounded, so any new attribute of a listing was implicitly in scope.
+
+### Fix Applied
+
+Airbnb rebuilt the search infrastructure on top of Elasticsearch with a schema designed to support arbitrary facets, reducing the cost of adding new filters from "rebuild index" to "add a field." More importantly, they added a requirements process: any new search filter requires a data model review before engineering begins. This review asks: does this filter require a schema change, an index rebuild, or a new data pipeline?
+
+### Staff Lessons
+
+- "Scope freeze" is a functional requirement for the requirements process itself. If nothing in your design says "we will stop adding requirements after this point," the requirements will never stop growing.
+- Every requirement added post-design has a multiplier cost, not an additive cost. A filter added at design time costs 1x. The same filter added 9 months later, after the index is in production, costs 7x to 12x.
+- At the Staff level, your job is to make the cost of scope creep visible before it happens. Build the multiplier table. Show it to the product team. Make the decision conscious.
+
+---
+
+## Brainstorming Questions: Phase 2 Functional Requirements
+
+Use these as interview prep, study prompts, or team discussion starters. Each one has a correct answer range, but the goal is to practice thinking, not to memorize answers.
+
+**API Design Trade-offs**
+
+1. You are designing the API for a ride-hailing app. The product team asks for a REST endpoint: `POST /rides`. What five things must you specify beyond the endpoint name before this is a complete functional requirement?
+
+2. A team is debating REST vs. GraphQL for a social feed API. The feed has 12 different object types (posts, photos, videos, stories, polls, events, etc.). Each client (iOS, Android, web) needs different fields. Which protocol is more appropriate for this use case, and what functional requirement drives that choice?
+
+3. gRPC is proposed for an internal service that does real-time price calculation. The service is called 50,000 times per second. REST is proposed instead by a new engineer. What functional requirement information would make one choice clearly better than the other?
+
+4. You are designing an API for Shopify merchants to query their order history. REST pagination (cursor-based) vs. offset-based pagination: which is correct for this use case? What is the functional requirement that makes one choice wrong?
+
+5. A financial services company (like Stripe) exposes a `POST /charges` endpoint. What is the minimum set of functional requirements this endpoint must satisfy before it is safe to ship to production?
+
+**Idempotency in Functional Requirements**
+
+6. A payments team says: "Our `POST /payments` endpoint is idempotent." What does that mean in practice? What does the caller need to do for idempotency to actually work? Write this as a complete functional requirement, not a statement.
+
+7. You are designing a bulk email send API for a marketing platform (like Mailchimp). A user uploads 100,000 email addresses and triggers a campaign. The job runs for 4 hours and then the server crashes at 97%. The user re-triggers the job. What functional requirement prevents 97,000 duplicate emails?
+
+8. A notification system at Meta sends push notifications to mobile devices. The same notification is sometimes delivered twice due to network retries. Is this an idempotency failure, a deduplication failure, or a delivery semantics failure? What is the functional requirement that would have prevented it?
+
+9. A fintech startup says: "We don't need idempotency because our database transactions are atomic." Is this a valid argument? What scenario would break it?
+
+**Data Models Before APIs vs. After**
+
+10. You are designing a search API. Should you design the API contract first, or the data model first? What is the argument for each approach, and what type of system should use which order?
+
+11. Netflix is adding a "content rating" field to their video metadata model. The API already has 200 external callers. Should the data model change be designed before or after the API change? What functional requirement governs this sequencing?
+
+12. A team at Google is designing the Pub/Sub message format. They design the API first, then the message schema. Six months later, they need to add a new required field to the message schema. What is the problem? What functional requirement should have been in place from the start?
+
+**Handling Ambiguity in an Interview**
+
+13. An interviewer says: "Design Twitter's timeline." You ask three clarifying questions. What are the three most important questions, and what architectural decision does each one unlock?
+
+14. You are 20 minutes into a system design interview when you realize the requirement "the system handles high traffic" is ambiguous. How do you resolve this without restarting the design? What do you say?
+
+15. An interviewer gives you a requirement: "Users can search for products." What four follow-up questions must you ask before you can design any data model or API?
+
+**Scope Management**
+
+16. At Airbnb's search system, 23 filters were added post-launch without a scope review. What is the one sentence you would add to the functional requirements document to prevent this from happening? (Hint: it is about process, not technology.)
+
+17. A product manager adds a new requirement 45 minutes into your system design interview: "Oh, and it should also support real-time collaboration." How do you handle this without losing control of the session?
+
+**Read vs. Write API Separation**
+
+18. You are designing the API for a bank account balance system. Should the "read balance" API and the "update balance" API be separate endpoints or combined? What functional requirement drives this decision?
+
+19. Twitter uses separate read and write paths for their feed system. What functional requirement -- not a performance requirement -- justifies this separation?
+
+**Functional vs. Non-Functional Boundary**
+
+20. A requirement says: "The system must respond within 200ms at P99." Is this a functional requirement or a non-functional requirement? What is the test to distinguish them? Give two examples of requirements that look like one but are actually the other.
+
+---
+
+## L5 vs. L6 Calibration Table: Phase 2 Functional Requirements
+
+This table is a direct measure of readiness for the Staff Engineer level. Go through each row and honestly assess which column describes your current behavior. For any row where you are in the L5 column, that is a specific gap to close.
+
+| Dimension | L5 (Senior Engineer) | L6 (Staff Engineer) |
+|---|---|---|
+| **API design breadth** | Defines the happy-path endpoint. Names the method and the resource. | Defines the endpoint, the request/response schema, error codes, pagination strategy, rate limit behavior, and the versioning plan. Raises backward compatibility as a constraint before writing a line of code. |
+| **Data model depth** | Draws an ER diagram with the main entities and their relationships. | Draws the ER diagram AND specifies: normalization level chosen and why, which fields are indexed and why, what the write amplification is for each index, how the schema supports the stated query patterns, and what changes would require a migration. |
+| **Idempotency consideration** | Does not mention idempotency unless asked. Treats it as an implementation concern. | Identifies every API endpoint or event handler where idempotency is required. Writes the idempotency contract as part of the functional requirement: "Callers must supply an idempotency_key. The system will return the same response for the same key within 24 hours." |
+| **Scope discipline** | Lists requirements by adding features. Does not explicitly exclude anything. | Explicitly states what is in scope, what is out of scope, and why. Defends exclusions: "Analytics is out of scope today. The data model will support it, but designing the analytics pipeline is a separate project." Uses MoSCoW. |
+| **Requirement ambiguity handling** | Proceeds with the first reasonable interpretation of an ambiguous requirement. | Surfaces the ambiguity. States two or more valid interpretations. Identifies which interpretation leads to a different architecture. Makes a reasoned choice and records it. "I'm interpreting this as X because it leads to a simpler design and matches the stated priority of write performance." |
+| **Read/write separation** | Designs a single API for both reads and writes. Treats them as symmetric operations. | Distinguishes read and write paths in the functional requirements. Notes the read/write ratio. If reads are 100:1 to writes, states that the read API has different caching, consistency, and latency requirements than the write API. |
+| **Pagination design** | Adds pagination as an afterthought. Uses offset-based pagination by default. | Specifies pagination strategy in the functional requirement. Knows that offset pagination breaks under concurrent writes (items shift). Chooses cursor-based for streaming feeds, keyset for sorted lists, and offset only for admin tools with bounded datasets. |
+| **Versioning strategy** | Does not address API versioning until asked. Assumes the first version will be the only version. | States the versioning strategy as part of the functional requirement: "API is versioned via URL path (/v1/). Breaking changes require a new version. Non-breaking changes (new optional fields) are backward compatible within a version." |
+| **Consistency in API contracts** | Mixes naming conventions (camelCase, snake_case). Mixes ID formats (integer, UUID). Different endpoints return errors in different formats. | Defines a consistent API contract before designing individual endpoints. Specifies: naming convention, ID format, error response schema, timestamp format (ISO 8601 with timezone), pagination envelope shape. All endpoints conform to this contract. |
+| **Error response design** | Returns HTTP 500 for unexpected errors. Does not specify error codes beyond 200/404/500. | Defines the error taxonomy in the functional requirements: which errors are client errors (4xx) vs. server errors (5xx), which errors are retryable vs. not, what the error response body contains (error_code, message, request_id, retry_after). |
+| **Backward compatibility** | Makes breaking API changes when needed. Assumes clients will update. | Treats backward compatibility as a hard functional requirement: "No breaking changes to v1 without 90 days deprecation notice. A breaking change is: removing a field, changing a field type, changing a required field to required that was optional, changing error codes." Designs additive-only changes. |
+| **Production instinct** | Requirements are clean and complete in theory. Misses operational requirements: admin overrides, circuit breakers, observability hooks, rate limit overrides for internal callers. | Includes operational requirements alongside user-facing ones: "Operators can disable a specific merchant's webhook delivery without a code deploy. The system exposes a per-endpoint error rate metric. Engineers can replay any failed webhook for the last 72 hours." These requirements come from having seen production failures. |
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+*Same problem at four levels: Phase 2 for a payment processing system like Stripe.*
+
+### Intern Level: "The API is POST /charge"
+
+"You send the amount, card details, and merchant ID. The system charges the card. Returns success or failure."
+
+One endpoint. No thought about idempotency, no thought about what "failure" means (card declined vs network timeout vs fraud block -- these are all different failures), no thought about webhooks for async events, no thought about refunds.
+
+### Mid-Level (L4): "Let me design all the endpoints"
+
+L4 lists: POST /charge, GET /charge/:id, POST /refund, GET /transactions. They add pagination to GET /transactions. They think about authentication (API key). They add error codes.
+
+What's missing: They haven't thought about idempotency. What if the client calls POST /charge twice with the same data (due to retry after timeout)? The card gets charged twice. This is a correctness failure, not a scale failure. L4 misses it because they're thinking about happy-path flows.
+
+### Senior (L5): "Let me design for every failure mode"
+
+L5 thinks through the failure taxonomy for payments:
+- Client sends request -> times out -> retries -> duplicate charge
+- Server processes charge -> crashes before responding -> did it charge or not?
+- Card network is down -> how long do we wait?
+- Fraud engine says maybe fraud -> charge, or decline?
+
+L5 adds idempotency keys: "Every POST /charge must include an Idempotency-Key header. If we've seen this key before, return the cached result instead of re-processing."
+
+L5 adds async webhooks: "The charge is synchronous, but the settlement, refund completion, and dispute events are async. We need POST /webhooks/endpoint to register a callback URL."
+
+```
+L5 API DESIGN (explicit state machine):
+
+  POST /charges (with Idempotency-Key header)
+    -> PENDING: charge submitted to card network
+    -> PROCESSING: card network is working on it
+    -> SUCCEEDED: funds captured
+    -> FAILED: declined / fraud / network error
+    -> REFUNDED: after POST /charges/:id/refund
+
+  L5 asks: what triggers each transition? Who can see each state?
+  L5 documents: every field, every error code, every constraint.
+```
+
+### Staff (L6): "Let me design the contract that will last 5 years"
+
+L6 thinks about the API as a product: "Who uses this API? External merchants, internal services, partner integrations. The external contract cannot break -- versioning matters from day one."
+
+L6 asks about data model implications upfront: "The charge object has a customer_id. What is the lifecycle of a customer object? If a customer deletes their account, what happens to their charge history? GDPR says we must delete their data, but financial regulations say we must retain transaction records for 7 years. These are conflicting requirements. Which wins? That's a legal question, but the data model must support the answer."
+
+L6 separates read and write models: "The POST /charges path is write-heavy, latency-critical, must be ACID-compliant. The GET /transactions path is read-heavy, can tolerate eventual consistency, should come from a read replica or a separate analytics store. These should not share a data model."
+
+```
+L6 PHASE 2 CHECKLIST:
+  [ ] All CRUD operations AND state transitions
+  [ ] Idempotency semantics for every write
+  [ ] Async events and webhook contracts
+  [ ] API versioning strategy
+  [ ] Read/write model separation
+  [ ] Data lifecycle and deletion semantics
+  [ ] Error codes with specific meaning (not just 400/500)
+  [ ] Rate limiting per endpoint
+  [ ] Audit trail requirements
+```
 
 ---
 

@@ -7911,3 +7911,83 @@ with a shared pub-sub layer (Redis Pub/Sub or the Kafka topic itself as the broa
 ---
 ---
 
+
+---
+
+### Cross-chapter: Kafka consumer idempotency with outbox pattern (from Ch23)
+
+**Question 40 -- Kafka consumer idempotency with outbox pattern (Ch23 + Ch33)**
+
+Your Kafka consumer processes "order.placed" events and does two things:
+(1) inserts into the orders table, (2) publishes a "send_confirmation_email" task to Redis.
+At-least-once delivery means the consumer may process the same message multiple times.
+
+- The naive implementation fails: consumer reads message M (order_id=XYZ),
+  inserts the order row, publishes the email task to Redis, then commits the offset.
+  The consumer crashes between "publish email task" and "commit offset."
+  On restart, it re-reads M, inserts again (blocked by unique constraint -- fine),
+  and publishes a SECOND email task. The customer receives two emails.
+  Which action failed to be idempotent, and why?
+- Outbox pattern: instead of writing to Redis directly, the consumer writes an outbox row
+  to the same PostgreSQL transaction as the order insert.
+  Outbox row: (event_id, task_type="send_email", payload, processed=false).
+  Walk through why this is idempotent on the second replay of message M.
+- A separate outbox processor queries outbox rows with processed=false
+  and publishes them to Redis. What is the deduplication key for the email task in Redis?
+  If Redis does not support deduplication natively, how do you enforce at-most-once delivery
+  at the outbox processor layer?
+- Follow-up: Kafka Transactions (enable.idempotence=true, transactional.id) let a consumer
+  atomically commit a Kafka offset AND produce to another Kafka topic.
+  How does this differ from the outbox pattern?
+  For writes to PostgreSQL (orders table), can Kafka Transactions help,
+  or do you still need the outbox pattern?
+  Explain the exact boundary of Kafka Transactions' guarantee.
+
+---
+
+---
+
+### Cross-chapter from Ch20: Mapping Kafka Consistency to the Spectrum
+
+**Question 42 — Ch20 + Ch33: Mapping Kafka's Consistency Model to the Spectrum**
+
+Kafka provides producer-side durability via the acks configuration (acks=0, acks=1, acks=all) and consumer-side reads via offset-based consumption. Consumers can be ahead of or behind the partition head by any amount.
+
+- Map each Kafka producer acks setting to a consistency model from Chapter 20's spectrum. acks=0 is fire-and-forget — what does the producer know about whether the write succeeded? acks=1 means the partition leader acknowledged — what does this provide and what does it not provide? acks=all means all in-sync replicas acknowledged — map this to the spectrum. Are these mappings clean, or do they cross multiple models?
+- A Kafka consumer reads events from a partition. It is always reading from committed offsets — it cannot read uncommitted messages. But it can be arbitrarily far behind the current head of the partition. Is this "eventual consistency" in the same sense that a database replica's async replication is eventual consistency? State two specific differences and one meaningful similarity.
+- A downstream service consumes from a Kafka topic, processes each event, and writes the result to a database. The service uses an exactly-once semantics (EOS) producer to write to the output topic. If the service restarts and re-reads from its last committed offset, it may re-process events whose results are already in the database. What consistency guarantee does the service need from its output database to prevent duplicate results? Is this a read-your-writes problem, a causal problem, or an idempotency problem? Which of these is the right framing, and what is the implementation?
+- Follow-up: You want read-your-writes in Kafka. A producer writes a message to topic T and then wants to verify the message is available for consumers. Design this verification. What is the minimum overhead — in latency and in Kafka operations — of this verification? At what producer throughput does verifying every write become a bottleneck? What is the industry practice for handling this at high throughput?
+
+> *Discussion notes:*
+> - *acks=0: not on the consistency spectrum at all. The producer does not wait for any acknowledgment. Equivalent to "hope the write arrived."*
+> - *acks=1: maps to read-your-writes for consumers reading from the same partition leader. But if the leader crashes before replicating, the write is lost. Durability guarantee is weak — not equivalent to a database write-to-disk acknowledgment.*
+> - *acks=all: maps to sequential consistency for durability per partition. All in-sync replicas (ISR) have the message before the producer is told success. Any consumer reading from any ISR member will see it. But Kafka ordering is per-partition only — not global across partitions — so this is not linearizable.*
+> - *Consumer lag vs. database replica lag key difference: in a database, the replica is expected to converge to the primary's state and serve reads in place of the primary. In Kafka, consumer offset is a client-side position — the partition head is always authoritative. Kafka "eventual consistency" is driven by consumer processing throughput, not server-side replication.*
+> - *Read-your-writes in Kafka: producer sends a message and receives the offset in the response. Producer then asks a consumer to confirm it can see offset N. At low throughput: add 1-3ms. At high throughput (1M messages/second), this verification becomes a bottleneck — industry practice is to verify a sample (1 in 1000 messages) rather than every write.*
+
+---
+
+
+---
+
+### Cross-chapter from Ch26: Kafka's CAP position
+
+**Question 36 -- Ch26 + Ch33: Kafka's CAP position**
+
+Kafka's CAP position is nuanced and commonly misunderstood. The producer side (with acks=all) is CP: it blocks until all in-sync replicas have acknowledged. But the consumer side is AP: consumers read from their current offset, which may be behind the latest committed offset. Kafka as a whole is a hybrid, with different CAP positions for different operations.
+
+- With acks=all and min.insync.replicas=2 on a cluster with 3 replicas: if one replica fails, producers can still write (2 in-sync replicas remain). If two replicas fail, producers block (CP behavior -- availability is sacrificed for consistency). Trace this through.
+- With min.insync.replicas=1 vs min.insync.replicas=2: how does the CAP position change for producers? Which is more available? Which is more consistent?
+- Follow-up: A Kafka consumer reads a message and processes it. The Kafka broker crashes before the consumer commits its offset. On restart, the consumer re-reads the message (at-least-once delivery). Is this a CAP consistency violation? Is it an ACID consistency violation? Explain the difference, and how you design idempotent consumers to handle it.
+
+
+### Cross-chapter from Ch27: Kafka transactions as 2PC
+
+**Question 39 -- Ch27 + Ch33: Kafka's transaction mechanism as 2PC**
+
+Kafka's exactly-once semantics (introduced in Kafka 0.11) implement a 2PC-like protocol internally. The producer writes to a transaction log (the transaction coordinator topic) and then commits. If the producer crashes after writing to the log but before committing, Kafka's transaction coordinator can recover the transaction state and complete or abort it. This is 2PC with Kafka acting as both the transaction coordinator and the participant.
+
+- Walk through Kafka's exactly-once protocol: (a) producer begins transaction (registers with transaction coordinator), (b) producer writes messages to topic partitions, (c) producer sends commit to transaction coordinator, (d) coordinator writes commit marker to all partitions, (e) consumers only read committed messages. Which step is equivalent to 2PC Phase 1 (prepare)? Which is Phase 2 (commit)?
+- What is the equivalent of the "coordinator" in Kafka's transaction protocol? (The transaction coordinator partition, which is itself Raft-replicated within the Kafka cluster.) If the transaction coordinator crashes, what happens to in-flight transactions?
+- Follow-up: Kafka's exactly-once semantics require that the consumer's processing (business logic) AND the offset commit happen atomically. This is only achievable if the consumer writes its output back to Kafka (consume-transform-produce). If the consumer writes to an external database (e.g., PostgreSQL), you need external transaction coordination (2PC between Kafka and PostgreSQL). Describe this scenario and why it is usually avoided.
+

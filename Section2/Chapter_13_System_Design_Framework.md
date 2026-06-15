@@ -1,4 +1,4 @@
-# Chapter 13: System Design Framework — Simplified Deep Dive
+# Chapter 13: System Design Framework -- Simplified Deep Dive
 
 > **Who this is for:** A recent college graduate preparing for Google Staff Engineer (L6) system design interviews. You know how to code. You may have built things. But you have not yet internalized the *discipline* of how Staff engineers approach a new design problem. This chapter teaches that discipline from scratch.
 
@@ -7,46 +7,46 @@
 ## Chapter at a Glance
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║            CHAPTER 13 — SYSTEM DESIGN FRAMEWORK AT A GLANCE                   ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  CORE IDEA: Establish the contract BEFORE designing. Every design decision   ║
-║  must trace back to a requirement established in the 5 phases.               ║
-║                                                                               ║
-║  THE 5 PHASES (always in this order):                                         ║
-║  1. Users & Use Cases        → Who? What are they trying to DO?               ║
-║  2. Functional Requirements  → What must the system DO?                       ║
-║  3. Scale                    → How big? QPS = DAU × actions ÷ 86,400         ║
-║  4. Non-Functional Reqs      → How well? Availability / Latency / Consistency ║
-║  5. Assumptions & Constraints → What is given? What limits us?               ║
-║                                                                               ║
-║  L5 vs L6 IN ONE SENTENCE:                                                    ║
-║  L5 jumps to architecture. L6 establishes the contract first.                ║
-║                                                                               ║
-║  THE QUESTION TO ASK AT THE END OF EVERY PHASE:                              ║
-║  "Does this match what you had in mind before I continue?"                    ║
-║                                                                               ║
-║  FAILURE REQUIREMENT (L6 adds this to every phase):                          ║
-║  "What is the acceptable user experience when this feature is degraded?"      ║
-║                                                                               ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
++===============================================================================+
+|            CHAPTER 13 -- SYSTEM DESIGN FRAMEWORK AT A GLANCE                   |
++===============================================================================+
+|                                                                               |
+|  CORE IDEA: Establish the contract BEFORE designing. Every design decision   |
+|  must trace back to a requirement established in the 5 phases.               |
+|                                                                               |
+|  THE 5 PHASES (always in this order):                                         |
+|  1. Users & Use Cases        -> Who? What are they trying to DO?               |
+|  2. Functional Requirements  -> What must the system DO?                       |
+|  3. Scale                    -> How big? QPS = DAU x actions / 86,400         |
+|  4. Non-Functional Reqs      -> How well? Availability / Latency / Consistency |
+|  5. Assumptions & Constraints -> What is given? What limits us?               |
+|                                                                               |
+|  L5 vs L6 IN ONE SENTENCE:                                                    |
+|  L5 jumps to architecture. L6 establishes the contract first.                |
+|                                                                               |
+|  THE QUESTION TO ASK AT THE END OF EVERY PHASE:                              |
+|  "Does this match what you had in mind before I continue?"                    |
+|                                                                               |
+|  FAILURE REQUIREMENT (L6 adds this to every phase):                          |
+|  "What is the acceptable user experience when this feature is degraded?"      |
+|                                                                               |
++===============================================================================+
 ```
 
 ---
 
-## Quick Visual: L5 vs L6 — The Comparison That Matters
+## Quick Visual: L5 vs L6 -- The Comparison That Matters
 
 | Dimension | L5 (Senior) | L6 (Staff) |
 |-----------|-------------|------------|
 | **Starting point** | Jumps to architecture immediately | Establishes context through 5 phases first |
 | **User discovery** | "Users are people who use the system" | Identifies external, internal, and system users separately |
 | **Requirements** | Treats all features as equal priority | Explicitly categorises: core / important / nice-to-have |
-| **Scale** | "We need to handle a lot of traffic" | "30M DAU × 20 actions ÷ 86,400 = 7K QPS. Peak at 3× = 21K" |
+| **Scale** | "We need to handle a lot of traffic" | "30M DAU x 20 actions / 86,400 = 7K QPS. Peak at 3x = 21K" |
 | **NFRs** | "It should be fast and reliable" | "99.9% availability, P99 < 200ms, eventual consistency OK for feeds" |
-| **Assumptions** | Implicit — problems found during design | Listed explicitly and confirmed: "Please correct me if any are wrong" |
+| **Assumptions** | Implicit -- problems found during design | Listed explicitly and confirmed: "Please correct me if any are wrong" |
 | **Failure thinking** | Designs for the happy path only | "What is the user experience when this component is down?" |
-| **Decision justification** | "I'll use Kafka for the queue" | "Kafka because our durability requirement needs replay — stated in Phase 4" |
+| **Decision justification** | "I'll use Kafka for the queue" | "Kafka because our durability requirement needs replay -- stated in Phase 4" |
 | **Scope** | Keeps adding features mid-design | Sets explicit scope, states what is out, confirms alignment |
 | **Trade-offs** | Makes choices silently | Names both options, states what is being traded and why |
 
@@ -56,15 +56,15 @@
 
 ```mermaid
 flowchart TD
-    A["🎯 Interview Prompt<br/>'Design a notification system'"] --> B
+    A["[goal] Interview Prompt<br/>'Design a notification system'"] --> B
 
     B["Phase 1: Users & Use Cases<br/>Who are we building for?<br/>What are they trying to do?"]
     B --> C["Phase 2: Functional Requirements<br/>What must the system DO?<br/>Core / Important / Nice-to-have"]
-    C --> D["Phase 3: Scale<br/>How big is this problem?<br/>Users × Actions ÷ 86400 = QPS"]
+    C --> D["Phase 3: Scale<br/>How big is this problem?<br/>Users x Actions / 86400 = QPS"]
     D --> E["Phase 4: Non-Functional Requirements<br/>How WELL must it work?<br/>Availability / Latency / Consistency"]
     E --> F["Phase 5: Assumptions & Constraints<br/>What's given? What limits us?<br/>Team / Timeline / Infrastructure"]
-    F --> G["✅ Confirm with Interviewer<br/>'Does this match your expectations?'"]
-    G --> H["🏗️ NOW Start Designing<br/>Every decision justified by a requirement"]
+    F --> G["[Y] Confirm with Interviewer<br/>'Does this match your expectations?'"]
+    G --> H["[build] NOW Start Designing<br/>Every decision justified by a requirement"]
 
     style A fill:#ff6b6b,color:#fff
     style B fill:#4ecdc4,color:#fff
@@ -105,32 +105,32 @@ mindmap
 
 ---
 
-## Section 1: Learning Goal — What You Can DO After Reading This
+## Section 1: Learning Goal -- What You Can DO After Reading This
 
 After reading this chapter, you will be able to:
 
-1. Walk into any system design interview and know exactly what to do in the first ten minutes — without panicking or winging it.
+1. Walk into any system design interview and know exactly what to do in the first ten minutes -- without panicking or winging it.
 2. Ask the five categories of questions that establish context before you design anything.
 3. Explain why each question category exists and what breaks when you skip it.
-4. Do quick back-of-envelope math to estimate scale and state it in numbers — not vague words.
+4. Do quick back-of-envelope math to estimate scale and state it in numbers -- not vague words.
 5. Distinguish between what a Senior (L5) engineer does and what a Staff (L6) engineer does at each phase.
-6. Trace every design decision back to a specific requirement — so you can defend it.
-7. Show two contrasting interview transcripts in your head: one structured, one not — and know which one gets the offer.
+6. Trace every design decision back to a specific requirement -- so you can defend it.
+7. Show two contrasting interview transcripts in your head: one structured, one not -- and know which one gets the offer.
 8. Apply the framework to at least three different types of problems (notifications, payments, search) and see how it generalizes.
 
-This is not just interview prep. This is how Staff engineers think on the job at Google, Amazon, Meta, and every other top-tier company. Learn this framework and you change how you think about every system — not just interview problems.
+This is not just interview prep. This is how Staff engineers think on the job at Google, Amazon, Meta, and every other top-tier company. Learn this framework and you change how you think about every system -- not just interview problems.
 
 ---
 
-## Section 2: Why This Matters — Real Interview and Production Impact
+## Section 2: Why This Matters -- Real Interview and Production Impact
 
 ### 2.1 The Two Ways Candidates Fail System Design Interviews
 
 There are two ways to fail a system design interview. Most candidates know about one of them. Very few know about the other.
 
-**Failure Mode 1 — Not knowing enough**: You don't know what a message queue is. You don't know how databases handle concurrent writes. You don't know what a CDN does. This is knowledge-gap failure. It is fixable by studying.
+**Failure Mode 1 -- Not knowing enough**: You don't know what a message queue is. You don't know how databases handle concurrent writes. You don't know what a CDN does. This is knowledge-gap failure. It is fixable by studying.
 
-**Failure Mode 2 — Not knowing what to do with what you know**: You know all the components. You've built systems before. But when given a vague prompt like "design a notification system," you panic, jump to drawing boxes, and produce something that doesn't fit the actual problem. This is process-gap failure. It is the more common failure for experienced engineers. It is what this chapter fixes.
+**Failure Mode 2 -- Not knowing what to do with what you know**: You know all the components. You've built systems before. But when given a vague prompt like "design a notification system," you panic, jump to drawing boxes, and produce something that doesn't fit the actual problem. This is process-gap failure. It is the more common failure for experienced engineers. It is what this chapter fixes.
 
 The framework in this chapter addresses Failure Mode 2 completely.
 
@@ -145,7 +145,7 @@ Think about what a Staff engineer actually does on the job. They don't get hande
 - What resources do we have?
 - What's the right trade-off between fast delivery and cost?
 
-An interviewer simulates this. They give you a vague prompt on purpose. The first ten minutes of your interview is the test of whether you know how to turn vague into concrete. If you skip that and jump to architecture, you are showing them that in real work you would also skip that step — and build the wrong thing.
+An interviewer simulates this. They give you a vague prompt on purpose. The first ten minutes of your interview is the test of whether you know how to turn vague into concrete. If you skip that and jump to architecture, you are showing them that in real work you would also skip that step -- and build the wrong thing.
 
 ### 2.3 What Goes Wrong in Production When You Skip This
 
@@ -158,7 +158,7 @@ Here is a real pattern seen repeatedly in production systems. An engineer gets a
 
 Every one of these failures maps to a skipped phase in the framework. The framework is not a bureaucratic ritual. It is a protection against these very concrete disasters.
 
-### 2.4 L5 vs L6 — The Interview-Level Difference
+### 2.4 L5 vs L6 -- The Interview-Level Difference
 
 Here is the clearest way to understand what separates L5 from L6 behavior in a system design interview:
 
@@ -169,7 +169,7 @@ The word "right" here means: sized correctly, scoped correctly, quality-leveled 
 
 ---
 
-## Section 3: Core Concepts — Everything You Need to Know
+## Section 3: Core Concepts -- Everything You Need to Know
 
 ### 3.1 What the Framework Is
 
@@ -192,7 +192,7 @@ Imagine you are an architect asked to design a building. If you just start drawi
 
 Every one of these mistakes would have been caught by asking the right questions first. The framework is that set of questions for system design.
 
-Here is the key insight: **a framework gives you confidence under pressure.** When an interviewer says "design a ride-sharing app," a person without a framework feels panic. A person with a framework feels calm. They know exactly what to do next — start Phase 1, ask about users.
+Here is the key insight: **a framework gives you confidence under pressure.** When an interviewer says "design a ride-sharing app," a person without a framework feels panic. A person with a framework feels calm. They know exactly what to do next -- start Phase 1, ask about users.
 
 ### 3.3 The Framework as a Contract
 
@@ -200,7 +200,7 @@ This is the mental model that makes the framework click for most people.
 
 Before you design, you are negotiating a contract with the interviewer. The contract says: "We agree that we are building [this] for [these users], at [this scale], with [these quality requirements], under [these constraints]."
 
-Once both of you sign that contract, you can design. If you don't establish the contract first, you might design something the interviewer never intended. And even if your design is brilliant, it doesn't fit the problem — which means it's wrong.
+Once both of you sign that contract, you can design. If you don't establish the contract first, you might design something the interviewer never intended. And even if your design is brilliant, it doesn't fit the problem -- which means it's wrong.
 
 Staff engineers at Google call this "alignment before architecture." In real projects, it's the difference between a design review that goes smoothly and one where someone says "Wait, why did you design it this way? That's not what we needed."
 
@@ -230,7 +230,7 @@ flowchart LR
 
 For example: You state requirements in Phase 2. Then in Phase 3, scale calculations reveal that the fan-out problem for celebrity users is extreme. That forces you back to Phase 1 to add "celebrity users" as a distinct user type, which then changes Phase 2 (you add a priority queue requirement for different user tiers). The framework is a loop, not just a checklist.
 
-### 3.4 Phase 1 — Users and Use Cases
+### 3.4 Phase 1 -- Users and Use Cases
 
 #### What It Is
 
@@ -240,7 +240,7 @@ For example: You state requirements in Phase 2. Then in Phase 3, scale calculati
 
 If you skip this phase, you design for the wrong person. And because different users need different things from the same system, designing for the wrong user produces the wrong architecture.
 
-**Concrete failure example:** A team designed a notification system. They thought about "users" as the people receiving notifications. They didn't think about the system-level services that send notifications. So their API was designed for human interactions — small payloads, manual triggers. When other services tried to use it programmatically to send millions of notifications per hour, it fell over. The whole system needed to be redesigned.
+**Concrete failure example:** A team designed a notification system. They thought about "users" as the people receiving notifications. They didn't think about the system-level services that send notifications. So their API was designed for human interactions -- small payloads, manual triggers. When other services tried to use it programmatically to send millions of notifications per hour, it fell over. The whole system needed to be redesigned.
 
 They skipped Phase 1. They assumed one user type when there were really three.
 
@@ -249,17 +249,17 @@ They skipped Phase 1. They assumed one user type when there were really three.
 Start by identifying every distinct type of user or actor in the system. For most systems, there are more than you think.
 
 Think in three rings:
-- **External users** — the people your product is built for
-- **Internal users** — operations staff, customer support, data scientists
-- **System users** — other services, APIs, automated processes
+- **External users** -- the people your product is built for
+- **Internal users** -- operations staff, customer support, data scientists
+- **System users** -- other services, APIs, automated processes
 
 Then for each user, ask: what are their primary goals? What does success look like for them?
 
-**Example — Notification System:**
+**Example -- Notification System:**
 
 Ring 1 (external): End users receiving push notifications on their phone
 Ring 2 (internal): Operations team monitoring delivery rates, customer support resolving "I didn't get my notification" tickets
-Ring 3 (system): The post service, the like service, the comment service — all of which generate events that become notifications
+Ring 3 (system): The post service, the like service, the comment service -- all of which generate events that become notifications
 
 Each of these users has different needs. If you only design for Ring 1, you miss the requirements of Ring 2 and Ring 3, and the system will fail to serve them.
 
@@ -285,15 +285,15 @@ Users also need to cancel, undo, recover, and handle errors. "User wants to stop
 **Mistake: Ignoring power users and edge cases**
 A celebrity account with 10 million followers is a user too. Their behavior is 10,000x more impactful than a regular user. Not accounting for them causes production incidents.
 
-#### L5 vs L6 Dialogue — Phase 1
+#### L5 vs L6 Dialogue -- Phase 1
 
 L5: "Who are the users? Users who want to receive notifications."
 
-L6: "Let me think about users carefully. I see at least three types. First, the end users — the people receiving notifications on their phones. They care about relevance, speed, and not being spammed. Second, internal users — operations staff who need to see delivery health dashboards, and customer support who needs to look up 'why did user X not get notification Y.' Third, system users — the post service, like service, and friend-request service that all generate events that need to turn into notifications. Each of these has very different needs. Did I miss any?"
+L6: "Let me think about users carefully. I see at least three types. First, the end users -- the people receiving notifications on their phones. They care about relevance, speed, and not being spammed. Second, internal users -- operations staff who need to see delivery health dashboards, and customer support who needs to look up 'why did user X not get notification Y.' Third, system users -- the post service, like service, and friend-request service that all generate events that need to turn into notifications. Each of these has very different needs. Did I miss any?"
 
 The L6 answer takes 60 seconds longer. It surfaces requirements the L5 answer misses completely. The interviewer notes the difference immediately.
 
-### 3.5 Phase 2 — Functional Requirements
+### 3.5 Phase 2 -- Functional Requirements
 
 #### What It Is
 
@@ -303,9 +303,9 @@ Functional requirements describe what the system must do. These are the capabili
 
 Without explicit functional requirements, two things go wrong:
 
-**Problem 1 — Scope creep:** You design without a clear boundary. The interviewer (or PM) keeps adding things. You keep expanding. Forty-five minutes in, you've designed 30% of everything and 100% of nothing.
+**Problem 1 -- Scope creep:** You design without a clear boundary. The interviewer (or PM) keeps adding things. You keep expanding. Forty-five minutes in, you've designed 30% of everything and 100% of nothing.
 
-**Problem 2 — Wrong priority:** You spend time on a nice-to-have feature while missing a must-have one. Or you design the entire analytics system in detail while only sketching the core delivery path.
+**Problem 2 -- Wrong priority:** You spend time on a nice-to-have feature while missing a must-have one. Or you design the entire analytics system in detail while only sketching the core delivery path.
 
 The functional requirements phase establishes scope and priority explicitly. It gives you permission to focus.
 
@@ -313,13 +313,13 @@ The functional requirements phase establishes scope and priority explicitly. It 
 
 Every requirement belongs in one of three buckets:
 
-**Core** — The system literally does not function without this. If you don't build it, there is no product.
+**Core** -- The system literally does not function without this. If you don't build it, there is no product.
 Example for notifications: "Users can send notifications" and "Users can receive notifications."
 
-**Important** — The system works without this, but it's significantly less useful or won't meet user expectations.
+**Important** -- The system works without this, but it's significantly less useful or won't meet user expectations.
 Example for notifications: "Users can set preferences to mute certain notification types."
 
-**Nice-to-have** — Valuable but can be added in a later version without impacting the core product.
+**Nice-to-have** -- Valuable but can be added in a later version without impacting the core product.
 Example for notifications: "Analytics on notification open rates."
 
 When you state your scope to the interviewer, you say: "I'm going to design the core requirements in detail. I'll acknowledge the important ones and show how the architecture supports them, but I won't design them fully. I'll mention the nice-to-haves without spending time on them. Does that work?"
@@ -328,33 +328,33 @@ This shows prioritization. It shows you understand that time is finite. It shows
 
 #### How to Execute This Phase
 
-**Step 1 — Enumerate requirements from use cases**
+**Step 1 -- Enumerate requirements from use cases**
 
 For each use case you identified in Phase 1, ask: "What must the system do to support this use case?"
 
 Use case: "User receives a push notification when someone likes their post"
-→ System must accept an event (someone liked a post)
-→ System must look up the post owner
-→ System must look up the post owner's notification preferences
-→ System must look up the post owner's device tokens
-→ System must send a push notification to those devices
-→ System must store the notification in history
+-> System must accept an event (someone liked a post)
+-> System must look up the post owner
+-> System must look up the post owner's notification preferences
+-> System must look up the post owner's device tokens
+-> System must send a push notification to those devices
+-> System must store the notification in history
 
 Each arrow becomes a functional requirement.
 
-**Step 2 — Prioritize into the three buckets**
+**Step 2 -- Prioritize into the three buckets**
 
-Go through your list and ask "If we couldn't do this on day one, would the product still make sense?" If no — it's core. If yes but barely — it's important. If yes easily — it's nice-to-have.
+Go through your list and ask "If we couldn't do this on day one, would the product still make sense?" If no -- it's core. If yes but barely -- it's important. If yes easily -- it's nice-to-have.
 
-**Step 3 — Define scope explicitly**
+**Step 3 -- Define scope explicitly**
 
-State what's in scope and what's not. "I'm not designing the email or SMS sending infrastructure — I'll assume we use third-party providers like SendGrid and Twilio. I'm not designing the auth system — that's an existing service. Does that scope work?"
+State what's in scope and what's not. "I'm not designing the email or SMS sending infrastructure -- I'll assume we use third-party providers like SendGrid and Twilio. I'm not designing the auth system -- that's an existing service. Does that scope work?"
 
-**Step 4 — Confirm with the interviewer**
+**Step 4 -- Confirm with the interviewer**
 
 Always end with "Does this scope match what you had in mind?" The interviewer may say yes. They may add something you missed. Either way, you're now aligned.
 
-#### Example Application — URL Shortener
+#### Example Application -- URL Shortener
 
 **Prompt:** "Design a URL shortening service."
 
@@ -394,21 +394,21 @@ This took 2 minutes. It established complete alignment. The interviewer now know
 This leads to designing 10% of everything instead of 100% of the important parts. Prioritize. The interviewer wants to see you prioritize.
 
 **Mistake: Confusing functional with non-functional**
-"The system must be fast" is NOT a functional requirement. It says nothing about what the system does — only about how well it does it. That belongs in Phase 4.
+"The system must be fast" is NOT a functional requirement. It says nothing about what the system does -- only about how well it does it. That belongs in Phase 4.
 "Users can retrieve their last 100 notifications" IS a functional requirement.
 
 **Mistake: Not scoping out-of-scope items explicitly**
 If you don't say "auth is out of scope," the interviewer might assume you forgot about it. Always state what you're explicitly not building.
 
-#### L5 vs L6 Dialogue — Phase 2
+#### L5 vs L6 Dialogue -- Phase 2
 
 L5: "We need to be able to send notifications, manage preferences, track delivery status, show history, and provide analytics."
 
-L6: "Let me prioritize the functional requirements. Core — which means without this there's no product: send notifications and receive them. Important — which means the product works but isn't great without it: user preferences and notification history. Nice-to-have: analytics, A/B testing for notification content. For this session, I'm designing core in full, acknowledging important at the data model level, and not spending time on nice-to-haves unless you'd like me to. I'm also scoping out authentication, email/SMS infrastructure, and content moderation — I'll assume those are handled by other services. Does this scope work?"
+L6: "Let me prioritize the functional requirements. Core -- which means without this there's no product: send notifications and receive them. Important -- which means the product works but isn't great without it: user preferences and notification history. Nice-to-have: analytics, A/B testing for notification content. For this session, I'm designing core in full, acknowledging important at the data model level, and not spending time on nice-to-haves unless you'd like me to. I'm also scoping out authentication, email/SMS infrastructure, and content moderation -- I'll assume those are handled by other services. Does this scope work?"
 
 The L6 answer explicitly categorizes, explicitly scopes, and explicitly confirms. It takes 90 seconds. It prevents 20 minutes of wasted design work.
 
-### 3.6 Phase 3 — Scale
+### 3.6 Phase 3 -- Scale
 
 #### What It Is
 
@@ -421,7 +421,7 @@ Scale is the single biggest factor in system architecture. This is not an exagge
 **Concrete example:**
 
 Notification system for 1,000 users:
-- Send notification → write to database → push to device
+- Send notification -> write to database -> push to device
 - A single server, a single database
 - Works fine
 
@@ -429,20 +429,20 @@ Notification system for 100 million users:
 - 7,000 notifications/second average, 70,000/second at peak
 - A single database can't handle the write rate
 - A single server can't handle the connection count
-- A naive fan-out algorithm (one user likes a celebrity post → 10 million notifications) will crash the system
+- A naive fan-out algorithm (one user likes a celebrity post -> 10 million notifications) will crash the system
 - You need message queues, distributed processing, sharded storage, priority lanes, and rate limiting
 
 These are not the same architecture. They share some concepts, but the scale changes everything about how you implement them. If you skip Phase 3 and assume some vague "high scale," you will either over-engineer (adding complexity for scale you don't need) or under-engineer (building something that falls over at real load).
 
 #### How to Execute This Phase
 
-**Step 1 — Get the numbers if the interviewer has them**
+**Step 1 -- Get the numbers if the interviewer has them**
 
 "What scale are we designing for? How many daily active users? What's the expected request rate?"
 
 If they give you numbers, use them. Write them down.
 
-**Step 2 — Estimate from first principles if they don't**
+**Step 2 -- Estimate from first principles if they don't**
 
 This is a critical L6 skill. You should be able to estimate scale from a product description.
 
@@ -452,19 +452,19 @@ QPS = (Number of users who perform this action per day) / 86,400 seconds per day
 ```
 (A useful shortcut: divide by 100,000 instead of 86,400 to get a conservative, round number)
 
-Peak = Average × 10 (use this as your default safety factor)
+Peak = Average x 10 (use this as your default safety factor)
 
-**Step 3 — Calculate storage**
+**Step 3 -- Calculate storage**
 
 ```
-Storage = (Number of items stored) × (Size per item) × (Retention period)
+Storage = (Number of items stored) x (Size per item) x (Retention period)
 ```
 
-**Step 4 — Use the numbers to drive decisions**
+**Step 4 -- Use the numbers to drive decisions**
 
 This is the step most L5 engineers skip. It's the most important part.
 
-Don't just list the numbers. Say: "At 7,000 writes/second, a single relational database can't sustain this — typical PostgreSQL handles 5,000-20,000 simple inserts/second. So the write path needs to be horizontally scalable. I'll introduce a message queue to buffer writes."
+Don't just list the numbers. Say: "At 7,000 writes/second, a single relational database can't sustain this -- typical PostgreSQL handles 5,000-20,000 simple inserts/second. So the write path needs to be horizontally scalable. I'll introduce a message queue to buffer writes."
 
 Connect the number to the consequence. That's L6 thinking.
 
@@ -474,8 +474,8 @@ You need to know these numbers cold. Practice them until they're automatic.
 
 **Time conversions:**
 - 1 day = 86,400 seconds (round to 100,000 for quick math)
-- 1 month ≈ 2.5 million seconds
-- 1 year ≈ 30 million seconds
+- 1 month ~= 2.5 million seconds
+- 1 year ~= 30 million seconds
 
 **Storage units:**
 - 1 KB = 1,000 bytes (a short text message, a small JSON object)
@@ -493,12 +493,12 @@ You need to know these numbers cold. Practice them until they're automatic.
 **Quick formulas:**
 ```
 QPS (average) = Daily actions / 100,000
-QPS (peak) = Average QPS × 10
-Storage needed = Item count × Item size × Retention days
-Bandwidth = QPS × Response size
+QPS (peak) = Average QPS x 10
+Storage needed = Item count x Item size x Retention days
+Bandwidth = QPS x Response size
 ```
 
-#### Scale Example — WhatsApp-Scale Messaging
+#### Scale Example -- WhatsApp-Scale Messaging
 
 **Prompt:** "Design a messaging system."
 
@@ -509,13 +509,13 @@ Bandwidth = QPS × Response size
 Users: 500 million registered users, 200 million daily active.
 
 Message volume: The average WhatsApp user sends about 50 messages per day and receives about 100.
-- Sent: 200M × 50 = 10 billion messages/day
-- That's 10B / 86,400 ≈ 115,000 messages/second average
+- Sent: 200M x 50 = 10 billion messages/day
+- That's 10B / 86,400 ~= 115,000 messages/second average
 - Peak (evenings, holidays): 3x to 5x, so let's design for 500,000 messages/second
 
 Storage: Average message is about 200 bytes of text. With metadata, call it 1 KB.
-- 10 billion messages/day × 1 KB = 10 TB/day new data
-- Keeping messages for 1 year: 365 × 10 TB = 3.65 PB
+- 10 billion messages/day x 1 KB = 10 TB/day new data
+- Keeping messages for 1 year: 365 x 10 TB = 3.65 PB
 - We need distributed, horizontally scalable storage from day one
 
 Connections: Real-time messaging requires persistent connections (WebSocket or long poll).
@@ -523,7 +523,7 @@ Connections: Real-time messaging requires persistent connections (WebSocket or l
 - A single server can hold about 100,000 connections
 - We need at minimum 2,000 connection servers, probably 10,000 for redundancy and geo-distribution
 
-What this tells me architecturally: this is a massive scale problem that requires distributed systems at every layer — message ingestion, storage, delivery, and connection management. I cannot use a simple request/response API. I need to design for async delivery and massive connection counts."
+What this tells me architecturally: this is a massive scale problem that requires distributed systems at every layer -- message ingestion, storage, delivery, and connection management. I cannot use a simple request/response API. I need to design for async delivery and massive connection counts."
 
 This analysis took 3 minutes. It tells the interviewer you can size a problem correctly. And it tells you what architectural constraints you're working under before you draw a single box.
 
@@ -533,13 +533,13 @@ Staff engineers don't just think about current scale. They think about what brea
 
 | Growth Stage | Typical First Bottleneck | Why It Breaks First |
 |---|---|---|
-| 1K → 10K users | Single database connection pool | Read and write contention before anything else |
-| 10K → 100K users | Latency for distant users | Users far from the datacenter see bad P99 |
-| 100K → 1M users | Fan-out events (celebrity posts, viral content) | One event generating millions of work items overwhelms queues |
-| 1M → 10M users | Storage cost and bandwidth | Data volume grows faster than budget |
+| 1K -> 10K users | Single database connection pool | Read and write contention before anything else |
+| 10K -> 100K users | Latency for distant users | Users far from the datacenter see bad P99 |
+| 100K -> 1M users | Fan-out events (celebrity posts, viral content) | One event generating millions of work items overwhelms queues |
+| 1M -> 10M users | Storage cost and bandwidth | Data volume grows faster than budget |
 | 10M+ users | Operational complexity | Team can't maintain the system; incidents increase |
 
-In an interview, you demonstrate L6 thinking by saying: "At 7K QPS, the write path is my first bottleneck — a single database can't sustain this. But as we grow to 70K QPS, the celebrity fan-out problem becomes my next bottleneck. I'll design the write path for horizontal scale now, and I'll design the fan-out handling in a way that can be extended without a rewrite."
+In an interview, you demonstrate L6 thinking by saying: "At 7K QPS, the write path is my first bottleneck -- a single database can't sustain this. But as we grow to 70K QPS, the celebrity fan-out problem becomes my next bottleneck. I'll design the write path for horizontal scale now, and I'll design the fan-out handling in a way that can be extended without a rewrite."
 
 #### Common Mistakes in Phase 3
 
@@ -558,19 +558,19 @@ Request volume is obvious. But what about data volume? A system that stores 10 T
 **Mistake: Ignoring growth trajectory**
 Current scale is fine. But what happens in 6 months? In 2 years? Designing for current scale with no headroom means an emergency redesign in a year.
 
-### 3.7 Phase 4 — Non-Functional Requirements
+### 3.7 Phase 4 -- Non-Functional Requirements
 
 #### What It Is
 
 Non-functional requirements (NFRs) describe the qualities the system must have. Functional requirements say what the system does. Non-functional requirements say how well it does it.
 
 The key NFR dimensions are:
-- **Availability** — What percentage of time must the system work?
-- **Latency** — How fast must responses be?
-- **Durability** — Can data ever be lost?
-- **Consistency** — Do all users see the same data at the same time?
-- **Security** — How is access controlled and data protected?
-- **Observability** — How do we know when the system is unhealthy?
+- **Availability** -- What percentage of time must the system work?
+- **Latency** -- How fast must responses be?
+- **Durability** -- Can data ever be lost?
+- **Consistency** -- Do all users see the same data at the same time?
+- **Security** -- How is access controlled and data protected?
+- **Observability** -- How do we know when the system is unhealthy?
 
 #### Why This Phase Exists
 
@@ -578,19 +578,19 @@ NFRs drive architecture more than functional requirements do. Two systems with i
 
 **Concrete example:**
 
-System A — Social notification system:
+System A -- Social notification system:
 - Availability: 99.9% (8 hours downtime/year)
 - Latency: Deliver within 5 seconds P95
-- Durability: Best-effort — some loss acceptable
-- Consistency: Eventual — doesn't matter if "read" status is stale for a few seconds
+- Durability: Best-effort -- some loss acceptable
+- Consistency: Eventual -- doesn't matter if "read" status is stale for a few seconds
 
 Architecture: Simple message queue, async processing, async replication, no transaction overhead. A few hundred dollars a day to run.
 
-System B — Financial transaction notification:
+System B -- Financial transaction notification:
 - Availability: 99.99% (52 minutes downtime/year)
 - Latency: Deliver within 500ms P99
-- Durability: Never lose a notification — these are legal records
-- Consistency: Strong — if a transaction notification is sent, it must be immediately visible everywhere
+- Durability: Never lose a notification -- these are legal records
+- Consistency: Strong -- if a transaction notification is sent, it must be immediately visible everywhere
 
 Architecture: Multi-region active-active, synchronous replication, ACID transactions, dedicated capacity lanes, 24/7 on-call. A few thousand dollars a day to run.
 
@@ -622,7 +622,7 @@ For example, if P50 is 20ms and P99 is 200ms, it means most requests are very fa
 
 Why does P99 matter? Because if you have 1 million requests per second and your P99 is 200ms, then 10,000 requests per second are slow. At that scale, "1% of requests" is a huge number of users.
 
-L6 thinking: "What's the latency budget for each operation, and is that achievable given the scale? If P99 must be under 100ms and I have 10 database lookups on the critical path, each lookup has a 10ms budget. At 100K QPS, can my database sustain those lookups within that budget? Probably not — I need caching."
+L6 thinking: "What's the latency budget for each operation, and is that achievable given the scale? If P99 must be under 100ms and I have 10 database lookups on the critical path, each lookup has a 10ms budget. At 100K QPS, can my database sustain those lookups within that budget? Probably not -- I need caching."
 
 #### Durability in Depth
 
@@ -630,9 +630,9 @@ L6 thinking: "What's the latency budget for each operation, and is that achievab
 
 Durability is usually expressed in "nines" just like availability:
 - 99.9% durable: lose roughly 1 in 1,000 records in a catastrophic event
-- 99.999999999% (11 nines) durable: essentially never lose data — this is the standard for services like AWS S3
+- 99.999999999% (11 nines) durable: essentially never lose data -- this is the standard for services like AWS S3
 
-For notifications: "Can we lose a notification?" For social likes notifications — maybe. Missing one is annoying but not harmful. For 2FA codes — absolutely not. Losing a 2FA message prevents a user from logging in. The system design for each is very different.
+For notifications: "Can we lose a notification?" For social likes notifications -- maybe. Missing one is annoying but not harmful. For 2FA codes -- absolutely not. Losing a 2FA message prevents a user from logging in. The system design for each is very different.
 
 #### Consistency in Depth
 
@@ -640,13 +640,13 @@ For notifications: "Can we lose a notification?" For social likes notifications 
 
 The main options are:
 
-**Strong consistency**: Every read returns the most recently written value. If User A writes "notification read," User B immediately sees it as read. This is safe but requires coordination — and coordination adds latency and reduces availability.
+**Strong consistency**: Every read returns the most recently written value. If User A writes "notification read," User B immediately sees it as read. This is safe but requires coordination -- and coordination adds latency and reduces availability.
 
 **Eventual consistency**: All machines will eventually agree, but might temporarily disagree. If User A marks a notification as read on their iPhone, their iPad might still show it as unread for 2-3 seconds. This is fine for many use cases and much simpler to implement at scale.
 
-**The key question**: For each data type in your system, ask "Does it matter if two users see different values for a few seconds?" If no — eventual consistency is fine. If yes — you need strong consistency, and you must be ready to pay the cost in latency and complexity.
+**The key question**: For each data type in your system, ask "Does it matter if two users see different values for a few seconds?" If no -- eventual consistency is fine. If yes -- you need strong consistency, and you must be ready to pay the cost in latency and complexity.
 
-#### The CAP Theorem — Simplified
+#### The CAP Theorem -- Simplified
 
 The CAP theorem says that in a distributed system, you can have at most two of these three properties simultaneously:
 
@@ -654,7 +654,7 @@ The CAP theorem says that in a distributed system, you can have at most two of t
 - **A**vailability: Every request gets a response (not an error)
 - **P**artition tolerance: The system keeps working even if network messages are lost
 
-The catch: in a real distributed system, network partitions (messages getting lost or delayed between machines) happen regularly. You can't choose to not have partition tolerance — it's forced on you. So the real choice is:
+The catch: in a real distributed system, network partitions (messages getting lost or delayed between machines) happen regularly. You can't choose to not have partition tolerance -- it's forced on you. So the real choice is:
 
 **CP** (Consistency + Partition Tolerance): When there's a network partition, the system refuses to serve reads/writes rather than risk returning stale data. It is consistent but not always available.
 
@@ -664,7 +664,7 @@ For a notification system: AP is almost always the right choice. It's better to 
 
 For a payment system: CP might be required. It's better to return an error than to process a transaction twice (choosing consistency over availability).
 
-In interviews: "I'm choosing eventual consistency here because our availability requirement (99.9%) and user tolerance for slightly stale notification state supports it. The alternative — strong consistency — would require synchronous replication across all replicas, adding 20-50ms to every write and significantly complicating the architecture."
+In interviews: "I'm choosing eventual consistency here because our availability requirement (99.9%) and user tolerance for slightly stale notification state supports it. The alternative -- strong consistency -- would require synchronous replication across all replicas, adding 20-50ms to every write and significantly complicating the architecture."
 
 #### Security and Compliance
 
@@ -681,7 +681,7 @@ Trust boundaries are a Staff-level concept: "Where does the trust level change i
 
 #### Observability
 
-Observability is how you know what's happening in your system — especially when things go wrong. Staff engineers think about this proactively.
+Observability is how you know what's happening in your system -- especially when things go wrong. Staff engineers think about this proactively.
 
 The three pillars of observability:
 - **Metrics**: Numerical time-series data. "Number of notifications delivered per second." "P99 latency of the delivery service."
@@ -690,7 +690,7 @@ The three pillars of observability:
 
 In an interview, demonstrate observability thinking: "I want to make sure this system is observable. Key metrics: notifications ingested per second, notifications delivered per second (broken down by type), delivery latency P50/P99, queue depth, dead letter queue size. Key alerts: queue depth rising (indicates processing slowdown), dead letter queue growing (indicates delivery failures), delivery latency P99 exceeding SLA."
 
-This shows operational maturity — a clear L6 signal.
+This shows operational maturity -- a clear L6 signal.
 
 #### Common Mistakes in Phase 4
 
@@ -706,15 +706,15 @@ These aren't boring. They fundamentally change architecture. A system that must 
 **Mistake: Designing for maximum quality everywhere**
 An internal debugging dashboard does not need 99.99% availability. A social feed does not need strong consistency. Match your quality targets to actual user impact.
 
-#### L5 vs L6 Dialogue — Phase 4
+#### L5 vs L6 Dialogue -- Phase 4
 
 L5: "Should the system be highly available? Yes. Fast? Yes. Reliable? Yes."
 
-L6: "Let me think through the non-functional requirements specifically. For availability: for a social notification system, I'd target 99.9% — 8 hours of downtime per year. Missing social notifications is annoying but not catastrophic, so 99.99% is overkill and expensive. For latency: I'd target 5-second delivery P95 for push notifications. In-app history retrieval should be under 200ms P99 — users are waiting for that. For durability: social notifications are best-effort. I would not want to lose them routinely, but occasional loss during extreme failures is acceptable. For financial or security notifications, that would be different. For consistency: eventual consistency is fine. If it takes 3 seconds for 'read' status to sync across devices, users won't notice. For security: notifications can contain user-generated content, so TLS in transit, encryption at rest, and per-user access control. No user should see another user's notifications. Is there a compliance requirement I should know about?"
+L6: "Let me think through the non-functional requirements specifically. For availability: for a social notification system, I'd target 99.9% -- 8 hours of downtime per year. Missing social notifications is annoying but not catastrophic, so 99.99% is overkill and expensive. For latency: I'd target 5-second delivery P95 for push notifications. In-app history retrieval should be under 200ms P99 -- users are waiting for that. For durability: social notifications are best-effort. I would not want to lose them routinely, but occasional loss during extreme failures is acceptable. For financial or security notifications, that would be different. For consistency: eventual consistency is fine. If it takes 3 seconds for 'read' status to sync across devices, users won't notice. For security: notifications can contain user-generated content, so TLS in transit, encryption at rest, and per-user access control. No user should see another user's notifications. Is there a compliance requirement I should know about?"
 
 The L6 answer takes 3 minutes. It prevents designing the wrong system. It shows the interviewer you understand trade-offs, not just properties.
 
-### 3.8 Phase 5 — Assumptions and Constraints
+### 3.8 Phase 5 -- Assumptions and Constraints
 
 #### What It Is
 
@@ -732,7 +732,7 @@ Systems do not exist in isolation. They exist within organizations, with existin
 
 They skipped Phase 5. They designed in a vacuum without considering team skills or timeline.
 
-A Staff engineer would have asked: "Do we have ML expertise on the team? Do we have GPU infrastructure? Is there a launch deadline?" And then designed accordingly — perhaps starting with a simpler collaborative filtering approach that the team could actually build and maintain.
+A Staff engineer would have asked: "Do we have ML expertise on the team? Do we have GPU infrastructure? Is there a launch deadline?" And then designed accordingly -- perhaps starting with a simpler collaborative filtering approach that the team could actually build and maintain.
 
 #### How to Execute This Phase
 
@@ -740,7 +740,7 @@ A Staff engineer would have asked: "Do we have ML expertise on the team? Do we h
 
 "I'm going to make a few assumptions and I want to flag them so you can correct me if they're wrong:
 1. We have existing authentication and authorization services I can integrate with rather than build
-2. We're operating on cloud infrastructure — I'll use AWS as a reference
+2. We're operating on cloud infrastructure -- I'll use AWS as a reference
 3. We have existing monitoring and logging infrastructure
 4. Other services can publish events to a message bus for us to consume
 5. The notification channels (push notification services, email, SMS) are handled by third-party providers"
@@ -750,16 +750,16 @@ Each assumption narrows your scope to what matters. Without stating them, the in
 **Probe for constraints:**
 
 "Are there constraints I should design around? Specifically:
-- Are there technology mandates — must we use specific technologies or avoid others?
+- Are there technology mandates -- must we use specific technologies or avoid others?
 - Are there existing systems I must integrate with?
 - What's the team size and experience level?
 - Is there a launch timeline?
 - Is there a budget constraint on infrastructure?
-- Are there cross-team dependencies — other teams whose work we depend on or who depend on ours?"
+- Are there cross-team dependencies -- other teams whose work we depend on or who depend on ours?"
 
 **Treat cost as a first-class constraint:**
 
-Staff engineers treat cost as a real constraint, not an afterthought. At scale, infrastructure cost can become the primary constraint — before latency and availability.
+Staff engineers treat cost as a real constraint, not an afterthought. At scale, infrastructure cost can become the primary constraint -- before latency and availability.
 
 | System Type | Dominant Cost Driver | Why It Grows Fast |
 |---|---|---|
@@ -773,7 +773,7 @@ In an interview: "What's the infrastructure cost budget? At 70K notifications/se
 
 **Consider cross-team and organizational impact:**
 
-This is a uniquely L6 consideration. Staff engineers don't just think about their system in isolation — they think about how their design affects other teams.
+This is a uniquely L6 consideration. Staff engineers don't just think about their system in isolation -- they think about how their design affects other teams.
 
 Questions to ask:
 - "Which teams depend on my API? Do I need backward compatibility or versioning?"
@@ -795,19 +795,19 @@ The best distributed system in the world is wrong if the team has 3 engineers wh
 Ask: "Is this constraint firm?" Sometimes a 2-month deadline is negotiable if you can show why 4 months produces a dramatically better outcome. Sometimes it's not negotiable. Knowing the difference helps you make better trade-offs.
 
 **Mistake: Forgetting to revisit assumptions**
-Assumptions made at the start might not hold as the design evolves. Check back: "Earlier I assumed eventual consistency was fine — given what we've discussed about financial notifications, should I revisit that?"
+Assumptions made at the start might not hold as the design evolves. Check back: "Earlier I assumed eventual consistency was fine -- given what we've discussed about financial notifications, should I revisit that?"
 
-#### L5 vs L6 Dialogue — Phase 5
+#### L5 vs L6 Dialogue -- Phase 5
 
 L5: [Designs without stating any assumptions. Halfway through: "Oh wait, I assumed we had authentication. Is that right?"]
 
-L6: "Before I design, let me state my assumptions clearly. I'm assuming: we have existing auth services, we're on cloud infrastructure, we have monitoring and logging in place, and the push/email/SMS delivery providers are third-party. I want to flag these explicitly because if any are wrong, they change the design. Now, constraints — I want to ask about a few things. One: are there technologies we must use or avoid? Two: what's the team size and experience level? We've been talking about Kafka — if the team has no Kafka experience, I'd consider a managed alternative or a simpler queue. Three: are there other teams whose roadmaps depend on this system launching by a specific date?"
+L6: "Before I design, let me state my assumptions clearly. I'm assuming: we have existing auth services, we're on cloud infrastructure, we have monitoring and logging in place, and the push/email/SMS delivery providers are third-party. I want to flag these explicitly because if any are wrong, they change the design. Now, constraints -- I want to ask about a few things. One: are there technologies we must use or avoid? Two: what's the team size and experience level? We've been talking about Kafka -- if the team has no Kafka experience, I'd consider a managed alternative or a simpler queue. Three: are there other teams whose roadmaps depend on this system launching by a specific date?"
 
 The L6 response takes 90 seconds. It demonstrates organizational awareness. It demonstrates the ability to adapt a design to real-world constraints. These are exactly the behaviors that get someone promoted from L5 to L6.
 
 ---
 
-## Section 4: Mental Models — Everyday Analogies
+## Section 4: Mental Models -- Everyday Analogies
 
 Mental models are thinking shortcuts. They help you reason quickly about unfamiliar situations by mapping them to familiar ones. Here are the most useful mental models for each phase of the framework.
 
@@ -817,7 +817,7 @@ Imagine you are a contractor hired to build a house. A client calls and says "bu
 
 A bad contractor says "okay" and starts ordering materials.
 
-A good contractor says: "Tell me about the people who will live in it. Tell me what rooms you need. Tell me how many people will use it. Tell me what's important — should it be energy-efficient, low-maintenance, or luxurious? Tell me your budget and timeline."
+A good contractor says: "Tell me about the people who will live in it. Tell me what rooms you need. Tell me how many people will use it. Tell me what's important -- should it be energy-efficient, low-maintenance, or luxurious? Tell me your budget and timeline."
 
 Without those answers, the contractor might build a beautiful 5-bedroom house for a single person who wanted a 2-bedroom apartment. Or a sprawling one-story ranch for a family that needed 3 floors on a narrow lot.
 
@@ -829,9 +829,9 @@ The framework phase is a contract negotiation. You are saying: "Here is my under
 
 The interviewer either confirms or corrects. Either way, you are now aligned. You have a contract.
 
-Without the contract, you might build something brilliant — for the wrong problem. In real work, building the wrong thing is not a partial success. It is a failure.
+Without the contract, you might build something brilliant -- for the wrong problem. In real work, building the wrong thing is not a partial success. It is a failure.
 
-### 4.3 The Stakeholder Map (for Phase 1 — Users)
+### 4.3 The Stakeholder Map (for Phase 1 -- Users)
 
 Imagine drawing concentric circles. In the center: the core user. The person you most obviously think of when you hear the product description.
 
@@ -849,7 +849,7 @@ For a social notification system:
 
 If you only design for the center, you miss everything else. The rings help you see the full picture.
 
-### 4.4 The MVP Concentric Circles (for Phase 2 — Requirements)
+### 4.4 The MVP Concentric Circles (for Phase 2 -- Requirements)
 
 Similar structure, different use:
 - Innermost circle: Core requirements. Cannot launch without these.
@@ -857,34 +857,34 @@ Similar structure, different use:
 - Third circle: Nice-to-have requirements. Would be great, can ship without.
 - Outside the circles: Out of scope. Not building this.
 
-Being able to draw this picture for any system shows the interviewer that you can prioritize — which is a critical L6 skill. People who can't prioritize requirements end up building 20% of everything instead of 100% of what matters.
+Being able to draw this picture for any system shows the interviewer that you can prioritize -- which is a critical L6 skill. People who can't prioritize requirements end up building 20% of everything instead of 100% of what matters.
 
-### 4.5 The Powers of Ten (for Phase 3 — Scale)
+### 4.5 The Powers of Ten (for Phase 3 -- Scale)
 
 Think about scale in orders of magnitude. Each jump of 10x changes the architecture fundamentally.
 
 | Scale | Architecture | Team |
 |---|---|---|
-| 10³ (1,000 users) | Single server, single database, no caching needed | 1-2 engineers |
-| 10⁶ (1 million users) | Need caching, read replicas, load balancers | 3-10 engineers |
-| 10⁹ (1 billion users) | Need sharding, distributed systems, multiple regions | 100+ engineers |
-| 10¹² (1 trillion requests/year) | Need custom infrastructure, specialized hardware | Dedicated infra teams |
+| 10^3 (1,000 users) | Single server, single database, no caching needed | 1-2 engineers |
+| 106 (1 million users) | Need caching, read replicas, load balancers | 3-10 engineers |
+| 109 (1 billion users) | Need sharding, distributed systems, multiple regions | 100+ engineers |
+| 101^2 (1 trillion requests/year) | Need custom infrastructure, specialized hardware | Dedicated infra teams |
 
 When you hear a product description, your first question should be: "What order of magnitude is this?" That immediately tells you the rough category of architecture required.
 
-### 4.6 The Dial Panel (for Phase 4 — NFRs)
+### 4.6 The Dial Panel (for Phase 4 -- NFRs)
 
 Imagine a control panel with four dials:
-- Availability dial: 99% → 99.9% → 99.99% → 99.999%
-- Latency dial: 1 second → 100ms → 10ms → 1ms
-- Consistency dial: Eventual → Session → Strong → Linearizable
-- Cost dial: $ → $$ → $$$ → $$$$
+- Availability dial: 99% -> 99.9% -> 99.99% -> 99.999%
+- Latency dial: 1 second -> 100ms -> 10ms -> 1ms
+- Consistency dial: Eventual -> Session -> Strong -> Linearizable
+- Cost dial: $ -> $$ -> $$$ -> $$$$
 
 You cannot turn every dial to maximum. Turning the consistency dial to maximum automatically turns the cost and latency dials up too. Turning the availability dial to maximum turns up the cost dial. These dials are physically connected.
 
 The design question in Phase 4 is: which dials matter most for this system? Which can we turn down to give us room to turn others up?
 
-### 4.7 The SLA Pyramid (for Phase 4 — NFRs)
+### 4.7 The SLA Pyramid (for Phase 4 -- NFRs)
 
 Imagine a pyramid with three levels:
 - Bottom (largest, easiest to violate): Performance. The system is slow but works. Users are frustrated.
@@ -895,7 +895,7 @@ Your architecture should protect higher levels of the pyramid more aggressively 
 
 This framing helps you make trade-off decisions: "I can accept slightly worse latency if it prevents data loss" is a good trade. "I can accept some downtime if it prevents data loss" is also often a good trade.
 
-### 4.8 The Dependency Web (for Phase 5 — Constraints)
+### 4.8 The Dependency Web (for Phase 5 -- Constraints)
 
 Picture a web with your system at the center. Threads connect your system to everything it depends on:
 - Infrastructure (cloud, network, hardware)
@@ -918,26 +918,26 @@ If you're at 50% of your database capacity and growing 10% per month, you hit th
 
 If you're at 50% capacity and growing 50% per month, you hit the limit in 2 months. You're already in crisis mode.
 
-This model teaches you to design with growth headroom — not infinite headroom, but enough runway to redesign without emergency. Typically, you want 6-12 months of runway before hitting any hard limit.
+This model teaches you to design with growth headroom -- not infinite headroom, but enough runway to redesign without emergency. Typically, you want 6-12 months of runway before hitting any hard limit.
 
 ---
 
 ---
 
-## Quick Reference Card — Everything You Need Before the Interview
+## Quick Reference Card -- Everything You Need Before the Interview
 
 Use this card to check your framework execution mid-design or in last-minute review.
 
 ### The 5-Phase Execution Checklist
 
-| Phase | The question you are answering | What L6 sounds like | ☐ |
+| Phase | The question you are answering | What L6 sounds like | [ ] |
 |-------|-------------------------------|---------------------|---|
-| **Phase 1 — Users** | Who is this system for? | "I see 3 user types: end users, ops staff, and the services that integrate with us. Each has different needs." | ☐ |
-| **Phase 2 — Requirements** | What must it do? | "Core: send and receive. Important: preferences and history. Nice-to-have: analytics. Out of scope: billing integration." | ☐ |
-| **Phase 3 — Scale** | How big is it? | "30M DAU × 20 actions ÷ 86,400 = 7K QPS average. Peak at 3× = 21K. Celebrity fan-out is the multiplier to watch." | ☐ |
-| **Phase 4 — NFRs** | How well must it work? | "99.9% availability = 8.7 hours downtime/year. P99 latency < 200ms. Eventual consistency acceptable for feed reads." | ☐ |
-| **Phase 5 — Assumptions** | What am I taking as given? | "I'm assuming existing auth infrastructure, cloud deployment, third-party push providers. Correct me if any are wrong." | ☐ |
-| **Confirm scope** | Does the interviewer agree? | "Here is my summary. Does this match what you had in mind?" | ☐ |
+| **Phase 1 -- Users** | Who is this system for? | "I see 3 user types: end users, ops staff, and the services that integrate with us. Each has different needs." | [ ] |
+| **Phase 2 -- Requirements** | What must it do? | "Core: send and receive. Important: preferences and history. Nice-to-have: analytics. Out of scope: billing integration." | [ ] |
+| **Phase 3 -- Scale** | How big is it? | "30M DAU x 20 actions / 86,400 = 7K QPS average. Peak at 3x = 21K. Celebrity fan-out is the multiplier to watch." | [ ] |
+| **Phase 4 -- NFRs** | How well must it work? | "99.9% availability = 8.7 hours downtime/year. P99 latency < 200ms. Eventual consistency acceptable for feed reads." | [ ] |
+| **Phase 5 -- Assumptions** | What am I taking as given? | "I'm assuming existing auth infrastructure, cloud deployment, third-party push providers. Correct me if any are wrong." | [ ] |
+| **Confirm scope** | Does the interviewer agree? | "Here is my summary. Does this match what you had in mind?" | [ ] |
 
 ---
 
@@ -945,13 +945,13 @@ Use this card to check your framework execution mid-design or in last-minute rev
 
 | Calculation | Formula | Example |
 |-------------|---------|---------|
-| **Average QPS** | DAU × actions/day ÷ 86,400 | 30M × 20 ÷ 86,400 = 6,944 ≈ 7K QPS |
-| **Peak QPS** | Average QPS × peak multiplier | 7K × 3 = 21K (primetime), 7K × 10 = 70K (events) |
-| **Storage per year** | items/day × item_size × 365 | 200M × 500B × 365 = 36.5 TB/year |
-| **Bandwidth** | QPS × average_payload_size | 7K × 2KB = 14 MB/s |
-| **Fan-out load** | writes/sec × average_fanout | 1K posts × 500 followers = 500K ops/sec |
+| **Average QPS** | DAU x actions/day / 86,400 | 30M x 20 / 86,400 = 6,944 ~= 7K QPS |
+| **Peak QPS** | Average QPS x peak multiplier | 7K x 3 = 21K (primetime), 7K x 10 = 70K (events) |
+| **Storage per year** | items/day x item_size x 365 | 200M x 500B x 365 = 36.5 TB/year |
+| **Bandwidth** | QPS x average_payload_size | 7K x 2KB = 14 MB/s |
+| **Fan-out load** | writes/sec x average_fanout | 1K posts x 500 followers = 500K ops/sec |
 
-Shortcut: **daily_count ÷ 100,000 ≈ QPS** (good for mental math)
+Shortcut: **daily_count / 100,000 ~= QPS** (good for mental math)
 
 ---
 
@@ -964,22 +964,22 @@ Shortcut: **daily_count ÷ 100,000 ≈ QPS** (good for mental math)
 | **Latency** | "Low latency" | "P99 < 200ms for API responses" | Most users experience < 200ms |
 | **Consistency** | "Consistent" | "Eventual OK for feed; strong required for payments" | Different data types need different models |
 | **Durability** | "Don't lose data" | "At-least-once delivery for messages; zero loss for payments" | Be specific per data type |
-| **CAP trade-off** | "We need both" | "During partition: availability over consistency (AP). Reads may be stale by up to 5s." | You must choose — CAP theorem |
+| **CAP trade-off** | "We need both" | "During partition: availability over consistency (AP). Reads may be stale by up to 5s." | You must choose -- CAP theorem |
 
 ---
 
-### Common Mistakes — Weak vs Strong
+### Common Mistakes -- Weak vs Strong
 
-| Signal | ❌ Weak (L5 pattern) | ✅ Strong (L6 pattern) | ☐ |
+| Signal | [X] Weak (L5 pattern) | [Y] Strong (L6 pattern) | [ ] |
 |--------|---------------------|----------------------|---|
-| **Starting point** | Draws boxes before asking questions | "Before I design, let me go through five questions..." | ☐ |
-| **Users** | "The users are people who receive notifications" | "External: recipients. Internal: ops, support. System: upstream services that trigger events." | ☐ |
-| **Scale** | "We need to handle a lot of traffic" | "30M × 20 ÷ 86,400 = 7K QPS average, 21K peak" | ☐ |
-| **NFRs** | "It should be fast and reliable" | "99.9% availability, P99 < 200ms, eventual consistency for reads" | ☐ |
-| **Failure modes** | Only designs the happy path | "When the push service is down, fall back to email. When email is down, queue and retry." | ☐ |
-| **Assumptions** | Never states them | "I'm assuming existing auth, cloud deployment, third-party push. Correct me if any are wrong." | ☐ |
-| **Decision justification** | "I'll use Kafka" | "Kafka because Phase 4 established a durability requirement that needs message replay" | ☐ |
-| **Scope** | Keeps expanding mid-design | "Analytics is out of scope for today. I'll make sure the data model can support it later." | ☐ |
+| **Starting point** | Draws boxes before asking questions | "Before I design, let me go through five questions..." | [ ] |
+| **Users** | "The users are people who receive notifications" | "External: recipients. Internal: ops, support. System: upstream services that trigger events." | [ ] |
+| **Scale** | "We need to handle a lot of traffic" | "30M x 20 / 86,400 = 7K QPS average, 21K peak" | [ ] |
+| **NFRs** | "It should be fast and reliable" | "99.9% availability, P99 < 200ms, eventual consistency for reads" | [ ] |
+| **Failure modes** | Only designs the happy path | "When the push service is down, fall back to email. When email is down, queue and retry." | [ ] |
+| **Assumptions** | Never states them | "I'm assuming existing auth, cloud deployment, third-party push. Correct me if any are wrong." | [ ] |
+| **Decision justification** | "I'll use Kafka" | "Kafka because Phase 4 established a durability requirement that needs message replay" | [ ] |
+| **Scope** | Keeps expanding mid-design | "Analytics is out of scope for today. I'll make sure the data model can support it later." | [ ] |
 
 ---
 
@@ -997,25 +997,25 @@ Before starting architecture, say these words:
 >
 > NFRs: [availability target], [latency target], [consistency model and why].
 >
-> Assumptions: [list the 3–4 main ones].
+> Assumptions: [list the 3-4 main ones].
 >
 > Does this match what you had in mind before I start designing?"
 
-This takes 60–90 seconds. It demonstrates L6 discipline before a single box is drawn.
+This takes 60-90 seconds. It demonstrates L6 discipline before a single box is drawn.
 
 ---
 
-## Section 5: Real-World Examples — Google, Amazon, Netflix, Uber
+## Section 5: Real-World Examples -- Google, Amazon, Netflix, Uber
 
-### 5.1 Google Search — Applying the Framework
+### 5.1 Google Search -- Applying the Framework
 
 **Prompt:** "Design Google Search."
 
-**Phase 1 — Users and Use Cases:**
+**Phase 1 -- Users and Use Cases:**
 
 Primary users: Everyday people searching for information. Their job-to-be-done: "Help me find the answer to my question as fast as possible."
 
-Secondary users: Businesses using Google Ads — their job is different: "Show my ad to people who are likely to buy my product."
+Secondary users: Businesses using Google Ads -- their job is different: "Show my ad to people who are likely to buy my product."
 
 Internal users: Search quality engineers, spam/abuse teams, ads engineers.
 
@@ -1023,7 +1023,7 @@ System users: Googlebot (the crawler that indexes the web), the ads serving syst
 
 Key use case distinction: Search (real-time, user-facing) vs. Indexing (background, crawler-driven). These have very different requirements and must be architecturally separate.
 
-**Phase 2 — Functional Requirements:**
+**Phase 2 -- Functional Requirements:**
 
 Core:
 1. Accept a search query from a user
@@ -1039,53 +1039,53 @@ Nice-to-have:
 7. Personalized results based on search history
 8. Real-time results (news, sports scores)
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 
 Google processes approximately 8.5 billion searches per day.
-- 8.5B / 86,400 ≈ 98,000 searches/second average
+- 8.5B / 86,400 ~= 98,000 searches/second average
 - Peak (Super Bowl, news events): 3-5x, call it 400,000 searches/second
 
 The web index: Google has indexed an estimated 100 billion web pages. Each page entry including all metadata is perhaps 10 KB average.
-- 100 billion × 10 KB = 1 petabyte for the index
+- 100 billion x 10 KB = 1 petabyte for the index
 - In practice, Google's index is estimated at hundreds of petabytes due to multiple versions, signals, and redundancy
 
 At this scale, no single machine serves the index. Google's search infrastructure spans dozens of datacenters worldwide, each with tens of thousands of servers.
 
-**Phase 4 — NFRs:**
+**Phase 4 -- NFRs:**
 
-- Availability: 99.99%+ — Google Search is effectively a utility. Extended downtime would be global news.
+- Availability: 99.99%+ -- Google Search is effectively a utility. Extended downtime would be global news.
 - Latency: Under 200ms for query serving (Google publicly targets this). The index is distributed specifically to achieve this.
-- Durability: The web index is reconstructable from the web — durability is less critical than freshness.
+- Durability: The web index is reconstructable from the web -- durability is less critical than freshness.
 - Consistency: Eventual consistency is fine for search results. New pages don't need to appear immediately; within a few hours to days is acceptable.
 
-**Phase 5 — Constraints:**
+**Phase 5 -- Constraints:**
 
-Google has enormous infrastructure — this is not a constraint but an advantage. Key constraints are: scale (100B+ pages to index), real-time requirements (news must appear quickly), and adversarial environment (people try to game search rankings).
+Google has enormous infrastructure -- this is not a constraint but an advantage. Key constraints are: scale (100B+ pages to index), real-time requirements (news must appear quickly), and adversarial environment (people try to game search rankings).
 
 **What the framework tells you:**
 
-The scale analysis alone tells you this requires a multi-tier distributed system: a crawling tier (Googlebot), an indexing tier (processing crawled pages into searchable entries), a serving tier (real-time query serving). The 200ms latency target at 100K QPS means the serving tier must use in-memory indexes or extremely fast distributed storage — disk-based lookups are too slow.
+The scale analysis alone tells you this requires a multi-tier distributed system: a crawling tier (Googlebot), an indexing tier (processing crawled pages into searchable entries), a serving tier (real-time query serving). The 200ms latency target at 100K QPS means the serving tier must use in-memory indexes or extremely fast distributed storage -- disk-based lookups are too slow.
 
-### 5.2 Amazon — Product Search and Recommendations
+### 5.2 Amazon -- Product Search and Recommendations
 
 **Prompt:** "Design Amazon's product search and recommendation system."
 
-**Phase 3 — Scale (focused demonstration):**
+**Phase 3 -- Scale (focused demonstration):**
 
 Amazon has approximately 300 million active customers worldwide and sells over 350 million products.
 
-Product catalog: 350 million products × 5 KB average metadata = 1.75 TB just for product data. With search indexes, images, descriptions, reviews — call it 50 TB.
+Product catalog: 350 million products x 5 KB average metadata = 1.75 TB just for product data. With search indexes, images, descriptions, reviews -- call it 50 TB.
 
 Search volume: Amazon doesn't publish search numbers, but if we estimate 300 million customers doing 3 searches per day:
-- 900 million searches/day ÷ 86,400 = 10,400 searches/second average
+- 900 million searches/day / 86,400 = 10,400 searches/second average
 - Holiday peaks (Black Friday, Prime Day): 10x average = 100,000 searches/second
 
-Recommendation volume: Every page load triggers recommendation generation. 300 million customers × 30 page views/day:
-- 9 billion recommendation requests/day ÷ 86,400 = 104,000 recommendation requests/second
+Recommendation volume: Every page load triggers recommendation generation. 300 million customers x 30 page views/day:
+- 9 billion recommendation requests/day / 86,400 = 104,000 recommendation requests/second
 
-What this tells us: Both search and recommendations operate at 100K+ QPS. Recommendation generation requires ML inference at that rate, which means: either pre-computed recommendations (stored per user), or extremely fast inference. At Amazon's scale, they do both — pre-compute for most users, real-time for fresh data.
+What this tells us: Both search and recommendations operate at 100K+ QPS. Recommendation generation requires ML inference at that rate, which means: either pre-computed recommendations (stored per user), or extremely fast inference. At Amazon's scale, they do both -- pre-compute for most users, real-time for fresh data.
 
-**Phase 4 — NFRs (focused demonstration):**
+**Phase 4 -- NFRs (focused demonstration):**
 
 - Latency: Add-to-cart latency directly impacts revenue (Amazon's famous study: 100ms slower = 1% less revenue). Target P99 < 100ms for product pages.
 - Availability: Amazon's marketplace outages make the news. 99.99% minimum.
@@ -1093,11 +1093,11 @@ What this tells us: Both search and recommendations operate at 100K+ QPS. Recomm
 
 The inventory constraint drives a key design decision: a separate, highly consistent inventory service with strong consistency requirements, vs. the recommendation system which can afford eventual consistency. These are separate systems with separate NFRs.
 
-### 5.3 Netflix — Content Streaming
+### 5.3 Netflix -- Content Streaming
 
 **Prompt:** "Design Netflix's video streaming system."
 
-**Phase 1 — Users and Use Cases:**
+**Phase 1 -- Users and Use Cases:**
 
 Primary users: Subscribers streaming video on various devices (TV, phone, tablet, laptop).
 Secondary users: Content creators and studios uploading new content.
@@ -1109,34 +1109,34 @@ Key use cases:
 3. Resume playback where user left off
 4. Download content for offline viewing
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 
 Netflix has ~250 million subscribers, with roughly 100 million daily active viewers.
 
 During peak hours, Netflix accounts for approximately 15% of global internet traffic. Let's estimate:
 - 100 million concurrent streams during peak evening hours
 - Average stream: 4 Mbps (HD quality)
-- Total bandwidth: 100M × 4 Mbps = 400 Tbps
+- Total bandwidth: 100M x 4 Mbps = 400 Tbps
 - This is why Netflix uses a global CDN (they call it Open Connect) with servers inside ISPs. Serving this from central datacenters would be impossible.
 
 Content storage: Netflix's catalog is approximately 36,000 hours of content. In 4K: roughly 25 GB/hour.
-- 36,000 × 25 GB = 900 TB of raw content
+- 36,000 x 25 GB = 900 TB of raw content
 - With multiple bitrates, languages, subtitles, and redundancy: tens of petabytes
 
-**Phase 4 — NFRs:**
+**Phase 4 -- NFRs:**
 
 - Latency: Netflix's research shows that if video start time exceeds 2 seconds, subscriber abandonment increases significantly. Target: video starts within 2 seconds.
 - Availability: If Netflix is down during prime time, millions of subscribers immediately notice. 99.99%+ availability.
-- Durability: Content files are precious — full durability required. User viewing history is also important but reconstructable.
+- Durability: Content files are precious -- full durability required. User viewing history is also important but reconstructable.
 - Consistency: Viewing position sync (so you can resume on a different device) needs to be near-real-time but not perfectly consistent. If you resume 5 seconds off from where you stopped, that's acceptable.
 
-**Framework insight:** The P99 latency requirement for video start drives the entire CDN architecture. You cannot serve 100 million concurrent viewers from central datacenters — you need servers physically close to users. The framework phase makes this obvious before you design anything.
+**Framework insight:** The P99 latency requirement for video start drives the entire CDN architecture. You cannot serve 100 million concurrent viewers from central datacenters -- you need servers physically close to users. The framework phase makes this obvious before you design anything.
 
-### 5.4 Uber — Ride Matching
+### 5.4 Uber -- Ride Matching
 
 **Prompt:** "Design Uber's ride-sharing matching system."
 
-**Phase 1 — Users and Use Cases:**
+**Phase 1 -- Users and Use Cases:**
 
 At minimum three user types:
 1. Riders: Want to request a ride and get picked up quickly
@@ -1154,31 +1154,31 @@ Key use cases for drivers:
 - Navigate to rider pickup
 - Complete a ride and receive payment
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 
 Uber completes approximately 19 million trips per day globally.
 - Average trip: 20 minutes
-- At any given time: 19M × (20 minutes / 1440 minutes/day) ≈ 263,000 active trips concurrently
+- At any given time: 19M x (20 minutes / 1440 minutes/day) ~= 263,000 active trips concurrently
 
 Driver location updates: Every active driver sends a GPS update every 4-5 seconds.
 - Uber has roughly 5 million active drivers globally
 - Not all active simultaneously, but at peak maybe 1 million active drivers
 - 1 million location updates / 5 seconds = 200,000 location updates per second
 
-This location-update volume is the scale driver for Uber's system. It means Uber's backend must process 200,000 geographic data points per second, maintain a real-time spatial index, and efficiently match nearby riders with drivers. This is not a simple database problem — it requires specialized geospatial data structures and high-throughput write processing.
+This location-update volume is the scale driver for Uber's system. It means Uber's backend must process 200,000 geographic data points per second, maintain a real-time spatial index, and efficiently match nearby riders with drivers. This is not a simple database problem -- it requires specialized geospatial data structures and high-throughput write processing.
 
-**Phase 4 — NFRs:**
+**Phase 4 -- NFRs:**
 
 - Matching latency: When a rider requests a ride, they expect to see a driver assigned within 30 seconds. Internally, the matching algorithm must find candidates and run in milliseconds.
 - Location freshness: Driver locations must be fresh to within 5-10 seconds for accurate matching. Stale location data causes bad matches (driver shown as 2 minutes away but actually 10 minutes away).
 - Availability: Uber downtime during high-demand periods (Friday night, NYE) has direct revenue impact. 99.99%+.
 - Surge pricing consistency: When surge pricing kicks in, all riders in an area should see the same surge multiplier. This requires consistency for pricing data across regions.
 
-**Framework insight:** The 200,000 location updates/second requirement immediately rules out a traditional SQL database as the location store. The geospatial nature of the matching problem requires specialized data structures (geohash, R-trees, or grid-based spatial indexes). Without Phase 3 analysis, you might design a system with a PostgreSQL table for driver locations — which would be completely wrong.
+**Framework insight:** The 200,000 location updates/second requirement immediately rules out a traditional SQL database as the location store. The geospatial nature of the matching problem requires specialized data structures (geohash, R-trees, or grid-based spatial indexes). Without Phase 3 analysis, you might design a system with a PostgreSQL table for driver locations -- which would be completely wrong.
 
 ---
 
-## Section 6: Design Trade-offs — When to Use or Avoid Each Approach
+## Section 6: Design Trade-offs -- When to Use or Avoid Each Approach
 
 ### 6.1 The Trade-off Map
 
@@ -1199,9 +1199,9 @@ Here is a structured view of the most common trade-offs that arise during the fr
 - Distributed locks where two processes must never both think they hold the lock
 
 **When to favor availability:**
-- Social feeds, likes, notifications — brief staleness is acceptable
-- Search indexes — showing a result from 10 minutes ago is usually fine
-- User profiles — if your follower count shows as "352" instead of "353" for 2 seconds, nobody cares
+- Social feeds, likes, notifications -- brief staleness is acceptable
+- Search indexes -- showing a result from 10 minutes ago is usually fine
+- User profiles -- if your follower count shows as "352" instead of "353" for 2 seconds, nobody cares
 - Read-heavy systems where serving a slightly stale cache is much cheaper than a real-time read
 
 **The decision question:** "If all machines temporarily disagree about the state of this data, what's the worst case? Is that worse than refusing to serve requests?"
@@ -1278,23 +1278,23 @@ In interview context: "For the message queue, I'd use a cloud-managed Kafka serv
 
 ---
 
-## Section 7: Common Interview Questions — 15+ with Full L6 Model Answers
+## Section 7: Common Interview Questions -- 15+ with Full L6 Model Answers
 
 ### 7.1 "Can you walk me through how you approach a system design problem?"
 
 **L6 model answer:**
 
-"Yes. I use a five-phase framework before I design anything. I do this because the right design depends entirely on context — who we're building for, at what scale, with what quality requirements, and under what constraints. Without establishing that context, any architecture I propose is just a guess.
+"Yes. I use a five-phase framework before I design anything. I do this because the right design depends entirely on context -- who we're building for, at what scale, with what quality requirements, and under what constraints. Without establishing that context, any architecture I propose is just a guess.
 
-Phase one: I identify all users and use cases. Not just the obvious end user — also secondary users, internal users like ops and support, and system users like other services that integrate with what I'm building. For each user type, I understand their primary job-to-be-done, not just what features they want.
+Phase one: I identify all users and use cases. Not just the obvious end user -- also secondary users, internal users like ops and support, and system users like other services that integrate with what I'm building. For each user type, I understand their primary job-to-be-done, not just what features they want.
 
 Phase two: I enumerate functional requirements and prioritize them. I separate them into core (must have), important (should have), and nice-to-have. I also explicitly state what's out of scope. Then I confirm the scope with the interviewer. This prevents spending time designing things that weren't asked for.
 
-Phase three: I figure out the scale. If numbers are given, I use them. If not, I derive them from the product description using back-of-envelope math. I turn scale into architectural consequences — at X QPS, we need Y. This phase is where I find the bottlenecks.
+Phase three: I figure out the scale. If numbers are given, I use them. If not, I derive them from the product description using back-of-envelope math. I turn scale into architectural consequences -- at X QPS, we need Y. This phase is where I find the bottlenecks.
 
-Phase four: I nail down non-functional requirements with specific numbers — not 'fast and reliable' but 'P99 under 200ms, 99.9% availability.' I also probe the trade-offs: between consistency and availability, between latency and durability, between cost and quality. I find which wins when they conflict.
+Phase four: I nail down non-functional requirements with specific numbers -- not 'fast and reliable' but 'P99 under 200ms, 99.9% availability.' I also probe the trade-offs: between consistency and availability, between latency and durability, between cost and quality. I find which wins when they conflict.
 
-Phase five: I state my assumptions explicitly and probe for constraints — team size, technology mandates, existing systems to integrate with, timeline, budget. These constrain the design space.
+Phase five: I state my assumptions explicitly and probe for constraints -- team size, technology mandates, existing systems to integrate with, timeline, budget. These constrain the design space.
 
 Only after these five phases do I start drawing boxes. At that point, every decision I make is justified by a specific requirement I established earlier. That's the difference between a Staff-level design and a Senior-level design."
 
@@ -1304,27 +1304,27 @@ Only after these five phases do I start drawing boxes. At that point, every deci
 
 "Because the right design depends entirely on context. Let me give you a concrete example. If you ask me to design a notification system and I start drawing boxes, I might design a system optimized for 1,000 users. Or for 100 million users. Those are completely different architectures. Without asking about scale, I'm guessing.
 
-Or I might assume we need strong consistency — every device must instantly see when a notification is marked as read. That adds significant complexity and cost. But if eventual consistency is fine (it usually is for social notifications), I'm building unnecessary complexity.
+Or I might assume we need strong consistency -- every device must instantly see when a notification is marked as read. That adds significant complexity and cost. But if eventual consistency is fine (it usually is for social notifications), I'm building unnecessary complexity.
 
 The questions I ask in the first 10 minutes directly determine whether the design I produce fits the actual problem or fits some imaginary problem. In a 45-minute interview, spending 10 minutes on questions and 35 minutes on the right design is a much better trade than spending 5 minutes on questions and 40 minutes on the wrong design.
 
-The second reason is communication. When I state my understanding of the problem and ask 'does this match your expectation?', I'm establishing alignment. If there's a misunderstanding, we catch it early — not 30 minutes in when I've already designed based on wrong assumptions."
+The second reason is communication. When I state my understanding of the problem and ask 'does this match your expectation?', I'm establishing alignment. If there's a misunderstanding, we catch it early -- not 30 minutes in when I've already designed based on wrong assumptions."
 
 ### 7.3 "Design a notification system."
 
-**L6 model answer (the framework phases only — this is what you say before designing):**
+**L6 model answer (the framework phases only -- this is what you say before designing):**
 
 "Before I design, I want to establish context.
 
-Users: I see at least three types. End users receiving notifications on their phones and in-app. Internal ops and customer support who need delivery visibility and debugging tools. And system users — the other services like the post service and like service that generate the events that become notifications.
+Users: I see at least three types. End users receiving notifications on their phones and in-app. Internal ops and customer support who need delivery visibility and debugging tools. And system users -- the other services like the post service and like service that generate the events that become notifications.
 
 Functional requirements. Core: accept events from other services, determine who should be notified, deliver notifications across push and in-app channels, store notification history. Important: user preferences to mute or filter notifications, aggregation of similar notifications. Nice-to-have: analytics on open rates. For this session, I'll focus on the core delivery pipeline. Does that scope work?
 
-Scale: How many users are we designing for? [Interviewer says 30 million DAU.] 30 million daily active users. If each receives about 20 notifications per day, that's 600 million deliveries per day — about 7,000 per second average. With a 10x peak factor for evenings and viral content, I'll design for 70,000 per second peak. Storage: if each notification is about 1 KB and we retain a year of history, 600 million per day × 365 × 1 KB ≈ 200 TB. These numbers tell me I need a distributed message queue and horizontally scalable storage.
+Scale: How many users are we designing for? [Interviewer says 30 million DAU.] 30 million daily active users. If each receives about 20 notifications per day, that's 600 million deliveries per day -- about 7,000 per second average. With a 10x peak factor for evenings and viral content, I'll design for 70,000 per second peak. Storage: if each notification is about 1 KB and we retain a year of history, 600 million per day x 365 x 1 KB ~= 200 TB. These numbers tell me I need a distributed message queue and horizontally scalable storage.
 
-NFRs: I'd target 99.9% availability — 8 hours downtime per year. Social notifications being delayed is annoying but not catastrophic. Latency: deliver push notifications within 5 seconds P95. For in-app history retrieval, 200ms P99. Durability: best-effort for social notifications — occasional loss during extreme failures is acceptable. For security or 2FA notifications, if those exist, stronger guarantees. Consistency: eventual is fine — 2-3 seconds for read status to sync across devices is acceptable.
+NFRs: I'd target 99.9% availability -- 8 hours downtime per year. Social notifications being delayed is annoying but not catastrophic. Latency: deliver push notifications within 5 seconds P95. For in-app history retrieval, 200ms P99. Durability: best-effort for social notifications -- occasional loss during extreme failures is acceptable. For security or 2FA notifications, if those exist, stronger guarantees. Consistency: eventual is fine -- 2-3 seconds for read status to sync across devices is acceptable.
 
-Assumptions and constraints: I'll assume we have existing auth infrastructure, cloud deployment, and push notification credentials for APNs and FCM. Are there technology constraints? [Interviewer says use existing Kafka infrastructure.] Good, I'll use Kafka as the message queue. Team size? [Interviewer says 4 engineers.] Small team — I'll favor operational simplicity over cutting-edge complexity.
+Assumptions and constraints: I'll assume we have existing auth infrastructure, cloud deployment, and push notification credentials for APNs and FCM. Are there technology constraints? [Interviewer says use existing Kafka infrastructure.] Good, I'll use Kafka as the message queue. Team size? [Interviewer says 4 engineers.] Small team -- I'll favor operational simplicity over cutting-edge complexity.
 
 Summary: 30M DAU, 7K QPS average / 70K peak, 200TB storage. 99.9% availability, 5-second push delivery, 200ms API latency. Best-effort durability, eventual consistency. Small team, use Kafka, favor simplicity. Does this match your expectations before I start designing?"
 
@@ -1332,13 +1332,13 @@ Summary: 30M DAU, 7K QPS average / 70K peak, 200TB storage. 99.9% availability, 
 
 **L6 model answer:**
 
-"Good question — they're related but distinct.
+"Good question -- they're related but distinct.
 
 Availability is about whether the system is up and responding to requests right now. It's usually expressed as a percentage: 99.9% availability means the system is operational 99.9% of the time.
 
-Reliability is a broader concept — it means the system behaves correctly and consistently over time. A system can be highly available but unreliable: it's always responding, but sometimes returning wrong answers or silently dropping data. Conversely, a system can be reliable when it's up, but frequently down.
+Reliability is a broader concept -- it means the system behaves correctly and consistently over time. A system can be highly available but unreliable: it's always responding, but sometimes returning wrong answers or silently dropping data. Conversely, a system can be reliable when it's up, but frequently down.
 
-In practice: Availability is often the operationally measured metric — are requests succeeding? Reliability includes correctness — when the system is up, are the answers correct?
+In practice: Availability is often the operationally measured metric -- are requests succeeding? Reliability includes correctness -- when the system is up, are the answers correct?
 
 For a notification system: if the system is up 99.9% of the time but occasionally sends duplicate notifications, it's highly available but has a reliability problem. If it never sends duplicates but goes down for 1 hour a week, it's reliable but has low availability.
 
@@ -1350,7 +1350,7 @@ At Staff level, you care about both, and they drive different design decisions. 
 
 "This is the CAP theorem, which I'll explain in practical terms.
 
-In a distributed system, your data lives on multiple machines. The machines communicate over a network. Networks are unreliable — messages can be delayed, dropped, or reordered. When that happens, machines can temporarily disagree about the state of the data.
+In a distributed system, your data lives on multiple machines. The machines communicate over a network. Networks are unreliable -- messages can be delayed, dropped, or reordered. When that happens, machines can temporarily disagree about the state of the data.
 
 You now have a choice: do you prioritize consistency or availability?
 
@@ -1358,9 +1358,9 @@ If you prioritize consistency: when two machines disagree about the data state, 
 
 If you prioritize availability: when two machines disagree, you continue serving requests even if some might return stale data. You're always up, but you're sometimes wrong.
 
-For most systems, the right choice depends on the failure mode. For payment processing — you absolutely prioritize consistency. Showing a stale balance could let someone spend money they don't have. Return an error rather than risk that. For a social notification feed — you absolutely prioritize availability. It's better to show a notification feed that's 3 seconds stale than to return a 503 error. Users would be far angrier at the error than at slightly stale data.
+For most systems, the right choice depends on the failure mode. For payment processing -- you absolutely prioritize consistency. Showing a stale balance could let someone spend money they don't have. Return an error rather than risk that. For a social notification feed -- you absolutely prioritize availability. It's better to show a notification feed that's 3 seconds stale than to return a 503 error. Users would be far angrier at the error than at slightly stale data.
 
-The Staff-level move is to separate this question by data type within the same system. In a notification system, the core delivery path can be eventually consistent, but notification preferences should be strongly consistent — if a user disables notifications, that should take effect immediately. Different data, different consistency model, same system."
+The Staff-level move is to separate this question by data type within the same system. In a notification system, the core delivery path can be eventually consistent, but notification preferences should be strongly consistent -- if a user disables notifications, that should take effect immediately. Different data, different consistency model, same system."
 
 ### 7.6 "How do you estimate QPS for a system you've never seen?"
 
@@ -1368,15 +1368,15 @@ The Staff-level move is to separate this question by data type within the same s
 
 "I work from first principles. I ask: how many users perform this action per day?
 
-Example: Let's say I'm estimating QPS for a URL shortener. If the product is a consumer URL shortener at scale, let's say 100 million monthly active users. About 30% of them are daily active — so 30 million DAU. Average user creates maybe 1 shortened URL per week, but clicks on 5 shortened URLs per day.
+Example: Let's say I'm estimating QPS for a URL shortener. If the product is a consumer URL shortener at scale, let's say 100 million monthly active users. About 30% of them are daily active -- so 30 million DAU. Average user creates maybe 1 shortened URL per week, but clicks on 5 shortened URLs per day.
 
-Creation QPS: 30M users × (1/7) URLs per day = about 4.3 million URL creations per day. Divided by 86,400 seconds = about 50 creations per second average. Peak at 10x: 500 creations/second.
+Creation QPS: 30M users x (1/7) URLs per day = about 4.3 million URL creations per day. Divided by 86,400 seconds = about 50 creations per second average. Peak at 10x: 500 creations/second.
 
-Click QPS: 30M users × 5 clicks per day = 150 million clicks per day. Divided by 86,400 = about 1,700 clicks per second average. Peak at 10x: 17,000 clicks/second.
+Click QPS: 30M users x 5 clicks per day = 150 million clicks per day. Divided by 86,400 = about 1,700 clicks per second average. Peak at 10x: 17,000 clicks/second.
 
-This tells me: the read path (clicks, redirects) is about 30x higher volume than the write path (URL creation). I should optimize the read path — likely with aggressive caching since each short URL maps to one long URL and that mapping almost never changes.
+This tells me: the read path (clicks, redirects) is about 30x higher volume than the write path (URL creation). I should optimize the read path -- likely with aggressive caching since each short URL maps to one long URL and that mapping almost never changes.
 
-The key skill is making the derivation explicit. Don't pull numbers from thin air. Start from 'how many users?' → 'what fraction are active daily?' → 'how many times does the average active user do this action per day?' → multiply and divide. Show your work so the interviewer can correct your assumptions if needed."
+The key skill is making the derivation explicit. Don't pull numbers from thin air. Start from 'how many users?' -> 'what fraction are active daily?' -> 'how many times does the average active user do this action per day?' -> multiply and divide. Show your work so the interviewer can correct your assumptions if needed."
 
 ### 7.7 "When would you choose a NoSQL database over a relational database?"
 
@@ -1386,7 +1386,7 @@ The key skill is making the derivation explicit. Don't pull numbers from thin ai
 
 First: My write rate exceeds what a single primary SQL node can sustain (roughly 20K-50K writes per second, depending on the workload). At that point, I need horizontal write scaling, which traditional SQL doesn't support natively. Cassandra or DynamoDB, which partition data across many nodes, can scale writes linearly.
 
-Second: My access pattern is overwhelmingly key-based lookups — give me the record for user ID 12345. No joins, no complex aggregations. In this case, a key-value or document store is simpler and faster than SQL because it removes overhead that I'm not using.
+Second: My access pattern is overwhelmingly key-based lookups -- give me the record for user ID 12345. No joins, no complex aggregations. In this case, a key-value or document store is simpler and faster than SQL because it removes overhead that I'm not using.
 
 Third: My schema is dynamic or frequently changing. If different users have completely different attributes, a document store's flexible schema is much better than SQL where every row must fit the same columns.
 
@@ -1416,7 +1416,7 @@ The threshold: if a user has more than, say, 10,000 followers, use fan-out on re
 
 Additional techniques: rate-limit fan-out velocity (process celebrity fan-out in batches over minutes rather than seconds), use a separate priority queue for celebrity events so they don't starve normal user processing, and monitor for accounts that cross the threshold and switch them automatically.
 
-The key Staff-level point: this problem is invisible if you only think about average load. Phase 3 scale analysis must include the skew — the worst case events — not just the average. The celebrity scenario changes the architecture fundamentally, and you only discover that if you ask 'what's the worst-case load pattern?'"
+The key Staff-level point: this problem is invisible if you only think about average load. Phase 3 scale analysis must include the skew -- the worst case events -- not just the average. The celebrity scenario changes the architecture fundamentally, and you only discover that if you ask 'what's the worst-case load pattern?'"
 
 ### 7.9 "What is a message queue and why would you use one?"
 
@@ -1436,13 +1436,13 @@ Three: Scale decoupling. You can scale consumers independently of producers. If 
 
 For a notification system: The event source (like service) produces events at 7K/second. The delivery system needs to send push notifications, which requires calls to Apple and Google push servers. Those external calls have variable latency. Without a queue, if Apple's push server is slow, the entire pipeline backs up and events are lost. With Kafka as a queue, the event source writes events at 7K/second, the delivery workers process at whatever rate the push servers allow, and the queue absorbs the difference.
 
-Additional benefits: message queues like Kafka allow replay — if the delivery worker has a bug and processes messages incorrectly, you can fix the bug and replay messages from the start. That's invaluable for disaster recovery and for schema migrations."
+Additional benefits: message queues like Kafka allow replay -- if the delivery worker has a bug and processes messages incorrectly, you can fix the bug and replay messages from the start. That's invaluable for disaster recovery and for schema migrations."
 
 ### 7.10 "How do you design for failure?"
 
 **L6 model answer:**
 
-"This is the part of requirements gathering that most Senior engineers skip — explicitly asking 'what should the system do when things go wrong?' Let me walk through my approach.
+"This is the part of requirements gathering that most Senior engineers skip -- explicitly asking 'what should the system do when things go wrong?' Let me walk through my approach.
 
 First, I identify failure modes. For every component in the system, I ask: what happens when this fails? Database slow? Message queue full? Push notification service down? Network partition between services?
 
@@ -1453,7 +1453,7 @@ Second, I classify failures by impact. Not all failures are equal.
 
 Third, I define degradation behavior. For each failure mode, what should the user experience? For a notification system: if the push notification service is down, can we fail gracefully by showing an in-app notification instead? If the entire notification system is slow, can we prioritize security notifications and delay social ones?
 
-Fourth, I design for recovery. What's the RTO (recovery time objective — how long can we be down?) and RPO (recovery point objective — how much data can we lose?) for each failure scenario? These drive decisions about redundancy, replication, and queue durability.
+Fourth, I design for recovery. What's the RTO (recovery time objective -- how long can we be down?) and RPO (recovery point objective -- how much data can we lose?) for each failure scenario? These drive decisions about redundancy, replication, and queue durability.
 
 Concrete techniques I use:
 - Circuit breakers: If a downstream service is failing, stop sending requests for a short time rather than hammering it with retries. This prevents cascading failures.
@@ -1470,27 +1470,27 @@ The L6 insight is asking these questions before designing, not after. 'What happ
 
 "I ask a single question for each piece of data in my system: 'What is the worst case if two users, or two devices, or two replicas temporarily disagree about this value?'
 
-If the answer is 'nothing important happens — a user might see a stale value for a few seconds,' then eventual consistency is fine. It's simpler, cheaper, and scales better.
+If the answer is 'nothing important happens -- a user might see a stale value for a few seconds,' then eventual consistency is fine. It's simpler, cheaper, and scales better.
 
 If the answer is 'a user could take an invalid action based on stale data, causing real harm,' then I need strong consistency.
 
 Examples:
 
-Notification read status: User marks a notification as read on their phone. Their laptop might still show it as unread for 3 seconds. Impact: negligible. → Eventual consistency.
+Notification read status: User marks a notification as read on their phone. Their laptop might still show it as unread for 3 seconds. Impact: negligible. -> Eventual consistency.
 
-User's notification preference to disable all notifications: User disables notifications. If this takes 5 seconds to propagate, they might receive one more notification. Impact: annoying but not harmful. → Eventual consistency, propagate quickly.
+User's notification preference to disable all notifications: User disables notifications. If this takes 5 seconds to propagate, they might receive one more notification. Impact: annoying but not harmful. -> Eventual consistency, propagate quickly.
 
-Payment balance: User spends $100. Their visible balance must immediately reflect this so they don't think they have more money to spend. If the balance is stale, they might overspend. Impact: financial harm. → Strong consistency.
+Payment balance: User spends $100. Their visible balance must immediately reflect this so they don't think they have more money to spend. If the balance is stale, they might overspend. Impact: financial harm. -> Strong consistency.
 
-Security setting (block user): User blocks an abusive user. The block must take effect immediately. A 3-second window where the blocked user can still message is unacceptable. Impact: safety risk. → Strong consistency.
+Security setting (block user): User blocks an abusive user. The block must take effect immediately. A 3-second window where the blocked user can still message is unacceptable. Impact: safety risk. -> Strong consistency.
 
-The key insight: consistency requirements differ by data type within the same system. I don't apply one model to the entire system — I apply the appropriate model to each type of data based on the failure mode of inconsistency."
+The key insight: consistency requirements differ by data type within the same system. I don't apply one model to the entire system -- I apply the appropriate model to each type of data based on the failure mode of inconsistency."
 
 ### 7.12 "What is a back-of-envelope calculation and how do you do one?"
 
 **L6 model answer:**
 
-"A back-of-envelope calculation is a quick, rough order-of-magnitude estimate. The goal is not precision — it's to get to the right order of magnitude (1K vs 10K vs 100K) quickly, so you can make architectural decisions.
+"A back-of-envelope calculation is a quick, rough order-of-magnitude estimate. The goal is not precision -- it's to get to the right order of magnitude (1K vs 10K vs 100K) quickly, so you can make architectural decisions.
 
 The process:
 1. Identify what you're estimating (QPS, storage, bandwidth, connections)
@@ -1499,24 +1499,24 @@ The process:
 4. Sanity-check the result
 5. Apply a safety factor (usually 2x-10x) for headroom
 
-Example — estimating storage for a notification system:
+Example -- estimating storage for a notification system:
 
 I need to estimate: how much storage does notification history require?
 
 Factors:
 - Number of users: 30 million DAU
 - Notifications per user per day: 20
-- Total notifications per day: 30M × 20 = 600 million
-- Size per notification: say 200 bytes for the text/metadata plus indexes → round to 1 KB to be safe
-- Storage per day: 600M × 1 KB = 600 GB/day
+- Total notifications per day: 30M x 20 = 600 million
+- Size per notification: say 200 bytes for the text/metadata plus indexes -> round to 1 KB to be safe
+- Storage per day: 600M x 1 KB = 600 GB/day
 - Retention: 1 year = 365 days
-- Total: 600 GB × 365 = about 220 TB
+- Total: 600 GB x 365 = about 220 TB
 
-Sanity check: 220 TB over a year for 30M daily active users. That's about 7 KB of notifications per user per year — about 7 MB per user over their lifetime. That seems plausible for a person's notification history.
+Sanity check: 220 TB over a year for 30M daily active users. That's about 7 KB of notifications per user per year -- about 7 MB per user over their lifetime. That seems plausible for a person's notification history.
 
 Safety factor: I'd say '200-250 TB' to allow for index overhead, replication, and growth.
 
-What I do with it: 'At 200+ TB, we can't fit this on a single database server. I need distributed storage. The 600 GB/day write rate also tells me I need multiple write nodes — a single server can typically sustain 100-500 MB/second of writes depending on the workload, so 600 GB/day is about 7 MB/second — actually manageable on a single fast server for writes, but the cumulative storage absolutely needs distribution.'
+What I do with it: 'At 200+ TB, we can't fit this on a single database server. I need distributed storage. The 600 GB/day write rate also tells me I need multiple write nodes -- a single server can typically sustain 100-500 MB/second of writes depending on the workload, so 600 GB/day is about 7 MB/second -- actually manageable on a single fast server for writes, but the cumulative storage absolutely needs distribution.'
 
 The calculation took 2 minutes. It determined key architectural decisions."
 
@@ -1528,11 +1528,11 @@ The calculation took 2 minutes. It determined key architectural decisions."
 
 Step one: Say so, and start with Phase 1. 'I'm not familiar with the specific domain, so I'll make sure to ask more clarifying questions than usual. Let me start by understanding the users and use cases.'
 
-Step two: Use the framework phases to gather information I would otherwise have from domain knowledge. The questions in each phase are domain-agnostic — they work for any system.
+Step two: Use the framework phases to gather information I would otherwise have from domain knowledge. The questions in each phase are domain-agnostic -- they work for any system.
 
 For Phase 1, I ask: 'Who are the users? What are they trying to accomplish? What does success look like for them?'
 
-For Phase 2: 'What are the core operations — the things without which there's no product? What operations are important but secondary?'
+For Phase 2: 'What are the core operations -- the things without which there's no product? What operations are important but secondary?'
 
 For Phase 3: 'How many users? How frequently do they use the core operations? What's the data volume?' Then I calculate.
 
@@ -1540,7 +1540,7 @@ For Phase 4: 'What happens if the system is down for an hour? A day? What does t
 
 For Phase 5: 'What existing infrastructure can I assume? What's the team's expertise?'
 
-By the end of the framework phases, I have enough information to design a reasonable system even in an unfamiliar domain — because I know the users, the operations, the scale, the quality requirements, and the constraints. The specific domain knowledge fills in details, but the framework provides the structure.
+By the end of the framework phases, I have enough information to design a reasonable system even in an unfamiliar domain -- because I know the users, the operations, the scale, the quality requirements, and the constraints. The specific domain knowledge fills in details, but the framework provides the structure.
 
 The meta-skill here: most of engineering judgment is not domain-specific knowledge. It's the ability to ask the right questions and reason from first principles. The framework teaches that skill."
 
@@ -1548,17 +1548,17 @@ The meta-skill here: most of engineering judgment is not domain-specific knowled
 
 **L6 model answer:**
 
-"Yes — this came up when I was designing a batch data processing system.
+"Yes -- this came up when I was designing a batch data processing system.
 
 The initial requirement seemed simple: 'Process files uploaded by users and extract structured data from them.' I started sketching a design: user uploads a file, we put it in S3, a processing worker picks it up, extracts data, writes to a database.
 
 Then I went through the framework phases carefully.
 
-Phase 1 — Users: Who are the users? The obvious ones are the end users uploading files. But I also asked about the users of the output data — the data scientists and business analysts who would query the extracted data. Their requirement: be able to run queries across all processed files in under 5 seconds.
+Phase 1 -- Users: Who are the users? The obvious ones are the end users uploading files. But I also asked about the users of the output data -- the data scientists and business analysts who would query the extracted data. Their requirement: be able to run queries across all processed files in under 5 seconds.
 
-Phase 2 — Functional requirements: I realized 'extract structured data' was vastly underspecified. Different file types (CSV, Excel, PDF) require completely different parsing. Different users needed different data schemas extracted. This wasn't one function — it was dozens.
+Phase 2 -- Functional requirements: I realized 'extract structured data' was vastly underspecified. Different file types (CSV, Excel, PDF) require completely different parsing. Different users needed different data schemas extracted. This wasn't one function -- it was dozens.
 
-Phase 3 — Scale: How many files per day? They said maybe 10,000 files at launch, growing to 1 million files per day in a year. Average file: 10 MB. That's 10 TB per day at scale. But the real issue was the analyst requirement: to query across 1 million files' worth of extracted data in 5 seconds. That volume does not fit in a regular database without careful design.
+Phase 3 -- Scale: How many files per day? They said maybe 10,000 files at launch, growing to 1 million files per day in a year. Average file: 10 MB. That's 10 TB per day at scale. But the real issue was the analyst requirement: to query across 1 million files' worth of extracted data in 5 seconds. That volume does not fit in a regular database without careful design.
 
 The requirement I discovered by going through the framework: the analyst query requirement at scale was incompatible with a simple relational database design. I needed a columnar data warehouse or a data lake architecture. Without the framework phase pushing me to ask 'who are all the users and what do they need?', I would have designed a system that worked for the file uploaders but completely failed the analysts."
 
@@ -1574,13 +1574,13 @@ Step one: Make the conflict explicit. Don't silently choose one requirement over
 
 For example: 'We want both strong consistency and high availability. But the CAP theorem tells us that during a network partition, we can have one or the other. I want to make sure we've agreed on which one takes priority before I commit to a design.'
 
-Step two: Quantify the cost of each choice. Don't just say 'there's a trade-off.' Say: 'If we choose strong consistency, we accept that during network partitions — which happen roughly once per month — the system will return errors for 30-60 seconds. If we choose availability, we accept that reads might be stale by up to 5 seconds during those same events.'
+Step two: Quantify the cost of each choice. Don't just say 'there's a trade-off.' Say: 'If we choose strong consistency, we accept that during network partitions -- which happen roughly once per month -- the system will return errors for 30-60 seconds. If we choose availability, we accept that reads might be stale by up to 5 seconds during those same events.'
 
-Step three: Involve the stakeholder in the decision. 'Given those options, which is more acceptable to your users — brief downtime or brief staleness?'
+Step three: Involve the stakeholder in the decision. 'Given those options, which is more acceptable to your users -- brief downtime or brief staleness?'
 
 Step four: Document the decision clearly. 'We've agreed to prioritize availability over consistency. This means [specific impact]. If this causes a problem in the future, we'll revisit.'
 
-The Staff-level insight is that the engineer's job is not to make these decisions unilaterally — it's to surface them clearly so the right people can make informed decisions. Silently choosing is an L5 behavior. Making trade-offs transparent is an L6 behavior."
+The Staff-level insight is that the engineer's job is not to make these decisions unilaterally -- it's to surface them clearly so the right people can make informed decisions. Silently choosing is an L5 behavior. Making trade-offs transparent is an L6 behavior."
 
 ### 7.16 "What questions do you always ask, regardless of the system design prompt?"
 
@@ -1588,15 +1588,15 @@ The Staff-level insight is that the engineer's job is not to make these decision
 
 "Regardless of the prompt, I always ask these questions:
 
-Phase 1 — Users: 'Who are all the users of this system? Are there internal users like ops and support in addition to external users?' And: 'Are there system users — other services that integrate with this?'
+Phase 1 -- Users: 'Who are all the users of this system? Are there internal users like ops and support in addition to external users?' And: 'Are there system users -- other services that integrate with this?'
 
-Phase 2 — Requirements: 'What's the minimum viable version of this system — the core without which there's no product?' And: 'What is explicitly out of scope for this design?'
+Phase 2 -- Requirements: 'What's the minimum viable version of this system -- the core without which there's no product?' And: 'What is explicitly out of scope for this design?'
 
-Phase 3 — Scale: 'How many daily active users? What's the expected request rate?' If no numbers: 'Let me estimate — does this order of magnitude seem right?' I always ask about peak vs. average and about growth trajectory.
+Phase 3 -- Scale: 'How many daily active users? What's the expected request rate?' If no numbers: 'Let me estimate -- does this order of magnitude seem right?' I always ask about peak vs. average and about growth trajectory.
 
-Phase 4 — NFRs: 'What's the availability target in numbers, not words?' And: 'Does this data need to be consistent across all nodes immediately, or is eventual consistency acceptable?'
+Phase 4 -- NFRs: 'What's the availability target in numbers, not words?' And: 'Does this data need to be consistent across all nodes immediately, or is eventual consistency acceptable?'
 
-Phase 5 — Constraints: 'Are there technology mandates or preferred tools?' And: 'What's the team size and experience level?' And: 'Are there existing systems I must integrate with?'
+Phase 5 -- Constraints: 'Are there technology mandates or preferred tools?' And: 'What's the team size and experience level?' And: 'Are there existing systems I must integrate with?'
 
 Failure requirements (L6 addition): 'What's the acceptable user experience when the system is degraded?' And: 'For this data, is any loss acceptable or must we have zero-loss durability?'
 
@@ -1604,7 +1604,7 @@ These questions take less than 5 minutes. They prevent designing for the wrong p
 
 ---
 
-## Section 8: Key Takeaways — L5 vs L6 Thinking for Every Dimension
+## Section 8: Key Takeaways -- L5 vs L6 Thinking for Every Dimension
 
 ### 8.1 The Core Distinction
 
@@ -1629,9 +1629,9 @@ L6: "Before I design, I want to establish context through five phases. Phase one
 
 L5: "Users are the people receiving notifications."
 
-L6: "Users include end users receiving notifications, operations staff monitoring delivery health, customer support resolving delivery issues, and system users — the services that generate notification events. Each has different needs."
+L6: "Users include end users receiving notifications, operations staff monitoring delivery health, customer support resolving delivery issues, and system users -- the services that generate notification events. Each has different needs."
 
-**Why it matters:** L5 sees one user. L6 sees the ecosystem. Missing internal or system users produces a system that can't be operated, debugged, or integrated — it just can't be deployed in the real world.
+**Why it matters:** L5 sees one user. L6 sees the ecosystem. Missing internal or system users produces a system that can't be operated, debugged, or integrated -- it just can't be deployed in the real world.
 
 #### Dimension 3: Requirements Handling
 
@@ -1645,7 +1645,7 @@ L6: "Core (must have): send and receive. Important (should have): preferences an
 
 L5: "We need to handle a lot of traffic. I'll design for scale."
 
-L6: "30 million DAU × 20 notifications/day = 600 million/day ÷ 86,400 = 7,000/second average. Peak at 10x = 70,000/second. At that write rate, a single database is insufficient — I need horizontal write scalability. I'll use a message queue to decouple ingestion from processing."
+L6: "30 million DAU x 20 notifications/day = 600 million/day / 86,400 = 7,000/second average. Peak at 10x = 70,000/second. At that write rate, a single database is insufficient -- I need horizontal write scalability. I'll use a message queue to decouple ingestion from processing."
 
 **Why it matters:** L5 acknowledges scale. L6 derives scale and uses it to drive specific decisions. Saying "we need scale" tells the interviewer nothing. Saying "at 70K/second, this specific component is the bottleneck, and here is my response" shows architectural judgment.
 
@@ -1661,7 +1661,7 @@ L6: "99.9% availability (8 hours downtime/year), P99 delivery latency under 5 se
 
 L5: [Designs without stating assumptions. Problems emerge later when assumptions turn out to be wrong.]
 
-L6: "I'm assuming existing auth infrastructure, cloud deployment, and third-party push notification providers. These assumptions are important — please correct me if they're wrong, because they change the design."
+L6: "I'm assuming existing auth infrastructure, cloud deployment, and third-party push notification providers. These assumptions are important -- please correct me if they're wrong, because they change the design."
 
 **Why it matters:** L6 makes assumptions explicit and discussable. If an assumption is wrong, you find out immediately instead of discovering it 30 minutes into the design. This is the hallmark of someone who has shipped production systems and learned from unexpected problems.
 
@@ -1669,7 +1669,7 @@ L6: "I'm assuming existing auth infrastructure, cloud deployment, and third-part
 
 L5: [Designs for the happy path. Failure modes emerge as afterthoughts.]
 
-L6: "What's the acceptable user experience when the system is degraded? For social notifications, I'd accept a 5-minute delay. For 2FA, I'd accept nothing — it must arrive. These different reliability requirements mean I need separate processing lanes."
+L6: "What's the acceptable user experience when the system is degraded? For social notifications, I'd accept a 5-minute delay. For 2FA, I'd accept nothing -- it must arrive. These different reliability requirements mean I need separate processing lanes."
 
 **Why it matters:** Production systems spend a lot of time in degraded states. Designing only for the happy path produces systems that catastrophically fail rather than gracefully degrade.
 
@@ -1685,7 +1685,7 @@ L6: "I'll use Kafka because we need replay capability (established in our durabi
 
 L5: "I chose availability over consistency."
 
-L6: "I'm choosing availability over consistency for read status data because: the failure mode of inconsistency is that two devices show different read states for 2-3 seconds — which users rarely notice. The failure mode of strong consistency during a network partition is 503 errors — which users definitely notice. Given our 99.9% availability requirement, the trade-off clearly favors availability here."
+L6: "I'm choosing availability over consistency for read status data because: the failure mode of inconsistency is that two devices show different read states for 2-3 seconds -- which users rarely notice. The failure mode of strong consistency during a network partition is 503 errors -- which users definitely notice. Given our 99.9% availability requirement, the trade-off clearly favors availability here."
 
 **Why it matters:** Stating the choice is not enough. Justifying it with the failure modes and requirements shows you understand why the trade-off exists, not just that it exists.
 
@@ -1695,11 +1695,11 @@ L5: Treats the framework as a warmup before the "real" design work.
 
 L6: Treats the framework as the foundation of the design. Every architectural decision traces back to a specific requirement established in the framework phases.
 
-**Why it matters:** The framework is not a checklist. It is a lens. When you've internalized it, you see every design decision through the lens of requirements. "Why did you choose X?" → "Because requirement Y from our Phase 4 discussion." This is what the interviewer is listening for.
+**Why it matters:** The framework is not a checklist. It is a lens. When you've internalized it, you see every design decision through the lens of requirements. "Why did you choose X?" -> "Because requirement Y from our Phase 4 discussion." This is what the interviewer is listening for.
 
 ---
 
-## Appendix A: The Two Interview Transcripts — Structured vs. Unstructured
+## Appendix A: The Two Interview Transcripts -- Structured vs. Unstructured
 
 This section shows two interviews with identical prompts. One candidate uses the framework. One does not. See the difference.
 
@@ -1707,7 +1707,7 @@ This section shows two interviews with identical prompts. One candidate uses the
 
 ---
 
-### Transcript 1 — Unstructured (L5 Behavior)
+### Transcript 1 -- Unstructured (L5 Behavior)
 
 **Interviewer:** "Design a ride-sharing system like Uber."
 
@@ -1741,13 +1741,13 @@ Should I go into more detail on any of these?"
 
 ---
 
-**What went wrong:** The candidate jumped to architecture without establishing context. They assumed a database-first design without asking about scale. When scale came up, it invalidated their design — 200,000 writes/second is far beyond what PostgreSQL can sustain for this use case. They had to backtrack.
+**What went wrong:** The candidate jumped to architecture without establishing context. They assumed a database-first design without asking about scale. When scale came up, it invalidated their design -- 200,000 writes/second is far beyond what PostgreSQL can sustain for this use case. They had to backtrack.
 
 More importantly: they never asked about users (only thought of riders and drivers, not ops), never prioritized requirements (what's core vs. nice-to-have?), never asked about NFRs (what's the availability target?), and never stated assumptions.
 
 ---
 
-### Transcript 2 — Structured (L6 Behavior)
+### Transcript 2 -- Structured (L6 Behavior)
 
 **Interviewer:** "Design a ride-sharing system like Uber."
 
@@ -1761,17 +1761,17 @@ Use cases for riders: Request a ride, see ETA and price, track driver in real-ti
 
 [Interviewer: Yes, that's good.]
 
-Functional requirements — let me prioritize. Core, without which there's no product: match a rider with a nearby driver, track driver location in real-time, handle payment. Important: ratings, notifications, ride history, surge pricing. Nice-to-have: scheduled rides, multiple stop points. For this session, I'll focus on core. Does that scope work?
+Functional requirements -- let me prioritize. Core, without which there's no product: match a rider with a nearby driver, track driver location in real-time, handle payment. Important: ratings, notifications, ride history, surge pricing. Nice-to-have: scheduled rides, multiple stop points. For this session, I'll focus on core. Does that scope work?
 
 [Interviewer: Yes.]
 
-Scale: How many rides per day are we designing for? [Interviewer: Assume global Uber scale — about 20 million rides per day.] Okay. 20 million rides per day, average duration 20 minutes. At any given time, that's 20M × (20/1440) ≈ 280,000 active rides concurrently.
+Scale: How many rides per day are we designing for? [Interviewer: Assume global Uber scale -- about 20 million rides per day.] Okay. 20 million rides per day, average duration 20 minutes. At any given time, that's 20M x (20/1440) ~= 280,000 active rides concurrently.
 
-Driver location updates: Drivers send GPS updates every 4-5 seconds. If we have maybe 2 million active drivers globally, that's 400,000 location updates per second. This is the key scale driver — it makes a traditional relational database impossible for the location store.
+Driver location updates: Drivers send GPS updates every 4-5 seconds. If we have maybe 2 million active drivers globally, that's 400,000 location updates per second. This is the key scale driver -- it makes a traditional relational database impossible for the location store.
 
-Matching requests: 20 million ride requests per day ÷ 86,400 = about 230 per second average. Peak at 5x (Friday evening) = about 1,200 matching requests per second. That's manageable.
+Matching requests: 20 million ride requests per day / 86,400 = about 230 per second average. Peak at 5x (Friday evening) = about 1,200 matching requests per second. That's manageable.
 
-Non-functional requirements: Availability — Uber downtime during peak hours is a major incident. I'd target 99.99%. Matching latency: When a rider requests a ride, matching should complete in under 2 seconds. Location freshness: Driver positions must be within 5-10 seconds for accurate matching. Durability: Payment records must never be lost. Ride history is important but reconstructable.
+Non-functional requirements: Availability -- Uber downtime during peak hours is a major incident. I'd target 99.99%. Matching latency: When a rider requests a ride, matching should complete in under 2 seconds. Location freshness: Driver positions must be within 5-10 seconds for accurate matching. Durability: Payment records must never be lost. Ride history is important but reconstructable.
 
 Assumptions: I'm assuming existing auth infrastructure, payment processing via Stripe, mapping/navigation via Google Maps API, and push notification infrastructure. Are there technology constraints I should know about?
 
@@ -1779,7 +1779,7 @@ Assumptions: I'm assuming existing auth infrastructure, payment processing via S
 
 Summary: 20M rides/day, 400K location updates/second, 1,200 matching requests/second at peak. 99.99% availability, 2-second matching latency, 5-second location freshness. Never lose payment data. Existing auth and payment infrastructure.
 
-The 400K location updates/second tells me immediately that the location store is a specialized problem — not a relational database. I'll use a distributed in-memory store like Redis with geospatial indexes, backed by periodic snapshots for durability. Now let me design the system..."
+The 400K location updates/second tells me immediately that the location store is a specialized problem -- not a relational database. I'll use a distributed in-memory store like Redis with geospatial indexes, backed by periodic snapshots for durability. Now let me design the system..."
 
 ---
 
@@ -1795,89 +1795,89 @@ The structured candidate spent 8 minutes on the framework phase. The unstructure
 
 **Prompt:** "Design a product search system for an e-commerce site like Amazon."
 
-**Phase 1 — Users:**
+**Phase 1 -- Users:**
 - Shoppers: Find a product they want to buy as quickly as possible
 - Sellers: Their products should be discoverable
 - Category managers: Need analytics on search quality and zero-result queries
 - Data scientists: Need search logs for training recommendation models
 
-**Phase 2 — Requirements:**
+**Phase 2 -- Requirements:**
 - Core: Accept a text query, return ranked list of relevant products within 500ms
 - Important: Filter by price, brand, rating; sort by relevance/price/recency; spell correction; search suggestions
 - Nice-to-have: Personalized results based on history; sponsored product injection
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 - 300 million registered users, 100 million daily active
-- Searches: Assume 3 searches per DAU = 300 million searches/day ÷ 86,400 = 3,500 searches/second average, 35,000/second peak
-- Product catalog: 350 million products × average 5 KB indexed data = 1.75 TB index (raw), probably 10-20 TB with all associated data
+- Searches: Assume 3 searches per DAU = 300 million searches/day / 86,400 = 3,500 searches/second average, 35,000/second peak
+- Product catalog: 350 million products x average 5 KB indexed data = 1.75 TB index (raw), probably 10-20 TB with all associated data
 - Index updates: Products change price, stock status frequently. Maybe 10 million updates/day = 115 updates/second average
 
-**Phase 4 — NFRs:**
+**Phase 4 -- NFRs:**
 - Latency: P99 < 200ms for search results. Users abandon searches that take longer.
-- Availability: 99.99% — if product search is down, no one can shop. That's a business emergency.
+- Availability: 99.99% -- if product search is down, no one can shop. That's a business emergency.
 - Index freshness: Price and stock status should be updated within 5 minutes. New product listings within 1 hour.
 - Consistency: Eventual consistency for search results is fine. If a price update takes 3 minutes to appear in search, that's acceptable.
 
-**Framework insight:** The 35,000 searches/second peak at P99 under 200ms tells you immediately that the full product catalog cannot be queried in real-time from a database. You need an inverted index — a pre-built data structure that maps keywords to products. Tools like Elasticsearch or a custom built inverted index. The 10 TB index size tells you this index must be distributed. The 115 updates/second tells you index updates need an async update pipeline to keep the index fresh without blocking search serving.
+**Framework insight:** The 35,000 searches/second peak at P99 under 200ms tells you immediately that the full product catalog cannot be queried in real-time from a database. You need an inverted index -- a pre-built data structure that maps keywords to products. Tools like Elasticsearch or a custom built inverted index. The 10 TB index size tells you this index must be distributed. The 115 updates/second tells you index updates need an async update pipeline to keep the index fresh without blocking search serving.
 
 ### B.2 Framework Applied to a Rate Limiter
 
 **Prompt:** "Design a rate limiting service."
 
-**Phase 1 — Users:**
+**Phase 1 -- Users:**
 - API consumers: Need to know when they've hit limits and what the limit is
 - API providers: Need to configure rate limits per API key or per IP
-- Internal services: The rate limiter itself must be called by every API endpoint — low latency is critical
+- Internal services: The rate limiter itself must be called by every API endpoint -- low latency is critical
 
-**Phase 2 — Requirements:**
+**Phase 2 -- Requirements:**
 - Core: Determine if a given request should be allowed or rejected based on configured rate limits; support rate limiting by API key, user ID, or IP; support multiple time windows (1 second, 1 minute, 1 hour)
 - Important: Return remaining quota in response headers; graceful degradation if rate limiter itself is slow
 - Nice-to-have: Real-time analytics on rate limit triggers
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 - The rate limiter is called by EVERY API request. If the APIs handle 100,000 requests/second total, the rate limiter handles 100,000 check requests/second.
-- Each check must complete in under 1ms to not dominate API latency budget. At 100K calls/second with 1ms budget, you need 100 checks completed per millisecond — extremely high throughput.
+- Each check must complete in under 1ms to not dominate API latency budget. At 100K calls/second with 1ms budget, you need 100 checks completed per millisecond -- extremely high throughput.
 - Counter storage: If you're rate limiting 10 million API keys with sliding window counters, you need to store and atomically update millions of counters under very high throughput.
 
-**Phase 4 — NFRs:**
-- Latency: Under 1ms P99 — this is called on the hot path of every API request
-- Availability: If the rate limiter is down, the question is: fail open (allow all requests) or fail closed (reject all requests)? For most systems, fail open is safer — don't block all traffic because rate limiting is unavailable
-- Consistency: For rate limiting, we need strong enough consistency to prevent significant overages, but not perfect consistency. If 10 concurrent requests each think they're the 100th request and all get through when the limit is 100, that's a minor overage. The alternative — strong consistency — requires coordination overhead that would violate the 1ms latency budget.
+**Phase 4 -- NFRs:**
+- Latency: Under 1ms P99 -- this is called on the hot path of every API request
+- Availability: If the rate limiter is down, the question is: fail open (allow all requests) or fail closed (reject all requests)? For most systems, fail open is safer -- don't block all traffic because rate limiting is unavailable
+- Consistency: For rate limiting, we need strong enough consistency to prevent significant overages, but not perfect consistency. If 10 concurrent requests each think they're the 100th request and all get through when the limit is 100, that's a minor overage. The alternative -- strong consistency -- requires coordination overhead that would violate the 1ms latency budget.
 
-**Framework insight:** The sub-1ms latency requirement at 100K+ QPS immediately tells you this must be in-memory (Redis). It also tells you that strong consistency (which would require distributed locking) is incompatible with the latency budget. So you accept approximate rate limiting — a sliding window algorithm implemented with Redis atomic operations that allows minor overages but doesn't require coordination. The framework makes this trade-off explicit before you design.
+**Framework insight:** The sub-1ms latency requirement at 100K+ QPS immediately tells you this must be in-memory (Redis). It also tells you that strong consistency (which would require distributed locking) is incompatible with the latency budget. So you accept approximate rate limiting -- a sliding window algorithm implemented with Redis atomic operations that allows minor overages but doesn't require coordination. The framework makes this trade-off explicit before you design.
 
 ### B.3 Framework Applied to a File Storage System
 
 **Prompt:** "Design a file storage system like Dropbox."
 
-**Phase 1 — Users:**
+**Phase 1 -- Users:**
 - Individual users: Store files and access them from multiple devices
 - Sharing recipients: Receive shared files from other users
 - Team users: Collaborate on shared folders
 - Enterprise IT admins: Manage user accounts, compliance, data retention
 
-**Phase 2 — Requirements:**
+**Phase 2 -- Requirements:**
 - Core: Upload a file; download a file; sync files across multiple devices when changed
 - Important: Share files with specific users or via link; version history; conflict resolution when same file edited simultaneously
 - Nice-to-have: Full-text search within documents; preview generation; admin compliance tools
 
-**Phase 3 — Scale:**
+**Phase 3 -- Scale:**
 - 500 million registered users, 100 million active monthly
-- Storage: Average user stores 5 GB of files. 500 million users × 5 GB = 2.5 exabytes (2.5 × 10^18 bytes). This is massive distributed storage.
-- Upload rate: If 10 million users upload 10 files per day each, that's 100 million uploads/day ÷ 86,400 = 1,157 uploads/second average
-- Bandwidth: 1,157 uploads/second × 100 KB average file size = 116 MB/second upload. And similar for downloads. This is significant but manageable with CDN.
+- Storage: Average user stores 5 GB of files. 500 million users x 5 GB = 2.5 exabytes (2.5 x 10^18 bytes). This is massive distributed storage.
+- Upload rate: If 10 million users upload 10 files per day each, that's 100 million uploads/day / 86,400 = 1,157 uploads/second average
+- Bandwidth: 1,157 uploads/second x 100 KB average file size = 116 MB/second upload. And similar for downloads. This is significant but manageable with CDN.
 
-**Phase 4 — NFRs:**
-- Durability: Files are irreplaceable user data. Must have 11 nines of durability — use multiple datacenters and multiple copies.
-- Availability: 99.9%+ — file access being unavailable is a major user problem
+**Phase 4 -- NFRs:**
+- Durability: Files are irreplaceable user data. Must have 11 nines of durability -- use multiple datacenters and multiple copies.
+- Availability: 99.9%+ -- file access being unavailable is a major user problem
 - Consistency: Strong consistency for file metadata (you must see your own uploads immediately). Eventual consistency for sharing and sync might be acceptable.
 - Latency: Small files should download in under 1 second. Large files are bandwidth-bound (you can't make a 1 GB download fast on a slow connection).
 
-**Framework insight:** The exabyte-scale storage requirement immediately tells you: you cannot use a traditional database for file storage. You need an object storage system (like AWS S3). The metadata (file names, paths, sharing info) can live in a traditional database, but the file bytes live in object storage. This separation — metadata in database, files in object storage — is the core architectural decision, and the framework makes it obvious before you draw a single box.
+**Framework insight:** The exabyte-scale storage requirement immediately tells you: you cannot use a traditional database for file storage. You need an object storage system (like AWS S3). The metadata (file names, paths, sharing info) can live in a traditional database, but the file bytes live in object storage. This separation -- metadata in database, files in object storage -- is the core architectural decision, and the framework makes it obvious before you draw a single box.
 
 ---
 
-## Appendix C: Quick Reference — Phrases That Signal L6 Thinking
+## Appendix C: Quick Reference -- Phrases That Signal L6 Thinking
 
 Use these phrases in your interview. They communicate framework mastery without explicitly saying "I'm using a framework."
 
@@ -1885,15 +1885,15 @@ Use these phrases in your interview. They communicate framework mastery without 
 
 "Before I start designing, let me establish context through a few questions..."
 
-"Who are all the users here — including internal users and system users that integrate with this?"
+"Who are all the users here -- including internal users and system users that integrate with this?"
 
 "Let me categorize the requirements into core, important, and nice-to-have. For this session, I'll focus on..."
 
-"Let me estimate the scale from first principles: [number of users] × [actions per day] ÷ 86,400 seconds = [QPS]."
+"Let me estimate the scale from first principles: [number of users] x [actions per day] / 86,400 seconds = [QPS]."
 
 "At [X QPS], the first bottleneck is likely [component] because [reason]."
 
-"What's the availability target in numbers — 99.9% or 99.99%? Those are completely different architectures."
+"What's the availability target in numbers -- 99.9% or 99.99%? Those are completely different architectures."
 
 "Is eventual consistency acceptable here, or does [specific data type] require strong consistency?"
 
@@ -1909,7 +1909,7 @@ Use these phrases in your interview. They communicate framework mastery without 
 
 "The trade-off I'm accepting here is [downside], which is acceptable because [requirement allows it]."
 
-"This decision traces back to our scale discussion — at [X QPS], [single approach] can't sustain the load."
+"This decision traces back to our scale discussion -- at [X QPS], [single approach] can't sustain the load."
 
 ### When Trade-offs Arise
 
@@ -1925,30 +1925,30 @@ Use these phrases in your interview. They communicate framework mastery without 
 
 Use this checklist the week before your interview to verify you can execute each phase smoothly.
 
-### Phase 1 — Users and Use Cases
+### Phase 1 -- Users and Use Cases
 - [ ] Can you identify external users, internal users, and system users for any prompt?
 - [ ] Can you describe the "job-to-be-done" for each user type?
 - [ ] Can you ask about edge case users (celebrities, high-volume accounts, ops staff)?
 
-### Phase 2 — Functional Requirements
+### Phase 2 -- Functional Requirements
 - [ ] Can you enumerate requirements from use cases methodically?
 - [ ] Can you categorize them into core / important / nice-to-have in real-time?
 - [ ] Can you state what's out of scope explicitly?
 - [ ] Can you confirm scope alignment with the interviewer?
 
-### Phase 3 — Scale
-- [ ] Do you know the back-of-envelope formulas cold? (QPS = daily volume ÷ 100K, storage = count × size × retention)
+### Phase 3 -- Scale
+- [ ] Do you know the back-of-envelope formulas cold? (QPS = daily volume / 100K, storage = count x size x retention)
 - [ ] Can you derive QPS from a product description without being given numbers?
 - [ ] Can you connect scale numbers to specific architectural consequences?
 - [ ] Can you identify the first bottleneck at current scale and the next bottleneck as it grows?
 
-### Phase 4 — NFRs
+### Phase 4 -- NFRs
 - [ ] Do you know the availability table cold? (99.9% = 8.76 hours downtime/year, etc.)
 - [ ] Can you explain the CAP theorem in plain language?
 - [ ] Can you explain strong vs. eventual consistency with concrete examples?
 - [ ] Can you identify when security and compliance requirements apply?
 
-### Phase 5 — Assumptions and Constraints
+### Phase 5 -- Assumptions and Constraints
 - [ ] Can you list five standard assumptions you'd make for any cloud-based system?
 - [ ] Do you ask about team size and experience as a constraint?
 - [ ] Do you ask about cost as a first-class constraint?
@@ -1961,19 +1961,19 @@ Use this checklist the week before your interview to verify you can execute each
 
 ---
 
-*End of Chapter 13 — System Design Framework*
+*End of Chapter 13 -- System Design Framework*
 
-> **Remember the core lesson:** Don't design until you've established the contract. Who are you building for? What must it do? How big is the problem? How well must it work? What are the limits? Answer these five questions explicitly, confirm alignment with the interviewer, and then design. Every decision you make after that point will be justified, defensible, and appropriate for the actual problem — not a generic one.
+> **Remember the core lesson:** Don't design until you've established the contract. Who are you building for? What must it do? How big is the problem? How well must it work? What are the limits? Answer these five questions explicitly, confirm alignment with the interviewer, and then design. Every decision you make after that point will be justified, defensible, and appropriate for the actual problem -- not a generic one.
 
 ---
 
-## Appendix E: The Real Incident — Cascading Notification Storm
+## Appendix E: The Real Incident -- Cascading Notification Storm
 
 This is one of the most important lessons in notification system design. It is based on a real class of production incident that has happened at multiple large companies. The lesson is simple: when you don't think about failure requirements, security-critical features get blocked by non-critical ones.
 
 ### The Setup
 
-A social platform is running a large product launch. The marketing team schedules a notification to all 40 million active users — "Check out our exciting new feature!" — to go out at exactly 9:00 AM Pacific Time.
+A social platform is running a large product launch. The marketing team schedules a notification to all 40 million active users -- "Check out our exciting new feature!" -- to go out at exactly 9:00 AM Pacific Time.
 
 Meanwhile, the platform is also a popular authentication provider. Millions of users log in every day using 2-Factor Authentication (2FA). When a user logs in, they press "Send me a verification code." The platform sends an SMS notification with a 6-digit code. The user has 60 seconds to enter it.
 
@@ -1981,13 +1981,13 @@ The notification system is a single shared pipeline. Marketing notifications, so
 
 No one has thought about priority. A notification is a notification.
 
-### 9:00 AM — The Storm Begins
+### 9:00 AM -- The Storm Begins
 
 The marketing job fires. 40 million notification messages are injected into the shared queue in approximately 90 seconds. The queue depth goes from near-zero to 40 million messages.
 
-The notification workers are processing messages in FIFO order — first in, first out. They are picking up marketing notifications and sending them to the push notification service.
+The notification workers are processing messages in FIFO order -- first in, first out. They are picking up marketing notifications and sending them to the push notification service.
 
-### 9:03 AM — The First Problem Surfaces
+### 9:03 AM -- The First Problem Surfaces
 
 Users are trying to log in to the platform during the morning peak. Thousands of users per minute are hitting "Send me a verification code." Each of those requests creates a 2FA notification in the same queue.
 
@@ -1997,21 +1997,21 @@ The 2FA notifications are sitting at position 39,000,000+ in the queue. The work
 
 Users are waiting for their 2FA code. 30 seconds pass. 60 seconds pass. The code never arrives. The login times out.
 
-### 9:07 AM — Customer Support Explodes
+### 9:07 AM -- Customer Support Explodes
 
 Support tickets start flooding in: "I can't log in." "I never received my verification code." "Is the site down?"
 
-The support team checks the platform status page. Everything shows green. The notification pipeline is "healthy" — it is processing messages, just not the right ones.
+The support team checks the platform status page. Everything shows green. The notification pipeline is "healthy" -- it is processing messages, just not the right ones.
 
-On-call engineers get paged. They look at the queue. Queue depth: 38 million (it's slowly draining). They see the issue. But they have no quick fix. The marketing notifications cannot simply be discarded — the marketing team has SLAs too. There is no priority queue. There is no mechanism to fast-track 2FA messages.
+On-call engineers get paged. They look at the queue. Queue depth: 38 million (it's slowly draining). They see the issue. But they have no quick fix. The marketing notifications cannot simply be discarded -- the marketing team has SLAs too. There is no priority queue. There is no mechanism to fast-track 2FA messages.
 
-### 9:15 AM — The Decisions Made Under Pressure
+### 9:15 AM -- The Decisions Made Under Pressure
 
 The on-call team makes an emergency decision: stop the marketing workers and redirect all capacity to clearing the queue. But now marketing notifications are backlogged too.
 
 Eventually, someone writes a one-off script to scan the queue and move messages flagged as "2FA" to the front. This takes 45 minutes to deploy through the emergency change process.
 
-By 10:00 AM — 1 hour after the incident began — 2FA delivery is restored. But 800,000 login attempts failed during that hour. Users who were locked out during that window had to wait, reset passwords, or contact support.
+By 10:00 AM -- 1 hour after the incident began -- 2FA delivery is restored. But 800,000 login attempts failed during that hour. Users who were locked out during that window had to wait, reset passwords, or contact support.
 
 ### The Root Cause: Missing Failure Requirements
 
@@ -2039,7 +2039,7 @@ sequenceDiagram
     TwoFA->>Queue: Enqueue at position ~40,000,000
     Workers->>Queue: Processing FIFO...
     Note over Workers: 2FA waits 6+ hours
-    User--xUser: Login timeout — code never arrives
+    User--xUser: Login timeout -- code never arrives
 ```
 
 ### What Should Have Been Designed
@@ -2072,9 +2072,9 @@ L6 engineers ask: "What if the queue is overwhelmed with low-priority messages? 
 
 The L6 question during requirements gathering was: **"Which notification types have strict delivery SLAs even under load?"**
 
-The answer would have been: "2FA and account security notifications — users are actively waiting for them, and they expire. Everything else is best-effort."
+The answer would have been: "2FA and account security notifications -- users are actively waiting for them, and they expire. Everything else is best-effort."
 
-That answer defines the architecture. Two separate pipelines. Separate queues. Separate capacity. Separate SLAs. The marketing blast can fill the bulk queue all it wants — it can never touch the critical queue.
+That answer defines the architecture. Two separate pipelines. Separate queues. Separate capacity. Separate SLAs. The marketing blast can fill the bulk queue all it wants -- it can never touch the critical queue.
 
 **The L6 way to write this requirement:**
 
@@ -2096,13 +2096,13 @@ Had an L6 engineer been in the room during the original requirements gathering, 
 
 ## Appendix F: Brainstorming Questions
 
-These questions are designed to deepen your thinking about the framework. Don't just read them — spend 5 minutes on each one that challenges you.
+These questions are designed to deepen your thinking about the framework. Don't just read them -- spend 5 minutes on each one that challenges you.
 
 ### On Requirements and Context
 
 1. When you hear a new design problem, what is your first instinct? Do you start solving, or do you start asking questions? If you start solving, what does that tell you about your current default mode?
 
-2. Think of a system you have built or maintained. Can you name all the different types of users — including internal users, operations staff, and other services that call it? If you struggle to name them, what does that suggest about who might be experiencing problems you don't know about?
+2. Think of a system you have built or maintained. Can you name all the different types of users -- including internal users, operations staff, and other services that call it? If you struggle to name them, what does that suggest about who might be experiencing problems you don't know about?
 
 3. Have you ever built something that was technically correct but was used differently than you expected? What did users actually need that you didn't think to ask about?
 
@@ -2138,13 +2138,13 @@ These questions are designed to deepen your thinking about the framework. Don't 
 
 ## Appendix G: Reflection Prompts
 
-Set aside 20 minutes for each reflection. Write your answers — don't just think them.
+Set aside 20 minutes for each reflection. Write your answers -- don't just think them.
 
 ### Reflection 1: Your Default Mode
 
 Think honestly about how you currently approach new problems.
 
-When you hear "design a system," do you feel a pull toward drawing boxes and arrows immediately? This is natural — it's pattern recognition from experience. But it skips the context that makes a design appropriate.
+When you hear "design a system," do you feel a pull toward drawing boxes and arrows immediately? This is natural -- it's pattern recognition from experience. But it skips the context that makes a design appropriate.
 
 Ask yourself: In my last three design conversations (at work or in a practice session), how long did I spend on requirements before touching architecture? Was it less than 5 minutes? More than 10?
 
@@ -2154,7 +2154,7 @@ Write down: what specific questions would you add to your habit to prevent a not
 
 ### Reflection 2: What You Optimize For
 
-Every engineer has unconscious defaults — things they optimize for without realizing it. Some engineers always add caching. Some always use the database they know best. Some always assume strong consistency.
+Every engineer has unconscious defaults -- things they optimize for without realizing it. Some engineers always add caching. Some always use the database they know best. Some always assume strong consistency.
 
 Think about your own defaults:
 - Do you default to eventual or strong consistency when not specified?
@@ -2162,16 +2162,16 @@ Think about your own defaults:
 - Do you tend to over-engineer for scale you don't have, or under-engineer and plan to fix it later?
 - Do you tend to build for the happy path and add failure handling after?
 
-These defaults aren't wrong — they're efficient heuristics. But they become problems when they override context. The framework is designed to surface the context that should override your defaults.
+These defaults aren't wrong -- they're efficient heuristics. But they become problems when they override context. The framework is designed to surface the context that should override your defaults.
 
 Write down your three strongest defaults and one situation where each would be the wrong choice.
 
 ### Reflection 3: The Conversations You Avoid
 
-The hardest part of the framework is not the technical questions — it's the conversations that feel uncomfortable:
+The hardest part of the framework is not the technical questions -- it's the conversations that feel uncomfortable:
 
 "I don't think we can meet all these requirements simultaneously."
-"This requirement conflicts with that one — which takes priority?"
+"This requirement conflicts with that one -- which takes priority?"
 "I'm not sure this is the right thing to build."
 "We're going to need to cut scope."
 
@@ -2189,7 +2189,7 @@ These exercises are designed to build the habits that make framework execution a
 
 ### Exercise 1: The 10-Minute Framework Drill
 
-Pick three different design prompts — for example: "design a rate limiter," "design a ride-sharing system," and "design a video streaming platform."
+Pick three different design prompts -- for example: "design a rate limiter," "design a ride-sharing system," and "design a video streaming platform."
 
 For each one, start a timer and spend exactly 10 minutes going through only the framework phases. Don't design anything. Don't draw any boxes. Just ask and answer the five framework questions.
 
@@ -2248,7 +2248,7 @@ This exercise reveals technical debt that is invisible until it causes an incide
 
 ### Exercise 5: The Requirements Tracing Walk
 
-Take a design you've built — or a simplified version of one.
+Take a design you've built -- or a simplified version of one.
 
 For each major architectural decision you made (choosing a specific database, adding a cache, using a message queue, separating services), trace it back to a requirement:
 - Which functional requirement drove this decision?
@@ -2265,7 +2265,7 @@ This is the most important exercise. Do it once a week.
 
 Find a partner. Your partner gives you a vague prompt: "Design a messaging system," "Design an analytics dashboard," "Design a recommendation engine."
 
-Your job: spend exactly 10-12 minutes on the framework phases only. Your partner's job: answer your questions and deliberately not volunteer information — make you ask for it.
+Your job: spend exactly 10-12 minutes on the framework phases only. Your partner's job: answer your questions and deliberately not volunteer information -- make you ask for it.
 
 After the framework phase:
 - Have your partner rate how complete your context was (1-10)
@@ -2282,15 +2282,15 @@ Track your scores over time. When your partner consistently rates your context-g
 
 ### Incident 1: The Interview That Went Sideways in Minute 3
 
-A senior engineer applying for Staff at a major tech company jumped straight to architecture: "I'll use a microservices approach with Kafka for async processing and Redis for caching." The interviewer asked: "Who are the users?" The engineer said: "Consumers and producers." The interviewer said: "This is a healthcare record system. Who specifically?" The engineer had no answer. They had built the entire mental architecture on top of an assumption — that all users were developers — which was wrong. The rest of the 45 minutes was spent recovering. Final verdict: no hire.
+A senior engineer applying for Staff at a major tech company jumped straight to architecture: "I'll use a microservices approach with Kafka for async processing and Redis for caching." The interviewer asked: "Who are the users?" The engineer said: "Consumers and producers." The interviewer said: "This is a healthcare record system. Who specifically?" The engineer had no answer. They had built the entire mental architecture on top of an assumption -- that all users were developers -- which was wrong. The rest of the 45 minutes was spent recovering. Final verdict: no hire.
 
 Staff lesson: The first 7 minutes are not overhead. They are the foundation. Every minute skipped at the start costs 5 minutes at the end.
 
 ---
 
-### Incident 2: The Rate Limiter That Let Through 10× Traffic
+### Incident 2: The Rate Limiter That Let Through 10x Traffic
 
-A team designed a rate limiter without identifying operational users. Three months after launch, a traffic spike hit a partner API. The on-call engineer needed to temporarily raise the rate limit for one customer without affecting others. There was no admin interface. There was no way to change limits without a code deployment. The code deployment took 40 minutes. The partner's service was degraded for 40 minutes because a user type — the operational user — was never identified in the design.
+A team designed a rate limiter without identifying operational users. Three months after launch, a traffic spike hit a partner API. The on-call engineer needed to temporarily raise the rate limit for one customer without affecting others. There was no admin interface. There was no way to change limits without a code deployment. The code deployment took 40 minutes. The partner's service was degraded for 40 minutes because a user type -- the operational user -- was never identified in the design.
 
 Staff lesson: Operational users are not a nice-to-have. If your system has no operator interface, it will be operated through code deploys, which is expensive, slow, and risky.
 
@@ -2298,15 +2298,15 @@ Staff lesson: Operational users are not a nice-to-have. If your system has no op
 
 ### Incident 3: The Migration That Took 3 Years Instead of 3 Months
 
-A team designed a notification system by starting with the architecture diagram. They chose Kafka, designed topics, built producers and consumers. Six months after launch, the business asked to add email, SMS, and in-app notifications. The original design had encoded "push notification" into every layer — topic names, message schemas, database tables. Adding email required a full rewrite of the message routing layer. It took 3 additional months and two engineers.
+A team designed a notification system by starting with the architecture diagram. They chose Kafka, designed topics, built producers and consumers. Six months after launch, the business asked to add email, SMS, and in-app notifications. The original design had encoded "push notification" into every layer -- topic names, message schemas, database tables. Adding email required a full rewrite of the message routing layer. It took 3 additional months and two engineers.
 
-If they had started with Phase 2 (functional requirements) first, they would have identified "multi-channel delivery" as a likely extension. The schema would have been: `{notification_id, channel_type, content, recipient}` — generic from day one. Instead it was: `{push_token, push_title, push_body, badge_count}`. Channel-specific.
+If they had started with Phase 2 (functional requirements) first, they would have identified "multi-channel delivery" as a likely extension. The schema would have been: `{notification_id, channel_type, content, recipient}` -- generic from day one. Instead it was: `{push_token, push_title, push_body, badge_count}`. Channel-specific.
 
 Staff lesson: Requirements drive architecture. Architecture that precedes requirements encodes the first guess. Systems built on first guesses are expensive to evolve.
 
 ---
 
-## More Brainstorming Questions — For Subconscious Internalization
+## More Brainstorming Questions -- For Subconscious Internalization
 
 Work through these one at a time. Write your answer before reading on. The goal is to feel these become automatic instinct.
 
@@ -2322,21 +2322,21 @@ Work through these one at a time. Write your answer before reading on. The goal 
 
 **Question 12:** "Design Twitter." In Phase 2, you decide the core features are: post tweet, follow user, view timeline. A PM says: "What about search?" You say: "That's out of scope for this design." The PM pushes back. How do you defend your scope decision? What makes a scope boundary defensible vs arbitrary?
 
-**Question 13:** You are on-call and a critical service is behaving strangely. You realize you don't know who the operational users of this service are — or who to call. What does this tell you about the design process for this service? What Phase is missing?
+**Question 13:** You are on-call and a critical service is behaving strangely. You realize you don't know who the operational users of this service are -- or who to call. What does this tell you about the design process for this service? What Phase is missing?
 
 **Question 14:** Your system has been running for 2 years. A compliance team appears and says: "We need audit logs for all admin actions." No admin actions were logged. This is now a 3-month project. Which Phase would have caught this? What specific question in that Phase?
 
 **Question 15:** You are mid-interview, 20 minutes in, and you realize you don't know whether the system is internal-only or public-facing. How does this change your design? Why does this question belong in Phase 1?
 
-**Question 16:** "Design a search autocomplete system." In Phase 3 (Scale), you estimate 100M DAU × 5 searches/day × 3 keystrokes/search = 1.5B autocomplete requests/day = 17,000/sec average. Does this number surprise you? What architectural decision does it force?
+**Question 16:** "Design a search autocomplete system." In Phase 3 (Scale), you estimate 100M DAU x 5 searches/day x 3 keystrokes/search = 1.5B autocomplete requests/day = 17,000/sec average. Does this number surprise you? What architectural decision does it force?
 
 **Question 17:** Compare: designing a system with Phase 1 taking 2 minutes vs 8 minutes. In which scenario are you more likely to miss the celebrity problem, the adversarial user, or the compliance requirement? Why does thoroughness early save time overall?
 
-**Question 18:** A Staff engineer is asked: "Design a financial transaction system." They say: "Before I start, let me understand the users. I see three types: consumers making payments, merchants receiving payments, and the compliance/fraud team auditing every transaction. The compliance user is important because it means every transaction needs an immutable audit log — which changes the storage design significantly." Is this a Phase 1, Phase 2, or Phase 4 insight? Why can it come from Phase 1?
+**Question 18:** A Staff engineer is asked: "Design a financial transaction system." They say: "Before I start, let me understand the users. I see three types: consumers making payments, merchants receiving payments, and the compliance/fraud team auditing every transaction. The compliance user is important because it means every transaction needs an immutable audit log -- which changes the storage design significantly." Is this a Phase 1, Phase 2, or Phase 4 insight? Why can it come from Phase 1?
 
 ---
 
-## More Homework Exercises (7–12)
+## More Homework Exercises (7-12)
 
 ### Exercise 7: User Type Discovery Under Time Pressure
 
@@ -2353,12 +2353,12 @@ Practice until 7 user types in 3 minutes feels easy.
 
 ---
 
-### Exercise 8: Phase 2 Requirements — Core vs Extended vs Out of Scope
+### Exercise 8: Phase 2 Requirements -- Core vs Extended vs Out of Scope
 
 Take this prompt: "Design a document collaboration tool (like Google Docs)."
 
 In 5 minutes, write three lists:
-1. **Core requirements** (must have for the first version — without these it's not the product)
+1. **Core requirements** (must have for the first version -- without these it's not the product)
 2. **Extended requirements** (valuable but could be deferred 6 months)
 3. **Out of scope** (things people expect but you are explicitly excluding with a reason)
 
@@ -2403,7 +2403,7 @@ Choose any production system you work on or know well. Open a document and spend
 - Scale assumptions (how traffic will grow)
 - Operational assumptions (who will operate it, how)
 
-For each assumption: rate it (1–5) for "how bad would it be if this assumption broke tomorrow?"
+For each assumption: rate it (1-5) for "how bad would it be if this assumption broke tomorrow?"
 
 Focus on the 3 highest-rated ones. For each: what is the fallback design? Is there one?
 
@@ -2445,4 +2445,440 @@ Write one paragraph explaining why the order of phases matters.
 
 ---
 
+---
+
+## Production Incident 3: Twitter's 2012 Fail Whale Era
+
+**Company:** Twitter | **Year:** 2012
+
+### What Happened (analogy first)
+
+Imagine five construction crews all building the same bridge from different ends, but nobody told them which standard of concrete to use. One crew pours fast concrete, another uses slow-drying concrete, and nobody checked whether the two halves would bond when they met. That is exactly what happened at Twitter.
+
+Twitter in 2012 had multiple teams building features on top of a shared timeline service. The framework question that nobody asked in Phase 1: "Is our timeline eventually consistent or strongly consistent?" Consistency vs. availability for timelines was never formally decided at design time. Each team made their own assumption. The storage team assumed strong consistency (every write is visible immediately). The caching team assumed eventual consistency (the cache might be stale by a few seconds). The feed ranking team assumed reads were authoritative (if the cache says X, X is true).
+
+When traffic scaled — especially during live events like elections, sports, and celebrity announcements — these conflicting assumptions surfaced at runtime. The cache would return a stale timeline. The ranking system would trust that stale data. Writes would fail silently. Users would see tweets in wrong order, or not at all. Then the retry storm would hit: clients retried, amplifying the traffic, which caused more cache misses, which caused more DB load, which caused the classic Fail Whale.
+
+### Which Phase of the Framework Was Skipped or Done Poorly
+
+**Phase 4 (NFRs) — Consistency model was never specified.**
+
+The team had done Phase 2 (functional requirements: users can see tweets in their timeline) but skipped the consistency clause: "With what guarantees?" Phase 4 NFRs for a feed system must answer: eventual vs. strong consistency, read-your-own-write guarantees, acceptable staleness window. None of these were captured. Different teams filled in their own answers, creating a system whose components could not agree on what "correct" meant.
+
+### ASCII Diagram
+
+```
++-----------------------------------------------------------------------------------+
+|                     TWITTER 2012 -- CONFLICTING CONSISTENCY ASSUMPTIONS           |
++-----------------------------------------------------------------------------------+
+|                                                                                   |
+|   [Write path]                         [Read path]                                |
+|                                                                                   |
+|   User posts tweet                      User loads timeline                       |
+|        |                                        |                                 |
+|        v                                        v                                 |
+|   +----------+   Team A assumes:          +----------+   Team B assumes:          |
+|   | Storage  |   STRONG consistency       |  Cache   |   EVENTUAL consistency     |
+|   | Layer    |   (write = visible now)    |  Layer   |   (may lag 5-30s)          |
+|   +----------+                            +----------+                            |
+|        |                                        |                                 |
+|        v                                        v                                 |
+|   +----------+   Team C assumes:          +----------+                            |
+|   | Fanout   |   reads are authoritative  | Ranking  |   trusts cache as truth    |
+|   | Worker   |                            | Engine   |                            |
+|   +----------+                            +----------+                            |
+|        |                                        |                                 |
+|        +-----> CONFLICT at runtime <-----------+                                  |
+|                                                                                   |
+|   Under load:                                                                     |
+|   Cache lag > 30s                                                                 |
+|        |                                                                          |
+|        v                                                                          |
+|   Ranking engine serves wrong order                                               |
+|        |                                                                          |
+|        v                                                                          |
+|   Clients retry -> traffic spike -> DB overload -> Fail Whale                     |
+|                                                                                   |
++-----------------------------------------------------------------------------------+
+```
+
+### Root Cause
+
+Phase 4 NFR for consistency was never written. Each team's implicit assumption was locally reasonable but globally incompatible. The framework's job is to force this decision before any code is written.
+
+### Fix Applied
+
+Twitter introduced a formal "consistency budget" concept: every service that touches timeline data was required to declare its consistency model. They adopted eventual consistency with a documented 10-second staleness window for timelines, with a separate strong-consistency path only for "read-your-own-write" (you always see your own tweets immediately). Teams were required to test against the staleness window explicitly.
+
+### Staff Lessons
+
+- **The framework prevents assumption drift.** When six teams build the same system without a shared NFR document, they will each choose different answers to the same question. At small scale, this looks fine. At Twitter scale, it causes cascading failures.
+- **Consistency is an NFR, not a database choice.** Do not confuse "we use Cassandra (eventually consistent)" with "we have decided on eventual consistency." You must decide the policy first, then pick the technology.
+- **Phase 4 is not optional.** Many engineers skip NFRs because they feel abstract. Twitter 2012 is the cost of skipping them: an 18-month period of embarrassing public outages called "the Fail Whale era."
+
+---
+
+## Production Incident 4: Google Docs 2019 Outage
+
+**Company:** Google | **Year:** 2019
+
+### What Happened (analogy first)
+
+Imagine a WhatsApp group chat with 50 people, but every time someone types a letter, their phone broadcasts that single keystroke to all 49 other phones simultaneously. You type "hello" -- five letters -- and generate 5 x 49 = 245 individual broadcasts. Now imagine 10,000 such groups active at the same time. That is the write amplification problem that brought down Google Docs' real-time collaboration feature on mobile in 2019.
+
+Google Docs desktop was designed first. On desktop, the collaboration model worked at the word or sentence level -- a reasonably bounded number of operations per second. When the team launched collaborative editing on mobile, they used the same protocol. But mobile keyboards work differently: autocorrect, word suggestions, and swipe typing generate a stream of individual character events rather than discrete word commits. Each character event on mobile became a separate operational transform message broadcast to all collaborators.
+
+The team ran capacity planning at the document level: "A 50-person doc generates X messages per second." The math was done assuming desktop-level message frequency. Mobile reality: each collaborator on mobile generates 3-5 websocket messages per keystroke, and mobile users type faster on swipe keyboards than on physical keyboards. A single 50-person collaborative doc during a live meeting became a 10,000-messages-per-second event. The operational transform servers were sized for roughly 200 messages per second per doc. The system fell over within minutes of a large mobile-first user event.
+
+### Which Phase of the Framework Was Skipped or Done Poorly
+
+**Phase 3 (Scale) -- capacity planning was done at the wrong unit of analysis.**
+
+The team estimated scale at the document level. The correct unit of analysis was the collaborator-event level. Scale estimation must ask not just "how many documents?" but "for each document, how many events does each user generate, and how does user type (desktop vs mobile) change that number?" Skipping this granular analysis meant the scale estimate was off by a factor of 25-50x.
+
+### ASCII Diagram
+
+```
++-----------------------------------------------------------------------------------+
+|                   GOOGLE DOCS 2019 -- WRITE AMPLIFICATION FAILURE                 |
++-----------------------------------------------------------------------------------+
+|                                                                                   |
+|   ASSUMED (Phase 3 estimation):                                                   |
+|                                                                                   |
+|   50 collaborators x 1 msg/event x 5 events/min = 250 msgs/min per doc           |
+|   Servers sized for: 200 msgs/sec per doc                                         |
+|                                                                                   |
+|   ACTUAL (mobile keyboard reality):                                               |
+|                                                                                   |
+|   50 collaborators x 3-5 msgs/event x 40 events/min = 6,000-10,000 msgs/min      |
+|                                                                                   |
+|   Mobile user types "hello world":                                                |
+|   h -> broadcast -> [49 collaborators]                                            |
+|   e -> broadcast -> [49 collaborators]                                            |
+|   l -> broadcast -> [49 collaborators]   <- 11 messages for 11 characters         |
+|   l -> broadcast -> [49 collaborators]      x 49 recipients each                 |
+|   o -> broadcast -> [49 collaborators]      = 539 websocket messages              |
+|   [space] -> broadcast -> [49 collaborators]                                      |
+|   ...                                                                             |
+|                                                                                   |
+|   Operational Transform Server:                                                   |
+|   +--------------------+                                                          |
+|   |  Capacity: 200/s   | <-- 10,000/s arrives --> OVERLOAD                        |
+|   +--------------------+                                                          |
+|           |                                                                       |
+|           v                                                                       |
+|   Queue backs up -> Latency spikes -> Client retries -> More messages             |
+|           |                                                                       |
+|           v                                                                       |
+|   Outage                                                                          |
+|                                                                                   |
++-----------------------------------------------------------------------------------+
+```
+
+### Root Cause
+
+Scale estimation used the wrong unit (documents) instead of the correct unit (collaborator-events). The framework's Phase 3 asks: "How big?" The full answer requires specifying the unit of work precisely. "A 50-person doc generates X" is incomplete. "A 50-person doc with mobile users generating Y events per minute generates Z messages per second" is the Phase 3 answer.
+
+### Fix Applied
+
+Google introduced a message batching layer between mobile clients and the operational transform servers. Mobile clients accumulate keystrokes for 50-100ms, then send a batch as one delta instead of one message per character. This reduced message volume by 10-20x. Additionally, the capacity planning process was updated to require a "user-type breakdown" in Phase 3: for every scale estimate, teams must specify the mix of user types and the events-per-minute for each type.
+
+### Staff Lessons
+
+- **Scale estimation units matter.** "How many users?" is the starting question, not the ending question. Keep asking: "What does each user do? How often? What does each action generate?" Stop when you reach the actual unit of work hitting your bottleneck.
+- **Device type is a use case variable, not a detail.** Mobile and desktop users of the same product can generate radically different load patterns. Phase 3 must include "at what device mix?"
+- **Write amplification is always the trap.** Any system where one action causes N downstream messages (fanout) will surprise you at scale. Always model the amplification factor explicitly.
+
+---
+
+## Production Incident 5: Slack's 2021 Multi-Workspace Incident
+
+**Company:** Slack | **Year:** 2021
+
+### What Happened (analogy first)
+
+Imagine mailing a letter. You put it in the mailbox, the post office picks it up, and gives you a receipt. You assume the letter was "sent." But the receipt from the post office only means they have the letter -- not that it was delivered to your recipient. If your recipient's mailbox is full and the letter comes back, you have a receipt saying "sent" but the letter was never read. That is exactly what Slack's 2021 incident exposed.
+
+Slack's Phase 1 functional requirement stated: "Users can send a message." The team wrote tests, built the API, and shipped the feature. But nobody defined what "send" meant in the requirements document. When a user clicks send, did "sent" mean:
+- (A) The Slack server received and acknowledged the message?
+- (B) The Slack server delivered the message to the recipient's client?
+
+Internally, Slack's infrastructure used definition (A). The UI showed a checkmark (meaning "server ack received"). Users assumed definition (B). During a network partition event in 2021, messages were acknowledged by the Slack servers (so the UI showed them as "sent") but the internal delivery mechanism between workspaces failed silently. Messages never reached recipients. Because the UI said "sent," users waited. Eventually, some users sent the same message again, believing the first hadn't gone through. When the partition healed, recipients received duplicate and sometimes triplicate messages with no indication of which was the "real" one.
+
+### Which Phase of the Framework Was Skipped or Done Poorly
+
+**Phase 2 (Functional Requirements) -- "send" was underspecified.**
+
+The functional requirement "users can send a message" is correct but incomplete. A Phase 2 requirement must define the success condition precisely: "send" means what, exactly, and what does failure look like to the user? The ambiguity in Phase 1/2 caused a trust violation in Phase 5 (production). The framework exists to force this precision before code is written.
+
+### ASCII Diagram
+
+```
++-----------------------------------------------------------------------------------+
+|                SLACK 2021 -- FUNCTIONAL REQUIREMENT AMBIGUITY                     |
++-----------------------------------------------------------------------------------+
+|                                                                                   |
+|   User clicks [Send]                                                              |
+|        |                                                                          |
+|        v                                                                          |
+|   +------------------+      ACK sent back to client                               |
+|   | Slack API Server |  --> UI shows checkmark (user thinks: "delivered")         |
+|   +------------------+                                                            |
+|        |                                                                          |
+|        v (internal delivery)                                                      |
+|   +--------------------+                                                          |
+|   | Message Bus        |  <-- NETWORK PARTITION HERE                              |
+|   | (cross-workspace)  |                                                          |
+|   +--------------------+                                                          |
+|        |                                                                          |
+|        v (FAILED -- message dropped)                                              |
+|   +--------------------+                                                          |
+|   | Recipient Workspace|  <-- never receives message                              |
+|   +--------------------+                                                          |
+|                                                                                   |
+|   User sees:     [checkmark] = "sent"                                             |
+|   Reality:       message lost                                                     |
+|   User action:   sends again (and again)                                          |
+|                                                                                   |
+|   After partition heals:                                                          |
+|   Recipient receives 3 copies of same message                                     |
+|   No ordering guarantee, no dedup, no explanation                                 |
+|                                                                                   |
+|   Phase 2 requirement that was MISSING:                                           |
+|   "Sent means delivered to recipient. If delivery fails,                          |
+|    the UI must show an error state, not a success state."                         |
+|                                                                                   |
++-----------------------------------------------------------------------------------+
+```
+
+### Root Cause
+
+The functional requirement used an ambiguous verb ("send") without defining the success condition. In distributed systems, the difference between "server received" and "recipient received" is the entire problem space of message delivery guarantees. Phase 2 must force this choice explicitly. The failure cascaded because the UI contract (checkmark = success) was incompatible with the delivery contract (server ack only).
+
+### Fix Applied
+
+Slack introduced two-tier delivery receipts: a "pending" state (server ack), a "delivered" state (recipient client ack), and an explicit error state with retry affordance in the UI. The Phase 2 requirement was retroactively tightened to: "A message is 'sent' when the recipient's client has acknowledged receipt. Until that point, the UI must show a 'pending' state." Additionally, idempotency keys were added to the send API so that client retries do not produce duplicate messages.
+
+### Staff Lessons
+
+- **Verbs in requirements hide assumptions.** "Send," "publish," "process," and "store" each have multiple possible success conditions in a distributed system. Phase 2 must define the success condition, the failure condition, and the user-visible error state for each functional requirement.
+- **The UI contract is part of the requirements.** What the user sees in the UI when something goes wrong is not a design detail -- it is a functional requirement. An incorrect success state (checkmark when message was not delivered) is worse than showing an error, because it erodes trust.
+- **Phase 1 ambiguity always becomes a Phase 5 incident.** The longer an ambiguous requirement survives without being challenged, the more code is written against conflicting interpretations. Fix it in requirements, not in production postmortems.
+
+---
+
+## Brainstorming Questions
+
+**Question 1 -- Which phase deserves the most time in a 45-minute interview?**
+In a real interview, you have 45 minutes total. If you spend 20 minutes on requirements and have no time left for architecture, you fail. But if you spend 2 minutes on requirements and rush to boxes on a whiteboard, you fail differently.
+- In a 45-minute system design interview, how would you allocate time across the 5 phases? Defend a specific breakdown (e.g., "8 minutes on phases 1-2, 5 minutes on phase 3...").
+- Follow-up: How does your allocation change if the interviewer has already given you detailed requirements upfront?
+
+**Question 2 -- When completeness hurts you**
+The 5-phase framework is thorough. But in an interview, thoroughness can become a trap: covering every phase at 20% depth is less impressive than covering 3 phases at 80% depth.
+- Where is the line between being systematic and being superficial? How do you know when to go deeper vs. move on?
+- Follow-up: An interviewer interrupts your Phase 1 with "let's just say 10M DAU." How do you handle that without losing the thread of what Phase 1 was supposed to capture?
+
+**Question 3 -- Pushing back on requirements**
+A PM in your interview scenario says: "The system must have 99.999% availability, sub-10ms P99 latency, and strong consistency across all regions." All three simultaneously are nearly impossible.
+- How do you push back on these requirements without seeming uncooperative or know-it-all?
+- Follow-up: What is the difference between "that's impossible" and "those trade-offs conflict -- here is what we can actually achieve"?
+
+**Question 4 -- Storage system vs. real-time system**
+The 5-phase framework was designed to be universal. But a storage system (design Amazon S3) feels different from a real-time system (design Slack).
+- How does the framework adapt when Phase 3 (scale) looks completely different for a storage system (terabytes, not QPS) vs. a real-time system (events per second, not gigabytes)?
+- Follow-up: Which phases are most likely to be skipped or compressed when designing a storage system? Why?
+
+**Question 5 -- Batch vs. streaming systems**
+Designing a batch data pipeline (Airflow, Spark jobs, ETL) involves different NFRs than a streaming system (Kafka, Flink). The framework phases still apply, but the content of each phase looks different.
+- For a batch processing system, what does Phase 4 (NFRs) look like? What replaces "P99 latency" as the key metric?
+- Follow-up: How do you frame "throughput" as an NFR in a way that drives architecture decisions?
+
+**Question 6 -- API-first system design**
+Some systems are defined entirely by their API contract. Design the Stripe payments API: the external API is the product, not the internals.
+- When the system is API-first, which phase of the framework becomes most critical, and why?
+- Follow-up: How does Phase 2 (functional requirements) change when your "user" is a developer integrating your API rather than an end user clicking a button?
+
+**Question 7 -- L6-level thinking: framework vs. free-form design**
+A skeptic argues: "The 5-phase framework is a crutch. Staff engineers don't follow checklists -- they think from first principles."
+- What is the difference between following a framework mechanically and using a framework as a scaffold for first-principles thinking?
+- Follow-up: Name a scenario where you would deliberately skip one of the 5 phases. Defend your choice.
+
+**Question 8 -- Time management under interview pressure**
+You are 30 minutes into a 45-minute interview. You have completed phases 1-3 and are halfway through Phase 4. The interviewer asks: "Can you start drawing the architecture?"
+- How do you decide whether to finish Phase 4 first or pivot to architecture?
+- Follow-up: What is the risk of drawing the architecture before completing Phase 4?
+
+**Question 9 -- The requirements that drive architecture**
+Not all requirements have equal architectural impact. "The system must store user profiles" and "the system must serve 50M active users with P99 < 50ms" are both requirements, but one drives architecture far more than the other.
+- How do you identify which 1-3 requirements from your Phase 1-2 list will actually determine your architecture? What is your process?
+- Follow-up: What happens if you identify the wrong "load-bearing" requirement and build around it?
+
+**Question 10 -- NFRs that conflict with budget**
+A startup founder says: "We need this to be 99.999% available, globally distributed, and cost under $5,000/month."
+- How do you handle NFRs that are mathematically incompatible with budget constraints?
+- Follow-up: How do you introduce cost as an explicit NFR without sounding like you are designing a cheap system?
+
+**Question 11 -- When requirements change mid-design**
+You are 35 minutes into the interview. You have finished the framework phases and are drawing the architecture. The interviewer says: "Actually, the system also needs to support real-time notifications."
+- How do you handle a late requirement without restarting the entire design?
+- Follow-up: How does a well-executed Phase 1-2 make late requirements easier to absorb?
+
+**Question 12 -- Cross-functional requirements**
+Phase 4 (NFRs) typically covers availability, latency, and consistency. But real systems also have legal requirements (GDPR data residency), business requirements (must work in China), and organizational requirements (must integrate with the existing Salesforce stack).
+- How do you surface cross-functional NFRs in Phase 4? Where do they come from, and how do you get them into your requirements document?
+- Follow-up: Give an example where a legal requirement changes the architecture more than a performance requirement does.
+
+**Question 13 -- Assumptions and their risks**
+Every Phase 5 (Assumptions) item is a risk. "I am assuming the P99 read latency requirement is more important than cost" is an assumption that could be wrong.
+- How do you decide which assumptions are safe to make and which ones require explicit confirmation from the interviewer?
+- Follow-up: What is the cost of an unchallenged wrong assumption discovered at Phase 4 vs. at production?
+
+**Question 14 -- Framework for internal systems**
+The 5-phase framework is typically taught for user-facing product systems. But internal tooling (a deployment pipeline, a data lake, an internal metrics dashboard) also needs design.
+- How does the framework change when your "users" are internal engineers rather than external customers?
+- Follow-up: What Phase 1 questions would you ask differently for an internal data pipeline vs. a consumer-facing API?
+
+**Question 15 -- Global vs. regional systems**
+Designing a global system (Netflix streaming worldwide) involves different constraints than a regional system (a delivery app for one city).
+- How does Phase 3 (scale) change when you go from "10M users in one country" to "100M users across 5 continents"?
+- Follow-up: At what scale does a regional architecture become a liability? How does your Phase 4 NFR for "latency" change when users are globally distributed?
+
+**Question 16 -- The single hardest Phase 2 question**
+Every system design problem has one functional requirement that is harder to specify than all the others. For a messaging system, it is "what does delivered mean?" For a payment system, it is "what does charged mean when the network fails?"
+- For the system "Design a distributed job scheduler," what is the single hardest functional requirement to specify precisely? Write it out in full.
+- Follow-up: How does getting this requirement wrong affect everything built in phases 3-5?
+
+**Question 17 -- The difference between a requirement and a constraint**
+"The system must handle 1M QPS" is a scale requirement. "We are using AWS and cannot change that" is a constraint. "The system must have 99.9% availability" is an NFR. The categories matter.
+- Why does it matter whether something is a requirement vs. a constraint vs. an NFR? Give a concrete example where misclassifying one of these leads to a wrong design decision.
+- Follow-up: What is the design implication of treating a constraint as a requirement?
+
+**Question 18 -- Calibrating depth for senior vs. staff**
+An L5 engineer's Phase 3 analysis: "We need to handle a lot of reads, so we'll add a cache." An L6 engineer's Phase 3 analysis: "DAU 50M, read-to-write ratio 100:1, P99 read < 50ms, cache hit ratio target 95%, TTL needs to match our 10-second staleness budget from Phase 4."
+- What is the specific difference in how an L6 does Phase 3 compared to an L5? List at least 4 concrete differences.
+- Follow-up: How do you develop the instinct for which numbers matter and which are unnecessary precision?
+
+**Question 19 -- Production instinct in framework phases**
+An experienced Staff engineer does not just run the framework -- they bring production war stories into each phase. "In Phase 4, I am specifying 99.9% availability because I have seen what 99.99% costs, and for this use case it is not worth it."
+- How do you demonstrate production instinct during the framework phases without it sounding like name-dropping?
+- Follow-up: What is the risk of over-relying on past experience and under-examining the specific system in front of you?
+
+**Question 20 -- Teaching the framework**
+You are an L6 mentoring an L5 who consistently jumps to architecture before completing the framework phases. You have told them three times, but the habit persists.
+- What is the root cause of the "skip to architecture" habit, and how do you address it beyond just saying "run the phases first"?
+- Follow-up: How do you design a practice exercise that forces the habit change, rather than just explaining it?
+
+---
+
+## L5 vs. L6 Calibration Table
+
+| Dimension | L5 (Senior) | L6 (Staff) |
+|-----------|-------------|------------|
+| **Requirements scoping** | Lists requirements as given; accepts the problem statement at face value | Probes the problem statement: "What is the actual user pain this solves?" Surfaces hidden requirements before proceeding |
+| **API design depth** | Names the endpoints and parameters; mentions REST vs. GraphQL | Specifies idempotency keys, pagination strategy, versioning policy, error contract, and rate limiting -- traces each back to a Phase 1 or Phase 2 requirement |
+| **Architecture breadth** | Draws the "obvious" components: API server, database, cache | Asks: "What components does this system need that I have not drawn yet?" Identifies monitoring, admin, abuse prevention, and data export as architectural concerns |
+| **Scale estimation** | Estimates QPS at the user level; stops at "we need a cache" | Estimates at the bottleneck level: per-component QPS, storage growth rate per year, replication lag budget, cache eviction rate, and cost per unit |
+| **NFR specification** | Names NFRs generically: "fast, reliable, consistent" | Specifies NFRs with numbers and trade-off choices: "99.9% not 99.99% -- here is why. Eventual consistency with 10s window -- here is why." |
+| **Time management in interview** | Runs out of time on phases 1-2; has to rush architecture | Allocates time explicitly at the start: "I will spend 8 minutes on requirements, 5 on scale, then 20 on architecture." Audibly checks the clock. |
+| **Cross-functional thinking** | Designs for the technical requirements; treats legal and business as someone else's problem | Surfaces GDPR, data residency, audit logging, and cost ceilings as Phase 4 NFRs without being prompted |
+| **Failure mode anticipation** | Designs the happy path; adds "we should have retries" at the end | For each component drawn, asks: "What happens when this is down? Does the system degrade gracefully or fail hard?" Documents failure modes in Phase 4 |
+| **Trade-off articulation** | States a decision: "I will use Kafka" | States the decision, the alternative considered, and the Phase requirement that made the trade-off: "Kafka over SQS because our Phase 4 replay requirement needs log retention -- SQS does not offer that" |
+| **Production instinct** | References textbook patterns; says "best practices" without attribution | Mentions real failure modes: "At the read volumes we estimated in Phase 3, this is where Twitter's timeline system fell over in 2012 -- here is what they did" |
+| **Mentoring on framework** | Can explain the framework when asked | Can diagnose *why* a junior engineer skips phases (anxiety, habit, unclear value) and prescribes a specific corrective exercise |
+| **Adapting framework to context** | Applies the same framework script regardless of problem type | Recognizes when a problem is storage-dominant vs. compute-dominant vs. real-time and adjusts which phases get more time and depth accordingly |
+
+---
+
 *Chapter 13 complete.*
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+*This section shows the SAME problem -- design a URL shortener like bit.ly -- answered at four different levels. Read all four. The differences are not about knowing more facts. They are about how you structure your reasoning.*
+
+### Intern Level: "Let me build the thing"
+
+An intern hears "design a URL shortener" and immediately starts coding in their head.
+
+"Okay, I need a database with two columns: short_code and long_url. I'll generate a random 6-character code using letters and numbers. That gives me 56 billion combinations -- plenty. I'll use a hash function. The API is GET /:code to redirect. POST /create to make a new URL. Done."
+
+What's right: they got the core idea. What's missing: they have no idea about scale (how many URLs per second?), no idea about the users (are these public URLs or authenticated?), no idea about NFRs (what's the latency target? what happens if the DB goes down?), and no idea about trade-offs (why 6 characters? what if two codes collide?).
+
+The intern design would work for 100 URLs. It would fall over at 100,000.
+
+```
+INTERN MENTAL MODEL:
+  User --> [My App] --> [Database]
+  (3 boxes, no questions)
+```
+
+### Mid-Level (L4): "Let me make it work at scale"
+
+An L4 engineer knows the right questions: "How many URLs per day? How many redirects per second?" They estimate: 100M URLs total, 10K redirects/second at peak. They add a cache in front of the database. They think about read/write ratio (reads dominate, 100:1). They add a CDN for popular links.
+
+What L4 does well: scale estimation, basic architecture. What L4 misses: they still haven't asked WHO creates URLs (authenticated users? anonymous?), what happens on hash collision (they'll "just retry"), and what the SLA is (they assume "fast").
+
+```
+L4 MENTAL MODEL:
+  User --> [CDN] --> [Cache] --> [DB]
+           (adds layers, but still no NFRs)
+```
+
+### Senior (L5): "Let me design it so it doesn't break"
+
+An L5 engineer goes through requirements methodically before drawing anything. Phase 1: "Who uses this? Authenticated users creating links, anonymous users clicking them, enterprise customers with custom domains." Phase 2: "The core APIs are: POST /links, GET /:code (redirect), DELETE /links/:code (expiry)."
+
+Phase 3: 10K redirects/second = 864M/day. At ~50 bytes per redirect log: 43GB/day of analytics. Cache hit rate matters: if 80% of traffic goes to 20% of links (Zipf's Law), the cache dramatically reduces DB load.
+
+Phase 4 NFRs: p99 redirect latency < 50ms, 99.9% availability, links expire as specified (correctness NFR).
+
+They think about failure modes: what if the cache is down? What if the DB is overwhelmed? They design for each.
+
+```
+L5 MENTAL MODEL:
+  Phase 1 -> Phase 2 -> Phase 3 -> Phase 4 -> Architecture
+  (each phase informs the next, no jumping ahead)
+```
+
+### Staff (L6): "Let me design it so it NEVER breaks, and I understand why"
+
+An L6 engineer does everything L5 does, then asks questions L5 didn't:
+
+"Is this the ONLY thing we're building, or is this a platform that other teams will use? If platform: the API contract matters more -- it needs versioning. If standalone: simpler."
+
+"What's the business model? If freemium: anonymous users get 3 links, authenticated get unlimited. This changes Phase 1 completely."
+
+"What happens to a link when a user deletes their account? GDPR says we must delete their data. Does deleting the link break existing URLs? That's a business decision, not a technical one -- but the technical design must support both answers."
+
+"The 6-character code gives 56 billion combinations. At 100M new URLs/day, we exhaust it in 560 days. Do we need 7 characters from day one? What's the migration cost if we hit the limit in production?"
+
+L6 thinks forward in time (what does this look like in 2 years?), thinks cross-functionally (what does legal/compliance need?), and makes trade-offs explicit rather than implicit.
+
+```
+L6 MENTAL MODEL:
+  Business requirements
+       |
+  Phase 1 (users, use cases, edge cases, future users)
+       |
+  Phase 2 (APIs with versioning, idempotency, error contracts)
+       |
+  Phase 3 (scale with Zipf's Law, 2-year projection, collision math)
+       |
+  Phase 4 (NFRs with specific numbers and cost sign-offs)
+       |
+  Architecture (with failure modes and evolution path)
+       |
+  "Here are the 3 decisions I made and what I'd do differently at 10x scale."
+```
+
+### The Pattern
+
+The progression is not about knowing more. It is about:
+- Intern: builds what was asked
+- L4: builds it so it scales
+- L5: builds it so it doesn't break
+- L6: builds the right thing, understands the trade-offs, and thinks two years ahead
+
+In a 45-minute interview, an L6 signal is not "more answers." It is "better questions before the answers."

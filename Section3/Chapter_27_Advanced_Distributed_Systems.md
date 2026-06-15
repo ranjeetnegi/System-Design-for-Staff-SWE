@@ -8,11 +8,11 @@
 
 ### The Moment It All Becomes Real
 
-It's 2am. Your on-call phone rings. A user's balance shows $5,000 — correct. They refresh. It shows $4,800. They refresh again. $5,000. Your support team is getting 200 tickets. Your database is "fine." No errors. No crashes.
+It's 2am. Your on-call phone rings. A user's balance shows $5,000 -- correct. They refresh. It shows $4,800. They refresh again. $5,000. Your support team is getting 200 tickets. Your database is "fine." No errors. No crashes.
 
 What's happening? Two read replicas are serving different snapshots. One is 3 seconds behind. The user keeps hitting different replicas on refresh. This isn't a bug in your code. It's a consistency model decision you made six months ago without fully understanding what you were signing up for.
 
-Welcome to Chapter 27. These five topics — 3PC, Read Consistency, HLC, CRDTs, Chaos Engineering — are what separates L5 thinking ("I know the definition") from L6 thinking ("I know exactly which failure mode this prevents, which one it doesn't, and which real system uses it").
+Welcome to Chapter 27. These five topics -- 3PC, Read Consistency, HLC, CRDTs, Chaos Engineering -- are what separates L5 thinking ("I know the definition") from L6 thinking ("I know exactly which failure mode this prevents, which one it doesn't, and which real system uses it").
 
 None of these are academic. Every one of them is a response to a real failure pattern that has hit production systems at scale.
 
@@ -24,11 +24,11 @@ An L5 engineer learns these topics to pass the interview. An L6 engineer reaches
 
 Here's the mental map:
 
-- System is **blocking on coordinator crash** during transaction → reach for 3PC or Saga + compensation
-- Users are **reading stale data right after writing** → reach for read-your-writes routing
-- Distributed events are **arriving out of causal order** → reach for HLC or Lamport clocks
-- **Concurrent offline edits** need to merge without coordination → reach for CRDTs
-- You **don't know if your system survives failures** → reach for chaos engineering
+- System is **blocking on coordinator crash** during transaction -> reach for 3PC or Saga + compensation
+- Users are **reading stale data right after writing** -> reach for read-your-writes routing
+- Distributed events are **arriving out of causal order** -> reach for HLC or Lamport clocks
+- **Concurrent offline edits** need to merge without coordination -> reach for CRDTs
+- You **don't know if your system survives failures** -> reach for chaos engineering
 
 The L6 move isn't knowing all five. It's knowing which one applies when.
 
@@ -50,7 +50,7 @@ The L6 move isn't knowing all five. It's knowing which one applies when.
 |                  | counter: order AND real time             | MongoDB (causal sessions)  | collisions, global consistency   |
 +------------------+------------------------------------------+----------------------------+----------------------------------+
 | CRDTs            | Data types that merge concurrent edits   | Redis (counters), Riak,    | Offline edits, collaborative     |
-|                  | without coordination — math does it      | Figma, Notion, Apple Notes | apps, conflict-free replication  |
+|                  | without coordination -- math does it      | Figma, Notion, Apple Notes | apps, conflict-free replication  |
 +------------------+------------------------------------------+----------------------------+----------------------------------+
 | Chaos Eng.       | Inject failure deliberately to find      | Netflix (Chaos Monkey),    | Resilience testing, SRE culture, |
 |                  | weaknesses before production does        | AWS, Google, Gremlin       | failure scenarios, game days     |
@@ -80,11 +80,11 @@ The L6 move isn't knowing all five. It's knowing which one applies when.
 
 ## Why This Chapter Exists
 
-Every senior engineer has been there. You're designing a checkout system. The order has to be created, the inventory has to be decremented, and the payment has to be charged — all at once, or not at all. Simple, right?
+Every senior engineer has been there. You're designing a checkout system. The order has to be created, the inventory has to be decremented, and the payment has to be charged -- all at once, or not at all. Simple, right?
 
 Not across three separate databases. Not when any one of them can crash mid-operation. Not when the network connecting them can cut out at the worst possible moment.
 
-This chapter is about the tools engineers have built to solve this problem — and the brutal tradeoffs that come with each one. We'll cover 2PC (the workhorse), 3PC (the theory), why 3PC fails in practice, and what production systems actually use instead.
+This chapter is about the tools engineers have built to solve this problem -- and the brutal tradeoffs that come with each one. We'll cover 2PC (the workhorse), 3PC (the theory), why 3PC fails in practice, and what production systems actually use instead.
 
 There are two failure modes that will keep you up at night as a Staff Engineer:
 
@@ -92,11 +92,11 @@ There are two failure modes that will keep you up at night as a Staff Engineer:
 
 2. **Network partition splitting participants**: The network splits your cluster into two islands. Each island can't hear the other. Each makes its own decision. Both think they're doing the right thing. They make conflicting choices. Your data is now inconsistent.
 
-Understanding these failure modes deeply — and being able to explain why you'd pick 2PC vs Raft vs Saga for a given system — is what separates a Staff-level answer from a senior-level one in a system design interview.
+Understanding these failure modes deeply -- and being able to explain why you'd pick 2PC vs Raft vs Saga for a given system -- is what separates a Staff-level answer from a senior-level one in a system design interview.
 
 ---
 
-## Part 1: The Problem — Distributed Atomicity
+## Part 1: The Problem -- Distributed Atomicity
 
 ### What "Atomic" Actually Means
 
@@ -107,12 +107,12 @@ If you transfer $100 from Account A to Account B, atomic means: Account A loses 
 On a single database, this is solved with a rollback log (also called a write-ahead log). If a transaction fails halfway through, the database reads the log and undoes whatever it partially did. Clean.
 
 ```
-Single Database — Easy Atomicity
+Single Database -- Easy Atomicity
 
   BEGIN TRANSACTION
     UPDATE accounts SET balance = balance - 100 WHERE id = 'A'
     UPDATE accounts SET balance = balance + 100 WHERE id = 'B'
-  COMMIT  ← if this crashes, rollback log restores both
+  COMMIT  <- if this crashes, rollback log restores both
 
   Rollback log says: "A had $500, B had $200 before we started"
   On crash: restore A to $500, restore B to $200. Done.
@@ -123,14 +123,14 @@ Single Database — Easy Atomicity
 Now put Account A on Database 1 (in Virginia) and Account B on Database 2 (in Oregon). They have separate rollback logs. They don't share a log. They can't read each other's state.
 
 ```
-Distributed — Coordination Problem
+Distributed -- Coordination Problem
 
   Database 1 (Virginia)         Database 2 (Oregon)
-  ┌─────────────────┐           ┌─────────────────┐
-  │ A: $500         │           │ B: $200         │
-  └─────────────────┘           └─────────────────┘
+  +-----------------+           +-----------------+
+  | A: $500         |           | B: $200         |
+  +-----------------+           +-----------------+
 
-  Step 1: DB1 debits A → A has $400
+  Step 1: DB1 debits A -> A has $400
   Step 2: CRASH before DB2 credits B
 
   Now: A has $400, B has $200. $100 vanished.
@@ -140,7 +140,7 @@ Distributed — Coordination Problem
   Whose log do you trust?
 ```
 
-The two rollback logs are independent. They can't form a consensus by themselves. You need something — a coordinator — to orchestrate the whole thing.
+The two rollback logs are independent. They can't form a consensus by themselves. You need something -- a coordinator -- to orchestrate the whole thing.
 
 ### The Real-World Stakes
 
@@ -152,7 +152,7 @@ At Visa scale (65,000 transactions per second), even a 0.001% inconsistency rate
 
 ---
 
-## Part 2: Two-Phase Commit (2PC) — The Workhorse
+## Part 2: Two-Phase Commit (2PC) -- The Workhorse
 
 ### The Core Idea
 
@@ -161,39 +161,39 @@ Two-Phase Commit is the oldest and most widely used solution. The idea is simple
 Think of it like a vote before a group decision. Nobody acts until everyone has voted AND the chairperson calls the result.
 
 ```
-2PC — Normal Case (3 participants)
+2PC -- Normal Case (3 participants)
 
 PHASE 1: PREPARE
-─────────────────────────────────────────────────
+-------------------------------------------------
 Coordinator                 P1    P2    P3
-    │                        │     │     │
-    │──── PREPARE ──────────►│     │     │
-    │──── PREPARE ───────────────►│     │
-    │──── PREPARE ────────────────────►│     │
-    │                        │     │     │
-    │◄─── VOTE YES ──────────│     │     │
-    │◄─── VOTE YES ───────────────│     │
-    │◄─── VOTE YES ────────────────────│     │
-    │                        │     │     │
-    │  All votes = YES        │     │     │
-    │                        │     │     │
+    |                        |     |     |
+    |---- PREPARE ---------->|     |     |
+    |---- PREPARE --------------->|     |
+    |---- PREPARE -------------------->|     |
+    |                        |     |     |
+    |<--- VOTE YES ----------|     |     |
+    |<--- VOTE YES ---------------|     |
+    |<--- VOTE YES --------------------|     |
+    |                        |     |     |
+    |  All votes = YES        |     |     |
+    |                        |     |     |
 
 PHASE 2: COMMIT
-─────────────────────────────────────────────────
+-------------------------------------------------
 Coordinator                 P1    P2    P3
-    │                        │     │     │
-    │──── COMMIT ───────────►│     │     │
-    │──── COMMIT ────────────────►│     │
-    │──── COMMIT ─────────────────────►│     │
-    │                        │     │     │
-    │◄─── ACK ───────────────│     │     │
-    │◄─── ACK ────────────────────│     │
-    │◄─── ACK ─────────────────────────│     │
-    │                        │     │     │
+    |                        |     |     |
+    |---- COMMIT ----------->|     |     |
+    |---- COMMIT ---------------->|     |
+    |---- COMMIT --------------------->|     |
+    |                        |     |     |
+    |<--- ACK ---------------|     |     |
+    |<--- ACK --------------------|     |
+    |<--- ACK -------------------------|     |
+    |                        |     |     |
     DONE. Transaction committed on all nodes.
 ```
 
-### Phase 1 — Prepare (The Vote)
+### Phase 1 -- Prepare (The Vote)
 
 The coordinator sends a PREPARE message to every participant. Each participant does this:
 
@@ -206,32 +206,32 @@ The key word is "guarantee." When a participant votes YES, it's making a promise
 
 If a participant votes NO (disk full, constraint violation, whatever), it immediately rolls back its own local work.
 
-### Phase 2 — Commit or Abort (The Decision)
+### Phase 2 -- Commit or Abort (The Decision)
 
 The coordinator looks at all the votes. If every single participant voted YES, it sends COMMIT to everyone. If even one participant voted NO, it sends ABORT to everyone.
 
 ```
-2PC — Abort Case (one participant votes NO)
+2PC -- Abort Case (one participant votes NO)
 
 PHASE 1: PREPARE
-─────────────────────────────────────────────────
+-------------------------------------------------
 Coordinator                 P1    P2    P3
-    │──── PREPARE ──────────►│     │     │
-    │──── PREPARE ───────────────►│     │
-    │──── PREPARE ────────────────────►│     │
-    │                        │     │     │
-    │◄─── VOTE YES ──────────│     │     │
-    │◄─── VOTE NO ────────────────│     │   ← P2 can't commit (disk full)
-    │◄─── VOTE YES ────────────────────│     │
-    │                        │     │     │
-    │  One vote = NO → ABORT  │     │     │
+    |---- PREPARE ---------->|     |     |
+    |---- PREPARE --------------->|     |
+    |---- PREPARE -------------------->|     |
+    |                        |     |     |
+    |<--- VOTE YES ----------|     |     |
+    |<--- VOTE NO ----------------|     |   <- P2 can't commit (disk full)
+    |<--- VOTE YES --------------------|     |
+    |                        |     |     |
+    |  One vote = NO -> ABORT  |     |     |
 
 PHASE 2: ABORT
-─────────────────────────────────────────────────
-    │──── ABORT ────────────►│     │     │
-    │──── ABORT ─────────────────►│     │
-    │──── ABORT ──────────────────────►│     │
-    │                        │     │     │
+-------------------------------------------------
+    |---- ABORT ------------>|     |     |
+    |---- ABORT ----------------->|     |
+    |---- ABORT ---------------------->|     |
+    |                        |     |     |
     All participants roll back. No permanent changes.
 ```
 
@@ -245,13 +245,13 @@ This is powerful. It's used in MySQL XA, PostgreSQL two-phase commit, Java JTA/X
 
 ---
 
-## Part 3: The 2PC Blocking Problem — In Depth
+## Part 3: The 2PC Blocking Problem -- In Depth
 
 ### The Wedding Analogy
 
-Picture a wedding ceremony. The minister (coordinator) asks the bride and groom (participants) "Do you take this person?" Both say "I do." The minister is about to say "I now pronounce you married" — and then faints.
+Picture a wedding ceremony. The minister (coordinator) asks the bride and groom (participants) "Do you take this person?" Both say "I do." The minister is about to say "I now pronounce you married" -- and then faints.
 
-Both the bride and groom are stuck. Can they declare themselves married? No — what if the minister was about to say "Wait, there's actually a legal problem, you can't marry"? Can they leave? Also no — they've both already committed to "I do."
+Both the bride and groom are stuck. Can they declare themselves married? No -- what if the minister was about to say "Wait, there's actually a legal problem, you can't marry"? Can they leave? Also no -- they've both already committed to "I do."
 
 They're frozen, waiting for the minister to wake up.
 
@@ -262,39 +262,39 @@ This is the exact 2PC blocking scenario.
 The coordinator has sent PREPARE to all participants. All participants have voted YES. All participants are now holding locks on their data, waiting for the COMMIT message. Then the coordinator crashes.
 
 ```
-2PC — BLOCKING SCENARIO
+2PC -- BLOCKING SCENARIO
 
 Timeline:
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 
   Coordinator     P1           P2           P3
-      │            │            │            │
-      │─ PREPARE ─►│            │            │
-      │─ PREPARE ──────────────►│            │
-      │─ PREPARE ───────────────────────────►│
-      │            │            │            │
-      │◄─ YES ─────│            │            │
-      │◄─ YES ──────────────────│            │
-      │◄─ YES ───────────────────────────────│
-      │            │            │            │
-      │  [CRASH]   │            │            │
-      ✗            │            │            │
-                   │            │            │
+      |            |            |            |
+      |- PREPARE ->|            |            |
+      |- PREPARE -------------->|            |
+      |- PREPARE --------------------------->|
+      |            |            |            |
+      |<- YES -----|            |            |
+      |<- YES ------------------|            |
+      |<- YES -------------------------------|
+      |            |            |            |
+      |  [CRASH]   |            |            |
+      N            |            |            |
+                   |            |            |
                  LOCKED        LOCKED       LOCKED
-                   │            │            │
+                   |            |            |
                    ?            ?            ?
               "Do I commit  "Do I commit  "Do I commit
                or abort?"    or abort?"    or abort?"
 
   Answer: THEY DON'T KNOW. They must WAIT.
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 ```
 
 ### Why Can't Participants Just Decide On Their Own?
 
 This is the key question. Why can't P1, P2, and P3 just look at each other and say "we all voted YES, let's just commit"?
 
-The problem is they don't know what the coordinator sent to *others* before crashing. What if the coordinator sent COMMIT to P1 before it crashed — but P2 and P3 didn't get the message? If P2 and P3 now decide to abort, you have P1 committed and P2+P3 aborted. Atomicity violated.
+The problem is they don't know what the coordinator sent to *others* before crashing. What if the coordinator sent COMMIT to P1 before it crashed -- but P2 and P3 didn't get the message? If P2 and P3 now decide to abort, you have P1 committed and P2+P3 aborted. Atomicity violated.
 
 ```
 The Dangerous Scenario:
@@ -306,9 +306,9 @@ The Dangerous Scenario:
   P2 and P3 only know they voted YES.
   They DON'T KNOW that P1 already committed.
 
-  If P2, P3 abort: P1 committed, P2+P3 aborted → INCONSISTENT!
+  If P2, P3 abort: P1 committed, P2+P3 aborted -> INCONSISTENT!
   If P2, P3 commit: they might be right, or coordinator might have
-                    been about to abort → depends on why it crashed
+                    been about to abort -> depends on why it crashed
 
   There's NO safe decision P2 and P3 can make unilaterally.
 ```
@@ -327,28 +327,28 @@ This is lock escalation: one blocked distributed transaction can cascade into hu
 Lock Cascade from Blocked 2PC
 
   2PC blocked on inventory rows (item_id = 1001, 1002, 1003)
-         │
-         ▼
-  All new orders for those items → WAIT FOR LOCK
-         │
-         ▼
+         |
+         v
+  All new orders for those items -> WAIT FOR LOCK
+         |
+         v
   Order service HTTP handlers queue up
-         │
-         ▼
-  Thread pool exhausted → new requests rejected
-         │
-         ▼
+         |
+         v
+  Thread pool exhausted -> new requests rejected
+         |
+         v
   502 errors for all users
 
   Duration: until coordinator restarts (could be minutes)
   Could be avoided with: coordinator timeout + retry
 ```
 
-How long are they blocked? In a naive implementation, forever — until the coordinator restarts. With a timeout set, participants abort after N seconds and retry. But even with timeouts, the retry storm can cause its own problems.
+How long are they blocked? In a naive implementation, forever -- until the coordinator restarts. With a timeout set, participants abort after N seconds and retry. But even with timeouts, the retry storm can cause its own problems.
 
 ---
 
-## Part 4: Three-Phase Commit — The Theory
+## Part 4: Three-Phase Commit -- The Theory
 
 ### The Key Insight
 
@@ -360,54 +360,54 @@ This is the 3PC insight. Add a PRE-COMMIT phase that says: "Everyone voted YES, 
 
 ### The Backup Minister Analogy
 
-Before the ceremony, you brief a backup minister: "The ceremony is proceeding, the couple will say 'I do', we will complete the wedding." Main minister faints mid-ceremony. Backup minister steps in. Backup minister says: "I was fully briefed — the wedding proceeds." Ceremony completes. No one is stuck.
+Before the ceremony, you brief a backup minister: "The ceremony is proceeding, the couple will say 'I do', we will complete the wedding." Main minister faints mid-ceremony. Backup minister steps in. Backup minister says: "I was fully briefed -- the wedding proceeds." Ceremony completes. No one is stuck.
 
 The PRE-COMMIT message is that briefing. It's an explicit signal that says "we are committed to committing."
 
 ### The Three Phases
 
 ```
-3PC — Full Message Flow
+3PC -- Full Message Flow
 
 PHASE 1: CanCommit? (same as 2PC Prepare)
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Coordinator                P1    P2    P3
-    │                       │     │     │
-    │──── CanCommit? ───────►│     │     │
-    │──── CanCommit? ────────────►│     │
-    │──── CanCommit? ─────────────────►│
-    │                       │     │     │
-    │◄─── YES ──────────────│     │     │
-    │◄─── YES ───────────────────│     │
-    │◄─── YES ────────────────────────│
-    │                       │     │     │
+    |                       |     |     |
+    |---- CanCommit? ------->|     |     |
+    |---- CanCommit? ------------>|     |
+    |---- CanCommit? ----------------->|
+    |                       |     |     |
+    |<--- YES --------------|     |     |
+    |<--- YES -------------------|     |
+    |<--- YES ------------------------|
+    |                       |     |     |
 
 PHASE 2: PreCommit (THE NEW PHASE)
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Coordinator                P1    P2    P3
-    │                       │     │     │
-    │──── PreCommit ────────►│     │     │
-    │──── PreCommit ─────────────►│     │
-    │──── PreCommit ──────────────────►│
-    │                       │     │     │
-    │◄─── ACK ──────────────│     │     │
-    │◄─── ACK ───────────────────│     │
-    │◄─── ACK ────────────────────────│
-    │                       │     │     │
-    │  All ACKed PreCommit  │     │     │
+    |                       |     |     |
+    |---- PreCommit -------->|     |     |
+    |---- PreCommit ------------->|     |
+    |---- PreCommit ------------------>|
+    |                       |     |     |
+    |<--- ACK --------------|     |     |
+    |<--- ACK -------------------|     |
+    |<--- ACK ------------------------|
+    |                       |     |     |
+    |  All ACKed PreCommit  |     |     |
 
 PHASE 3: DoCommit
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
 Coordinator                P1    P2    P3
-    │                       │     │     │
-    │──── DoCommit ─────────►│     │     │
-    │──── DoCommit ──────────────►│     │
-    │──── DoCommit ───────────────────►│
-    │                       │     │     │
-    │◄─── ACK ──────────────│     │     │
-    │◄─── ACK ───────────────────│     │
-    │◄─── ACK ────────────────────────│
-    │                       │     │     │
+    |                       |     |     |
+    |---- DoCommit --------->|     |     |
+    |---- DoCommit -------------->|     |
+    |---- DoCommit ------------------->|
+    |                       |     |     |
+    |<--- ACK --------------|     |     |
+    |<--- ACK -------------------|     |
+    |<--- ACK ------------------------|
+    |                       |     |     |
     COMMITTED on all nodes.
 ```
 
@@ -415,16 +415,16 @@ Coordinator                P1    P2    P3
 
 In 2PC, after PREPARE, participants are in an uncertain state: they don't know the coordinator's decision. In 3PC, after PreCommit, participants know the coordinator's decision: commit. They just haven't executed it yet.
 
-If the coordinator crashes after all participants have ACKed PreCommit, any participant can take over as the new coordinator and send DoCommit. They know it's safe because every participant already ACKed the PreCommit — meaning everyone was ready and intended to commit.
+If the coordinator crashes after all participants have ACKed PreCommit, any participant can take over as the new coordinator and send DoCommit. They know it's safe because every participant already ACKed the PreCommit -- meaning everyone was ready and intended to commit.
 
 ```
-3PC — Coordinator Crash After PreCommit (handled gracefully)
+3PC -- Coordinator Crash After PreCommit (handled gracefully)
 
   Coordinator crashes here:
-                                    ↓
-  Phase 1: CanCommit?  [all YES]    │
-  Phase 2: PreCommit   [all ACK]    │    ← Coordinator dies
-  Phase 3: DoCommit    [   ?  ]     ✗
+                                    v
+  Phase 1: CanCommit?  [all YES]    |
+  Phase 2: PreCommit   [all ACK]    |    <- Coordinator dies
+  Phase 3: DoCommit    [   ?  ]     N
 
   P1 detects coordinator timeout.
   P1 knows: "Everyone ACKed PreCommit. Safe to commit."
@@ -436,21 +436,21 @@ If the coordinator crashes after all participants have ACKed PreCommit, any part
   P1 can't act. Blocks forever.
 ```
 
-This is the theoretical win: 3PC is non-blocking in the case of coordinator crash — because the PreCommit phase ensures every surviving participant knows the commit intent.
+This is the theoretical win: 3PC is non-blocking in the case of coordinator crash -- because the PreCommit phase ensures every surviving participant knows the commit intent.
 
 ---
 
-## Part 5: Why 3PC Fails — The Partition Problem
+## Part 5: Why 3PC Fails -- The Partition Problem
 
 ### The Fatal Assumption
 
 Here's the catch. Everything in 3PC's non-blocking property depends on one assumption: **you can reliably detect when the coordinator is dead versus unreachable**.
 
-If a participant can't hear the coordinator, 3PC says: "If I got PreCommit and now I can't reach the coordinator, I should commit — the coordinator was going to commit anyway."
+If a participant can't hear the coordinator, 3PC says: "If I got PreCommit and now I can't reach the coordinator, I should commit -- the coordinator was going to commit anyway."
 
 But "coordinator is dead" and "coordinator is unreachable due to network partition" look IDENTICAL from the participant's perspective. Both produce the same symptom: no response from the coordinator.
 
-### The Split-Brain Scenario — Step by Step
+### The Split-Brain Scenario -- Step by Step
 
 This is the critical failure. Read this slowly.
 
@@ -458,75 +458,75 @@ This is the critical failure. Read this slowly.
 Setup: Two datacenters. Network link between them cuts.
 
     North DC                           South DC
-  ┌─────────────────┐               ┌─────────────────┐
-  │  Coordinator    │               │                 │
-  │  Participant A  │               │  Participant B  │
-  └─────────────────┘               └─────────────────┘
-           │                                 │
-           └───────── NETWORK LINK ──────────┘
+  +-----------------+               +-----------------+
+  |  Coordinator    |               |                 |
+  |  Participant A  |               |  Participant B  |
+  +-----------------+               +-----------------+
+           |                                 |
+           +--------- NETWORK LINK ----------+
 ```
 
 Now here's the sequence of events:
 
 ```
 STEP 1: Normal operation begins
-─────────────────────────────────────────────────────────────
-  Coordinator → A: CanCommit?    → A: YES
-  Coordinator → B: CanCommit?    → B: YES
+-------------------------------------------------------------
+  Coordinator -> A: CanCommit?    -> A: YES
+  Coordinator -> B: CanCommit?    -> B: YES
 
-  Coordinator → A: PreCommit     → A: ACK
-  Coordinator → B: PreCommit     → B: ACK
+  Coordinator -> A: PreCommit     -> A: ACK
+  Coordinator -> B: PreCommit     -> B: ACK
 
   [Both participants have now ACKed PreCommit]
   [Both know: "we are going to commit"]
 
 STEP 2: Network partition occurs
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 
     North DC                           South DC
-  ┌─────────────────┐    CUT!       ┌─────────────────┐
-  │  Coordinator    │ ═══════════✗  │                 │
-  │  Participant A  │               │  Participant B  │
-  └─────────────────┘               └─────────────────┘
+  +-----------------+    CUT!       +-----------------+
+  |  Coordinator    | ===========N  |                 |
+  |  Participant A  |               |  Participant B  |
+  +-----------------+               +-----------------+
 
 STEP 3: Coordinator crashes (in North DC, after network cut)
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 
     North DC                           South DC
-  ┌─────────────────┐    CUT!       ┌─────────────────┐
-  │  Coordinator ✗  │ ═══════════✗  │                 │
-  │  Participant A  │               │  Participant B  │
-  └─────────────────┘               └─────────────────┘
+  +-----------------+    CUT!       +-----------------+
+  |  Coordinator N  | ===========N  |                 |
+  |  Participant A  |               |  Participant B  |
+  +-----------------+               +-----------------+
 
 STEP 4: Timeout fires. Each participant makes its own decision.
-─────────────────────────────────────────────────────────────
+-------------------------------------------------------------
 
   Participant A (North):
     "I got PreCommit. Coordinator is not responding.
      It must have crashed after PreCommit.
      3PC says: safe to commit. COMMITTING."
-                   ↓
-              A COMMITS ✓
+                   v
+              A COMMITS Y
 
   Participant B (South):
     "I got PreCommit. Coordinator is not responding.
      Maybe it crashed right after sending PreCommit to me,
      and before it could send DoCommit to A?
      Or... maybe it aborted? I can't tell.
-     Wait — did A even get DoCommit? I can't reach North DC.
+     Wait -- did A even get DoCommit? I can't reach North DC.
      I'll abort to be safe."
 
-     [actually, in some 3PC variants, B also commits — which
+     [actually, in some 3PC variants, B also commits -- which
       might be right. But in network partition, B has no way
       to know if A committed or was going to. The logic is
       identical from B's perspective whether A committed or not.]
-                   ↓
-              B ABORTS ✗
+                   v
+              B ABORTS N
 
 RESULT:
   A: COMMITTED
   B: ABORTED
-  ──────────────────────────────
+  ------------------------------
   ATOMICITY VIOLATED.
   $100 debited from account, $100 never credited.
 ```
@@ -547,20 +547,20 @@ You must sacrifice one. 3PC chose liveness (always deciding, never blocking). 2P
 The Impossibility Triangle
 
          Safety (no bad state)
-              ▲
+              ^
              / \
             /   \
            /     \
           /       \
-         ─────────────────────────
+         -------------------------
         Liveness          Partition
       (always decide)    Tolerance
 
   You can have 2 of 3. Never all 3.
 
-  2PC: Safety + Partition Tolerance → sacrifices Liveness (blocks)
-  3PC: Safety + Liveness → sacrifices Partition Tolerance (split brain)
-  Raft: Safety + Partition Tolerance → sacrifices Liveness
+  2PC: Safety + Partition Tolerance -> sacrifices Liveness (blocks)
+  3PC: Safety + Liveness -> sacrifices Partition Tolerance (split brain)
+  Raft: Safety + Partition Tolerance -> sacrifices Liveness
         (minority partition can't make progress, but majority is safe)
 ```
 
@@ -570,7 +570,7 @@ This is why 3PC is a theoretical curiosity and not a production system.
 
 ---
 
-## Part 6: The Math — 3PC Adds Cost Without Guaranteed Benefit
+## Part 6: The Math -- 3PC Adds Cost Without Guaranteed Benefit
 
 ### Message Complexity
 
@@ -580,8 +580,8 @@ Let's count messages. N = number of participants.
 Message Count Comparison (N participants)
 
 Protocol    Phase 1         Phase 2         Phase 3         Total
-─────────────────────────────────────────────────────────────────
-2PC         N + N = 2N      N + N = 2N      —               4N
+-----------------------------------------------------------------
+2PC         N + N = 2N      N + N = 2N      --               4N
             (prepare +      (commit +
              votes)          acks)
 
@@ -589,15 +589,15 @@ Protocol    Phase 1         Phase 2         Phase 3         Total
             (canCommit +    (preCommit +    (doCommit +
              votes)          acks)           acks)
 
-Raft        N (leader       —               —               N
+Raft        N (leader       --               --               N
 (normal)    sends to all                                    (best case)
             followers)
 
-─────────────────────────────────────────────────────────────────
-With N=10:  2PC = 40 msgs.  3PC = 60 msgs.  Raft ≈ 10 msgs.
+-----------------------------------------------------------------
+With N=10:  2PC = 40 msgs.  3PC = 60 msgs.  Raft ~= 10 msgs.
 ```
 
-Raft uses N messages in the normal case because the leader broadcasts and followers acknowledge — one round trip. No prepare phase needed; the consensus algorithm handles safety through quorums, not through coordinator authority.
+Raft uses N messages in the normal case because the leader broadcasts and followers acknowledge -- one round trip. No prepare phase needed; the consensus algorithm handles safety through quorums, not through coordinator authority.
 
 ### Latency Cost Per Round Trip
 
@@ -622,7 +622,7 @@ At 10,000 transactions per second, the extra 70ms round trip in 3PC adds 700 sec
 
 ### The Cost Isn't Worth It
 
-3PC costs 50% more messages and 33% more latency than 2PC. And it still fails during network partitions — which are more common than coordinator crashes. You're paying more money for less reliability.
+3PC costs 50% more messages and 33% more latency than 2PC. And it still fails during network partitions -- which are more common than coordinator crashes. You're paying more money for less reliability.
 
 This is the decisive argument against 3PC in production. The cost is real. The benefit is limited to a specific failure scenario (coordinator crash with no partition). In practice, coordinator crashes are handled more cheaply with recovery logs.
 
@@ -632,17 +632,17 @@ This is the decisive argument against 3PC in production. The cost is real. The b
 
 ### Option 1: 2PC With Recovery Logs
 
-The solution to 2PC blocking isn't 3PC — it's durable coordinator state.
+The solution to 2PC blocking isn't 3PC -- it's durable coordinator state.
 
 The coordinator writes its decision to a log BEFORE sending the commit message. On restart, the coordinator reads its log, finds any in-progress transactions, and completes them. Blocking is reduced to coordinator restart time (seconds, not indefinite).
 
 ```
-2PC With Recovery Log — Coordinator Crash Handled
+2PC With Recovery Log -- Coordinator Crash Handled
 
   Coordinator:
-  ─────────────────────────────────────────────────────────
+  ---------------------------------------------------------
   1. Receive all YES votes from participants
-  2. WRITE TO DURABLE LOG: "TXN-789: COMMIT"   ← key step
+  2. WRITE TO DURABLE LOG: "TXN-789: COMMIT"   <- key step
   3. Send COMMIT to P1, P2, P3
   4. Collect ACKs
 
@@ -669,8 +669,8 @@ In Java EE / Jakarta EE, you can write a transaction that spans a database and a
 @Transactional  // Managed by JTA Transaction Manager
 public void processOrder(Order order) {
     // These two operations are in a distributed transaction
-    orderRepository.save(order);           // → PostgreSQL (Resource 1)
-    orderQueue.send(new OrderMessage(order)); // → ActiveMQ (Resource 2)
+    orderRepository.save(order);           // -> PostgreSQL (Resource 1)
+    orderQueue.send(new OrderMessage(order)); // -> ActiveMQ (Resource 2)
     // JTA Transaction Manager runs 2PC behind the scenes:
     //   Phase 1: Prepare both PostgreSQL XA and ActiveMQ XA
     //   Phase 2: Commit both if both voted YES
@@ -680,31 +680,31 @@ public void processOrder(Order order) {
 
 The developer writes normal Java. The JTA Transaction Manager handles the 2PC protocol, the recovery logs, and the coordinator restart logic transparently.
 
-### Option 2: Raft/Paxos — Consensus Without a Single Coordinator
+### Option 2: Raft/Paxos -- Consensus Without a Single Coordinator
 
 The deeper problem with 2PC and 3PC is that they have a single coordinator. Kill the coordinator, and the system stops. What if leadership was itself distributed?
 
 Raft and Paxos are consensus algorithms that let a cluster of nodes elect a leader and replicate decisions. If the leader dies, the cluster elects a new one. No transaction is committed without a quorum (majority) of nodes agreeing.
 
 ```
-Raft — Partition Handling
+Raft -- Partition Handling
 
   Cluster: 5 nodes (need 3 for quorum)
 
   Normal:                      5 nodes running, leader elected
                                Commits need 3/5 ACKs
 
-  Partition — 3+2 split:
-  ┌─────────────────────┐     ┌─────────────────┐
-  │  Node1 (leader)     │     │  Node4          │
-  │  Node2              │ ✗   │  Node5          │
-  │  Node3              │     │                 │
-  └─────────────────────┘     └─────────────────┘
+  Partition -- 3+2 split:
+  +---------------------+     +-----------------+
+  |  Node1 (leader)     |     |  Node4          |
+  |  Node2              | N   |  Node5          |
+  |  Node3              |     |                 |
+  +---------------------+     +-----------------+
     3 nodes: can reach quorum    2 nodes: can't reach quorum
 
   Majority side (3 nodes): continues accepting writes (safe)
   Minority side (2 nodes): rejects all writes (can't quorum)
-  → No split brain. Minority is blocked but doesn't corrupt data.
+  -> No split brain. Minority is blocked but doesn't corrupt data.
 
   After partition heals: minority rejoins, catches up from leader.
 ```
@@ -713,32 +713,32 @@ The key difference from 3PC: the minority doesn't try to decide on its own. It k
 
 **Where Raft Is Used:**
 
-- **etcd**: Stores all Kubernetes cluster state. Every pod creation, service endpoint, config map — all go through a Raft log. Kubernetes can't corrupt cluster state even if an etcd node dies mid-write.
+- **etcd**: Stores all Kubernetes cluster state. Every pod creation, service endpoint, config map -- all go through a Raft log. Kubernetes can't corrupt cluster state even if an etcd node dies mid-write.
 - **CockroachDB**: Each key range has its own Raft group. Writes to a range require quorum of that range's replicas. A single CockroachDB node death doesn't block writes to most ranges.
 - **ZooKeeper**: Used by Kafka, HBase, and others to elect coordinators and store distributed configuration. ZooKeeper itself uses Zab (similar to Raft) for its own replication.
 - **TiKV / TiDB**: TiDB runs Raft on every region, giving distributed ACID transactions with Raft safety guarantees.
 
-### Option 3: Saga Pattern — Avoid Distributed Transactions Entirely
+### Option 3: Saga Pattern -- Avoid Distributed Transactions Entirely
 
 The most honest approach: if distributed atomicity is this hard, don't do it.
 
 The Saga pattern decomposes a multi-step distributed operation into local transactions, each with a compensating action that undoes it if something fails later.
 
 ```
-Saga — Order Processing
+Saga -- Order Processing
 
-  Step 1: Order Service      → CREATE ORDER (local tx)
-  Step 2: Payment Service    → CHARGE CARD (local tx)
-  Step 3: Inventory Service  → ALLOCATE ITEMS (local tx)
-  Step 4: Shipping Service   → RESERVE COURIER (local tx)
+  Step 1: Order Service      -> CREATE ORDER (local tx)
+  Step 2: Payment Service    -> CHARGE CARD (local tx)
+  Step 3: Inventory Service  -> ALLOCATE ITEMS (local tx)
+  Step 4: Shipping Service   -> RESERVE COURIER (local tx)
 
-  ─────────────────────────────────────────────────────────
+  ---------------------------------------------------------
 
   FAILURE at Step 3 (Inventory out of stock):
 
   Compensating transactions run in reverse:
-  Step 2 undo: REFUND CARD         ← Payment compensating tx
-  Step 1 undo: CANCEL ORDER        ← Order compensating tx
+  Step 2 undo: REFUND CARD         <- Payment compensating tx
+  Step 1 undo: CANCEL ORDER        <- Order compensating tx
 
   No distributed locks. No coordinator. No 2PC blocking.
   Just local transactions + local rollbacks.
@@ -750,31 +750,31 @@ Sagas can be implemented two ways:
 
 ```
 Saga Choreography (event-driven):
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
   Order Service     Payment Service     Inventory Service
-      │                  │                   │
-      │── OrderCreated ──►│                   │
-      │                  │── PaymentDone ─────►│
-      │                  │                   │── InventoryFail ──►
-      │◄─────────────────────────────────────── RefundRequested ──│
-      │── OrderCancelled ►│                   │
-      │                  │◄── Refund ─────────│
+      |                  |                   |
+      |-- OrderCreated -->|                   |
+      |                  |-- PaymentDone ----->|
+      |                  |                   |-- InventoryFail -->
+      |<--------------------------------------- RefundRequested --|
+      |-- OrderCancelled >|                   |
+      |                  |<-- Refund ---------|
 
   Each service reacts to events. No central coordinator.
   Downside: hard to follow the flow. Hard to monitor state.
 
 Saga Orchestration (central orchestrator):
-─────────────────────────────────────────────────────────
+---------------------------------------------------------
       Orchestrator
-          │
-          │─ "Create Order" ─────────► Order Service
-          │◄─ "Order Created" ────────────────────────│
-          │─ "Charge Card" ──────────► Payment Service
-          │◄─ "Payment Done" ─────────────────────────│
-          │─ "Allocate" ─────────────► Inventory Service
-          │◄─ "Out of Stock" ─────────────────────────│
-          │─ "Refund Card" ──────────► Payment Service
-          │─ "Cancel Order" ─────────► Order Service
+          |
+          |- "Create Order" ---------> Order Service
+          |<- "Order Created" ------------------------|
+          |- "Charge Card" ----------> Payment Service
+          |<- "Payment Done" -------------------------|
+          |- "Allocate" -------------> Inventory Service
+          |<- "Out of Stock" -------------------------|
+          |- "Refund Card" ----------> Payment Service
+          |- "Cancel Order" ---------> Order Service
           DONE (with compensation)
 
   Orchestrator tracks state. Easier to monitor, debug, replay.
@@ -795,71 +795,71 @@ For financial operations where you need strict consistency (bank transfers), Sag
 
 ```
 2PC vs 3PC vs Raft/Paxos vs Saga
-─────────────────────────────────────────────────────────────────────────────────
+---------------------------------------------------------------------------------
 
-Property        │ 2PC            │ 3PC            │ Raft/Paxos     │ Saga
-────────────────┼────────────────┼────────────────┼────────────────┼─────────────
-Blocking        │ YES — coord    │ Non-blocking   │ Non-blocking   │ No (no locks)
-                │ crash blocks   │ for coord      │ majority       │
-                │ participants   │ crash only     │ continues      │
+Property        | 2PC            | 3PC            | Raft/Paxos     | Saga
+----------------+----------------+----------------+----------------+-------------
+Blocking        | YES -- coord    | Non-blocking   | Non-blocking   | No (no locks)
+                | crash blocks   | for coord      | majority       |
+                | participants   | crash only     | continues      |
 
-Partition       │ Safe (doesn't  │ UNSAFE —       │ Safe — minor-  │ N/A — no
-behavior        │ split-brain,   │ can split-     │ ity blocks,    │ distributed
-                │ but blocks)    │ brain and      │ majority ok    │ locks to split
-                │                │ corrupt data   │                │
+Partition       | Safe (doesn't  | UNSAFE --       | Safe -- minor-  | N/A -- no
+behavior        | split-brain,   | can split-     | ity blocks,    | distributed
+                | but blocks)    | brain and      | majority ok    | locks to split
+                |                | corrupt data   |                |
 
-Latency cost    │ 2 round trips  │ 3 round trips  │ 1 round trip   │ Sequential
-                │ ~140ms cross-  │ ~210ms cross-  │ ~1ms same-DC   │ local txns,
-                │ region         │ region         │                │ async retries
+Latency cost    | 2 round trips  | 3 round trips  | 1 round trip   | Sequential
+                | ~140ms cross-  | ~210ms cross-  | ~1ms same-DC   | local txns,
+                | region         | region         |                | async retries
 
-Message count   │ 4N             │ 6N             │ ~N             │ Events/cmds
-(N participants)│                │                │ (normal case)  │ per step
+Message count   | 4N             | 6N             | ~N             | Events/cmds
+(N participants)|                |                | (normal case)  | per step
 
-Consistency     │ Atomic (strong)│ Atomic (but    │ Linearizable   │ Eventually
-                │                │ broken in      │ (strong)       │ consistent
-                │                │ partitions)    │                │
+Consistency     | Atomic (strong)| Atomic (but    | Linearizable   | Eventually
+                |                | broken in      | (strong)       | consistent
+                |                | partitions)    |                |
 
-Failure         │ Coord crash    │ Coord crash    │ Leader crash   │ Any step can
-handling        │ → participants │ + partition    │ → elect new    │ fail → run
-                │ block          │ → split brain  │ leader safely  │ compensations
+Failure         | Coord crash    | Coord crash    | Leader crash   | Any step can
+handling        | -> participants | + partition    | -> elect new    | fail -> run
+                | block          | -> split brain  | leader safely  | compensations
 
-Production      │ MySQL XA,      │ Not used in    │ etcd, CockroachDB,│ Netflix,
-use             │ PostgreSQL XA, │ production     │ TiDB, ZooKeeper,  │ Uber, Amazon,
-                │ Java JTA/XA,   │ systems        │ Consul, Google    │ most micro-
-                │ Microsoft DTC  │                │ Spanner (Paxos)   │ services
+Production      | MySQL XA,      | Not used in    | etcd, CockroachDB,| Netflix,
+use             | PostgreSQL XA, | production     | TiDB, ZooKeeper,  | Uber, Amazon,
+                | Java JTA/XA,   | systems        | Consul, Google    | most micro-
+                | Microsoft DTC  |                | Spanner (Paxos)   | services
 
-Complexity      │ Medium         │ Medium+        │ High (algo     │ Medium-High
-                │                │                │ complex to     │ (compensating
-                │                │                │ implement)     │ tx design hard)
+Complexity      | Medium         | Medium+        | High (algo     | Medium-High
+                |                |                | complex to     | (compensating
+                |                |                | implement)     | tx design hard)
 
-When to use     │ Need strict    │ Don't use.     │ Need strict    │ Microservices.
-                │ atomicity,     │ Use 2PC or     │ atomicity with │ Can tolerate
-                │ coordinator    │ Raft instead   │ high           │ eventual
-                │ recovery logs  │                │ availability   │ consistency.
-                │ in place,      │                │                │ Can design
-                │ partitions     │                │                │ compensating
-                │ acceptable to  │                │                │ actions.
-                │ block (not     │                │                │
-                │ corrupt)       │                │                │
+When to use     | Need strict    | Don't use.     | Need strict    | Microservices.
+                | atomicity,     | Use 2PC or     | atomicity with | Can tolerate
+                | coordinator    | Raft instead   | high           | eventual
+                | recovery logs  |                | availability   | consistency.
+                | in place,      |                |                | Can design
+                | partitions     |                |                | compensating
+                | acceptable to  |                |                | actions.
+                | block (not     |                |                |
+                | corrupt)       |                |                |
 
-─────────────────────────────────────────────────────────────────────────────────
+---------------------------------------------------------------------------------
 ```
 
 ---
 
-## Part 9: Real Incident — 2PC Lock Pile-Up in Production
+## Part 9: Real Incident -- 2PC Lock Pile-Up in Production
 
 This is a real pattern that appears in production post-mortems. The details are representative.
 
 ### Context
 
-E-commerce platform. Checkout creates an order and allocates inventory simultaneously, using MySQL XA transactions. Coordinator is a Java service using JTA. Two MySQL shards — one for orders, one for inventory.
+E-commerce platform. Checkout creates an order and allocates inventory simultaneously, using MySQL XA transactions. Coordinator is a Java service using JTA. Two MySQL shards -- one for orders, one for inventory.
 
 Traffic: 3,000 checkouts per minute during normal operation. Black Friday: 8,000 per minute.
 
 ### The Trigger
 
-A JVM garbage collection pause hit the coordinator service during Black Friday. The GC pause lasted 8 seconds — long enough to interrupt in-flight 2PC transactions. The coordinator couldn't send COMMIT messages during the pause.
+A JVM garbage collection pause hit the coordinator service during Black Friday. The GC pause lasted 8 seconds -- long enough to interrupt in-flight 2PC transactions. The coordinator couldn't send COMMIT messages during the pause.
 
 ```
 Incident Timeline
@@ -876,11 +876,11 @@ Incident Timeline
   09:48:00  Coordinator starts sending COMMIT messages
   09:48:00  Queue of waiting transactions: 3,400
 
-  09:48:00 → 09:48:45: Backlog drains, transactions complete
+  09:48:00 -> 09:48:45: Backlog drains, transactions complete
   09:48:45  System returns to normal
 
   User impact:
-  09:47:52 → 09:48:45: 100% checkout failure (53 seconds)
+  09:47:52 -> 09:48:45: 100% checkout failure (53 seconds)
   Revenue impact: ~$40,000 in failed transactions
 ```
 
@@ -890,31 +890,31 @@ Incident Timeline
 Root Cause Chain
 
   JVM GC pause (8 sec)
-       │
-       ▼
+       |
+       v
   Coordinator unresponsive during pause
-       │
-       ▼
+       |
+       v
   200 2PC transactions stuck in PREPARE (coordinator couldn't send COMMIT)
-       │
-       ▼
-  Participants have NO TIMEOUT configured → wait indefinitely
+       |
+       v
+  Participants have NO TIMEOUT configured -> wait indefinitely
   (Default: infinite wait. This is a common misconfiguration.)
-       │
-       ▼
+       |
+       v
   200 transactions holding row locks on inventory table
-       │
-       ▼
-  3,400 incoming checkout requests → queue on those row locks
-       │
-       ▼
+       |
+       v
+  3,400 incoming checkout requests -> queue on those row locks
+       |
+       v
   MySQL connection pool exhausted
-       │
-       ▼
+       |
+       v
   Checkout API returns 500 for all new requests
 ```
 
-The fatal configuration was the missing participant timeout. MySQL XA participants were configured with no timeout — they would wait indefinitely for the coordinator. One GC pause → indefinite lock hold → complete service failure.
+The fatal configuration was the missing participant timeout. MySQL XA participants were configured with no timeout -- they would wait indefinitely for the coordinator. One GC pause -> indefinite lock hold -> complete service failure.
 
 ### The Fix
 
@@ -949,7 +949,7 @@ Changes Made After Incident
 
 ### The Lesson
 
-2PC blocking is real. It is not theoretical. The default configuration in most XA implementations is infinite wait — you have to explicitly configure timeouts.
+2PC blocking is real. It is not theoretical. The default configuration in most XA implementations is infinite wait -- you have to explicitly configure timeouts.
 
 Always set participant timeouts. Always have coordinator recovery logs. Always test what happens when your coordinator crashes. These are table stakes for any production distributed transaction system.
 
@@ -965,21 +965,21 @@ The right answer: explain 3PC, then explain why it's not used in production, the
 
 Here's the structure:
 
-**Step 1 — Acknowledge the problem 3PC solves:**
-> "3PC was designed to fix 2PC's blocking problem. In 2PC, if the coordinator crashes after PREPARE but before COMMIT, participants hold locks indefinitely because they can't determine the coordinator's decision. 3PC adds a PreCommit phase that broadcasts the coordinator's intent — if it crashes after PreCommit, any participant can take over and commit safely."
+**Step 1 -- Acknowledge the problem 3PC solves:**
+> "3PC was designed to fix 2PC's blocking problem. In 2PC, if the coordinator crashes after PREPARE but before COMMIT, participants hold locks indefinitely because they can't determine the coordinator's decision. 3PC adds a PreCommit phase that broadcasts the coordinator's intent -- if it crashes after PreCommit, any participant can take over and commit safely."
 
-**Step 2 — Immediately explain why 3PC fails:**
-> "The issue is that 3PC assumes you can reliably distinguish between a dead coordinator and an unreachable coordinator. In a network partition, you can't. A participant in an isolated partition will see coordinator timeout and commit, while a participant in another partition aborts. You get split-brain — worse than blocking, because you now have data corruption instead of just unavailability."
+**Step 2 -- Immediately explain why 3PC fails:**
+> "The issue is that 3PC assumes you can reliably distinguish between a dead coordinator and an unreachable coordinator. In a network partition, you can't. A participant in an isolated partition will see coordinator timeout and commit, while a participant in another partition aborts. You get split-brain -- worse than blocking, because you now have data corruption instead of just unavailability."
 
-**Step 3 — State what production uses:**
+**Step 3 -- State what production uses:**
 > "In practice, 3PC is a theoretical result, not a production tool. Production systems use one of three approaches: 2PC with coordinator recovery logs (MySQL XA, JTA) for strict atomicity with bounded blocking; Raft or Paxos for strict atomicity without a single coordinator; or Sagas when eventual consistency is acceptable and you can design compensating actions."
 
-**Step 4 — Show the tradeoff reasoning:**
+**Step 4 -- Show the tradeoff reasoning:**
 > "The choice between these depends on the consistency requirement. If you're building a payment system where inconsistency means lost money, 2PC with recovery or Raft. If you're building an order pipeline in microservices where eventual consistency is acceptable, Sagas avoid the distributed transaction problem entirely."
 
 ### The One-Liner That Shows Mastery
 
-> "3PC fixes 2PC's blocking — until a partition proves you can't tell who's really dead."
+> "3PC fixes 2PC's blocking -- until a partition proves you can't tell who's really dead."
 
 This line demonstrates you understand: (a) what 3PC solves, (b) the assumption it relies on, (c) why that assumption breaks in real networks. That's three layers of understanding in one sentence.
 
@@ -987,19 +987,19 @@ This line demonstrates you understand: (a) what 3PC solves, (b) the assumption i
 
 **Q: "When would you choose Saga over 2PC?"**
 
-Answer: "Sagas are better when you can tolerate eventual consistency and the operations are naturally reversible. E-commerce order flows are a good example — you can refund a payment, cancel an order, release inventory. The system may be inconsistent for seconds during processing, but it converges. Sagas avoid distributed locking entirely, which is a major operational win for microservices. I'd use 2PC when the operation is not reversible or when regulators require strict consistency — wire transfers, ledger accounting, inventory in a physical warehouse."
+Answer: "Sagas are better when you can tolerate eventual consistency and the operations are naturally reversible. E-commerce order flows are a good example -- you can refund a payment, cancel an order, release inventory. The system may be inconsistent for seconds during processing, but it converges. Sagas avoid distributed locking entirely, which is a major operational win for microservices. I'd use 2PC when the operation is not reversible or when regulators require strict consistency -- wire transfers, ledger accounting, inventory in a physical warehouse."
 
 **Q: "How does Raft handle this better than 2PC?"**
 
-Answer: "Raft doesn't have a single coordinator that can vanish. Leadership is distributed — any node can be elected leader, and the cluster uses quorum voting to prevent split-brain. In a partition, the minority side can't reach quorum, so it rejects writes rather than making inconsistent decisions. The majority side keeps running safely. Compare this to 2PC where coordinator crash → indefinite blocking, or 3PC where partition → potential split-brain. Raft gives you the non-blocking property without the partition safety violation."
+Answer: "Raft doesn't have a single coordinator that can vanish. Leadership is distributed -- any node can be elected leader, and the cluster uses quorum voting to prevent split-brain. In a partition, the minority side can't reach quorum, so it rejects writes rather than making inconsistent decisions. The majority side keeps running safely. Compare this to 2PC where coordinator crash -> indefinite blocking, or 3PC where partition -> potential split-brain. Raft gives you the non-blocking property without the partition safety violation."
 
 **Q: "What's the operational complexity of Raft vs 2PC?"**
 
-Answer: "Raft is significantly harder to implement correctly. The Raft paper itself is 20 pages and covers 15+ edge cases. Most engineers using Raft use etcd or CockroachDB rather than rolling their own. 2PC with recovery logs is simpler to implement and reason about — it's just two rounds of messages with a durable log. For a system that needs cross-DB transactions but doesn't need the full guarantees of a consensus protocol, 2PC with recovery is often the pragmatic choice."
+Answer: "Raft is significantly harder to implement correctly. The Raft paper itself is 20 pages and covers 15+ edge cases. Most engineers using Raft use etcd or CockroachDB rather than rolling their own. 2PC with recovery logs is simpler to implement and reason about -- it's just two rounds of messages with a durable log. For a system that needs cross-DB transactions but doesn't need the full guarantees of a consensus protocol, 2PC with recovery is often the pragmatic choice."
 
-**Q: "Amazon Aurora/DynamoDB doesn't use 2PC — how do they handle this?"**
+**Q: "Amazon Aurora/DynamoDB doesn't use 2PC -- how do they handle this?"**
 
-Answer: "Aurora uses Quorum writes at the storage layer — each write goes to 6 storage nodes across 3 AZs, and requires 4 ACKs to be durable. But this isn't a distributed transaction across independent databases — it's replication of a single database. DynamoDB uses single-shard atomicity. For cross-shard transactions, DynamoDB Transactions uses a variant of 2PC with optimistic concurrency, but it's limited to 25 items and has significant throughput overhead. This is why AWS documentation says: use transactions sparingly, design your access patterns to be single-shard where possible."
+Answer: "Aurora uses Quorum writes at the storage layer -- each write goes to 6 storage nodes across 3 AZs, and requires 4 ACKs to be durable. But this isn't a distributed transaction across independent databases -- it's replication of a single database. DynamoDB uses single-shard atomicity. For cross-shard transactions, DynamoDB Transactions uses a variant of 2PC with optimistic concurrency, but it's limited to 25 items and has significant throughput overhead. This is why AWS documentation says: use transactions sparingly, design your access patterns to be single-shard where possible."
 
 ### The Framing That Shows System Thinking
 
@@ -1021,17 +1021,17 @@ The best interview answers don't just recite protocol mechanics. They show you u
 Decision Tree: Choosing a Distributed Transaction Protocol
 
   Do you need strict atomicity across multiple independent services/DBs?
-  │
-  ├─ NO → Use Saga (eventual consistency, compensating transactions)
-  │        Works for: order pipelines, microservice flows, workflows
-  │
-  └─ YES → Do you need high availability even during coordinator failure?
-            │
-            ├─ NO  → 2PC + Recovery Logs
-            │         Works for: same-datacenter, coordinator HA not critical
-            │         Examples: MySQL XA, PostgreSQL 2PC, Java JTA
-            │
-            └─ YES → Raft / Paxos (consensus)
+  |
+  +- NO -> Use Saga (eventual consistency, compensating transactions)
+  |        Works for: order pipelines, microservice flows, workflows
+  |
+  +- YES -> Do you need high availability even during coordinator failure?
+            |
+            +- NO  -> 2PC + Recovery Logs
+            |         Works for: same-datacenter, coordinator HA not critical
+            |         Examples: MySQL XA, PostgreSQL 2PC, Java JTA
+            |
+            +- YES -> Raft / Paxos (consensus)
                       Works for: globally distributed systems,
                                  critical infrastructure state
                       Examples: etcd, CockroachDB, Google Spanner, TiDB
@@ -1045,7 +1045,7 @@ Protocol Behavior Under Each Failure Mode
 
                   Coordinator    Network        Both
                   Crash          Partition
-───────────────────────────────────────────────────────
+-------------------------------------------------------
 2PC               BLOCKS         BLOCKS         BLOCKS
                   (until         (minority      (until
                   recovery)      can't decide)  recovery)
@@ -1078,7 +1078,7 @@ Sagas sidestep the problem entirely by replacing atomic multi-service transactio
 
 The Staff Engineer answer is never "use 3PC." It's: "understand what consistency guarantee you need, match it to the right protocol, and configure whatever you use with timeouts and recovery."
 
-3PC is a stepping stone in the intellectual history of distributed transactions. Understanding why it fails tells you something deep about distributed systems: **in an asynchronous network, you cannot distinguish between a crashed node and an unreachable node — and any protocol that requires you to do so will eventually corrupt your data.**
+3PC is a stepping stone in the intellectual history of distributed transactions. Understanding why it fails tells you something deep about distributed systems: **in an asynchronous network, you cannot distinguish between a crashed node and an unreachable node -- and any protocol that requires you to do so will eventually corrupt your data.**
 # Chapter 27: Read Consistency Models
 
 ---
@@ -1095,7 +1095,7 @@ Think about a photocopier at a library. The original document lives at the front
 
 Your database works the same way.
 
-You have a **leader** (the original) and **followers** (the copies). Every write goes to the leader. The leader then ships the changes to its followers asynchronously — meaning it does not wait for them to confirm before telling you "write succeeded."
+You have a **leader** (the original) and **followers** (the copies). Every write goes to the leader. The leader then ships the changes to its followers asynchronously -- meaning it does not wait for them to confirm before telling you "write succeeded."
 
 This pattern is everywhere:
 
@@ -1119,18 +1119,18 @@ So after a write to the leader, the replicas catch up somewhere between "almost 
 Here is what the system looks like:
 
 ```
-                    ┌─────────────┐
-    User writes ───►│   LEADER    │
-                    │  (primary)  │
-                    └──────┬──────┘
-                           │ async replication
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-       ┌────────────┐ ┌────────────┐ ┌────────────┐
-       │ Replica A  │ │ Replica B  │ │ Replica C  │
-       │  lag: 20ms │ │ lag: 80ms  │ │ lag: 500ms │
-       └────────────┘ └────────────┘ └────────────┘
-              ▲            ▲            ▲
+                    +-------------+
+    User writes --->|   LEADER    |
+                    |  (primary)  |
+                    +------+------+
+                           | async replication
+              +------------+------------+
+              v            v            v
+       +------------+ +------------+ +------------+
+       | Replica A  | | Replica B  | | Replica C  |
+       |  lag: 20ms | | lag: 80ms  | | lag: 500ms |
+       +------------+ +------------+ +------------+
+              ^            ^            ^
     User reads routed to any replica by load balancer
 ```
 
@@ -1152,35 +1152,35 @@ It did save. The leader has the new value. But the load balancer sent your profi
 
 Three real scenarios where this destroys user experience:
 
-**Scenario 1 — Profile Update**
+**Scenario 1 -- Profile Update**
 
 ```
 1. User changes bio to "Software Engineer"
-2. POST /profile → writes to LEADER ✓
-3. GET  /profile → routes to REPLICA (lag: 300ms) → returns "Student"
+2. POST /profile -> writes to LEADER Y
+3. GET  /profile -> routes to REPLICA (lag: 300ms) -> returns "Student"
 4. User sees old data. Did it save? Confusion.
 ```
 
-**Scenario 2 — Payment Confirmation**
+**Scenario 2 -- Payment Confirmation**
 
 ```
 1. User submits $2,000 wire transfer
-2. POST /transfer → writes to LEADER → returns "Transfer submitted successfully"
+2. POST /transfer -> writes to LEADER -> returns "Transfer submitted successfully"
 3. User taps "View Transaction History" (200ms later)
-4. GET  /transactions → routes to REPLICA (lag: 800ms)
+4. GET  /transactions -> routes to REPLICA (lag: 800ms)
 5. Transfer not visible. User sees nothing.
 6. User panics. Calls support. Files dispute.
 ```
 
 This is not just annoying. It is a customer service incident.
 
-**Scenario 3 — Post Scheduling**
+**Scenario 3 -- Post Scheduling**
 
 ```
 1. User schedules social post for "right now"
-2. System writes post to LEADER → returns "Posted!"
+2. System writes post to LEADER -> returns "Posted!"
 3. User navigates to their profile page to see the post
-4. GET /profile/posts → routes to REPLICA (lag: 400ms)
+4. GET /profile/posts -> routes to REPLICA (lag: 400ms)
 5. Post not there yet. User clicks "Post" again.
 6. Now there are two identical posts.
 ```
@@ -1190,23 +1190,23 @@ The write went through. But the user doubled up because they did not see confirm
 Here is the full timeline in ASCII:
 
 ```
-Time ──────────────────────────────────────────────────────────►
+Time ---------------------------------------------------------->
 
 t=0ms    User submits form
-         │
-         ▼
+         |
+         v
 t=1ms    Write hits LEADER
          Leader confirms "OK"
-         │
+         |
 t=2ms    Response returns to user: "Saved!"
          Replication starts in background...
-         │
+         |
 t=5ms    User's browser issues GET request
          Load balancer routes to Replica B
-         │
+         |
 t=5ms    Replica B has lag of 200ms
          It has NOT yet received the write from t=1ms
-         │
+         |
 t=5ms    Replica B returns OLD DATA
          User sees stale state
 
@@ -1227,17 +1227,17 @@ t=5ms    Replica B returns OLD DATA
 
 ```
 User just wrote?
-     │
-     ▼
+     |
+     v
 Route ALL their reads to leader for X seconds
-     │
-     ▼
+     |
+     v
 After X seconds, allow replica reads again
 ```
 
 Simple. Works. But it defeats the purpose of having read replicas. If you always read from the leader, why do you have replicas?
 
-This is only acceptable for a small slice of operations: financial confirmations, account creation, password resets — things where the cost of staleness is catastrophic and the frequency is low.
+This is only acceptable for a small slice of operations: financial confirmations, account creation, password resets -- things where the cost of staleness is catastrophic and the frequency is low.
 
 **Solution 2: Track Last-Write Timestamp Per User**
 
@@ -1246,44 +1246,44 @@ This is the practical solution for most production systems.
 The idea: after any write, record "user X wrote at time T" in a fast store (Redis). On each read, check if user X has a recent write. If yes, route to leader. If no, replica is fine.
 
 ```
-                    ┌──────────────┐
-WRITE               │              │
-User writes ───────►│ LEADER       │◄─── Write acknowledged
-                    │              │
-                    └──────────────┘
-                           │
-                           │ (in parallel with replication)
-                           ▼
-                    ┌──────────────┐
-                    │ Redis        │
-                    │ SET ryw:u123 │
-                    │ = 1710000000 │
-                    │ TTL = 2s     │
-                    └──────────────┘
+                    +--------------+
+WRITE               |              |
+User writes ------->| LEADER       |<--- Write acknowledged
+                    |              |
+                    +--------------+
+                           |
+                           | (in parallel with replication)
+                           v
+                    +--------------+
+                    | Redis        |
+                    | SET ryw:u123 |
+                    | = 1710000000 |
+                    | TTL = 2s     |
+                    +--------------+
 
 READ
 User requests data
-           │
-           ▼
-   ┌───────────────────────────────┐
-   │ Check Redis: GET ryw:u123     │
-   └───────────────┬───────────────┘
-                   │
-         ┌─────────┴─────────┐
-         ▼                   ▼
+           |
+           v
+   +-------------------------------+
+   | Check Redis: GET ryw:u123     |
+   +---------------+---------------+
+                   |
+         +---------+---------+
+         v                   v
      KEY EXISTS          KEY ABSENT
      (recent write)      (no recent write)
-         │                   │
-         ▼                   ▼
+         |                   |
+         v                   v
    Route to LEADER    Route to REPLICA
 ```
 
 Implementation details:
 
-- Redis key: `ryw:{user_id}` → Unix timestamp of last write
+- Redis key: `ryw:{user_id}` -> Unix timestamp of last write
 - TTL: set to your **replication lag threshold** (e.g., 2 seconds for same-DC, 10 seconds cross-region)
 - On write: `SET ryw:{user_id} {timestamp} EX {ttl}`
-- On read: `GET ryw:{user_id}` — if non-null, route to leader
+- On read: `GET ryw:{user_id}` -- if non-null, route to leader
 
 What percentage of reads hit the leader? Depends on write frequency:
 
@@ -1323,8 +1323,8 @@ After writing, immediately read the data back and check if your write appears:
 1. Write to leader
 2. Issue read immediately
 3. Check: does the read include my write?
-4. If yes → return success to user
-5. If no  → retry read against leader
+4. If yes -> return success to user
+5. If no  -> retry read against leader
 ```
 
 This is used in async UI patterns where you want eventual confirmation without blocking the user. The downside is double latency on the write path. Useful when you cannot control read routing but can add a verification step.
@@ -1335,12 +1335,12 @@ Not every read needs this guarantee. Save the complexity for where it matters.
 
 ```
 Does the user EXPECT to see their own change immediately?
-│
-├── YES → Apply RYW
-│         Examples: profile updates, payment history,
-│                   settings changes, post publishing
-│
-└── NO  → Eventual consistency is fine
+|
++-- YES -> Apply RYW
+|         Examples: profile updates, payment history,
+|                   settings changes, post publishing
+|
++-- NO  -> Eventual consistency is fine
           Examples: view counts, like counts,
                     trending lists, analytics dashboards,
                     aggregate statistics
@@ -1367,15 +1367,15 @@ Here is the diagram:
 ```
 State of Replicas at time T:
 
-Replica A: score = 250  (lag: 20ms)  ← up to date
-Replica B: score = 230  (lag: 800ms) ← far behind
+Replica A: score = 250  (lag: 20ms)  <- up to date
+Replica B: score = 230  (lag: 800ms) <- far behind
 
 User Session:
-  Request 1 → Load Balancer → Replica A → sees 250  ✓
-  Request 2 → Load Balancer → Replica B → sees 230  ✗ (went backward!)
-  Request 3 → Load Balancer → Replica A → sees 250  ✓ (jumped forward!)
+  Request 1 -> Load Balancer -> Replica A -> sees 250  Y
+  Request 2 -> Load Balancer -> Replica B -> sees 230  N (went backward!)
+  Request 3 -> Load Balancer -> Replica A -> sees 250  Y (jumped forward!)
 
-From the user's perspective: 250 → 230 → 250
+From the user's perspective: 250 -> 230 -> 250
 Data appears to fluctuate randomly.
 ```
 
@@ -1385,10 +1385,10 @@ Round-robin and weighted round-robin distribute requests without any session awa
 
 ```
 Round-robin distribution:
-  Req 1 (user X) → Replica A
-  Req 2 (user X) → Replica B   ← different replica, potentially stale
-  Req 3 (user X) → Replica C
-  Req 4 (user Y) → Replica A
+  Req 1 (user X) -> Replica A
+  Req 2 (user X) -> Replica B   <- different replica, potentially stale
+  Req 3 (user X) -> Replica C
+  Req 4 (user Y) -> Replica A
 ```
 
 The load balancer is doing its job (distributing load). But the side effect is that the same user bounces between replicas at different lag points.
@@ -1402,7 +1402,7 @@ The simplest fix: hash the user ID to a replica. User X always goes to Replica 2
 ```
 user_id = "u12345"
 replica_count = 3
-assigned_replica = hash("u12345") % 3  → Replica 2
+assigned_replica = hash("u12345") % 3  -> Replica 2
 
 All requests from u12345 go to Replica 2.
 Replica 2 may be behind Replica 0, but it will never go backward
@@ -1427,7 +1427,7 @@ Read handler:
 
 The limitation: if your assigned replica is consistently slow (high lag), you are stuck with stale-but-monotonic data. Users on a slow replica might see older data than users on a fast replica. But they will never see data go backward, which is what we care about here.
 
-What happens when the replica restarts or goes down? Rehash to another replica. The session gets a momentary "jump" to a potentially different point in time (newer data on the new replica). This is acceptable — moving forward is fine. Only moving backward is the problem.
+What happens when the replica restarts or goes down? Rehash to another replica. The session gets a momentary "jump" to a potentially different point in time (newer data on the new replica). This is acceptable -- moving forward is fine. Only moving backward is the problem.
 
 **Solution 2: Version-Aware Reads**
 
@@ -1435,19 +1435,19 @@ Instead of pinning to a replica, track the "highest version I have seen" in the 
 
 ```
 CLIENT                         SERVER
-  │                              │
-  │── GET /data, seen_version=0 ─►│
-  │◄── data, version=150 ────────│
-  │ [stores seen_version=150]    │
-  │                              │
-  │── GET /data, seen_version=150►│
-  │                              │ checks local version
-  │                              │ if local_version >= 150: serve
-  │                              │ if local_version < 150:
-  │                              │   wait for replication
-  │                              │   OR redirect to leader
-  │◄── data, version=155 ────────│
-  │ [updates seen_version=155]   │
+  |                              |
+  |-- GET /data, seen_version=0 ->|
+  |<-- data, version=150 --------|
+  | [stores seen_version=150]    |
+  |                              |
+  |-- GET /data, seen_version=150>|
+  |                              | checks local version
+  |                              | if local_version >= 150: serve
+  |                              | if local_version < 150:
+  |                              |   wait for replication
+  |                              |   OR redirect to leader
+  |<-- data, version=155 --------|
+  | [updates seen_version=155]   |
 ```
 
 The version number can be a timestamp (milliseconds since epoch), a logical clock value, or a database log sequence number (LSN).
@@ -1463,12 +1463,12 @@ Cost: the server must compare versions on every read. This is a fast comparison 
 Read from a majority of replicas and take the most recent response.
 
 ```
-Read from Replica A: version 155 ─────┐
-Read from Replica B: version 148 ──── take max ──► return version 155
-Read from Replica C: version 151 ─────┘
+Read from Replica A: version 155 -----+
+Read from Replica B: version 148 ---- take max --> return version 155
+Read from Replica C: version 151 -----+
 ```
 
-A quorum always includes at least one node that has the latest data (by the pigeonhole principle — if a majority has seen the write, at least one of any majority overlap will have it).
+A quorum always includes at least one node that has the latest data (by the pigeonhole principle -- if a majority has seen the write, at least one of any majority overlap will have it).
 
 This guarantees monotonicity and freshness. But it requires multiple parallel network calls and waiting for the slower responses. Latency goes up substantially. This is overkill for most reads. Reserve it for high-stakes reads where you need both recency and monotonicity without the overhead of a full linearizable read.
 
@@ -1507,13 +1507,13 @@ This is not just a chat problem. Consider a database state machine:
 
 ```
 Order status progression:
-  PENDING → PROCESSING → SHIPPED → DELIVERED
+  PENDING -> PROCESSING -> SHIPPED -> DELIVERED
 
 A replica shows: DELIVERED
 Another replica shows: PENDING
 
 If a user's read bounces between these two, they see:
-  "Your order is Delivered"  →  refresh  →  "Your order is Pending"
+  "Your order is Delivered"  ->  refresh  ->  "Your order is Pending"
 
 The state machine went backward. Business logic that checks "is order in DELIVERED state" might misfire.
 ```
@@ -1526,8 +1526,8 @@ Actual event order on LEADER:
   t=2ms:  Bob   sends reply   (msg_id=102, reply_to=101)
 
 Replication to Replica X:
-  t=50ms: msg_id=102 arrives (Bob's reply)  ← replicated fast
-  t=500ms: msg_id=101 arrives (Alice's msg) ← replicated slow
+  t=50ms: msg_id=102 arrives (Bob's reply)  <- replicated fast
+  t=500ms: msg_id=101 arrives (Alice's msg) <- replicated slow
 
 Timeline of Replica X:
   t=0 to 499ms: only has msg_id=102 (Bob's reply, no context)
@@ -1584,7 +1584,7 @@ If all writes for a given conversation go to a single primary, and that primary 
 
 ```
 Conversation sharding:
-  conversation_id=chat_1234 → always writes to Primary-A
+  conversation_id=chat_1234 -> always writes to Primary-A
   Primary-A replicates its write log sequentially to replicas
   Replica sees: msg_101, msg_102, msg_103... in order
 ```
@@ -1609,44 +1609,44 @@ All of the above fit into a ladder of consistency models, from strongest to weak
 
 ```
   STRONGEST                                          COST: HIGH
-  ┌─────────────────────────────────────────────────────────────┐
-  │  LINEARIZABILITY                                            │
-  │  Every read sees the absolute latest write.                 │
-  │  Globally ordered. Feels like one machine.                  │
-  │  Used in: etcd, ZooKeeper, Google Spanner                  │
-  │  Cost: multi-node coordination on every read. High latency. │
-  └─────────────────────────────────────────────────────────────┘
-                          │  slightly weaker
-  ┌─────────────────────────────────────────────────────────────┐
-  │  SEQUENTIAL CONSISTENCY                                     │
-  │  All nodes see the same ORDER of operations.                │
-  │  Not necessarily real-time, but globally consistent order.  │
-  │  Used in: some CPU memory models, academic distributed DBs  │
-  │  Cost: coordination overhead, still expensive               │
-  └─────────────────────────────────────────────────────────────┘
-                          │  slightly weaker
-  ┌─────────────────────────────────────────────────────────────┐
-  │  CAUSAL CONSISTENCY                                         │
-  │  Reads respect happened-before relationships.               │
-  │  You see events in causal order.                            │
-  │  Used in: MongoDB causal sessions, some Cassandra configs   │
-  │  Cost: version tokens exchanged with each request           │
-  └─────────────────────────────────────────────────────────────┘
-                          │  slightly weaker
-  ┌─────────────────────────────────────────────────────────────┐
-  │  SESSION CONSISTENCY (RYW + Monotonic)                      │
-  │  Your own writes are visible to you.                        │
-  │  Data never goes backward within your session.              │
-  │  Used in: most web apps with sticky sessions                │
-  │  Cost: Redis RYW tracking or sticky routing                 │
-  └─────────────────────────────────────────────────────────────┘
-                          │  weakest
-  ┌─────────────────────────────────────────────────────────────┐
-  │  EVENTUAL CONSISTENCY                                       │
-  │  All nodes eventually agree. No timing guarantee.           │
-  │  Used in: Cassandra default, DynamoDB default, AP systems   │
-  │  Cost: cheapest. Fast reads. No coordination.               │
-  └─────────────────────────────────────────────────────────────┘
+  +-------------------------------------------------------------+
+  |  LINEARIZABILITY                                            |
+  |  Every read sees the absolute latest write.                 |
+  |  Globally ordered. Feels like one machine.                  |
+  |  Used in: etcd, ZooKeeper, Google Spanner                  |
+  |  Cost: multi-node coordination on every read. High latency. |
+  +-------------------------------------------------------------+
+                          |  slightly weaker
+  +-------------------------------------------------------------+
+  |  SEQUENTIAL CONSISTENCY                                     |
+  |  All nodes see the same ORDER of operations.                |
+  |  Not necessarily real-time, but globally consistent order.  |
+  |  Used in: some CPU memory models, academic distributed DBs  |
+  |  Cost: coordination overhead, still expensive               |
+  +-------------------------------------------------------------+
+                          |  slightly weaker
+  +-------------------------------------------------------------+
+  |  CAUSAL CONSISTENCY                                         |
+  |  Reads respect happened-before relationships.               |
+  |  You see events in causal order.                            |
+  |  Used in: MongoDB causal sessions, some Cassandra configs   |
+  |  Cost: version tokens exchanged with each request           |
+  +-------------------------------------------------------------+
+                          |  slightly weaker
+  +-------------------------------------------------------------+
+  |  SESSION CONSISTENCY (RYW + Monotonic)                      |
+  |  Your own writes are visible to you.                        |
+  |  Data never goes backward within your session.              |
+  |  Used in: most web apps with sticky sessions                |
+  |  Cost: Redis RYW tracking or sticky routing                 |
+  +-------------------------------------------------------------+
+                          |  weakest
+  +-------------------------------------------------------------+
+  |  EVENTUAL CONSISTENCY                                       |
+  |  All nodes eventually agree. No timing guarantee.           |
+  |  Used in: Cassandra default, DynamoDB default, AP systems   |
+  |  Cost: cheapest. Fast reads. No coordination.               |
+  +-------------------------------------------------------------+
   WEAKEST                                           COST: LOW
 ```
 
@@ -1655,26 +1655,26 @@ All of the above fit into a ladder of consistency models, from strongest to weak
 Do not over-engineer. Match consistency to the feature's actual requirement.
 
 ```
-┌────────────────────────────────────────┬─────────────────────┬─────────────────────────┐
-│ Feature                                │ Required Level      │ Example System          │
-├────────────────────────────────────────┼─────────────────────┼─────────────────────────┤
-│ Distributed locks (leader election)    │ Linearizability     │ etcd, ZooKeeper         │
-│ Financial transactions (balance)       │ Linearizability     │ Spanner, CockroachDB    │
-│ Password change (login sessions)       │ Linearizability     │ Reads to primary        │
-│ Inventory (stock = 1, prevent oversell)│ Linearizability     │ Strong reads in DynamoDB│
-│ Chat message ordering                  │ Causal              │ MongoDB causal session  │
-│ Order status progression               │ Causal              │ Single-shard primary    │
-│ User profile (own reads)               │ Session (RYW)       │ Redis RYW + replica mix │
-│ User settings (own reads)              │ Session (RYW)       │ Sticky routing or Redis │
-│ Game leaderboard (no backward jumps)   │ Monotonic reads     │ Sticky routing          │
-│ News feed, social timeline             │ Monotonic reads     │ Version-aware reads     │
-│ View counts, like counts               │ Eventual            │ Cassandra, Redis incr   │
-│ Analytics dashboards                   │ Eventual            │ Read replicas, no RYW   │
-│ Search indexes (eventually consistent) │ Eventual            │ Elasticsearch replicas  │
-└────────────────────────────────────────┴─────────────────────┴─────────────────────────┘
++----------------------------------------+---------------------+-------------------------+
+| Feature                                | Required Level      | Example System          |
++----------------------------------------+---------------------+-------------------------+
+| Distributed locks (leader election)    | Linearizability     | etcd, ZooKeeper         |
+| Financial transactions (balance)       | Linearizability     | Spanner, CockroachDB    |
+| Password change (login sessions)       | Linearizability     | Reads to primary        |
+| Inventory (stock = 1, prevent oversell)| Linearizability     | Strong reads in DynamoDB|
+| Chat message ordering                  | Causal              | MongoDB causal session  |
+| Order status progression               | Causal              | Single-shard primary    |
+| User profile (own reads)               | Session (RYW)       | Redis RYW + replica mix |
+| User settings (own reads)              | Session (RYW)       | Sticky routing or Redis |
+| Game leaderboard (no backward jumps)   | Monotonic reads     | Sticky routing          |
+| News feed, social timeline             | Monotonic reads     | Version-aware reads     |
+| View counts, like counts               | Eventual            | Cassandra, Redis incr   |
+| Analytics dashboards                   | Eventual            | Read replicas, no RYW   |
+| Search indexes (eventually consistent) | Eventual            | Elasticsearch replicas  |
++----------------------------------------+---------------------+-------------------------+
 ```
 
-The key insight: you do not need to pick one consistency level for your entire system. Different features have different requirements. A social app might use linearizable reads for the login flow, RYW for profile updates, monotonic reads for the feed, and eventual consistency for like counts — all in the same application, against the same underlying database cluster.
+The key insight: you do not need to pick one consistency level for your entire system. Different features have different requirements. A social app might use linearizable reads for the login flow, RYW for profile updates, monotonic reads for the feed, and eventual consistency for like counts -- all in the same application, against the same underlying database cluster.
 
 ---
 
@@ -1714,13 +1714,13 @@ Replica 3 returned a transaction list that did not include the $2,000 transfer.
 ```
 [Transaction History - Loaded at t=280ms]
 
-┌─────────────────────────────────────────────┐
-│ Date        │ Description  │ Amount         │
-├─────────────────────────────────────────────┤
-│ Yesterday   │ Amazon       │ -$45.99        │
-│ 2 days ago  │ Salary       │ +$3,200.00     │
-│ 3 days ago  │ Rent         │ -$1,500.00     │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+| Date        | Description  | Amount         |
++---------------------------------------------+
+| Yesterday   | Amazon       | -$45.99        |
+| 2 days ago  | Salary       | +$3,200.00     |
+| 3 days ago  | Rent         | -$1,500.00     |
++---------------------------------------------+
 
 [The $2,000 wire transfer is NOT LISTED]
 ```
@@ -1801,13 +1801,13 @@ def get_transaction_history(user_id: str) -> list:
 
 **Phase 3: Monitoring (deployed in 1 week)**
 
-Added a metric: `read_consistency.ryw_routing_to_primary` — percentage of history reads that triggered the RYW path. Target: under 20%. Alerts if above 40% (indicates unusually high write rate or lag issues).
+Added a metric: `read_consistency.ryw_routing_to_primary` -- percentage of history reads that triggered the RYW path. Target: under 20%. Alerts if above 40% (indicates unusually high write rate or lag issues).
 
 ### Post-Incident Lesson
 
 The system kept its write-side promise ("Transfer submitted successfully"). But it broke the implicit read-side promise ("And you can immediately see it in your history").
 
-For financial UX, these two promises are inseparable. A confirmation screen that says "success" while the history screen says "nothing happened" is not just a consistency problem — it is a trust problem. Users do not model "async replication" in their mental framework. They model "did it work or did it not?"
+For financial UX, these two promises are inseparable. A confirmation screen that says "success" while the history screen says "nothing happened" is not just a consistency problem -- it is a trust problem. Users do not model "async replication" in their mental framework. They model "did it work or did it not?"
 
 **The rule**: Any write that you tell the user was successful must be immediately visible to that user in any subsequent read. For financial data, this is non-negotiable.
 
@@ -1815,13 +1815,13 @@ For financial UX, these two promises are inseparable. A confirmation screen that
 The Promise Chain:
 
   System says "Success" 
-       ↓
+       v
   User expects to see it everywhere, immediately
-       ↓
+       v
   If you cannot guarantee that, either:
   (a) Apply RYW routing
   (b) Show pending state in UI until confirmed visible
-  (c) Do not say "Success" — say "Submitted, visible in 1-2 seconds"
+  (c) Do not say "Success" -- say "Submitted, visible in 1-2 seconds"
 
   Option (c) degrades UX. Options (a) and (b) are the right solutions.
 ```
@@ -1871,16 +1871,16 @@ Memorize these. They compress each concept into an interview-ready sentence.
 
 ```
 Read-Your-Writes:
-  "After you write, you always see your own write — even if replicas are behind."
+  "After you write, you always see your own write -- even if replicas are behind."
 
 Monotonic Reads:
   "Once you see data at version N, you will never see data at version N-1 again."
 
 Consistent Prefix:
-  "You see events in causal order — you never see a reply before the original message."
+  "You see events in causal order -- you never see a reply before the original message."
 
 Linearizability:
-  "Every operation appears instantaneous and globally ordered — one machine, no staleness."
+  "Every operation appears instantaneous and globally ordered -- one machine, no staleness."
 
 Eventual Consistency:
   "All nodes agree eventually, but right now different readers may see different versions."
@@ -1896,7 +1896,7 @@ Eventual Consistency:
 
 For user profile reads after a profile update, I need read-your-writes. I will track `ryw:{user_id}` in Redis with a 3-second TTL after any profile write. Profile reads check this key; if present, they route to the primary.
 
-For the feed and timeline, I need monotonic reads — users should not see their feed jump backward. I will use sticky routing: hash the user ID to a consistent replica. The session maintains the preferred replica.
+For the feed and timeline, I need monotonic reads -- users should not see their feed jump backward. I will use sticky routing: hash the user ID to a consistent replica. The session maintains the preferred replica.
 
 For comment threads, I need consistent prefix. I will shard comment writes by post_id so all comments for a single post go through one primary and replicate in order.
 
@@ -1909,24 +1909,24 @@ That is a staff-level answer. It is specific, it trades off deliberately, and it
 ### Quick Reference Card
 
 ```
-┌──────────────────────┬─────────────────────────────────┬──────────────────────────┐
-│ Consistency Model    │ When You Need It                │ Implementation           │
-├──────────────────────┼─────────────────────────────────┼──────────────────────────┤
-│ Read-Your-Writes     │ User sees their own changes     │ Redis TTL + leader route │
-│                      │ (profile, payments, settings)   │ OR w:majority writes     │
-├──────────────────────┼─────────────────────────────────┼──────────────────────────┤
-│ Monotonic Reads      │ Data must not go backward       │ Sticky routing by user   │
-│                      │ (scores, counts, status fields) │ OR version token in session│
-├──────────────────────┼─────────────────────────────────┼──────────────────────────┤
-│ Consistent Prefix    │ Causal order must be preserved  │ Shard by causal unit     │
-│                      │ (chat, state machines, events)  │ OR causal session tokens │
-├──────────────────────┼─────────────────────────────────┼──────────────────────────┤
-│ Linearizability      │ Absolute correctness required   │ Read from leader         │
-│                      │ (locks, balances, inventory)    │ OR quorum reads in Spanner│
-├──────────────────────┼─────────────────────────────────┼──────────────────────────┤
-│ Eventual             │ Precision not required           │ Read from any replica    │
-│                      │ (likes, views, trending)        │ No special routing needed│
-└──────────────────────┴─────────────────────────────────┴──────────────────────────┘
++----------------------+---------------------------------+--------------------------+
+| Consistency Model    | When You Need It                | Implementation           |
++----------------------+---------------------------------+--------------------------+
+| Read-Your-Writes     | User sees their own changes     | Redis TTL + leader route |
+|                      | (profile, payments, settings)   | OR w:majority writes     |
++----------------------+---------------------------------+--------------------------+
+| Monotonic Reads      | Data must not go backward       | Sticky routing by user   |
+|                      | (scores, counts, status fields) | OR version token in session|
++----------------------+---------------------------------+--------------------------+
+| Consistent Prefix    | Causal order must be preserved  | Shard by causal unit     |
+|                      | (chat, state machines, events)  | OR causal session tokens |
++----------------------+---------------------------------+--------------------------+
+| Linearizability      | Absolute correctness required   | Read from leader         |
+|                      | (locks, balances, inventory)    | OR quorum reads in Spanner|
++----------------------+---------------------------------+--------------------------+
+| Eventual             | Precision not required           | Read from any replica    |
+|                      | (likes, views, trending)        | No special routing needed|
++----------------------+---------------------------------+--------------------------+
 ```
 
 ---
@@ -1937,17 +1937,17 @@ The core tension: replicas are cheaper to read from, but they are always a littl
 
 The four problems this creates:
 
-1. **RYW violation** — you write data and immediately read stale data. Fix with Redis TTL-based routing or synchronous writes for high-stakes operations.
+1. **RYW violation** -- you write data and immediately read stale data. Fix with Redis TTL-based routing or synchronous writes for high-stakes operations.
 
-2. **Monotonic read violation** — data appears to go backward across reads. Fix with sticky routing (per user per session) or version tokens.
+2. **Monotonic read violation** -- data appears to go backward across reads. Fix with sticky routing (per user per session) or version tokens.
 
-3. **Consistent prefix violation** — you see causal effects before their causes. Fix with single-writer-per-shard or causal session tokens.
+3. **Consistent prefix violation** -- you see causal effects before their causes. Fix with single-writer-per-shard or causal session tokens.
 
-4. **Linearizability violation** — two concurrent readers see different "latest" values. Fix by routing to primary or using quorum reads (expensive).
+4. **Linearizability violation** -- two concurrent readers see different "latest" values. Fix by routing to primary or using quorum reads (expensive).
 
 Most production systems need a mix: eventual consistency for high-volume low-stakes reads, RYW and monotonic for user-facing features, and linearizable reads for financial and inventory operations.
 
-The payment history ghost incident is the clearest illustration: a system that said "success" but could not prove it to the user's next read request. Three thousand users per day, 120 support calls, 15 disputes. The fix was 20 lines of code — a Redis check before routing financial reads. The delay was not writing the code; it was recognizing the problem existed.
+The payment history ghost incident is the clearest illustration: a system that said "success" but could not prove it to the user's next read request. Three thousand users per day, 120 support calls, 15 disputes. The fix was 20 lines of code -- a Redis check before routing financial reads. The delay was not writing the code; it was recognizing the problem existed.
 
 That is the lesson of read consistency: the bugs are invisible in development, catastrophic in production, and cheap to fix once you know what you are looking for.
 # Chapter 27: Hybrid Logical Clocks (HLC)
@@ -1958,7 +1958,7 @@ That is the lesson of read consistency: the bugs are invisible in development, c
 
 ## 1. Why Ordering Matters in Distributed Systems
 
-Imagine three friends — Alice in New York, Bob in London, and Carlos in Tokyo — all writing in the same shared Google Doc at the same time. Each of them is using their own wristwatch to timestamp their edits. Alice's watch says 3:00 PM, Bob's watch says 3:00 PM too (in his timezone it's 8 PM, but let's say they all agreed to use UTC). Carlos's watch is running 10 seconds fast because he never synced it.
+Imagine three friends -- Alice in New York, Bob in London, and Carlos in Tokyo -- all writing in the same shared Google Doc at the same time. Each of them is using their own wristwatch to timestamp their edits. Alice's watch says 3:00 PM, Bob's watch says 3:00 PM too (in his timezone it's 8 PM, but let's say they all agreed to use UTC). Carlos's watch is running 10 seconds fast because he never synced it.
 
 Now you look at the edit history and try to figure out: who wrote what, in what order? Carlos's edit says 3:00:10 PM. Alice's says 3:00:05 PM. But Alice responded *to* Carlos's edit. How? How can you respond to something that happened 5 seconds "after" you?
 
@@ -1970,11 +1970,11 @@ That's exactly what happens in distributed systems.
 
 ### The Distributed Ordering Problem
 
-In a distributed system, events happen on different nodes. A "node" is just a server — maybe in a different city, maybe in a different continent. Each node has its own clock. Those clocks are never perfectly in sync. When you have thousands of requests per second across dozens of nodes, tiny clock differences (even 5ms) cause big problems.
+In a distributed system, events happen on different nodes. A "node" is just a server -- maybe in a different city, maybe in a different continent. Each node has its own clock. Those clocks are never perfectly in sync. When you have thousands of requests per second across dozens of nodes, tiny clock differences (even 5ms) cause big problems.
 
 Here's what "ordering matters" means in practice:
 
-**For databases (MVCC):** Multi-Version Concurrency Control keeps multiple versions of each row — one for each write. When you read a row, you get the "latest" version. But "latest" means "highest timestamp." If two nodes wrote to the same key and their timestamps are slightly off, the wrong version might win. An older write might look newer because it came from a server with a fast clock.
+**For databases (MVCC):** Multi-Version Concurrency Control keeps multiple versions of each row -- one for each write. When you read a row, you get the "latest" version. But "latest" means "highest timestamp." If two nodes wrote to the same key and their timestamps are slightly off, the wrong version might win. An older write might look newer because it came from a server with a fast clock.
 
 **For replication:** When a primary database replicates changes to replicas, those replicas must apply changes in the same order the primary did. If timestamps don't reflect true order, replicas diverge. Different replicas end up with different data.
 
@@ -2005,7 +2005,7 @@ We'll go through each. By the end, you'll understand why HLC is the pragmatic ch
 
 A physical clock gives you wall-clock time. When Server A records an event at `14:35:22.504`, that number has real-world meaning. You can compare it to a timestamp from a log file, a user's browser, or a monitoring dashboard. Humans understand it intuitively.
 
-Physical clocks are also useful for time-range queries: "give me all records created in the last 5 minutes." With a logical clock, that question is impossible to answer — a Lamport timestamp of "47" doesn't tell you if that was 5 minutes ago or 5 days ago.
+Physical clocks are also useful for time-range queries: "give me all records created in the last 5 minutes." With a logical clock, that question is impossible to answer -- a Lamport timestamp of "47" doesn't tell you if that was 5 minutes ago or 5 days ago.
 
 Most servers sync their clocks using **NTP (Network Time Protocol)**. NTP talks to a hierarchy of time servers (ultimately traceable to atomic clocks) and slowly adjusts your server's clock to match. It's automatic, it's free, and it works reasonably well.
 
@@ -2018,16 +2018,16 @@ This is where the trouble starts.
 ```
 CLOCK SOURCE          | TYPICAL ACCURACY    | NOTES
 ----------------------|---------------------|---------------------------
-Unsynchronized server | ±1ms per hour       | Drifts fast without NTP
-NTP (good network)    | ±1-10ms             | Standard for cloud VMs
-NTP (bad network)     | ±100-500ms          | During re-sync events
-GPS time server       | ±100 microseconds   | Expensive, very accurate
-Atomic clock          | ±nanoseconds        | Only Google/Amazon have these
+Unsynchronized server | +/-1ms per hour       | Drifts fast without NTP
+NTP (good network)    | +/-1-10ms             | Standard for cloud VMs
+NTP (bad network)     | +/-100-500ms          | During re-sync events
+GPS time server       | +/-100 microseconds   | Expensive, very accurate
+Atomic clock          | +/-nanoseconds        | Only Google/Amazon have these
 ```
 
 A typical cloud VM using NTP has clocks that differ from each other by roughly **1-10ms** under normal conditions. During an NTP re-sync event (when the server realizes it's been drifting and corrects itself), the difference can spike to **500ms or more**.
 
-10ms doesn't sound like much. But modern databases process thousands of transactions per second. In 10ms, you might have 50 transactions. If Server A's clock is 10ms ahead of Server B's, then Server A's timestamps are in "the future" from Server B's perspective. Events on Server A that happened after events on Server B will still sort *later* — even if Server B's events causally depended on Server A's output.
+10ms doesn't sound like much. But modern databases process thousands of transactions per second. In 10ms, you might have 50 transactions. If Server A's clock is 10ms ahead of Server B's, then Server A's timestamps are in "the future" from Server B's perspective. Events on Server A that happened after events on Server B will still sort *later* -- even if Server B's events causally depended on Server A's output.
 
 ---
 
@@ -2036,7 +2036,7 @@ A typical cloud VM using NTP has clocks that differ from each other by roughly *
 Let's make this concrete. Say we have an e-commerce system with two database nodes.
 
 ```
-TIMELINE (ground truth — what actually happened):
+TIMELINE (ground truth -- what actually happened):
 ------------------------------------------------
 
 Server A (clock slightly FAST, +5ms):
@@ -2049,8 +2049,8 @@ Server B (clock slightly SLOW, -5ms):
            Server B records: timestamp 14:35:22.098
            (B's clock is 5ms behind real time)
 
-                    ACTUAL ORDER:    Order → Payment
-                    TIMESTAMP ORDER: Payment (22.098) → Order (22.105)
+                    ACTUAL ORDER:    Order -> Payment
+                    TIMESTAMP ORDER: Payment (22.098) -> Order (22.105)
 ```
 
 You've recorded the payment happening **before** the order existed. Causality is violated.
@@ -2080,13 +2080,13 @@ The message clearly flowed from A to B (order before payment), but timestamps sa
 
 ### Why Google Built Atomic Clocks for Spanner
 
-Google's Spanner runs globally — data centers in US, Europe, Asia. Clock drift between data centers can be **10-100ms** due to network distance and VM scheduling jitter.
+Google's Spanner runs globally -- data centers in US, Europe, Asia. Clock drift between data centers can be **10-100ms** due to network distance and VM scheduling jitter.
 
 Spanner needs **external consistency** (also called linearizability). This means: if transaction T1 commits before T2 starts, then T1's timestamp must be less than T2's timestamp. No exceptions. This is the gold standard for distributed database consistency.
 
 With normal NTP, you can't guarantee this. You don't know exactly how much your clock is wrong.
 
-Google's solution: the **TrueTime API**. Instead of returning a single point in time, TrueTime returns an *interval*: `[earliest, latest]`. The true time is guaranteed to be somewhere in that interval. By using atomic clocks and GPS receivers in every data center, they bound that uncertainty to **±7ms** typically, never more than ±10ms.
+Google's solution: the **TrueTime API**. Instead of returning a single point in time, TrueTime returns an *interval*: `[earliest, latest]`. The true time is guaranteed to be somewhere in that interval. By using atomic clocks and GPS receivers in every data center, they bound that uncertainty to **+/-7ms** typically, never more than +/-10ms.
 
 When Spanner commits a transaction at time T, it **waits** until `TrueTime.now().earliest > T` before releasing the result. This "commit wait" ensures any future transaction that reads *after* this one will see a timestamp that's definitely later. Causal order preserved.
 
@@ -2141,7 +2141,7 @@ Node A        Node B        Node C
 [1]           [2,3]         [4,5]
 
 KEY PROPERTY: if A sent to B, then timestamp(A's send) < timestamp(B's receive)
-              1 < 2  ✓  Causal order preserved.
+              1 < 2  Y  Causal order preserved.
 ```
 
 This gives you a **partial order**: if event A caused event B, then `timestamp(A) < timestamp(B)`. Guaranteed. Even across nodes. Even with completely different physical clocks.
@@ -2156,7 +2156,7 @@ Here's the catch: a Lamport timestamp tells you *order*, but not *time*.
 
 ```
 QUESTIONS LAMPORT CLOCKS CAN ANSWER:
-  "Did event A happen before event B?"      YES (if A→B causally)
+  "Did event A happen before event B?"      YES (if A->B causally)
   "What is the causal order of all events?" YES
 
 QUESTIONS LAMPORT CLOCKS CANNOT ANSWER:
@@ -2170,17 +2170,17 @@ A Lamport timestamp of `47` tells you that 46 causally-preceding events happened
 
 For most real databases, this is unacceptable. Users need to query by time. Debuggers need to know when things happened in real-world terms. Monitoring systems need timestamps that correlate with logs, metrics, and alerts.
 
-Lamport clocks are used inside systems that don't need to expose real time — like some consensus algorithms internally. But they're not enough for a general-purpose distributed database.
+Lamport clocks are used inside systems that don't need to expose real time -- like some consensus algorithms internally. But they're not enough for a general-purpose distributed database.
 
 ---
 
-## 4. Hybrid Logical Clocks (HLC) — The Full Explanation
+## 4. Hybrid Logical Clocks (HLC) -- The Full Explanation
 
 ### The Intuition
 
 Can we have *both* real time AND causal ordering? Yes. That's HLC.
 
-Think of it like a GPS watch that also counts laps. The GPS gives you "what time is it in the real world" — approximate, but close. The lap counter gives you "what order did the laps happen" — exact, never wrong. You use both together.
+Think of it like a GPS watch that also counts laps. The GPS gives you "what time is it in the real world" -- approximate, but close. The lap counter gives you "what order did the laps happen" -- exact, never wrong. You use both together.
 
 HLC was introduced in a 2014 paper by Kulkarni, Demirbas, Madeppa, Avva, and Leone. The idea: track wall clock time *and* a logical counter. The wall clock tells you approximately when. The counter handles ties and ensures causal order even when clocks don't advance.
 
@@ -2215,7 +2215,7 @@ Node B:  (1001ms, 0, "C")   -- same time, node C
 
 ---
 
-### HLC Update Algorithm — Step by Step
+### HLC Update Algorithm -- Step by Step
 
 Here's the algorithm with explanations:
 
@@ -2233,7 +2233,7 @@ ON LOCAL EVENT or SEND:
     my_lc = 0
   else:
     // Clock didn't advance (same millisecond as last event).
-    // DON'T use pt_now — keep my_pt. Increment counter.
+    // DON'T use pt_now -- keep my_pt. Increment counter.
     my_lc = my_lc + 1
   
   timestamp = (my_pt, my_lc, node_id)
@@ -2293,7 +2293,7 @@ STEP 4: C receives message from B. C's clock = 101ms.
   msg = (100, 3, B)
   pt_max = max(101, 101, 100) = 101  -- C's own clock wins
   101 > my_pt (101)? No. 101 == my_pt. 101 > msg_pt (100)? Yes.
-  → my lc = my_lc + 1 = 1
+  -> my lc = my_lc + 1 = 1
   C: HLC = (101, 1, C)
 
 STEP 5: C sends message back to A. C's clock = 101ms.
@@ -2314,8 +2314,8 @@ FINAL TIMELINE (ordering by HLC):
   (101, 2, C)  -- C sent to A
   (102, 0, A)  -- A received C's message
   
-  Causal order: A→B→C→A. All HLC timestamps respect this. ✓
-  Physical time: all timestamps are within 2ms of real clock. ✓
+  Causal order: A->B->C->A. All HLC timestamps respect this. Y
+  Physical time: all timestamps are within 2ms of real clock. Y
 ```
 
 ---
@@ -2337,7 +2337,7 @@ NEXT EVENT on A:
 
 EFFECT: the 10ms jump is "absorbed". Future timestamps correctly reflect
         the new physical time. The gap from 500-509ms just doesn't exist
-        in HLC-land, which is fine — no events happened in those 10ms.
+        in HLC-land, which is fine -- no events happened in those 10ms.
 ```
 
 What if the clock jumps *backward* (NTP steps the clock back)?
@@ -2360,7 +2360,7 @@ EFFECT: the backward step is IGNORED. HLC stays at 500ms and
   will pick up the physical part again.
 ```
 
-HLC is **monotonic** — it never goes backward. Physical clocks can. That's a key safety property.
+HLC is **monotonic** -- it never goes backward. Physical clocks can. That's a key safety property.
 
 ---
 
@@ -2397,13 +2397,13 @@ TIME (ms)    Node A (clock: real)     Node B (partitioned!)     Node C (clock: r
              local event              |                         |
              HLC=(100,1,A)            |  <<NETWORK PARTITION>>  |
                                       |  B can't talk to A or C |
- t=101       A→C: (100,2,A)          B: local events          C receives from A:
+ t=101       A->C: (100,2,A)          B: local events          C receives from A:
              send to C                HLC=(100,1,B)             max(101,100,100)=101
-                                      HLC=(100,2,B)             101>msg_pt → lc++
+                                      HLC=(100,2,B)             101>msg_pt -> lc++
                                       HLC=(100,3,B)             HLC=(101,1,C)
                                       HLC=(100,4,B)
  t=102       A: local event           B: local event            C: local event
-             pt=102 > 100 → reset     HLC=(100,5,B)             HLC=(101,2,C)
+             pt=102 > 100 -> reset     HLC=(100,5,B)             HLC=(101,2,C)
              HLC=(102,0,A)
  t=110       <<PARTITION HEALED>>
              B reconnects, sends buffered msgs to A and C
@@ -2411,8 +2411,8 @@ TIME (ms)    Node A (clock: real)     Node B (partitioned!)     Node C (clock: r
              A receives B's msg:      B sends to A:             C receives B's msg:
              msg=(100,5,B)            (100,5,B) sent            msg=(100,5,B)
              pt_max=max(112,102,100)  B's clock=110ms           pt_max=max(111,101,100)
-             =112 > both → reset      B: send=                  =111 > both → reset
-             HLC=(112,0,A)           pt=110>100 → (110,0,B)    HLC=(111,0,C)
+             =112 > both -> reset      B: send=                  =111 > both -> reset
+             HLC=(112,0,A)           pt=110>100 -> (110,0,B)    HLC=(111,0,C)
              
 OBSERVATION: After partition heals, all clocks are back in sync.
              B's "past" timestamps (100,1-5) are recognized as older
@@ -2432,9 +2432,9 @@ Spanner's TrueTime API is a hardware-backed time service that returns not a sing
 ```
 TrueTime.now() returns:
   {
-    earliest: T - ε,   // true time is definitely after this
-    latest:   T + ε,   // true time is definitely before this  
-    ε ≈ 7ms            // typical uncertainty bound
+    earliest: T - e,   // true time is definitely after this
+    latest:   T + e,   // true time is definitely before this  
+    e ~= 7ms            // typical uncertainty bound
   }
 ```
 
@@ -2455,14 +2455,14 @@ WHY THIS WORKS:
     start_time >= TrueTime.now().latest at that start moment
     Since we waited until now().earliest > S, 
     future transactions see now().latest > S
-    Therefore future transaction timestamps > S. ✓
+    Therefore future transaction timestamps > S. Y
   
   External consistency guaranteed: if T1 commits before T2 starts,
   then S(T1) < S(T2). No atomic clocks anywhere else needed
   because we just waited out the uncertainty.
 ```
 
-The commit wait is typically 7-14ms (the uncertainty ε). For a global database doing millions of transactions, this wait is a real cost. But the guarantee is mathematically airtight.
+The commit wait is typically 7-14ms (the uncertainty e). For a global database doing millions of transactions, this wait is a real cost. But the guarantee is mathematically airtight.
 
 **Cost:** GPS receivers + atomic clocks in every data center. Google has them. Deployed at every Google data center globally. For everyone else: not available.
 
@@ -2480,7 +2480,7 @@ COCKROACHDB TRANSACTION TIMESTAMPS:
   Read timestamp = HLC.now() at the start of the read
   Write timestamp = HLC.now() at commit time
   
-MVCC reads: read at timestamp T → see all writes with HLC ≤ T
+MVCC reads: read at timestamp T -> see all writes with HLC <= T
   
 THE UNCERTAINTY WINDOW:
   When Node A reads at time T, it considers any write
@@ -2498,46 +2498,46 @@ THE UNCERTAINTY WINDOW:
   Actual retries due to uncertainty: rare. Typically <0.1% of reads.
 ```
 
-CockroachDB achieves **serializable isolation** (SSI — Serializable Snapshot Isolation), not full external consistency like Spanner. The difference:
+CockroachDB achieves **serializable isolation** (SSI -- Serializable Snapshot Isolation), not full external consistency like Spanner. The difference:
 
 - **External consistency (Spanner):** if you see T1 committed, any new transaction you start is guaranteed to be after T1. Even if you check from a different machine, different network, different time.
 - **Serializable (CockroachDB):** transactions execute as if they ran one at a time in some serial order. No dirty reads, no phantoms, no anomalies. But there's a tiny window where a transaction might not see a recently committed value that happened just before it started.
 
-For most production workloads, this distinction doesn't matter. For global financial systems with hard real-time ordering requirements across continents — it might.
+For most production workloads, this distinction doesn't matter. For global financial systems with hard real-time ordering requirements across continents -- it might.
 
 ---
 
 ### Full Comparison Table
 
 ```
-┌──────────────────┬──────────────────┬─────────────────┬───────────────┬──────────────────┐
-│ PROPERTY         │ Physical Clocks  │ Lamport Clocks  │ HLC           │ TrueTime         │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Real wall time   │ YES              │ NO              │ APPROX        │ YES (bounded)    │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Causal ordering  │ WEAK             │ STRONG          │ STRONG        │ STRONG           │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Total ordering   │ WEAK             │ YES (w/ node ID)│ YES           │ YES              │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ External consist │ NO               │ NO              │ NO            │ YES              │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Time-range query │ YES              │ NO              │ YES           │ YES              │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Clock uncertainty│ ±10ms (NTP)      │ N/A             │ ±500ms (max)  │ ±7ms (typical)   │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Hardware needed  │ NTP only         │ None            │ NTP only      │ GPS + Atomic clk │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Cost             │ Free             │ Free            │ Free          │ $$$$ per DC      │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Who uses it      │ Cassandra, Redis │ Some consensus  │ CockroachDB,  │ Google Spanner   │
-│                  │ (naive approach) │ algorithms      │ YugabyteDB    │ only             │
-├──────────────────┼──────────────────┼─────────────────┼───────────────┼──────────────────┤
-│ Monotonic?       │ NO (NTP can step │ YES             │ YES           │ YES              │
-│                  │ clock backward)  │                 │               │                  │
-└──────────────────┴──────────────────┴─────────────────┴───────────────┴──────────────────┘
++------------------+------------------+-----------------+---------------+------------------+
+| PROPERTY         | Physical Clocks  | Lamport Clocks  | HLC           | TrueTime         |
++------------------+------------------+-----------------+---------------+------------------+
+| Real wall time   | YES              | NO              | APPROX        | YES (bounded)    |
++------------------+------------------+-----------------+---------------+------------------+
+| Causal ordering  | WEAK             | STRONG          | STRONG        | STRONG           |
++------------------+------------------+-----------------+---------------+------------------+
+| Total ordering   | WEAK             | YES (w/ node ID)| YES           | YES              |
++------------------+------------------+-----------------+---------------+------------------+
+| External consist | NO               | NO              | NO            | YES              |
++------------------+------------------+-----------------+---------------+------------------+
+| Time-range query | YES              | NO              | YES           | YES              |
++------------------+------------------+-----------------+---------------+------------------+
+| Clock uncertainty| +/-10ms (NTP)      | N/A             | +/-500ms (max)  | +/-7ms (typical)   |
++------------------+------------------+-----------------+---------------+------------------+
+| Hardware needed  | NTP only         | None            | NTP only      | GPS + Atomic clk |
++------------------+------------------+-----------------+---------------+------------------+
+| Cost             | Free             | Free            | Free          | $$$$ per DC      |
++------------------+------------------+-----------------+---------------+------------------+
+| Who uses it      | Cassandra, Redis | Some consensus  | CockroachDB,  | Google Spanner   |
+|                  | (naive approach) | algorithms      | YugabyteDB    | only             |
++------------------+------------------+-----------------+---------------+------------------+
+| Monotonic?       | NO (NTP can step | YES             | YES           | YES              |
+|                  | clock backward)  |                 |               |                  |
++------------------+------------------+-----------------+---------------+------------------+
 ```
 
-HLC sits in the sweet spot: it gives you causal ordering (as strong as Lamport), approximate real time (useful for range queries), runs on commodity hardware (just NTP), and is monotonic (safe for databases). The only thing it can't do is provide mathematically-guaranteed external consistency without bounded hardware uncertainty — that requires TrueTime.
+HLC sits in the sweet spot: it gives you causal ordering (as strong as Lamport), approximate real time (useful for range queries), runs on commodity hardware (just NTP), and is monotonic (safe for databases). The only thing it can't do is provide mathematically-guaranteed external consistency without bounded hardware uncertainty -- that requires TrueTime.
 
 ---
 
@@ -2557,13 +2557,13 @@ Versions:
   (bio="Manager",     hlc=(200ms, 0, C))
 
 READ at T=175ms:
-  → Returns bio="Engineer" (latest version ≤ 175ms)
+  -> Returns bio="Engineer" (latest version <= 175ms)
   
 READ at T=125ms (snapshot read):
-  → Returns bio="Student"  (latest version ≤ 125ms)
+  -> Returns bio="Student"  (latest version <= 125ms)
   
 Current READ (no timestamp):
-  → Returns bio="Manager"  (latest version overall)
+  -> Returns bio="Manager"  (latest version overall)
 ```
 
 This is how CockroachDB implements time-travel queries (`AS OF SYSTEM TIME`). You can query data as it existed 1 hour ago by reading at an older HLC timestamp.
@@ -2587,17 +2587,17 @@ Node B writes: bio = "Manager"
   HLC = (100ms, 0, B)
   
   HLC comparison: (100, 0, A) vs (100, 0, B)
-  → Same physical time, same logical counter
-  → Compare node_id: "A" < "B"
-  → B's write is "later"
-  → bio = "Manager" wins. DETERMINISTIC. Both nodes agree.
+  -> Same physical time, same logical counter
+  -> Compare node_id: "A" < "B"
+  -> B's write is "later"
+  -> bio = "Manager" wins. DETERMINISTIC. Both nodes agree.
   
 WITHOUT HLC (physical-only):
   Both timestamps = 100ms exactly
   No tiebreaker defined in protocol
   Node A thinks "Engineer" wins (it got there first locally)
   Node B thinks "Manager" wins
-  → Split brain. Two replicas show different data.
+  -> Split brain. Two replicas show different data.
 ```
 
 HLC's node_id component ensures that even with perfectly synchronized clocks, there's always a deterministic total order. No ties. No ambiguity.
@@ -2618,12 +2618,12 @@ Node B (clock = 99ms):  writes bio = "Manager"
   B's HLC: (99, 0, B)
   
 HLC comparison: (100, 0, A) vs (99, 0, B)
-→ pt: 100 > 99 → A's write is "later"
-→ bio = "Engineer" wins.
+-> pt: 100 > 99 -> A's write is "later"
+-> bio = "Engineer" wins.
 
 Is this right? Depends on causal order:
-  - If A's write happened first (user changed from Manager→Engineer), correct.
-  - If B's write happened first (user changed from Engineer→Manager), WRONG.
+  - If A's write happened first (user changed from Manager->Engineer), correct.
+  - If B's write happened first (user changed from Engineer->Manager), WRONG.
 
 This is the fundamental tension: when two writes are within the clock 
 uncertainty window (1ms < 500ms max_offset), we can't tell which is 
@@ -2671,7 +2671,7 @@ Result: "Engineer" wins (higher timestamp).
 But Client 2's write happened AFTER Client 1's write in wall time.
 "Manager" should win.
 
-This is "last write wins" — and it's "last by timestamp" which isn't
+This is "last write wins" -- and it's "last by timestamp" which isn't
 the same as "last in real time."
 ```
 
@@ -2688,8 +2688,8 @@ VECTOR CLOCK FORMAT: [A:2, B:1, C:3]
   Meaning: "This version has seen 2 events from A, 1 from B, 3 from C"
 
 COMPARISON:
-  [A:2, B:1] < [A:3, B:2]   (first is older — second dominates)
-  [A:2, B:1] vs [A:1, B:2]  CONCURRENT — neither dominates!
+  [A:2, B:1] < [A:3, B:2]   (first is older -- second dominates)
+  [A:2, B:1] vs [A:1, B:2]  CONCURRENT -- neither dominates!
   
 When concurrent: application must resolve conflict ("sibling versions")
   Dynamo returned both versions to the application.
@@ -2705,19 +2705,19 @@ Modern DynamoDB has moved away from client-visible vector clocks and uses intern
 
 ```
 COMPARISON: HLC vs Vector Clocks
-┌─────────────────┬──────────────────────┬────────────────────┐
-│ PROPERTY        │ HLC                  │ Vector Clocks      │
-├─────────────────┼──────────────────────┼────────────────────┤
-│ Size            │ Fixed (3 fields)     │ O(num_nodes)       │
-├─────────────────┼──────────────────────┼────────────────────┤
-│ Real time       │ Approximate (yes)    │ No                 │
-├─────────────────┼──────────────────────┼────────────────────┤
-│ Conflict detect │ Via ordering rules   │ Explicit "siblings"│
-├─────────────────┼──────────────────────┼────────────────────┤
-│ Conflict resolve│ Higher timestamp wins│ App must resolve   │
-├─────────────────┼──────────────────────┼────────────────────┤
-│ Complexity      │ Low                  │ High               │
-└─────────────────┴──────────────────────┴────────────────────┘
++-----------------+----------------------+--------------------+
+| PROPERTY        | HLC                  | Vector Clocks      |
++-----------------+----------------------+--------------------+
+| Size            | Fixed (3 fields)     | O(num_nodes)       |
++-----------------+----------------------+--------------------+
+| Real time       | Approximate (yes)    | No                 |
++-----------------+----------------------+--------------------+
+| Conflict detect | Via ordering rules   | Explicit "siblings"|
++-----------------+----------------------+--------------------+
+| Conflict resolve| Higher timestamp wins| App must resolve   |
++-----------------+----------------------+--------------------+
+| Complexity      | Low                  | High               |
++-----------------+----------------------+--------------------+
 ```
 
 ---
@@ -2731,26 +2731,26 @@ START: "I need to order events in a distributed system"
        |
        v
 Do you have Google's TrueTime hardware (GPS + atomic clocks)?
-  YES ─────────────────────────────────────────────> Use TrueTime (Spanner)
-                                                     External consistency ✓
-  NO ──────────────────────────────────────────────> Continue
+  YES ---------------------------------------------> Use TrueTime (Spanner)
+                                                     External consistency Y
+  NO ----------------------------------------------> Continue
        |
        v
 Do you need real-world wall-clock time in your queries?
 (e.g., "show records from last 5 minutes")
-  NO ──────────────────────────────────────────────> Lamport Clocks
+  NO ----------------------------------------------> Lamport Clocks
                                                      Simpler, exact causal order
-  YES ─────────────────────────────────────────────> Continue
+  YES ---------------------------------------------> Continue
        |
        v
 Is this a single-node system?
-  YES ─────────────────────────────────────────────> Physical Clock
+  YES ---------------------------------------------> Physical Clock
                                                      No distribution = no problem
-  NO ──────────────────────────────────────────────> Continue
+  NO ----------------------------------------------> Continue
        |
        v
 Do you need causal ordering AND real time AND commodity hardware?
-  YES ─────────────────────────────────────────────> USE HLC
+  YES ---------------------------------------------> USE HLC
                                                      Best of both worlds
 ```
 
@@ -2774,7 +2774,7 @@ Do you need causal ordering AND real time AND commodity hardware?
 
 - **You have TrueTime.** If Google built your infrastructure and you're running on Spanner, you get external consistency. HLC gives weaker guarantees than TrueTime.
 
-- **You need external consistency guarantees in writing.** If your SLAs explicitly require "any transaction started after T1 commits definitely sees T1's writes" with mathematical proof — HLC can't give you that without also bounding your clock uncertainty to atomic clock levels.
+- **You need external consistency guarantees in writing.** If your SLAs explicitly require "any transaction started after T1 commits definitely sees T1's writes" with mathematical proof -- HLC can't give you that without also bounding your clock uncertainty to atomic clock levels.
 
 - **Your application already does ordering at a higher layer.** Some systems use a serializer (a single consensus node that assigns sequence numbers to all writes). In that case, the sequencer's counter IS the order, and HLC is redundant.
 
@@ -2788,7 +2788,7 @@ This is based on a class of incidents that have happened in production distribut
 
 ### Context
 
-A fintech company runs a distributed database across three data centers: US-East, US-West, and EU-West. The database is HLC-based (custom-built on top of RocksDB). `max_clock_offset` is configured at 500ms — standard for this type of system.
+A fintech company runs a distributed database across three data centers: US-East, US-West, and EU-West. The database is HLC-based (custom-built on top of RocksDB). `max_clock_offset` is configured at 500ms -- standard for this type of system.
 
 The system processes payment records. Ordering is critical: a "refund" must be ordered after the original "charge." The HLC ensures this.
 
@@ -2824,19 +2824,19 @@ US-East's writes are now being rejected by the other data centers. US-East is **
 ```
 TOPOLOGY DURING INCIDENT:
                                      
-  US-East ──────X──────────> US-West
+  US-East ------X----------> US-West
   [clock: +800ms]    REJECTED        
        |                             
        X              EU-West        
        |REJECTED                     
-       +──────────────────────────>  
+       +-------------------------->  
                     REJECTED         
                     
-  US-West <──────────────────> EU-West
+  US-West <------------------> EU-West
   [clock: OK]                [clock: OK]
   
   Healthy two-node cluster continues operating.
-  US-East is isolated — all its writes fail.
+  US-East is isolated -- all its writes fail.
 ```
 
 ---
@@ -2845,12 +2845,12 @@ TOPOLOGY DURING INCIDENT:
 
 15% of payment write requests are routed to US-East via load balancing. Those requests begin failing with the error: `"Clock skew exceeds maximum allowed offset: node us-east-node-7 offset 823ms > max 500ms"`.
 
-The operations team gets paged at 2:23 AM. The error is unfamiliar — clock skew errors are rare in this system. The on-call engineer initially suspects a network partition, not a clock issue.
+The operations team gets paged at 2:23 AM. The error is unfamiliar -- clock skew errors are rare in this system. The on-call engineer initially suspects a network partition, not a clock issue.
 
 Dashboard shows:
 - Write failure rate: 15% (consistent with US-East traffic share)
 - Latency for successful writes: normal
-- No network errors (connections are fine — data is being sent and received, just rejected)
+- No network errors (connections are fine -- data is being sent and received, just rejected)
 
 The key metric that fingered the real cause: `clock_skew_ms` on the US-East nodes, showing **812ms**. But this metric wasn't on the default dashboard. The engineer found it only after 6 minutes of investigation.
 
@@ -2860,7 +2860,7 @@ The key metric that fingered the real cause: `clock_skew_ms` on the US-East node
 
 2:29 AM: Engineer SSHes into US-East servers. Runs `ntpstat`. Output: `unsynchronised, time server re-starting`. Confirms NTP daemon is crashed.
 
-2:31 AM: Manually restarts NTP daemon: `systemctl restart ntpd`. NTP begins stepping the clock back. But NTP is gentle — it slowly adjusts, 0.5ms per second by default. To go back 800ms takes 1,600 seconds (26 minutes) with slow adjustment.
+2:31 AM: Manually restarts NTP daemon: `systemctl restart ntpd`. NTP begins stepping the clock back. But NTP is gentle -- it slowly adjusts, 0.5ms per second by default. To go back 800ms takes 1,600 seconds (26 minutes) with slow adjustment.
 
 Engineer forces a fast NTP step: `ntpdate -s pool.ntp.org`. Clock jumps back 800ms instantly. NTP daemon takes over from there.
 
@@ -2873,7 +2873,7 @@ Engineer forces a fast NTP step: `ntpdate -s pool.ntp.org`. Clock jumps back 800
 ### Root Cause
 
 1. NTP daemon exited silently due to corrupted config file
-2. Process monitor was misconfigured — set to restart on SIGKILL only, not on unexpected exit
+2. Process monitor was misconfigured -- set to restart on SIGKILL only, not on unexpected exit
 3. No alerting on `clock_skew_ms` metric
 4. No alerting on NTP daemon health
 
@@ -2883,7 +2883,7 @@ Engineer forces a fast NTP step: `ntpdate -s pool.ntp.org`. Clock jumps back 800
 
 Implemented in the week after the incident:
 
-1. **Alerting on `clock_skew_ms`**: PagerDuty alert if any node exceeds 200ms skew (warning at 200ms, critical at 400ms — both well below the 500ms kill threshold).
+1. **Alerting on `clock_skew_ms`**: PagerDuty alert if any node exceeds 200ms skew (warning at 200ms, critical at 400ms -- both well below the 500ms kill threshold).
 
 2. **NTP daemon health check**: Added to the standard service health check. If NTP is not synchronized, the node self-reports as degraded and load balancer stops sending it write traffic.
 
@@ -2895,23 +2895,23 @@ Implemented in the week after the incident:
 
 ### The Lesson
 
-HLC is a software mechanism. It is only as reliable as the physical clocks underneath it. `max_offset = 500ms` is a configured safety threshold, not magic. If clocks drift past it, nodes get isolated — which is the *correct* behavior (better isolated than serving inconsistent data), but it's still a failure.
+HLC is a software mechanism. It is only as reliable as the physical clocks underneath it. `max_offset = 500ms` is a configured safety threshold, not magic. If clocks drift past it, nodes get isolated -- which is the *correct* behavior (better isolated than serving inconsistent data), but it's still a failure.
 
 **Clock skew is an infrastructure problem that masquerades as a database problem.** Always:
 - Monitor `clock_skew_ms` (CockroachDB exposes this as a built-in metric)
 - Alert well below the max_offset threshold (alert at 40%, page at 80%)
 - Ensure NTP daemon has process supervision
-- Have a runbook for "NTP daemon crashed" — it's a real failure mode
+- Have a runbook for "NTP daemon crashed" -- it's a real failure mode
 
 ```
 MONITORING CHECKLIST FOR HLC-BASED SYSTEMS:
-  □ clock_skew_ms monitored and alerted
-  □ NTP daemon has process supervision (systemd, supervisord, etc.)
-  □ Alert threshold: 40% of max_offset (e.g., 200ms if max=500ms)
-  □ Page threshold: 80% of max_offset (e.g., 400ms if max=500ms)  
-  □ NTP daemon failure → node marked degraded → removed from write pool
-  □ Runbook exists for clock skew incidents
-  □ Fallback NTP source configured
+  [ ] clock_skew_ms monitored and alerted
+  [ ] NTP daemon has process supervision (systemd, supervisord, etc.)
+  [ ] Alert threshold: 40% of max_offset (e.g., 200ms if max=500ms)
+  [ ] Page threshold: 80% of max_offset (e.g., 400ms if max=500ms)  
+  [ ] NTP daemon failure -> node marked degraded -> removed from write pool
+  [ ] Runbook exists for clock skew incidents
+  [ ] Fallback NTP source configured
 ```
 
 ---
@@ -2922,8 +2922,8 @@ MONITORING CHECKLIST FOR HLC-BASED SYSTEMS:
 
 HLC comes up in two types of system design questions:
 
-1. **"Design a globally distributed database"** — you'll naturally need to discuss transaction ordering
-2. **"How do you handle ordering / consistency in your distributed system?"** — HLC is the right answer if you're not Google
+1. **"Design a globally distributed database"** -- you'll naturally need to discuss transaction ordering
+2. **"How do you handle ordering / consistency in your distributed system?"** -- HLC is the right answer if you're not Google
 
 ---
 
@@ -2931,11 +2931,11 @@ HLC comes up in two types of system design questions:
 
 Don't drop "HLC" immediately without context. Build up to it:
 
-> "In a distributed system, events happen on different nodes. We need to order them for MVCC to work correctly — to know which version of a row is latest. Physical clocks can't be trusted: NTP gives us ±10ms accuracy, which is enough for operations happening within 10ms on different nodes to appear out of order. Lamport clocks solve ordering but lose real time — you can't do time-range queries with them. That's why distributed databases like CockroachDB use Hybrid Logical Clocks."
+> "In a distributed system, events happen on different nodes. We need to order them for MVCC to work correctly -- to know which version of a row is latest. Physical clocks can't be trusted: NTP gives us +/-10ms accuracy, which is enough for operations happening within 10ms on different nodes to appear out of order. Lamport clocks solve ordering but lose real time -- you can't do time-range queries with them. That's why distributed databases like CockroachDB use Hybrid Logical Clocks."
 
 Then explain HLC:
 
-> "HLC is a three-tuple: (physical_time, logical_counter, node_id). Physical time is from the wall clock — gives you approximate real time. Logical counter handles ties — if two events happen in the same millisecond, the counter ensures we can still order them. Node ID is the final tiebreaker. The update rule: take the max of your clock and any incoming message's clock, reset the counter if physical time advanced, increment if it didn't."
+> "HLC is a three-tuple: (physical_time, logical_counter, node_id). Physical time is from the wall clock -- gives you approximate real time. Logical counter handles ties -- if two events happen in the same millisecond, the counter ensures we can still order them. Node ID is the final tiebreaker. The update rule: take the max of your clock and any incoming message's clock, reset the counter if physical time advanced, increment if it didn't."
 
 ---
 
@@ -2943,7 +2943,7 @@ Then explain HLC:
 
 The Spanner comparison usually comes up right after you mention HLC:
 
-> "Google Spanner takes a different approach — TrueTime. Instead of a software solution, they put atomic clocks and GPS receivers in every data center. TrueTime returns a time interval [earliest, latest] with uncertainty ±7ms. When a transaction commits, Spanner waits out that uncertainty interval before making the commit visible. This gives full external consistency — mathematical guarantee that later transactions see earlier ones. CockroachDB's HLC is a software equivalent: same idea (bound uncertainty), but the bound is 500ms from NTP instead of 7ms from atomic clocks. You get serializable isolation, not external consistency. Close enough for 99% of workloads."
+> "Google Spanner takes a different approach -- TrueTime. Instead of a software solution, they put atomic clocks and GPS receivers in every data center. TrueTime returns a time interval [earliest, latest] with uncertainty +/-7ms. When a transaction commits, Spanner waits out that uncertainty interval before making the commit visible. This gives full external consistency -- mathematical guarantee that later transactions see earlier ones. CockroachDB's HLC is a software equivalent: same idea (bound uncertainty), but the bound is 500ms from NTP instead of 7ms from atomic clocks. You get serializable isolation, not external consistency. Close enough for 99% of workloads."
 
 ---
 
@@ -2961,44 +2961,44 @@ When the interviewer probes deeper, be ready for:
 > "Cost and availability. Atomic clocks in every DC is expensive and requires specialized ops. Spanner is Google-only or Cloud Spanner (expensive, Google-managed). HLC runs on any commodity cluster with NTP."
 
 **"What are the failure modes of HLC?"**
-> "Clock skew exceeding max_offset. If a node's clock drifts more than 500ms, it gets isolated — can't participate in writes. This is a safety mechanism, not a bug, but it requires solid NTP monitoring. I'd alert at 40% of max_offset to catch drift early."
+> "Clock skew exceeding max_offset. If a node's clock drifts more than 500ms, it gets isolated -- can't participate in writes. This is a safety mechanism, not a bug, but it requires solid NTP monitoring. I'd alert at 40% of max_offset to catch drift early."
 
 **"Could you lower max_offset to get closer to TrueTime's guarantees?"**
-> "Yes, but you'd need tighter NTP. With GPS time servers (±100μs), you could set max_offset to 1ms. CockroachDB actually suggests lowering to 250ms if your network is well-managed. The lower the max_offset, the more aggressive the isolation behavior on drift, so you need NTP to be rock-solid."
+> "Yes, but you'd need tighter NTP. With GPS time servers (+/-100mus), you could set max_offset to 1ms. CockroachDB actually suggests lowering to 250ms if your network is well-managed. The lower the max_offset, the more aggressive the isolation behavior on drift, so you need NTP to be rock-solid."
 
 **"How does HLC interact with follower reads?"**
-> "CockroachDB supports 'follower reads' — serving reads from replicas (followers) without going to the leader. HLC timestamps make this safe: a follower read at timestamp T is guaranteed to see all writes with HLC ≤ T that have been replicated. The 'closed timestamp' mechanism periodically advances a watermark on followers, indicating 'all writes before this timestamp are definitely here.' This allows bounded-staleness reads with low latency."
+> "CockroachDB supports 'follower reads' -- serving reads from replicas (followers) without going to the leader. HLC timestamps make this safe: a follower read at timestamp T is guaranteed to see all writes with HLC <= T that have been replicated. The 'closed timestamp' mechanism periodically advances a watermark on followers, indicating 'all writes before this timestamp are definitely here.' This allows bounded-staleness reads with low latency."
 
 ---
 
 ### Architecture Pattern (Draw This in Interviews)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  DISTRIBUTED DATABASE                    │
-│                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
-│  │  Node A  │  │  Node B  │  │  Node C  │             │
-│  │          │  │          │  │          │             │
-│  │ HLC:     │  │ HLC:     │  │ HLC:     │             │
-│  │ (102,0,A)│  │ (101,2,B)│  │ (103,0,C)│             │
-│  │          │  │          │  │          │             │
-│  │ NTP sync │  │ NTP sync │  │ NTP sync │             │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘             │
-│       │              │              │                   │
-│  Write to A    Write to B     Write to C               │
-│  (100,1,A)     (101,0,B)      (103,0,C)                │
-│       │              │              │                   │
-│       └──────────────┴──────────────┘                  │
-│                       │                                 │
-│              HLC comparison: total order               │
-│              (100,1,A) < (101,0,B) < (103,0,C)        │
-│                                                         │
-│  MVCC:                                                  │
-│    key="user:42": [(100,1,A)→"Alice", (103,0,C)→"Bob"] │
-│    Read now → "Bob" (highest HLC)                       │
-│    Read AS OF (101,0,B) → "Alice"                       │
-└─────────────────────────────────────────────────────────┘
++---------------------------------------------------------+
+|                  DISTRIBUTED DATABASE                    |
+|                                                         |
+|  +----------+  +----------+  +----------+             |
+|  |  Node A  |  |  Node B  |  |  Node C  |             |
+|  |          |  |          |  |          |             |
+|  | HLC:     |  | HLC:     |  | HLC:     |             |
+|  | (102,0,A)|  | (101,2,B)|  | (103,0,C)|             |
+|  |          |  |          |  |          |             |
+|  | NTP sync |  | NTP sync |  | NTP sync |             |
+|  +----+-----+  +----+-----+  +----+-----+             |
+|       |              |              |                   |
+|  Write to A    Write to B     Write to C               |
+|  (100,1,A)     (101,0,B)      (103,0,C)                |
+|       |              |              |                   |
+|       +--------------+--------------+                  |
+|                       |                                 |
+|              HLC comparison: total order               |
+|              (100,1,A) < (101,0,B) < (103,0,C)        |
+|                                                         |
+|  MVCC:                                                  |
+|    key="user:42": [(100,1,A)->"Alice", (103,0,C)->"Bob"] |
+|    Read now -> "Bob" (highest HLC)                       |
+|    Read AS OF (101,0,B) -> "Alice"                       |
++---------------------------------------------------------+
 ```
 
 ---
@@ -3007,31 +3007,31 @@ When the interviewer probes deeper, be ready for:
 
 ```
 HLC SOLVES:
-  ✓ Causal ordering across nodes
-  ✓ Total ordering of all events
-  ✓ Monotonic timestamps (never goes backward)
-  ✓ Time-range queries (approximate real time preserved)
-  ✓ MVCC version ordering in distributed databases
-  ✓ Works with commodity NTP (no special hardware)
+  Y Causal ordering across nodes
+  Y Total ordering of all events
+  Y Monotonic timestamps (never goes backward)
+  Y Time-range queries (approximate real time preserved)
+  Y MVCC version ordering in distributed databases
+  Y Works with commodity NTP (no special hardware)
 
 HLC DOES NOT SOLVE:
-  ✗ External consistency (you need TrueTime for that)
-  ✗ NTP daemon failures (monitor your NTP!)
-  ✗ The fundamental clock uncertainty (just manages it)
-  ✗ Consensus (HLC is ordering, not agreement — use Raft for that)
-  ✗ Network partitions (HLC doesn't help isolated nodes agree)
+  N External consistency (you need TrueTime for that)
+  N NTP daemon failures (monitor your NTP!)
+  N The fundamental clock uncertainty (just manages it)
+  N Consensus (HLC is ordering, not agreement -- use Raft for that)
+  N Network partitions (HLC doesn't help isolated nodes agree)
 ```
 
 ---
 
 ### The 30-Second Summary (For When the Interviewer Wants It Short)
 
-> Physical clocks give you real time but drift. Drift causes ordering bugs in distributed systems — events appear in the wrong order because one server's clock is a few milliseconds ahead. Lamport clocks fix ordering but lose real time. Hybrid Logical Clocks (HLC) combine both: a three-tuple of (wall_clock, logical_counter, node_id). You get approximate real time from the wall clock and exact causal ordering from the counter. CockroachDB and YugabyteDB use HLC. Google Spanner uses TrueTime (atomic clocks) for stronger guarantees, but that requires hardware most companies don't have. HLC is the pragmatic choice for distributed databases on commodity hardware.
+> Physical clocks give you real time but drift. Drift causes ordering bugs in distributed systems -- events appear in the wrong order because one server's clock is a few milliseconds ahead. Lamport clocks fix ordering but lose real time. Hybrid Logical Clocks (HLC) combine both: a three-tuple of (wall_clock, logical_counter, node_id). You get approximate real time from the wall clock and exact causal ordering from the counter. CockroachDB and YugabyteDB use HLC. Google Spanner uses TrueTime (atomic clocks) for stronger guarantees, but that requires hardware most companies don't have. HLC is the pragmatic choice for distributed databases on commodity hardware.
 
 ---
 
-*Next chapter: Chapter 28 — Distributed Consensus and Raft*
-# Chapter 27: CRDTs — Conflict-Free Replicated Data Types
+*Next chapter: Chapter 28 -- Distributed Consensus and Raft*
+# Chapter 27: CRDTs -- Conflict-Free Replicated Data Types
 
 ---
 
@@ -3052,8 +3052,8 @@ This is the core problem of **distributed systems with concurrent writes**. Ther
 Whoever syncs first after landing "wins." The other person's edits are silently discarded.
 
 ```
-You land, sync at 2:05 PM ─────────────────────── Your changes SURVIVE
-Your teammate lands, syncs at 2:07 PM ─────────── Their changes OVERWRITE yours
+You land, sync at 2:05 PM ----------------------- Your changes SURVIVE
+Your teammate lands, syncs at 2:07 PM ----------- Their changes OVERWRITE yours
 ```
 
 Silent data loss. No error. No warning. Your three sections just disappeared. You have no idea. This happens in production more often than you'd think.
@@ -3124,20 +3124,20 @@ Set X = {apples, bananas}
 Set Y = {bananas, oranges}
 
 Union(X, Y) = {apples, bananas, oranges}
-Union(Y, X) = {apples, bananas, oranges}   ← same result (commutative)
+Union(Y, X) = {apples, bananas, oranges}   <- same result (commutative)
 
-Union(X, Union(Y, Z)) = Union(Union(X, Y), Z)  ← same result (associative)
+Union(X, Union(Y, Z)) = Union(Union(X, Y), Z)  <- same result (associative)
 
-Union(X, X) = X                             ← same result (idempotent)
+Union(X, X) = X                             <- same result (idempotent)
 ```
 
-Set union has all three properties. That's why a Grow-Only Set is one of the simplest CRDTs — set union IS the merge function.
+Set union has all three properties. That's why a Grow-Only Set is one of the simplest CRDTs -- set union IS the merge function.
 
 ---
 
 ### The Formal Name: Join Semilattice
 
-If your data structure forms a **join semilattice**, it's a CRDT. Every CRDT is a join semilattice. The "join" operation is the merge. The semilattice property guarantees convergence — all replicas that receive the same updates will reach the same final state, regardless of order.
+If your data structure forms a **join semilattice**, it's a CRDT. Every CRDT is a join semilattice. The "join" operation is the merge. The semilattice property guarantees convergence -- all replicas that receive the same updates will reach the same final state, regardless of order.
 
 You don't need to memorize "join semilattice" for most interviews. But if a Staff+ interviewer asks, you now know what it is.
 
@@ -3156,9 +3156,9 @@ You don't need to memorize "join semilattice" for most interviews. But if a Staf
 If three servers all share a counter `count = 10`, and they all increment concurrently:
 
 ```
-Node A: count = 10, increments → count = 11
-Node B: count = 10, increments → count = 11
-Node C: count = 10, increments → count = 11
+Node A: count = 10, increments -> count = 11
+Node B: count = 10, increments -> count = 11
+Node C: count = 10, increments -> count = 11
 
 After sync: count = ??? (should be 13, but they all report 11)
 ```
@@ -3167,7 +3167,7 @@ Last-write-wins gives you 11. You lost 2 increments silently.
 
 ### The G-Counter Solution: Each Node Has Its Own Slot
 
-Instead of a single number, each node maintains a **vector** — one slot per node in the cluster.
+Instead of a single number, each node maintains a **vector** -- one slot per node in the cluster.
 
 ```
 G-Counter state = {nodeA: 5, nodeB: 3, nodeC: 0}
@@ -3184,27 +3184,27 @@ G-Counter state = {nodeA: 5, nodeB: 3, nodeC: 0}
 ```
 Initial state: {A:0, B:0, C:0}
 
-  ┌─────────────────────────────────────────────┐
-  │              NETWORK PARTITION               │
-  │  (nodes A and B isolated from C)             │
-  └─────────────────────────────────────────────┘
+  +---------------------------------------------+
+  |              NETWORK PARTITION               |
+  |  (nodes A and B isolated from C)             |
+  +---------------------------------------------+
 
-Node A (isolated):   A increments 5 times  → {A:5, B:0, C:0}
-Node B (isolated):   B increments 3 times  → {A:0, B:3, C:0}
-Node C (isolated):   C increments 2 times  → {A:0, B:0, C:2}
+Node A (isolated):   A increments 5 times  -> {A:5, B:0, C:0}
+Node B (isolated):   B increments 3 times  -> {A:0, B:3, C:0}
+Node C (isolated):   C increments 2 times  -> {A:0, B:0, C:2}
 
-              ↓ partition heals ↓
+              v partition heals v
 
 MERGE all three:
   {A:5, B:0, C:0}
   {A:0, B:3, C:0}
   {A:0, B:0, C:2}
-  ─────────────────
+  -----------------
   max per slot:
   {A: max(5,0,0), B: max(0,3,0), C: max(0,0,2)}
 = {A:5, B:3, C:2}
 
-value() = 5 + 3 + 2 = 10 ✓
+value() = 5 + 3 + 2 = 10 Y
 ```
 
 Correct! Every increment is preserved. The merge-by-max works because **each node only ever increases its own slot**. The maximum is always the latest value for that node.
@@ -3213,34 +3213,34 @@ Correct! Every increment is preserved. The merge-by-max works because **each nod
 
 ```
 Before Partition:
-┌────────┐   ┌────────┐   ┌────────┐
-│ Node A │   │ Node B │   │ Node C │
-│{A:0,   │   │{A:0,   │   │{A:0,   │
-│ B:0,   │   │ B:0,   │   │ B:0,   │
-│ C:0}   │   │ C:0}   │   │ C:0}   │
-└────────┘   └────────┘   └────────┘
-     ↑            ↑            ↑
-     │  ← all 3 connected  →  │
++--------+   +--------+   +--------+
+| Node A |   | Node B |   | Node C |
+|{A:0,   |   |{A:0,   |   |{A:0,   |
+| B:0,   |   | B:0,   |   | B:0,   |
+| C:0}   |   | C:0}   |   | C:0}   |
++--------+   +--------+   +--------+
+     ^            ^            ^
+     |  <- all 3 connected  ->  |
 
 During Partition:
-┌────────┐   ┌────────┐   ┌────────┐
-│ Node A │   │ Node B │   │ Node C │
-│{A:5,   │ X │{A:0,   │ X │{A:0,   │
-│ B:0,   │   │ B:3,   │   │ B:0,   │
-│ C:0}   │   │ C:0}   │   │ C:2}   │
-└────────┘   └────────┘   └────────┘
-     ↑            ↑            ↑
++--------+   +--------+   +--------+
+| Node A |   | Node B |   | Node C |
+|{A:5,   | X |{A:0,   | X |{A:0,   |
+| B:0,   |   | B:3,   |   | B:0,   |
+| C:0}   |   | C:0}   |   | C:2}   |
++--------+   +--------+   +--------+
+     ^            ^            ^
   +5 self      +3 self      +2 self
 
 After Merge (partition heals):
-┌────────┐   ┌────────┐   ┌────────┐
-│ Node A │   │ Node B │   │ Node C │
-│{A:5,   │   │{A:5,   │   │{A:5,   │
-│ B:3,   │   │ B:3,   │   │ B:3,   │
-│ C:2}   │   │ C:2}   │   │ C:2}   │
-└────────┘   └────────┘   └────────┘
++--------+   +--------+   +--------+
+| Node A |   | Node B |   | Node C |
+|{A:5,   |   |{A:5,   |   |{A:5,   |
+| B:3,   |   | B:3,   |   | B:3,   |
+| C:2}   |   | C:2}   |   | C:2}   |
++--------+   +--------+   +--------+
  value=10     value=10     value=10
-      ↑ all nodes converged ↑
+      ^ all nodes converged ^
 ```
 
 ### Full Pseudocode
@@ -3314,21 +3314,21 @@ Use **two** G-Counters:
 - **N** (Negative): tracks all decrements
 - **Actual value** = P.value() - N.value()
 
-When you want to "decrement" the counter, you actually **add to the N counter**. You're still only doing additions — additions to the "decrements" counter.
+When you want to "decrement" the counter, you actually **add to the N counter**. You're still only doing additions -- additions to the "decrements" counter.
 
 This is a bit mind-bending but it works:
 
 ```
-P = {A:10, B:7}  → P.value() = 17
-N = {A:2, B:3}   → N.value() = 5
+P = {A:10, B:7}  -> P.value() = 17
+N = {A:2, B:3}   -> N.value() = 5
 
 Actual value = 17 - 5 = 12
 ```
 
 ### Operations
 
-- **Increment:** `P.increment(my_node_id)` — add 1 to my slot in P
-- **Decrement:** `N.increment(my_node_id)` — add 1 to my slot in N
+- **Increment:** `P.increment(my_node_id)` -- add 1 to my slot in P
+- **Decrement:** `N.increment(my_node_id)` -- add 1 to my slot in N
 - **Value:** `P.value() - N.value()`
 - **Merge:** merge P with other's P (element-wise max), merge N with other's N (element-wise max)
 
@@ -3336,17 +3336,17 @@ Actual value = 17 - 5 = 12
 
 ```
 Initial state:
-  Node A: P={A:0,B:0}, N={A:0,B:0} → value = 0
-  Node B: P={A:0,B:0}, N={A:0,B:0} → value = 0
+  Node A: P={A:0,B:0}, N={A:0,B:0} -> value = 0
+  Node B: P={A:0,B:0}, N={A:0,B:0} -> value = 0
 
 During partition:
   Node A: +10 likes, -2 unlikes
-    P={A:10, B:0}, N={A:2, B:0} → value = 10-2 = 8
+    P={A:10, B:0}, N={A:2, B:0} -> value = 10-2 = 8
 
   Node B: +7 likes, -3 unlikes
-    P={A:0, B:7}, N={A:0, B:3} → value = 7-3 = 4
+    P={A:0, B:7}, N={A:0, B:3} -> value = 7-3 = 4
 
-After partition heals — merge:
+After partition heals -- merge:
   P merge: {A: max(10,0), B: max(0,7)} = {A:10, B:7}
   N merge: {A: max(2,0),  B: max(0,3)} = {A:2,  B:3}
 
@@ -3358,25 +3358,25 @@ Both nodes' likes AND unlikes are preserved. The net count (12) is correct.
 ### ASCII Diagram
 
 ```
-                  ┌──────────────────────┐
-                  │   NETWORK PARTITION  │
-                  └──────────────────────┘
+                  +----------------------+
+                  |   NETWORK PARTITION  |
+                  +----------------------+
 
 Node A:                           Node B:
-┌─────────────────────┐           ┌─────────────────────┐
-│ P = {A:10, B:0}     │    ///    │ P = {A:0,  B:7}     │
-│ N = {A:2,  B:0}     │           │ N = {A:0,  B:3}     │
-│ value = 8           │           │ value = 4           │
-└─────────────────────┘           └─────────────────────┘
-         │                                  │
-         └──────────────┬───────────────────┘
-                        │ partition heals
-                        ▼
-              ┌─────────────────────┐
-              │ P = {A:10, B:7}     │
-              │ N = {A:2,  B:3}     │
-              │ value = 12          │
-              └─────────────────────┘
++---------------------+           +---------------------+
+| P = {A:10, B:0}     |    ///    | P = {A:0,  B:7}     |
+| N = {A:2,  B:0}     |           | N = {A:0,  B:3}     |
+| value = 8           |           | value = 4           |
++---------------------+           +---------------------+
+         |                                  |
+         +--------------+-------------------+
+                        | partition heals
+                        v
+              +---------------------+
+              | P = {A:10, B:7}     |
+              | N = {A:2,  B:3}     |
+              | value = 12          |
+              +---------------------+
               (both nodes converge here)
 ```
 
@@ -3426,7 +3426,7 @@ print(a.value())  # 12
 
 ### Important Note
 
-PN-Counters can go negative if decrements exceed increments. That's intentional — the user defined those semantics. If you need a floor at zero (can't remove items you don't have), that's application-level logic, not CRDT logic.
+PN-Counters can go negative if decrements exceed increments. That's intentional -- the user defined those semantics. If you need a floor at zero (can't remove items you don't have), that's application-level logic, not CRDT logic.
 
 ---
 
@@ -3454,7 +3454,7 @@ Structure: {apple, banana, cherry}
 
 ### Why It's Trivially Correct
 
-Set union is commutative, associative, and idempotent. We already proved this above. The G-Set is basically "free" — you get CRDT semantics automatically from the properties of sets.
+Set union is commutative, associative, and idempotent. We already proved this above. The G-Set is basically "free" -- you get CRDT semantics automatically from the properties of sets.
 
 ### Worked Example: Offline Shopping List
 
@@ -3482,18 +3482,18 @@ Both Alice's and Bob's items survive. No conflict. No coordination needed.
 
 ```
 Alice (offline):          Bob (offline):
-┌──────────────┐          ┌──────────────┐
-│ {milk,       │   ///    │ {eggs,       │
-│  bread}      │          │  coffee}     │
-└──────────────┘          └──────────────┘
-        │                         │
-        └────────────┬────────────┘
-                     │ sync
-                     ▼
-             ┌──────────────────┐
-             │ {milk, bread,    │
-             │  eggs, coffee}   │
-             └──────────────────┘
++--------------+          +--------------+
+| {milk,       |   ///    | {eggs,       |
+|  bread}      |          |  coffee}     |
++--------------+          +--------------+
+        |                         |
+        +------------+------------+
+                     | sync
+                     v
+             +------------------+
+             | {milk, bread,    |
+             |  eggs, coffee}   |
+             +------------------+
 ```
 
 ### The Limitation
@@ -3502,7 +3502,7 @@ You can never remove elements. Once "milk" is in the set, it's there forever. Th
 
 ---
 
-## Section 5: OR-Set (Observed-Remove Set) — The Interesting One
+## Section 5: OR-Set (Observed-Remove Set) -- The Interesting One
 
 ### Real-World Use Cases
 - Shopping carts (add and remove items)
@@ -3525,7 +3525,7 @@ After merge: should "apple" be in the set?
 
 This is the **concurrent add vs remove** problem. There's no universally "correct" answer. You have to make a choice. CRDTs choose: **add wins**. If someone adds an element concurrently with someone else removing it, the add survives.
 
-But how do you implement this? The naïve "just remove from the set" approach doesn't let you distinguish:
+But how do you implement this? The naive "just remove from the set" approach doesn't let you distinguish:
 
 - "Remove the apple that was there before" (a remove that should win over nothing)
 - "Remove the apple that B just added" (a remove that B didn't observe yet)
@@ -3553,16 +3553,16 @@ Node B: has apple with tag (apple, A, 1)
 
 They go offline.
 
-Node A: removes apple → moves (apple, A, 1) to tombstones
-Node B: adds apple AGAIN → creates NEW tag (apple, B, 2)
+Node A: removes apple -> moves (apple, A, 1) to tombstones
+Node B: adds apple AGAIN -> creates NEW tag (apple, B, 2)
 
 After merge:
   add_tags: {(apple, A, 1), (apple, B, 2)}
   remove_tags (tombstones): {(apple, A, 1)}
 
   Is apple present?
-    Check (apple, A, 1): it's in tombstones → this "version" is removed
-    Check (apple, B, 2): NOT in tombstones → this version is alive!
+    Check (apple, A, 1): it's in tombstones -> this "version" is removed
+    Check (apple, B, 2): NOT in tombstones -> this version is alive!
 
   Result: apple IS in the set (B's add survived)
 ```
@@ -3575,8 +3575,8 @@ Node A's remove only removed the **specific apple it observed**. It had no knowl
 
 ```
 Initial state (both nodes synced):
-  apple  → tags: {(apple, A, 1)}
-  banana → tags: {(banana, A, 2)}
+  apple  -> tags: {(apple, A, 1)}
+  banana -> tags: {(banana, A, 2)}
 
   add_set:    {(apple, A, 1), (banana, A, 2)}
   remove_set: {}
@@ -3584,17 +3584,17 @@ Initial state (both nodes synced):
 Both go offline.
 
 Node A actions:
-  1. removes banana → remove_set += {(banana, A, 2)}
-  2. adds cherry   → add_set    += {(cherry, A, 3)}
+  1. removes banana -> remove_set += {(banana, A, 2)}
+  2. adds cherry   -> add_set    += {(cherry, A, 3)}
 
 Node A state:
   add_set:    {(apple, A, 1), (banana, A, 2), (cherry, A, 3)}
   remove_set: {(banana, A, 2)}
 
 Node B actions:
-  1. removes banana → remove_set += {(banana, A, 2)}
-  2. adds date      → add_set    += {(date, B, 1)}
-  3. adds elderberry→ add_set    += {(elderberry, B, 2)}
+  1. removes banana -> remove_set += {(banana, A, 2)}
+  2. adds date      -> add_set    += {(date, B, 1)}
+  3. adds elderberry-> add_set    += {(elderberry, B, 2)}
 
 Node B state:
   add_set:    {(apple, A, 1), (banana, A, 2), (date, B, 1), (elderberry, B, 2)}
@@ -3606,11 +3606,11 @@ After merge (union of add_sets, union of remove_sets):
   remove_set: {(banana, A, 2)}
 
 Present elements (has at least one tag NOT in remove_set):
-  apple:       (apple, A, 1) not in remove_set → PRESENT ✓
-  banana:      (banana, A, 2) IS in remove_set → check for other tags → none → ABSENT ✗
-  cherry:      (cherry, A, 3) not in remove_set → PRESENT ✓
-  date:        (date, B, 1) not in remove_set → PRESENT ✓
-  elderberry:  (elderberry, B, 2) not in remove_set → PRESENT ✓
+  apple:       (apple, A, 1) not in remove_set -> PRESENT Y
+  banana:      (banana, A, 2) IS in remove_set -> check for other tags -> none -> ABSENT N
+  cherry:      (cherry, A, 3) not in remove_set -> PRESENT Y
+  date:        (date, B, 1) not in remove_set -> PRESENT Y
+  elderberry:  (elderberry, B, 2) not in remove_set -> PRESENT Y
 
 Final set: {apple, cherry, date, elderberry}
 ```
@@ -3625,39 +3625,39 @@ Both nodes have: {apple, banana}
   add_set: {(apple,A,1), (banana,A,2)}
   rem_set: {}
 
-         ┌─────────────────────────────────┐
-         │         GOES OFFLINE            │
-         └─────────────────────────────────┘
+         +---------------------------------+
+         |         GOES OFFLINE            |
+         +---------------------------------+
 
 Node A:                          Node B:
-┌────────────────────┐           ┌────────────────────────────┐
-│ Removes banana     │   ///     │ Removes banana             │
-│ Adds cherry        │           │ Adds date, elderberry      │
-│                    │           │                            │
-│ add_set:           │           │ add_set:                   │
-│  (apple,A,1)  ✓   │           │  (apple,A,1)   ✓          │
-│  (banana,A,2) ✓   │           │  (banana,A,2)  ✓          │
-│  (cherry,A,3) ✓   │           │  (date,B,1)    ✓          │
-│                    │           │  (elderberry,B,2) ✓       │
-│ rem_set:           │           │                            │
-│  (banana,A,2) ✓   │           │ rem_set:                   │
-│                    │           │  (banana,A,2)  ✓          │
-└────────────────────┘           └────────────────────────────┘
-        │                                   │
-        └──────────────┬────────────────────┘
-                       │ reconnect + merge
-                       ▼
-       ┌────────────────────────────────┐
-       │ add_set: union of both         │
-       │ rem_set: union of both         │
-       │                                │
-       │ Present:                       │
-       │  apple       ✓                 │
-       │  banana      ✗ (both removed)  │
-       │  cherry      ✓                 │
-       │  date        ✓                 │
-       │  elderberry  ✓                 │
-       └────────────────────────────────┘
++--------------------+           +----------------------------+
+| Removes banana     |   ///     | Removes banana             |
+| Adds cherry        |           | Adds date, elderberry      |
+|                    |           |                            |
+| add_set:           |           | add_set:                   |
+|  (apple,A,1)  Y   |           |  (apple,A,1)   Y          |
+|  (banana,A,2) Y   |           |  (banana,A,2)  Y          |
+|  (cherry,A,3) Y   |           |  (date,B,1)    Y          |
+|                    |           |  (elderberry,B,2) Y       |
+| rem_set:           |           |                            |
+|  (banana,A,2) Y   |           | rem_set:                   |
+|                    |           |  (banana,A,2)  Y          |
++--------------------+           +----------------------------+
+        |                                   |
+        +--------------+--------------------+
+                       | reconnect + merge
+                       v
+       +--------------------------------+
+       | add_set: union of both         |
+       | rem_set: union of both         |
+       |                                |
+       | Present:                       |
+       |  apple       Y                 |
+       |  banana      N (both removed)  |
+       |  cherry      Y                 |
+       |  date        Y                 |
+       |  elderberry  Y                 |
+       +--------------------------------+
 ```
 
 ### Full Pseudocode
@@ -3685,7 +3685,7 @@ class ORSet:
         if element in self.add_set:
             for tag in self.add_set[element]:
                 self.remove_set.add(tag)
-        # We do NOT delete from add_set — needed for merge operations
+        # We do NOT delete from add_set -- needed for merge operations
 
     def lookup(self, element):
         # Element is present if at least one of its tags is NOT tombstoned
@@ -3724,12 +3724,12 @@ class ORSet:
 node_a = ORSet()
 node_b = ORSet()
 
-# Initial state (both have same items — simulate sync)
+# Initial state (both have same items -- simulate sync)
 node_a.add("apple")
 node_a.add("banana")
 node_b.add("apple")
 node_b.add("banana")
-# (In real systems, initial sync would share actual tags — simplified here)
+# (In real systems, initial sync would share actual tags -- simplified here)
 
 # Go offline
 # Node A: removes banana, adds cherry
@@ -3753,16 +3753,16 @@ Each element stores a set of (element, unique_tag) pairs. For every add operatio
 ```
 1,000 elements, 50 nodes, each element added/removed 10 times:
   Tags per element: ~10 alive + ~10 tombstoned = 20 tags
-  Total entries: 1,000 × 20 = 20,000 tag pairs
+  Total entries: 1,000 x 20 = 20,000 tag pairs
 
-  At ~50 bytes per tag: 20,000 × 50 = ~1 MB
+  At ~50 bytes per tag: 20,000 x 50 = ~1 MB
 ```
 
 Manageable at this scale. But if you have millions of elements or elements are added/removed thousands of times, tombstones accumulate.
 
 ### Garbage Collection
 
-Once **all nodes** have seen a removal (the tombstone has been propagated to every replica), the (add_tag, remove_tag) pair is safe to delete. You'll never need those old tags again. This requires tracking which nodes have confirmed receipt — adds complexity but keeps metadata bounded.
+Once **all nodes** have seen a removal (the tombstone has been propagated to every replica), the (add_tag, remove_tag) pair is safe to delete. You'll never need those old tags again. This requires tracking which nodes have confirmed receipt -- adds complexity but keeps metadata bounded.
 
 ---
 
@@ -3776,15 +3776,15 @@ Stores a single value with a timestamp. On merge: keep the value with the higher
 Node A: value="dark mode",    timestamp=100
 Node B: value="light mode",   timestamp=99
 
-merge → value="dark mode" (timestamp 100 wins)
+merge -> value="dark mode" (timestamp 100 wins)
         value="light mode" silently discarded
 ```
 
 **When LWW is acceptable:** configuration settings where the last intent should win, and the difference in timestamps is meaningful. User deliberately changed the setting on one device after the other.
 
-**When LWW is dangerous:** when timestamps are unreliable (clock skew, NTP drift), or when the concurrent writes are logically independent (two different fields in a settings object — changing one shouldn't overwrite the other).
+**When LWW is dangerous:** when timestamps are unreliable (clock skew, NTP drift), or when the concurrent writes are logically independent (two different fields in a settings object -- changing one shouldn't overwrite the other).
 
-**Real limitation:** LWW loses data on true concurrent writes. It's NOT truly conflict-free — it just picks a winner arbitrarily when timestamps are equal or close.
+**Real limitation:** LWW loses data on true concurrent writes. It's NOT truly conflict-free -- it just picks a winner arbitrarily when timestamps are equal or close.
 
 ### MV-Register (Multi-Value Register)
 
@@ -3794,11 +3794,11 @@ On conflict, keep **both** values. Expose the conflict to the application. The a
 Node A: value="dark mode",    vector_clock={A:1}
 Node B: value="light mode",   vector_clock={B:1}
 
-merge → values=["dark mode", "light mode"], conflict=True
+merge -> values=["dark mode", "light mode"], conflict=True
         application shows user: "Choose one"
 ```
 
-This is what **Riak** uses with vector clocks. When two writes conflict (concurrent, no causal relationship), Riak returns "siblings" — multiple values — and lets the application resolve it.
+This is what **Riak** uses with vector clocks. When two writes conflict (concurrent, no causal relationship), Riak returns "siblings" -- multiple values -- and lets the application resolve it.
 
 Less convenient than automatic merge, but preserves all information. No silent data loss.
 
@@ -3826,8 +3826,8 @@ Ship the **full state**. The merge function combines two complete states.
 Node A state: {A:5, B:3, C:0}
 Node B state: {A:2, B:7, C:0}
 
-Node A sends entire state → {A:5, B:3, C:0}
-Node B receives, merges → {A:5, B:7, C:0}
+Node A sends entire state -> {A:5, B:3, C:0}
+Node B receives, merges -> {A:5, B:7, C:0}
 ```
 
 **Pros:** Simple to implement. Works even if messages arrive out of order or are duplicated (merge is idempotent). Easy to reason about.
@@ -3840,7 +3840,7 @@ Ship only the **operation** (e.g., "increment by 1" or "add element X"). The ope
 
 ```
 Node A: increments
-  → sends message: "increment nodeA's slot by 1"
+  -> sends message: "increment nodeA's slot by 1"
 Node B: receives message, applies operation directly
 ```
 
@@ -3853,8 +3853,8 @@ Node B: receives message, applies operation directly
 In practice, most production implementations use **delta-CRDTs**: state-based, but instead of shipping the full state, ship only the **delta** (the changes since last sync).
 
 ```
-Full state: {A:5, B:3, C:0} → 3 integers, 24 bytes
-Delta:      {A:+2}           → just the change, 8 bytes
+Full state: {A:5, B:3, C:0} -> 3 integers, 24 bytes
+Delta:      {A:+2}           -> just the change, 8 bytes
 ```
 
 Dramatically reduces bandwidth while keeping the simplicity of state-based merge.
@@ -3873,7 +3873,7 @@ Dramatically reduces bandwidth while keeping the simplicity of state-based merge
 
 ## Section 8: Real-World Deep Dives
 
-### A. Figma — Collaborative Design Canvas
+### A. Figma -- Collaborative Design Canvas
 
 Figma lets 100 designers edit the same canvas file simultaneously. No "someone else is editing" locks. No "conflict detected" dialogs.
 
@@ -3893,17 +3893,17 @@ Figma lets 100 designers edit the same canvas file simultaneously. No "someone e
 
 This is why Figma scales to 100 simultaneous editors. CRDTs + fast infrastructure, not CRDTs alone.
 
-### B. Riak — Distributed Database with Native CRDTs
+### B. Riak -- Distributed Database with Native CRDTs
 
 Riak 2.0 (2014) added native CRDT data types to the database. This was a big deal.
 
 **Built-in Riak CRDT types:**
-- `riak_dt_gcounter` — G-Counter
-- `riak_dt_pncounter` — PN-Counter
-- `riak_dt_orset` — OR-Set
-- `riak_dt_map` — nested maps containing other CRDTs
-- `riak_dt_flag` — enable/disable flag
-- `riak_dt_register` — LWW register
+- `riak_dt_gcounter` -- G-Counter
+- `riak_dt_pncounter` -- PN-Counter
+- `riak_dt_orset` -- OR-Set
+- `riak_dt_map` -- nested maps containing other CRDTs
+- `riak_dt_flag` -- enable/disable flag
+- `riak_dt_register` -- LWW register
 
 **Shopping Cart Use Case:**
 
@@ -3911,37 +3911,37 @@ Before Riak CRDTs, shopping cart storage looked like:
 
 ```
 User 1234 has cart: ["shoes", "jacket"]
-  → Stored as a blob in Riak
-  → User opens cart on phone AND laptop (both offline)
-  → Phone: adds "hat"
-  → Laptop: adds "scarf"
-  → On sync: Riak returns SIBLINGS (two conflicting versions)
-  → Application code: custom merge logic needed
-  → Developer nightmare: "what's the right merge for a cart?"
+  -> Stored as a blob in Riak
+  -> User opens cart on phone AND laptop (both offline)
+  -> Phone: adds "hat"
+  -> Laptop: adds "scarf"
+  -> On sync: Riak returns SIBLINGS (two conflicting versions)
+  -> Application code: custom merge logic needed
+  -> Developer nightmare: "what's the right merge for a cart?"
 ```
 
 After Riak CRDTs:
 
 ```
 User 1234's cart: Riak OR-Set
-  → Phone (offline): add("hat")
-  → Laptop (offline): add("scarf")
-  → On sync: Riak automatically merges OR-Sets
-  → Result: ["shoes", "jacket", "hat", "scarf"]
-  → No application code needed
+  -> Phone (offline): add("hat")
+  -> Laptop (offline): add("scarf")
+  -> On sync: Riak automatically merges OR-Sets
+  -> Result: ["shoes", "jacket", "hat", "scarf"]
+  -> No application code needed
 ```
 
-Removes the "remove from cart" button conundrum: OR-Set handles concurrent "add an item on one device, remove same item on other" with add-wins semantics. If the user actively removes an item and another device adds it simultaneously, the add wins (conservative — don't lose items from cart).
+Removes the "remove from cart" button conundrum: OR-Set handles concurrent "add an item on one device, remove same item on other" with add-wins semantics. If the user actively removes an item and another device adds it simultaneously, the add wins (conservative -- don't lose items from cart).
 
 The prior Riak approach required application-level sibling resolution for every data type. CRDTs made common cases automatic.
 
-### C. Apple Notes — Silent Offline Sync
+### C. Apple Notes -- Silent Offline Sync
 
 Open Apple Notes. Write a note on your iPhone. Turn on airplane mode. Write more. Switch to iPad (also in airplane mode). Edit the same note. Land. Both devices sync.
 
 No "conflict detected" dialog. Both edits appear. The note contains all your changes.
 
-Apple Notes uses CRDT-inspired merge for text content. Not precisely the OR-Set or G-Counter — text has its own CRDT called a **Sequence CRDT** (similar to LSEQ or RGA). Each character has a unique ID. Concurrent insertions at the same position get both characters inserted (with a deterministic ordering). Concurrent deletions of the same character are idempotent.
+Apple Notes uses CRDT-inspired merge for text content. Not precisely the OR-Set or G-Counter -- text has its own CRDT called a **Sequence CRDT** (similar to LSEQ or RGA). Each character has a unique ID. Concurrent insertions at the same position get both characters inserted (with a deterministic ordering). Concurrent deletions of the same character are idempotent.
 
 The user experience: it just works. You'd have to deliberately try to create a merge conflict to find one, and even then the result is usually "both changes are there."
 
@@ -3953,17 +3953,17 @@ The user experience: it just works. You'd have to deliberately try to create a m
 
 ```
 G-Counter, 100 nodes:
-  100 integers × 8 bytes = 800 bytes
-  → Trivially fine
+  100 integers x 8 bytes = 800 bytes
+  -> Trivially fine
 
 OR-Set, 1,000 elements, 50 nodes:
-  Each element: (element_value, unique_tag) ≈ 50-100 bytes per tag
-  If each element added once: 1,000 × 100 bytes = 100 KB
-  → Fine
+  Each element: (element_value, unique_tag) ~= 50-100 bytes per tag
+  If each element added once: 1,000 x 100 bytes = 100 KB
+  -> Fine
 
 OR-Set, 1,000,000 elements, each added/removed 100 times:
-  Tombstones: 1,000,000 × 100 × 100 bytes = 10 GB
-  → Not fine without garbage collection
+  Tombstones: 1,000,000 x 100 x 100 bytes = 10 GB
+  -> Not fine without garbage collection
 ```
 
 ### Tombstone Accumulation
@@ -3980,8 +3980,8 @@ Tombstones accumulate. Your OR-Set's metadata grows unboundedly.
 ### When CRDTs Are NOT the Right Answer
 
 **Strong consistency requirements:**
-- Financial ledgers: "Account balance must never go negative" — CRDTs can't enforce this without coordination.
-- Inventory with hard limits: "Only 5 seats left" — two concurrent purchases of the last seat? CRDTs say both succeed. LWW picks one. Only strict serialization prevents double-selling.
+- Financial ledgers: "Account balance must never go negative" -- CRDTs can't enforce this without coordination.
+- Inventory with hard limits: "Only 5 seats left" -- two concurrent purchases of the last seat? CRDTs say both succeed. LWW picks one. Only strict serialization prevents double-selling.
 
 **Data types without natural commutative semantics:**
 - Ranked lists: "Move item from position 3 to position 1." Concurrent reorderings don't commute naturally.
@@ -4009,20 +4009,20 @@ Operational Transform (OT) is the alternative approach to real-time collaborativ
 ```
 Document: "Hello World"
 
-User A (position 5): Insert " Beautiful"   → "Hello Beautiful World"
-User B (position 5): Delete "World"        → "Hello "
+User A (position 5): Insert " Beautiful"   -> "Hello Beautiful World"
+User B (position 5): Delete "World"        -> "Hello "
 
 If B's delete arrives first:
   Document is now "Hello "
-  A's insert was at position 5 — position 5 is now past the end
+  A's insert was at position 5 -- position 5 is now past the end
   OT transforms A's insert: adjust position accounting for B's delete
-  Apply transformed insert → "Hello Beautiful"
+  Apply transformed insert -> "Hello Beautiful"
 
 If A's insert arrives first:
   Document is now "Hello Beautiful World"
   B's delete was "World" starting at position 5
   OT transforms B's delete: adjust position for A's insert (shift right by 10)
-  Apply transformed delete → "Hello Beautiful"
+  Apply transformed delete -> "Hello Beautiful"
 ```
 
 OT transforms operations before applying them, maintaining consistent document state.
@@ -4056,13 +4056,13 @@ OT transforms operations before applying them, maintaining consistent document s
 
 **The honest truth about rich text with CRDTs:**
 
-Sequence CRDTs (for text) exist — LSEQ, RGA, Logoot, YATA (used in Y.js). They work. But they're significantly more complex than OT for text editing, and have their own quirks (interleaving issues, tombstone overhead). Many production collaborative text editors still use OT or hybrid approaches for this reason.
+Sequence CRDTs (for text) exist -- LSEQ, RGA, Logoot, YATA (used in Y.js). They work. But they're significantly more complex than OT for text editing, and have their own quirks (interleaving issues, tombstone overhead). Many production collaborative text editors still use OT or hybrid approaches for this reason.
 
 Y.js (used by many modern collaborative editors) is a CRDT-based framework that handles text editing via a Sequence CRDT, and it works well in practice. But it required years of research and engineering to get right.
 
 ---
 
-## Section 11: Real Incident — LWW Silent Data Loss in Production
+## Section 11: Real Incident -- LWW Silent Data Loss in Production
 
 ### Context
 
@@ -4108,13 +4108,13 @@ Marcus's laptop (offline, battery-saver mode):
 
 ```
 Phone syncs at T=100: profile saved with notifications=off, privacy=private
-                                                              ↑ (unchanged from before)
+                                                              ^ (unchanged from before)
 
 Laptop tries to sync at T=99:
   Server detects: "I have T=100, you have T=99. Yours is older."
   Server discards laptop's write entirely.
 
-  Marcus's privacy change (private → public) is silently lost.
+  Marcus's privacy change (private -> public) is silently lost.
 ```
 
 Marcus set his profile to public. The setting disappeared. Nobody told him.
@@ -4140,8 +4140,8 @@ Phone update (T=100):    notifications changed,  privacy UNCHANGED
 Laptop update (T=99):    notifications UNCHANGED, privacy changed
 
 LWW picks T=100 (phone):
-  → correct notifications
-  → WRONG privacy (phone's T=100 version has the old privacy setting)
+  -> correct notifications
+  -> WRONG privacy (phone's T=100 version has the old privacy setting)
 ```
 
 ### The Fix
@@ -4169,7 +4169,7 @@ Now each field resolves independently. Phone's T=100 notification changes win fo
 
 **LWW at the object level loses data. LWW at the field level is more correct. CRDTs (LWW-Register per field, OR-Set for collections) prevent this entire class of data loss.**
 
-The root issue: using a coarse-grained timestamp on a document that contains logically independent fields. The fix doesn't even require full CRDTs — just applying LWW at the right granularity.
+The root issue: using a coarse-grained timestamp on a document that contains logically independent fields. The fix doesn't even require full CRDTs -- just applying LWW at the right granularity.
 
 ---
 
@@ -4202,25 +4202,25 @@ Don't just say "use a CRDT." Walk through the reasoning:
 "For this shopping cart use case, we need add and remove semantics on a set of items. That's exactly what an OR-Set handles. Here's how..."
 
 **Step 3: Describe the merge semantics**
-"The OR-Set gives each add operation a unique tag. When we remove an item, we tombstone its tags. On merge, we union all add_sets and remove_sets. An item is present if it has any active tags. Concurrent add beats concurrent remove — add-wins semantics."
+"The OR-Set gives each add operation a unique tag. When we remove an item, we tombstone its tags. On merge, we union all add_sets and remove_sets. An item is present if it has any active tags. Concurrent add beats concurrent remove -- add-wins semantics."
 
 **Step 4: Note the trade-offs**
-"The metadata overhead is per-element tags and tombstones. At 100K items with normal churn, we're looking at a few MB of metadata per user — totally acceptable. We'd want periodic garbage collection to prune old tombstones once all nodes have confirmed delivery."
+"The metadata overhead is per-element tags and tombstones. At 100K items with normal churn, we're looking at a few MB of metadata per user -- totally acceptable. We'd want periodic garbage collection to prune old tombstones once all nodes have confirmed delivery."
 
 **Step 5: Anchor with a real system**
-"This is essentially what Riak 2.0 ships natively — their `riak_dt_orset` implements exactly this for shopping cart-style use cases."
+"This is essentially what Riak 2.0 ships natively -- their `riak_dt_orset` implements exactly this for shopping cart-style use cases."
 
 ### The One-Liner
 
 If you need to summarize CRDTs in 20 seconds:
 
-> "CRDTs: design your data structure so that concurrent edits always merge automatically, without coordination and without conflict. You give up some data type expressiveness and take on metadata overhead. In exchange, you get guaranteed eventual consistency, no conflict dialogs, and no silent data loss. The math — commutativity, associativity, and idempotency — does the work."
+> "CRDTs: design your data structure so that concurrent edits always merge automatically, without coordination and without conflict. You give up some data type expressiveness and take on metadata overhead. In exchange, you get guaranteed eventual consistency, no conflict dialogs, and no silent data loss. The math -- commutativity, associativity, and idempotency -- does the work."
 
 ### CRDT Selection Cheat Sheet
 
 ```
 Use case                              CRDT type
-─────────────────────────────────────────────────────
+-----------------------------------------------------
 Metrics, counters (up only)           G-Counter
 Counters (up and down)                PN-Counter
 Add-only collections                  G-Set
@@ -4246,37 +4246,37 @@ Flags (on/off)                        Enable-Wins Flag
 
 ```
                     CRDT TYPE OVERVIEW
-    ┌──────────────────────────────────────────────┐
-    │ G-Counter   │ Counters (up only)             │
-    │             │ merge = element-wise max        │
-    ├─────────────┼────────────────────────────────┤
-    │ PN-Counter  │ Counters (up/down)              │
-    │             │ = two G-Counters, P-N           │
-    ├─────────────┼────────────────────────────────┤
-    │ G-Set       │ Sets (add only)                 │
-    │             │ merge = union                   │
-    ├─────────────┼────────────────────────────────┤
-    │ OR-Set      │ Sets (add/remove)               │
-    │             │ merge = union add+remove sets   │
-    │             │ add-wins semantics              │
-    ├─────────────┼────────────────────────────────┤
-    │ LWW-Reg     │ Single value, last write wins   │
-    │             │ merge = higher timestamp wins   │
-    ├─────────────┼────────────────────────────────┤
-    │ MV-Register │ Single value, preserve all      │
-    │             │ merge = keep both, app decides  │
-    └─────────────┴────────────────────────────────┘
+    +----------------------------------------------+
+    | G-Counter   | Counters (up only)             |
+    |             | merge = element-wise max        |
+    +-------------+--------------------------------+
+    | PN-Counter  | Counters (up/down)              |
+    |             | = two G-Counters, P-N           |
+    +-------------+--------------------------------+
+    | G-Set       | Sets (add only)                 |
+    |             | merge = union                   |
+    +-------------+--------------------------------+
+    | OR-Set      | Sets (add/remove)               |
+    |             | merge = union add+remove sets   |
+    |             | add-wins semantics              |
+    +-------------+--------------------------------+
+    | LWW-Reg     | Single value, last write wins   |
+    |             | merge = higher timestamp wins   |
+    +-------------+--------------------------------+
+    | MV-Register | Single value, preserve all      |
+    |             | merge = keep both, app decides  |
+    +-------------+--------------------------------+
 
     All CRDTs satisfy: merge is
       Commutative: merge(A,B) = merge(B,A)
       Associative: merge(A,merge(B,C)) = merge(merge(A,B),C)
       Idempotent:  merge(A,A) = A
-    → guaranteed eventual convergence, no coordination needed
+    -> guaranteed eventual convergence, no coordination needed
 ```
 
 ---
 
-*Chapter 27 of System Design L6 Interview Prep — Section 3: Distributed Systems Internals*
+*Chapter 27 of System Design L6 Interview Prep -- Section 3: Distributed Systems Internals*
 # Chapter 27: Chaos Engineering
 
 ---
@@ -4289,7 +4289,7 @@ How confident are you?
 
 Now imagine instead that every quarter, your building runs a fire drill. The alarm goes off at 2pm on a Tuesday. Everyone evacuates. You time it. You find out that the back stairwell door gets jammed. You fix the door. You find out that half the team didn't know where the assembly point was. You fix that too. Each drill makes the evacuation a little bit better.
 
-That is chaos engineering. A controlled, watched, deliberately-triggered failure — run while stakes are low — so when real failure shows up uninvited, your system handles it automatically.
+That is chaos engineering. A controlled, watched, deliberately-triggered failure -- run while stakes are low -- so when real failure shows up uninvited, your system handles it automatically.
 
 ---
 
@@ -4301,13 +4301,13 @@ They are often wrong.
 
 Here is why. Software is written to handle the happy path. Error handling is added afterward, usually by the same engineer who wrote the happy path, imagining failure scenarios in their head rather than watching them actually happen. The result is code that *looks* resilient but hasn't been exercised under real failure conditions.
 
-Unit tests don't catch this. Integration tests might catch a narrow slice of it. Load tests test volume, not failure. The failure modes that cause real outages — network partitions, disk corruption, clock skew, cascading thread pool exhaustion — rarely appear in any test suite.
+Unit tests don't catch this. Integration tests might catch a narrow slice of it. Load tests test volume, not failure. The failure modes that cause real outages -- network partitions, disk corruption, clock skew, cascading thread pool exhaustion -- rarely appear in any test suite.
 
 ---
 
 ### The Original Insight (Netflix, 2011)
 
-In 2008, Netflix started moving from their own data centers to AWS. By 2011, the migration was underway and a problem became obvious: AWS has failures. EC2 instances die. Availability zones go down. Network partitions happen. This is not a bug in AWS — it's a property of operating at that scale.
+In 2008, Netflix started moving from their own data centers to AWS. By 2011, the migration was underway and a problem became obvious: AWS has failures. EC2 instances die. Availability zones go down. Network partitions happen. This is not a bug in AWS -- it's a property of operating at that scale.
 
 The Netflix engineers faced a choice: hope their architecture was resilient, or find out for sure. They chose to find out.
 
@@ -4324,9 +4324,9 @@ That was the founding insight of chaos engineering.
 | Test Type | What It Tests | What It Misses |
 |---|---|---|
 | Unit test | Single function logic | Everything outside that function |
-| Integration test | Service A → Service B | Network failures, partial failures |
+| Integration test | Service A -> Service B | Network failures, partial failures |
 | Load test | Volume at steady state | Failure under volume |
-| Chaos experiment | Actual failure modes | N/A — this is what fills the gap |
+| Chaos experiment | Actual failure modes | N/A -- this is what fills the gap |
 
 Unit tests are not designed to simulate "database unreachable." Integration tests assume infrastructure is healthy. Load tests assume all services respond. Chaos engineering assumes nothing and tests everything.
 
@@ -4334,7 +4334,7 @@ Unit tests are not designed to simulate "database unreachable." Integration test
 
 ## 2. The Netflix Origin Story
 
-**2008:** Netflix begins migrating from physical data centers to AWS. The scale of the migration is enormous — millions of customers, petabytes of video.
+**2008:** Netflix begins migrating from physical data centers to AWS. The scale of the migration is enormous -- millions of customers, petabytes of video.
 
 **2011:** Netflix engineers create **Chaos Monkey**. It does one thing: it randomly terminates production EC2 instances during business hours. Not staging. Not at 3am. Production. Business hours.
 
@@ -4354,7 +4354,7 @@ The quote that captures the mindset: *"We break things on purpose so our custome
 
 ### Chaos Escalation: From Monkey to Kong
 
-Netflix didn't stop at killing single instances. After years of instance-level chaos, they built **Chaos Kong** — an experiment that takes down an *entire AWS region*.
+Netflix didn't stop at killing single instances. After years of instance-level chaos, they built **Chaos Kong** -- an experiment that takes down an *entire AWS region*.
 
 US-East goes dark. All traffic that was hitting US-East either fails or routes to US-West and EU. Chaos Kong tests whether Netflix's multi-region failover actually works. Not in theory. Not in diagrams. In practice, with real traffic.
 
@@ -4362,37 +4362,37 @@ The engineering confidence this buys is enormous. Netflix engineers know that if
 
 ---
 
-## 3. The Chaos Engineering Process — Step by Step
+## 3. The Chaos Engineering Process -- Step by Step
 
 This is the full feedback loop. Every serious chaos engineering program runs this cycle:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CHAOS ENGINEERING LOOP                       │
-│                                                                 │
-│   ┌──────────────┐                                              │
-│   │  1. Define   │                                              │
-│   │ Steady State │◄─────────────────────────────────┐          │
-│   └──────┬───────┘                                  │          │
-│          │                                          │          │
-│          ▼                                          │          │
-│   ┌──────────────┐                              ┌───┴──────┐   │
-│   │ 2. Hypothesize│                             │7. Fix &  │   │
-│   │  the failure │                             │ Document │   │
-│   └──────┬───────┘                              └───▲──────┘   │
-│          │                                          │          │
-│          ▼                                          │          │
-│   ┌──────────────┐                              ┌───┴──────┐   │
-│   │ 3. Choose    │                             │ 6. Observe│   │
-│   │  Failure     │                             │& Measure │   │
-│   └──────┬───────┘                              └───▲──────┘   │
-│          │                                          │          │
-│          ▼                                          │          │
-│   ┌──────────────┐      ┌──────────────┐            │          │
-│   │ 4. Define    │─────►│  5. Inject   │────────────┘          │
-│   │ Blast Radius │      │   Failure    │                       │
-│   └──────────────┘      └──────────────┘                       │
-└─────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------+
+|                    CHAOS ENGINEERING LOOP                       |
+|                                                                 |
+|   +--------------+                                              |
+|   |  1. Define   |                                              |
+|   | Steady State |<---------------------------------+          |
+|   +------+-------+                                  |          |
+|          |                                          |          |
+|          v                                          |          |
+|   +--------------+                              +---+------+   |
+|   | 2. Hypothesize|                             |7. Fix &  |   |
+|   |  the failure |                             | Document |   |
+|   +------+-------+                              +---^------+   |
+|          |                                          |          |
+|          v                                          |          |
+|   +--------------+                              +---+------+   |
+|   | 3. Choose    |                             | 6. Observe|   |
+|   |  Failure     |                             |& Measure |   |
+|   +------+-------+                              +---^------+   |
+|          |                                          |          |
+|          v                                          |          |
+|   +--------------+      +--------------+            |          |
+|   | 4. Define    |----->|  5. Inject   |------------+          |
+|   | Blast Radius |      |   Failure    |                       |
+|   +--------------+      +--------------+                       |
++-----------------------------------------------------------------+
 ```
 
 ---
@@ -4404,30 +4404,30 @@ Before you break anything, you need to know what "normal" looks like. This is th
 **Key steady state metrics:**
 
 ```
-STEADY STATE DASHBOARD — BASELINE
-══════════════════════════════════════════════════════
+STEADY STATE DASHBOARD -- BASELINE
+======================================================
 
 Latency
-  p50:  45ms   ████████░░░░░░░░░░░░  (normal range: 30-60ms)
-  p95:  120ms  ████████████░░░░░░░░  (normal range: 80-150ms)
-  p99:  280ms  ██████████████░░░░░░  (normal range: 200-350ms)
+  p50:  45ms   ########............  (normal range: 30-60ms)
+  p95:  120ms  ############........  (normal range: 80-150ms)
+  p99:  280ms  ##############......  (normal range: 200-350ms)
 
 Error Rate
-  5xx:  0.02%  █░░░░░░░░░░░░░░░░░░░  (normal range: <0.1%)
+  5xx:  0.02%  #...................  (normal range: <0.1%)
 
 Throughput
-  RPS:  4,200  ███████████████░░░░░  (normal range: 3K-6K)
+  RPS:  4,200  ###############.....  (normal range: 3K-6K)
 
 Saturation
-  CPU:  42%    ████████░░░░░░░░░░░░  (normal range: 20-65%)
-  Mem:  61%    ████████████░░░░░░░░  (normal range: 40-75%)
-  Conns: 180   ██████████████░░░░░░  (normal range: 100-300, max 500)
+  CPU:  42%    ########............  (normal range: 20-65%)
+  Mem:  61%    ############........  (normal range: 40-75%)
+  Conns: 180   ##############......  (normal range: 100-300, max 500)
 
 Business Metrics
   Orders/min:  23     (normal range: 18-30)
   Checkouts:   94%    (normal range: >90%)
 
-══════════════════════════════════════════════════════
+======================================================
 Last updated: 14:02:11  |  Experiment start: 14:15:00
 ```
 
@@ -4437,7 +4437,7 @@ Without this baseline, you can't tell if chaos *caused* degradation or if you we
 
 ### Step 2: Hypothesize
 
-A chaos experiment without a hypothesis isn't engineering — it's just breaking things. Form a specific, testable hypothesis before you touch anything.
+A chaos experiment without a hypothesis isn't engineering -- it's just breaking things. Form a specific, testable hypothesis before you touch anything.
 
 **The template:**
 
@@ -4462,10 +4462,10 @@ No expected behavior. No success criteria. Nothing to learn from. This is chaos 
 Match the failure to your hypothesis. Start with the most likely real failures your system will face. A useful way to prioritize:
 
 ```
-Priority = Probability of occurring in production × Impact if it occurs
+Priority = Probability of occurring in production x Impact if it occurs
 
 HIGH PRIORITY                     LOW PRIORITY
-────────────────────              ────────────────────
+--------------------              --------------------
 - Instance failure               - Datacenter fire
 - Dependency timeout             - Meteor strike
 - Disk full                      - Multi-cloud simultaneous outage
@@ -4493,7 +4493,7 @@ Good chaos tools (Gremlin, AWS FIS) let you set an abort condition in the experi
 
 ### Step 5: Inject the Failure
 
-Use tooling. Don't `kill -9` a process manually — that's not repeatable and it's not controlled.
+Use tooling. Don't `kill -9` a process manually -- that's not repeatable and it's not controlled.
 
 Timing rules:
 - Not during a deployment
@@ -4507,7 +4507,7 @@ Timing rules:
 
 Compare everything to your steady state baseline. Did the system behave as hypothesized?
 
-Watch ALL your metrics — not just the ones in your hypothesis. The most valuable findings come from metrics you weren't watching.
+Watch ALL your metrics -- not just the ones in your hypothesis. The most valuable findings come from metrics you weren't watching.
 
 **Common surprise:** a timeout on Service A causes thread pool exhaustion in Service B, which you weren't monitoring. The cascade propagates in a direction you didn't predict.
 
@@ -4519,7 +4519,7 @@ Two outcomes:
 
 **Hypothesis held:** The system behaved exactly as expected. Document it. This is a validated resilience property. Celebrate briefly, then expand the blast radius next time.
 
-**Hypothesis didn't hold:** You found a bug. This is actually the better outcome — you found it in a controlled experiment, not at 3am during a real outage. Fix it, re-run the experiment, confirm the fix works.
+**Hypothesis didn't hold:** You found a bug. This is actually the better outcome -- you found it in a controlled experiment, not at 3am during a real outage. Fix it, re-run the experiment, confirm the fix works.
 
 Document every finding. Build a resilience library that grows over time. Future engineers will thank you.
 
@@ -4529,40 +4529,40 @@ Document every finding. Build a resilience library that grows over time. Future 
 
 ```
 FAILURE INJECTION TAXONOMY
-══════════════════════════════════════════════════════════════════
+==================================================================
 
   Chaos Experiments
-  ├── Instance / Process Failures
-  │   ├── Kill 1 of N servers            (tests load balancing, auto-scaling)
-  │   ├── Kill the leader                (tests leader election)
-  │   └── Kill all instances of a service (tests circuit breakers)
-  │
-  ├── Network Failures
-  │   ├── Packet loss (10%, 50%, 100%)   (tests retry logic)
-  │   ├── Added latency (50ms-500ms)     (tests timeout values)
-  │   ├── Network partition              (tests CAP behavior)
-  │   └── Bandwidth throttling           (tests resource constraints)
-  │
-  ├── Dependency Failures
-  │   ├── External API returns 5xx       (tests circuit breaker)
-  │   ├── External API times out         (tests timeout + fallback)
-  │   └── Microservice goes dark         (tests graceful degradation)
-  │
-  ├── Resource Exhaustion
-  │   ├── Disk fill (90%+)              (tests disk-full behavior)
-  │   ├── CPU saturation                 (tests performance under load)
-  │   ├── Memory exhaustion (OOM)        (tests OOM handling)
-  │   └── Connection pool exhaustion     (tests backpressure behavior)
-  │
-  ├── Data / State Corruption
-  │   ├── Corrupt cache entry            (tests cache miss + fallback)
-  │   ├── Inject stale data              (tests consistency validation)
-  │   └── Clock skew (±5 minutes)        (tests time-dependent logic)
-  │
-  └── Human Error Simulation
-      ├── Deploy bad config              (tests config rollback)
-      ├── Deploy bad build               (tests canary detection + rollback)
-      └── Delete wrong table (staging)   (tests backup + restore)
+  +-- Instance / Process Failures
+  |   +-- Kill 1 of N servers            (tests load balancing, auto-scaling)
+  |   +-- Kill the leader                (tests leader election)
+  |   +-- Kill all instances of a service (tests circuit breakers)
+  |
+  +-- Network Failures
+  |   +-- Packet loss (10%, 50%, 100%)   (tests retry logic)
+  |   +-- Added latency (50ms-500ms)     (tests timeout values)
+  |   +-- Network partition              (tests CAP behavior)
+  |   +-- Bandwidth throttling           (tests resource constraints)
+  |
+  +-- Dependency Failures
+  |   +-- External API returns 5xx       (tests circuit breaker)
+  |   +-- External API times out         (tests timeout + fallback)
+  |   +-- Microservice goes dark         (tests graceful degradation)
+  |
+  +-- Resource Exhaustion
+  |   +-- Disk fill (90%+)              (tests disk-full behavior)
+  |   +-- CPU saturation                 (tests performance under load)
+  |   +-- Memory exhaustion (OOM)        (tests OOM handling)
+  |   +-- Connection pool exhaustion     (tests backpressure behavior)
+  |
+  +-- Data / State Corruption
+  |   +-- Corrupt cache entry            (tests cache miss + fallback)
+  |   +-- Inject stale data              (tests consistency validation)
+  |   +-- Clock skew (+/-5 minutes)        (tests time-dependent logic)
+  |
+  +-- Human Error Simulation
+      +-- Deploy bad config              (tests config rollback)
+      +-- Deploy bad build               (tests canary detection + rollback)
+      +-- Delete wrong table (staging)   (tests backup + restore)
 ```
 
 ---
@@ -4581,7 +4581,7 @@ A more interesting variant: kill the leader specifically. This tests your leader
 
 These are harder to simulate manually and are often the most revealing. Network issues in production are common and subtle.
 
-**Packet loss:** inject 10% packet loss between two services. Your retry logic should handle this. Inject 50% — does the service degrade gracefully or fail hard? Inject 100% — that's a full network partition.
+**Packet loss:** inject 10% packet loss between two services. Your retry logic should handle this. Inject 50% -- does the service degrade gracefully or fail hard? Inject 100% -- that's a full network partition.
 
 **Added latency:** inject 200ms of additional latency on all calls to the database. Your p99 write latency jumps. Does your timeout configuration still work? Does read latency stay flat? Does error rate stay low?
 
@@ -4589,7 +4589,7 @@ These are harder to simulate manually and are often the most revealing. Network 
 
 ---
 
-### Dependency Failures — The Most Important Category
+### Dependency Failures -- The Most Important Category
 
 The failure that matters most in microservices: "what happens when a service I depend on goes down?"
 
@@ -4619,7 +4619,7 @@ This one catches people off-guard. Advance a server's clock by 5 minutes. Now wa
 - Distributed lock timeouts
 - Event ordering in audit logs
 
-Clock skew happens in production for real — NTP sync issues, VM migration, cloud provider quirks. Inject it artificially to find your time-dependent bugs.
+Clock skew happens in production for real -- NTP sync issues, VM migration, cloud provider quirks. Inject it artificially to find your time-dependent bugs.
 
 ---
 
@@ -4627,40 +4627,40 @@ Clock skew happens in production for real — NTP sync issues, VM migration, clo
 
 ```
 MATURITY MODEL
-══════════════════════════════════════════════════════════════════════════════
+==============================================================================
 
-Level │ State                     │ Symptom                  │ Next Step
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  0   │ Hope nothing breaks.      │ First major incident =   │ Run ONE game day.
-      │ Manual runbooks, maybe    │ 4+ hour outage. Engineers│ Kill one non-critical
-      │ outdated. No tests.       │ don't know what to do.   │ staging service.
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  1   │ Ad hoc game days.         │ Runbooks tested.         │ Automate experiments
-      │ Quarterly, manual,        │ Engineers know the       │ you've already run.
-      │ everyone watching.        │ playbook for top 3       │
-      │                           │ failure scenarios.       │
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  2   │ Automated staging chaos.  │ Caught 3+ bugs last      │ Take one well-understood
-      │ Weekly cadence. In CI/CD. │ month before they hit    │ experiment to production
-      │ Chaos Mesh / Litmus.      │ production.              │ (off-peak, small blast). 
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  3   │ Controlled prod chaos.    │ Engineers confident about│ Expand to AZ-level after
-      │ One instance of 20.       │ instance-level failures. │ several successful
-      │ Off-hours → biz hours.    │ MTTR trending down.      │ instance-level runs.
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  4   │ Continuous prod chaos.    │ Failures are background  │ Use chaos findings to
-      │ Multiple experiments/day. │ noise. Auto-recovery is  │ drive architecture
-      │ Netflix-level.            │ routine and expected.    │ decisions.
-──────┼───────────────────────────┼──────────────────────────┼────────────────────────
-  5   │ Chaos as release gate.    │ Engineers design for     │ (This is the ceiling.
-      │ New services must pass    │ failure from day 1, not  │ Extremely rare.)
-      │ chaos gauntlet to ship.   │ as an afterthought.      │
-══════════════════════════════════════════════════════════════════════════════
+Level | State                     | Symptom                  | Next Step
+------+---------------------------+--------------------------+------------------------
+  0   | Hope nothing breaks.      | First major incident =   | Run ONE game day.
+      | Manual runbooks, maybe    | 4+ hour outage. Engineers| Kill one non-critical
+      | outdated. No tests.       | don't know what to do.   | staging service.
+------+---------------------------+--------------------------+------------------------
+  1   | Ad hoc game days.         | Runbooks tested.         | Automate experiments
+      | Quarterly, manual,        | Engineers know the       | you've already run.
+      | everyone watching.        | playbook for top 3       |
+      |                           | failure scenarios.       |
+------+---------------------------+--------------------------+------------------------
+  2   | Automated staging chaos.  | Caught 3+ bugs last      | Take one well-understood
+      | Weekly cadence. In CI/CD. | month before they hit    | experiment to production
+      | Chaos Mesh / Litmus.      | production.              | (off-peak, small blast). 
+------+---------------------------+--------------------------+------------------------
+  3   | Controlled prod chaos.    | Engineers confident about| Expand to AZ-level after
+      | One instance of 20.       | instance-level failures. | several successful
+      | Off-hours -> biz hours.    | MTTR trending down.      | instance-level runs.
+------+---------------------------+--------------------------+------------------------
+  4   | Continuous prod chaos.    | Failures are background  | Use chaos findings to
+      | Multiple experiments/day. | noise. Auto-recovery is  | drive architecture
+      | Netflix-level.            | routine and expected.    | decisions.
+------+---------------------------+--------------------------+------------------------
+  5   | Chaos as release gate.    | Engineers design for     | (This is the ceiling.
+      | New services must pass    | failure from day 1, not  | Extremely rare.)
+      | chaos gauntlet to ship.   | as an afterthought.      |
+==============================================================================
 ```
 
 ---
 
-### Level 0 — No Chaos
+### Level 0 -- No Chaos
 
 This is where most teams start and where many stay longer than they should. The runbooks exist somewhere but nobody has run them. The on-call rotation is staffed but the playbooks are aspirational.
 
@@ -4670,7 +4670,7 @@ The path forward: don't try to build a chaos engineering program. Run one game d
 
 ---
 
-### Level 1 — Ad Hoc Game Days
+### Level 1 -- Ad Hoc Game Days
 
 The team now runs planned chaos experiments. Quarterly, maybe monthly. Manual. The whole team watches. It feels like a fire drill, which is exactly what it is.
 
@@ -4680,7 +4680,7 @@ The debrief finds two bugs: the recommendation call doesn't have a timeout, and 
 
 ---
 
-### Level 2 — Automated Staging Chaos
+### Level 2 -- Automated Staging Chaos
 
 The experiments you ran manually in Level 1 are now automated. Chaos Mesh or Litmus runs in your staging environment on a weekly schedule. A report is generated. Findings are filed as tickets.
 
@@ -4690,7 +4690,7 @@ The program has ROI that's easy to measure: "in the last quarter, automated stag
 
 ---
 
-### Level 3 — Controlled Production Chaos
+### Level 3 -- Controlled Production Chaos
 
 This is the first real test of organizational maturity. Running chaos in staging is safe. Running it in production requires trust, tooling, and buy-in.
 
@@ -4700,7 +4700,7 @@ After several successful production experiments, engineers stop asking "are we s
 
 ---
 
-### Level 4 — Continuous Production Chaos
+### Level 4 -- Continuous Production Chaos
 
 This is Netflix territory. Chaos Monkey runs constantly. Hundreds of experiments across thousands of services every day. No single engineer tracks all of them.
 
@@ -4710,7 +4710,7 @@ MTTR (mean time to recovery) for automated failures drops to seconds or minutes.
 
 ---
 
-### Level 5 — Chaos as Release Gate
+### Level 5 -- Chaos as Release Gate
 
 Extremely rare. Only the most mature SRE organizations operate here.
 
@@ -4725,30 +4725,30 @@ If any of these fail the gauntlet, the service doesn't ship until it's fixed. En
 
 ---
 
-## 6. Blast Radius Control — The Full Framework
+## 6. Blast Radius Control -- The Full Framework
 
 ```
 BLAST RADIUS EXPANSION LADDER
-══════════════════════════════════════════════════════════════════
+==================================================================
 
    Impact Scope
-        │
- Global │                                              ■ Level 6
-        │                                     ╔══════╗  Multi-region
-        │                              ╔══════╣      ║  (Netflix/Amazon only)
- Region │                       ╔══════╣      ║      ║
-        │                ╔══════╣      ║      ║      ║  Level 5: Region failure
-   AZ   │         ╔══════╣      ║      ║      ║      ║
-        │  ╔══════╣      ║      ║      ║      ║      ║  Level 4: AZ failure
-Service │  ║      ║      ║      ║      ║      ║      ║
- (prod) │  ║  L2  ║  L3  ║  L4  ║  L5  ║  L6  ║  L7  ║  Level 3: Critical service
-        │  ║      ║      ║      ║      ║      ║      ║
-Staging │══╣      ╚══════╩══════╩══════╩══════╩══════╝  Level 1-2: Staging
-        │  ║ L1                                          Level 2: Single prod instance
-        └──╚══════════════════════════════════════════►
+        |
+ Global |                                              * Level 6
+        |                                     +======+  Multi-region
+        |                              +======+      |  (Netflix/Amazon only)
+ Region |                       +======+      |      |
+        |                +======+      |      |      |  Level 5: Region failure
+   AZ   |         +======+      |      |      |      |
+        |  +======+      |      |      |      |      |  Level 4: AZ failure
+Service |  |      |      |      |      |      |      |
+ (prod) |  |  L2  |  L3  |  L4  |  L5  |  L6  |  L7  |  Level 3: Critical service
+        |  |      |      |      |      |      |      |
+Staging |==+      +======+======+======+======+======+  Level 1-2: Staging
+        |  | L1                                          Level 2: Single prod instance
+        +--+==========================================>
               Experiment Maturity / Confidence Level
 
-Start here ──►                                ◄── Work toward here (slowly)
+Start here -->                                <-- Work toward here (slowly)
 ```
 
 ---
@@ -4767,32 +4767,32 @@ Blast radius is the scope of impact if something goes wrong during your experime
 
 Work through these levels sequentially. Don't skip levels. Each level builds confidence for the next.
 
-**Level 1 — Single instance in staging**
+**Level 1 -- Single instance in staging**
 - Blast radius: 0 users. 1 staging service.
 - Risk: zero. If you break staging, you reset it.
 - What you learn: does your service auto-restart? Does the load balancer notice?
 
-**Level 2 — Single non-critical instance in production**
+**Level 2 -- Single non-critical instance in production**
 - Example: kill 1 of 20 API servers at 2am on a Tuesday.
 - Blast radius: ~5% of traffic, ~15 seconds.
 - What you learn: real auto-scaling behavior under real traffic.
 
-**Level 3 — Critical service instance in production**
+**Level 3 -- Critical service instance in production**
 - Example: kill 1 of 5 database read replicas during business hours.
 - Blast radius: 20% of read traffic for 30-60 seconds.
 - What you learn: how reads degrade when a replica is gone.
 
-**Level 4 — One availability zone failure**
+**Level 4 -- One availability zone failure**
 - Example: disable all networking to your US-East-1a AZ.
 - Blast radius: ~1/3 of your US-East capacity.
 - What you learn: whether your load balancer properly routes around a dead AZ.
 
-**Level 5 — One region failure**
-- Example: Chaos Kong — take US-East offline entirely.
+**Level 5 -- One region failure**
+- Example: Chaos Kong -- take US-East offline entirely.
 - Blast radius: 30-40% of global users (depends on your traffic distribution).
 - What you learn: whether multi-region failover actually works under load.
 
-**Level 6 — Multi-region failure**
+**Level 6 -- Multi-region failure**
 - Netflix runs this. Almost nobody else does.
 - Blast radius: potentially 50-100% of users.
 - What you learn: whether your global failover architecture survives correlated failures.
@@ -4804,17 +4804,17 @@ Work through these levels sequentially. Don't skip levels. Each level builds con
 Before running any experiment, calculate the expected impact:
 
 ```
-Impact = traffic_fraction × failure_window × error_rate_during_failure
+Impact = traffic_fraction x failure_window x error_rate_during_failure
 
 Example: kill 1 of 20 API servers
   traffic_fraction    = 1/20 = 5%
   failure_window      = 15 seconds (load balancer detection + redirect)
   error_rate_during   = ~100% for that 5% of traffic
 
-  Impact = 0.05 × 15s × 1.0 = 0.75 user-seconds per second of traffic
+  Impact = 0.05 x 15s x 1.0 = 0.75 user-seconds per second of traffic
 
 For 10,000 req/sec:
-  = 10,000 × 0.05 × (15/60) minutes = ~125 affected requests total
+  = 10,000 x 0.05 x (15/60) minutes = ~125 affected requests total
 
 Acceptable? Probably yes.
 Run it.
@@ -4835,7 +4835,7 @@ Good tools (Gremlin, AWS FIS) let you configure abort conditions programmaticall
 
 ---
 
-## 7. Game Day Design — The Practical Guide
+## 7. Game Day Design -- The Practical Guide
 
 A game day is a planned, manual chaos experiment run with the whole team watching. It is the starting point for any chaos engineering program, and it is useful at every maturity level for testing new failure modes.
 
@@ -4845,21 +4845,21 @@ A game day is a planned, manual chaos experiment run with the whole team watchin
 
 ```
 PRE-GAME DAY CHECKLIST
-══════════════════════════════════════════════════════
-□  Hypothesis written and shared with team (Slack/doc)
-□  Steady state baseline captured (screenshots)
-□  Abort conditions defined and documented
-□  Blast radius calculated and documented
-□  Time scheduled: weekday, 2pm business hours
-□  Stakeholders notified:
-     □  Product team ("we're running a planned drill")
-     □  Customer support ("expect possible brief degradation")
-     □  On-call engineer: standing by, not in the room
-□  Chaos tooling configured and tested
-□  Communication channel created (dedicated Slack channel)
-□  Observer assigned (one engineer, only watching metrics)
-□  Chaos operator assigned (one engineer, runs the experiment)
-══════════════════════════════════════════════════════
+======================================================
+[ ]  Hypothesis written and shared with team (Slack/doc)
+[ ]  Steady state baseline captured (screenshots)
+[ ]  Abort conditions defined and documented
+[ ]  Blast radius calculated and documented
+[ ]  Time scheduled: weekday, 2pm business hours
+[ ]  Stakeholders notified:
+     [ ]  Product team ("we're running a planned drill")
+     [ ]  Customer support ("expect possible brief degradation")
+     [ ]  On-call engineer: standing by, not in the room
+[ ]  Chaos tooling configured and tested
+[ ]  Communication channel created (dedicated Slack channel)
+[ ]  Observer assigned (one engineer, only watching metrics)
+[ ]  Chaos operator assigned (one engineer, runs the experiment)
+======================================================
 ```
 
 The stakeholder notification step is underrated. If customer support gets a call during your chaos experiment, they need to know it's planned. "Yes, we're aware of slight degradation, it's a planned maintenance drill" is very different from "I have no idea what's happening."
@@ -4868,7 +4868,7 @@ The stakeholder notification step is underrated. If customer support gets a call
 
 ### During Game Day
 
-**Designated observer:** one engineer's only job is watching ALL metrics — not participating in discussion, not looking at code. They call out metric changes as they happen and paste observations into the channel.
+**Designated observer:** one engineer's only job is watching ALL metrics -- not participating in discussion, not looking at code. They call out metric changes as they happen and paste observations into the channel.
 
 **Designated chaos operator:** one engineer triggers the failure. They follow the pre-written experiment steps exactly.
 
@@ -4876,11 +4876,11 @@ The stakeholder notification step is underrated. If customer support gets a call
 
 ```
 14:15:03 - [Operator] Killing recommendation service instance i-abc123
-14:15:04 - [Observer] Error rate ticking up — 0.02% → 0.8%
-14:15:08 - [Observer] Product page latency increasing — p99 280ms → 1.4s
-14:15:11 - [Observer] !! Product page error rate now 15% — approaching abort threshold
+14:15:04 - [Observer] Error rate ticking up -- 0.02% -> 0.8%
+14:15:08 - [Observer] Product page latency increasing -- p99 280ms -> 1.4s
+14:15:11 - [Observer] !! Product page error rate now 15% -- approaching abort threshold
 14:15:14 - [Observer] Circuit breaker tripped on recommendation service
-14:15:15 - [Observer] Product page error rate dropping — 15% → 2% → 0.3%
+14:15:15 - [Observer] Product page error rate dropping -- 15% -> 2% -> 0.3%
 14:15:22 - [Observer] Error rate back to baseline (0.02%). p99 recovered to 310ms.
 14:15:22 - [Operator] Experiment complete. Duration: 19 seconds.
 ```
@@ -4961,7 +4961,7 @@ The sweet spot: teams running on Kubernetes who don't want to pay for Gremlin. C
 
 ### AWS Fault Injection Simulator (FIS)
 
-First-party AWS service. Inject failures directly into AWS resources: EC2 instance termination, ECS task failure, EKS pod termination, RDS failover, API throttling. IAM-controlled — permissions work the same way as all other AWS services. Native CloudWatch integration for monitoring.
+First-party AWS service. Inject failures directly into AWS resources: EC2 instance termination, ECS task failure, EKS pod termination, RDS failover, API throttling. IAM-controlled -- permissions work the same way as all other AWS services. Native CloudWatch integration for monitoring.
 
 The sweet spot: teams already deeply invested in AWS who want chaos experiments that are integrated with their existing IAM, monitoring, and incident management tooling.
 
@@ -4984,24 +4984,24 @@ They were confident.
 ### What Actually Happened
 
 ```
-TIME     │ EVENT
-─────────┼──────────────────────────────────────────────────────────────
-T+0:00   │ Recommendation service killed.
-T+0:02   │ Product page service starts calling recommendation → 5xx
-T+0:02   │ [BUG] No timeout on recommendation call. Default HTTP timeout = 30s.
-         │ Each product page request hangs for 30 seconds before failing.
-T+0:15   │ Thread pool (max 200 threads) filling up. 180/200 threads busy
-         │ waiting for recommendation service to timeout.
-T+0:30   │ First recommendation calls start timing out. Threads freed briefly.
-         │ But more requests have piled up behind them.
-T+0:45   │ Thread pool fully exhausted: 200/200 threads waiting.
-         │ NEW product page requests: "connection refused" immediately.
-T+0:46   │ Product page error rate: 100%. Entire product catalog down.
-T+4:00   │ Team panics. Recommendation service restarted. Threads drain.
-T+4:30   │ System recovers. Product pages load again.
-─────────┼──────────────────────────────────────────────────────────────
-Total:   │ 4 minutes of complete product catalog outage.
-         │ Estimated revenue impact: ~$200,000.
+TIME     | EVENT
+---------+--------------------------------------------------------------
+T+0:00   | Recommendation service killed.
+T+0:02   | Product page service starts calling recommendation -> 5xx
+T+0:02   | [BUG] No timeout on recommendation call. Default HTTP timeout = 30s.
+         | Each product page request hangs for 30 seconds before failing.
+T+0:15   | Thread pool (max 200 threads) filling up. 180/200 threads busy
+         | waiting for recommendation service to timeout.
+T+0:30   | First recommendation calls start timing out. Threads freed briefly.
+         | But more requests have piled up behind them.
+T+0:45   | Thread pool fully exhausted: 200/200 threads waiting.
+         | NEW product page requests: "connection refused" immediately.
+T+0:46   | Product page error rate: 100%. Entire product catalog down.
+T+4:00   | Team panics. Recommendation service restarted. Threads drain.
+T+4:30   | System recovers. Product pages load again.
+---------+--------------------------------------------------------------
+Total:   | 4 minutes of complete product catalog outage.
+         | Estimated revenue impact: ~$200,000.
 ```
 
 ---
@@ -5010,24 +5010,24 @@ Total:   │ 4 minutes of complete product catalog outage.
 
 ```
 Recommendation service goes down
-        │
-        ▼
-Product page calls recommendation service synchronously ──► [BUG: No timeout]
-        │
-        ▼
+        |
+        v
+Product page calls recommendation service synchronously --> [BUG: No timeout]
+        |
+        v
 Request hangs for 30 seconds (default HTTP timeout)
-        │
-        ▼
+        |
+        v
 Thread held for 30 seconds (1 thread per inflight request)
-        │
-        ▼
-200 requests in flight × 30 second hold = thread pool maxed in ~45 seconds
-        │
-        ▼
+        |
+        v
+200 requests in flight x 30 second hold = thread pool maxed in ~45 seconds
+        |
+        v
 No free threads to handle new product page requests
-        │
-        ▼
-ALL product page requests fail immediately ──► 100% error rate
+        |
+        v
+ALL product page requests fail immediately --> 100% error rate
 ```
 
 This is cascading failure through thread pool exhaustion. It's one of the most common and most dangerous failure patterns in microservices architectures. The recommendation service was supposed to be a non-critical dependency. The thread pool exhaustion made it a single point of failure.
@@ -5038,20 +5038,20 @@ This is cascading failure through thread pool exhaustion. It's one of the most c
 
 **Expected:**
 ```
-User request → Product Page Service → Recommendation (down) → Empty section
-                                                            → Page loads fine ✓
+User request -> Product Page Service -> Recommendation (down) -> Empty section
+                                                            -> Page loads fine Y
 ```
 
 **Actual:**
 ```
-User request → Product Page Service → Recommendation (down, no timeout)
-                                    → Hangs 30 seconds
-                                    → Thread held 30 seconds
-                                    → Thread pool exhausted after 45 seconds
-                                    → ALL product page requests fail ✗
+User request -> Product Page Service -> Recommendation (down, no timeout)
+                                    -> Hangs 30 seconds
+                                    -> Thread held 30 seconds
+                                    -> Thread pool exhausted after 45 seconds
+                                    -> ALL product page requests fail N
 ```
 
-The fallback behavior was implemented. The engineer who wrote it *thought* it worked. But the fallback only triggers after the HTTP call completes — either with a response or with a timeout error. Without a timeout, the call never completes.
+The fallback behavior was implemented. The engineer who wrote it *thought* it worked. But the fallback only triggers after the HTTP call completes -- either with a response or with a timeout error. Without a timeout, the call never completes.
 
 ---
 
@@ -5084,7 +5084,7 @@ Add a metric for thread pool utilization. Alert when it exceeds 70%. This would 
 
 ### The Lesson
 
-This bug existed in production before the chaos experiment. It was a live bomb. If the recommendation service had failed during peak season — Black Friday, for example — the thread pool exhaustion would have taken down the entire product catalog during the highest-traffic hours of the year.
+This bug existed in production before the chaos experiment. It was a live bomb. If the recommendation service had failed during peak season -- Black Friday, for example -- the thread pool exhaustion would have taken down the entire product catalog during the highest-traffic hours of the year.
 
 The chaos experiment caused $200,000 in lost revenue. The real incident on Black Friday would have cost several million and generated news coverage.
 
@@ -5122,7 +5122,7 @@ The fix: no experiment runs without a written hypothesis. The hypothesis include
 
 Team runs a chaos experiment. System seems fine afterward. Everyone congratulates each other.
 
-Three days later, someone checks the monitoring dashboards and realizes the error rate has been elevated since before the experiment. The system was already degraded. The experiment happened to hit a degraded system and appeared to cause no additional harm — but nobody knows whether the chaos experiment made things worse.
+Three days later, someone checks the monitoring dashboards and realizes the error rate has been elevated since before the experiment. The system was already degraded. The experiment happened to hit a degraded system and appeared to cause no additional harm -- but nobody knows whether the chaos experiment made things worse.
 
 The fix: collect 1-2 weeks of steady state metrics before the first experiment. Screenshot the baseline. Capture p50, p95, p99 latency, error rate, and key business metrics. Without the baseline, your "after" comparison is meaningless.
 
@@ -5134,7 +5134,7 @@ The fix: collect 1-2 weeks of steady state metrics before the first experiment. 
 
 No runbooks were updated. No bugs were fixed. No one changed their behavior. The experiment was a box-checking exercise.
 
-Chaos theater is common because running the experiment is visible and generates praise. The hard work — fixing findings, updating runbooks, building the resilience library — is invisible. Teams with chaos theater look mature from the outside and aren't.
+Chaos theater is common because running the experiment is visible and generates praise. The hard work -- fixing findings, updating runbooks, building the resilience library -- is invisible. Teams with chaos theater look mature from the outside and aren't.
 
 The fix: measure outcomes, not activities. The question is not "did we run experiments?" but "what did we fix because of experiments?" Track bugs found, MTTR improvement, runbook coverage.
 
@@ -5148,7 +5148,7 @@ What happens next: that engineer, and every engineer who heard about it, quietly
 
 The fix: blameless postmortems are non-negotiable for chaos engineering. When chaos finds a bug, the correct framing is: "Our system has a vulnerability that the whole team shares responsibility for building and shipping. Chaos found it before users did. That's a win."
 
-Blame the system, not the person. The person who wrote the bug was working with the information they had at the time. The gap was in the system — missing runbook, missing test coverage, missing architecture review.
+Blame the system, not the person. The person who wrote the bug was working with the information they had at the time. The gap was in the system -- missing runbook, missing test coverage, missing architecture review.
 
 ---
 
@@ -5164,7 +5164,7 @@ The fix: before any experiment, open your monitoring dashboard. Designate one ob
 
 ## 12. Staff-Level Interview Section
 
-Chaos engineering questions come up in Staff and Principal interviews as a way to test whether you think about systems as inherently fallible — or whether you're still in the happy-path mindset.
+Chaos engineering questions come up in Staff and Principal interviews as a way to test whether you think about systems as inherently fallible -- or whether you're still in the happy-path mindset.
 
 ---
 
@@ -5172,15 +5172,15 @@ Chaos engineering questions come up in Staff and Principal interviews as a way t
 
 Don't lead with the tool. Lead with the philosophy.
 
-"Chaos engineering starts with acknowledging that failure is inevitable in distributed systems. The question isn't whether things will fail — it's whether you find out before your users do. Chaos engineering is the process of finding those failure modes on your schedule, at controlled blast radius, instead of during a real incident."
+"Chaos engineering starts with acknowledging that failure is inevitable in distributed systems. The question isn't whether things will fail -- it's whether you find out before your users do. Chaos engineering is the process of finding those failure modes on your schedule, at controlled blast radius, instead of during a real incident."
 
 Then walk through the process:
 
-1. Define steady state — you need a baseline to compare against
-2. Hypothesize — specific, testable, measurable
-3. Inject — use tooling, control the blast radius
-4. Observe — all metrics, not just the ones in the hypothesis
-5. Fix and document — build the resilience library
+1. Define steady state -- you need a baseline to compare against
+2. Hypothesize -- specific, testable, measurable
+3. Inject -- use tooling, control the blast radius
+4. Observe -- all metrics, not just the ones in the hypothesis
+5. Fix and document -- build the resilience library
 6. Repeat, expanding scope
 
 ---
@@ -5189,13 +5189,13 @@ Then walk through the process:
 
 Interviewers are looking for people who have thought about the organizational challenges, not just the technical steps.
 
-**On starting a program:** "I'd begin with game days — planned, manual, team watching — before automating anything. Automation without understanding is dangerous. You need to understand the failure modes and their expected behavior before you automate the experiment. Game days also build cultural muscle: engineers get comfortable with controlled failure before chaos becomes continuous."
+**On starting a program:** "I'd begin with game days -- planned, manual, team watching -- before automating anything. Automation without understanding is dangerous. You need to understand the failure modes and their expected behavior before you automate the experiment. Game days also build cultural muscle: engineers get comfortable with controlled failure before chaos becomes continuous."
 
 **On blast radius:** "Blast radius is the first thing I define before any experiment. I want to know: what fraction of traffic flows through this component, how long is the failure window, and what's my abort condition if it goes wrong? I expand blast radius slowly: staging instance, then production non-critical instance, then production critical service, then AZ-level. You earn the right to expand scope by succeeding at smaller experiments."
 
 **On culture:** "The technical part of chaos engineering is the easy part. The hard part is making blame-free postmortems a real cultural practice, not just words in a document. Engineers need to believe that chaos findings don't affect their performance reviews before they'll stop quietly blocking experiments in their area."
 
-**On measuring success:** "I track bugs found before production outages — that's the leading indicator. And MTTR trending down over time — that's the lagging indicator. Together they tell me whether the program is finding real issues and whether the fixes are making the system more resilient."
+**On measuring success:** "I track bugs found before production outages -- that's the leading indicator. And MTTR trending down over time -- that's the lagging indicator. Together they tell me whether the program is finding real issues and whether the fixes are making the system more resilient."
 
 ---
 
@@ -5215,7 +5215,7 @@ And the third level: "Chaos engineering is a culture first, a tool second. Defin
 
 ```
 CHAOS ENGINEERING: THE ESSENTIAL PICTURE
-══════════════════════════════════════════════════════════════════════
+======================================================================
 
 THE PHILOSOPHY
   Failure is inevitable in distributed systems.
@@ -5223,7 +5223,7 @@ THE PHILOSOPHY
   Break it on purpose so it doesn't break when you don't.
 
 THE PROCESS
-  Define Steady State → Hypothesize → Inject → Observe → Fix → Repeat
+  Define Steady State -> Hypothesize -> Inject -> Observe -> Fix -> Repeat
 
 THE BLAST RADIUS RULE
   Staging first. Non-critical prod second. Critical prod third.
@@ -5240,14 +5240,14 @@ THE MATURITY LADDER
 
 THE MOST COMMON FINDING
   Synchronous dependencies with no timeout = cascading failure via thread pool.
-  (See Section 10 — this pattern kills more services than any other.)
+  (See Section 10 -- this pattern kills more services than any other.)
 
 THE CULTURE RULE
   Blame the system, not the person.
   Chaos finds bugs. Those bugs were already there.
   The experiment scheduled when you found them.
 
-══════════════════════════════════════════════════════════════════════
+======================================================================
 ```
 
 ## PART B: L5 vs L6 FULL CALIBRATION TABLE
@@ -5264,7 +5264,7 @@ THE CULTURE RULE
 "2PC has two phases: Prepare and Commit. 3PC adds a PreCommit phase in between. This prevents the coordinator crash problem where participants are stuck waiting."
 
 **L6:**
-"2PC has a blocking problem: if the coordinator crashes after participants vote YES but before sending COMMIT, participants are stuck in PREPARE state and can't decide on their own — they don't know if the others voted YES or NO. 3PC adds a PreCommit phase: once the coordinator sends PreCommit, every participant knows everyone voted YES, so if the coordinator crashes, any participant can take over and drive to commit. The catch: 3PC is NOT safe under network partition. If the network splits after PreCommit and one partition commits while the other aborts, you get inconsistency. 2PC at least stays blocked (which is recoverable) rather than silently inconsistent."
+"2PC has a blocking problem: if the coordinator crashes after participants vote YES but before sending COMMIT, participants are stuck in PREPARE state and can't decide on their own -- they don't know if the others voted YES or NO. 3PC adds a PreCommit phase: once the coordinator sends PreCommit, every participant knows everyone voted YES, so if the coordinator crashes, any participant can take over and drive to commit. The catch: 3PC is NOT safe under network partition. If the network splits after PreCommit and one partition commits while the other aborts, you get inconsistency. 2PC at least stays blocked (which is recoverable) rather than silently inconsistent."
 
 ---
 
@@ -5274,7 +5274,7 @@ THE CULTURE RULE
 "It fixes 2PC's blocking problem, so yes, it seems better. Modern systems might use it."
 
 **L6:**
-"Almost never in practice. 3PC fixes coordinator-crash blocking but breaks under network partition — and network partitions are the failure mode you actually get in production. The theoretical improvement doesn't hold up in real-world network conditions. What production systems actually use: (1) 2PC with a recovery process that times out and retries, (2) Saga pattern with compensating transactions for long-running flows, (3) consensus protocols like Raft/Paxos which handle leader election properly. MySQL XA uses 2PC. Google Spanner uses 2PC coordinated by Paxos groups. Nobody ships 3PC in a customer-facing product."
+"Almost never in practice. 3PC fixes coordinator-crash blocking but breaks under network partition -- and network partitions are the failure mode you actually get in production. The theoretical improvement doesn't hold up in real-world network conditions. What production systems actually use: (1) 2PC with a recovery process that times out and retries, (2) Saga pattern with compensating transactions for long-running flows, (3) consensus protocols like Raft/Paxos which handle leader election properly. MySQL XA uses 2PC. Google Spanner uses 2PC coordinated by Paxos groups. Nobody ships 3PC in a customer-facing product."
 
 ---
 
@@ -5288,7 +5288,7 @@ THE CULTURE RULE
 "Replication lag means reads might be stale. The replica might be behind the primary."
 
 **L6:**
-"Replication lag creates at least four distinct failure modes: (1) Read-Your-Writes violation — you update your profile, get redirected, hit a different replica that hasn't gotten the update yet, see old data. (2) Monotonic reads violation — you see a value, refresh, see an older value because you hit a different replica. (3) Consistent prefix violation — you see a response to a message before the message itself, because the reply replicated faster. (4) Linearizability violation — two clients reading 'simultaneously' see different values. For most apps, RYW and monotonic reads matter most. They're fixable: track last write timestamp in Redis per user, route recent writers to the primary for a short window."
+"Replication lag creates at least four distinct failure modes: (1) Read-Your-Writes violation -- you update your profile, get redirected, hit a different replica that hasn't gotten the update yet, see old data. (2) Monotonic reads violation -- you see a value, refresh, see an older value because you hit a different replica. (3) Consistent prefix violation -- you see a response to a message before the message itself, because the reply replicated faster. (4) Linearizability violation -- two clients reading 'simultaneously' see different values. For most apps, RYW and monotonic reads matter most. They're fixable: track last write timestamp in Redis per user, route recent writers to the primary for a short window."
 
 ---
 
@@ -5298,7 +5298,7 @@ THE CULTURE RULE
 "Replication lag. The write went to the primary but the read went to a replica that hasn't caught up."
 
 **L6:**
-"This is a read-your-writes (RYW) violation. Here's the exact sequence: POST /profile → hits primary, writes, returns 200. GET /profile → load balancer routes to replica-2. Replica-2 is 400ms behind primary. Returns old profile. The fix: when the POST succeeds, store (user_id → current_timestamp) in Redis with a 10-second TTL. On GET /profile, check Redis: if a recent write exists within the TTL, route this read to the primary. Otherwise, replicas are fine. This adds a Redis read to every profile fetch, but only routes to primary during the brief window after a write. Most requests stay on replicas — you still get the scale benefit."
+"This is a read-your-writes (RYW) violation. Here's the exact sequence: POST /profile -> hits primary, writes, returns 200. GET /profile -> load balancer routes to replica-2. Replica-2 is 400ms behind primary. Returns old profile. The fix: when the POST succeeds, store (user_id -> current_timestamp) in Redis with a 10-second TTL. On GET /profile, check Redis: if a recent write exists within the TTL, route this read to the primary. Otherwise, replicas are fine. This adds a Redis read to every profile fetch, but only routes to primary during the brief window after a write. Most requests stay on replicas -- you still get the scale benefit."
 
 ---
 
@@ -5308,7 +5308,7 @@ THE CULTURE RULE
 "It means reads always return values at least as new as what you've seen before. You won't see data go backwards."
 
 **L6:**
-"Monotonic reads means: once you see a value at time T, you will never see a value from before T. Without it, a user can see their newsfeed, scroll down, see a post from 5 minutes ago, scroll up, and the top of the feed now shows posts from 10 minutes ago — because they bounced between replicas at different replication offsets. Implementation: sticky routing. Assign each user a preferred replica based on hash(user_id). They always read from the same replica. Downside: that replica becomes their bottleneck. Alternative: track the user's highest-seen replica timestamp in a session cookie and reject reads from replicas more than X ms behind. Monotonic reads matter most for: social feeds, leaderboards, any 'list that grows over time' UI pattern."
+"Monotonic reads means: once you see a value at time T, you will never see a value from before T. Without it, a user can see their newsfeed, scroll down, see a post from 5 minutes ago, scroll up, and the top of the feed now shows posts from 10 minutes ago -- because they bounced between replicas at different replication offsets. Implementation: sticky routing. Assign each user a preferred replica based on hash(user_id). They always read from the same replica. Downside: that replica becomes their bottleneck. Alternative: track the user's highest-seen replica timestamp in a session cookie and reject reads from replicas more than X ms behind. Monotonic reads matter most for: social feeds, leaderboards, any 'list that grows over time' UI pattern."
 
 ---
 
@@ -5322,7 +5322,7 @@ THE CULTURE RULE
 "They use timestamps. Most systems use the server's clock to order events."
 
 **L6:**
-"Physical clocks (NTP) alone are insufficient because they drift and can go backwards after correction — two nodes can independently generate identical timestamps for different events. Lamport clocks give causal ordering but lose the real-world time relationship. HLC solves both: format is (physical_time_ms, logical_counter, node_id). Rules: on any event, advance to max(local_physical, received_physical). If physical times match, increment the counter. This means HLC is always >= the physical clock, preserves causality (if A caused B, HLC(A) < HLC(B)), and stays within a bounded offset of real time. CockroachDB enforces a max_offset of 500ms — if a node's clock drifts beyond this, it self-evicts from the cluster rather than create inconsistency."
+"Physical clocks (NTP) alone are insufficient because they drift and can go backwards after correction -- two nodes can independently generate identical timestamps for different events. Lamport clocks give causal ordering but lose the real-world time relationship. HLC solves both: format is (physical_time_ms, logical_counter, node_id). Rules: on any event, advance to max(local_physical, received_physical). If physical times match, increment the counter. This means HLC is always >= the physical clock, preserves causality (if A caused B, HLC(A) < HLC(B)), and stays within a bounded offset of real time. CockroachDB enforces a max_offset of 500ms -- if a node's clock drifts beyond this, it self-evicts from the cluster rather than create inconsistency."
 
 ---
 
@@ -5332,7 +5332,7 @@ THE CULTURE RULE
 "Clocks can drift and NTP isn't perfect. There can be small differences between servers."
 
 **L6:**
-"Three specific failure modes: (1) Clock drift — NTP syncs at intervals, between syncs clocks drift. Two nodes can be 50-200ms apart in normal operation. (2) Clock skew going backwards — when NTP corrects a clock that's running fast, it can jump backwards. If Node A wrote at timestamp 1000ms and Node B wrote at timestamp 999ms (after correction), event ordering is wrong. (3) Leap seconds — NTP handles these differently on different OS versions. Google uses leap smearing, others don't. For distributed transactions, even 1ms of ambiguity can mean a transaction appears to happen before another that it causally depended on. Spanner's solution: atomic clocks + GPS receivers → TrueTime with ±7ms uncertainty. CockroachDB's solution: HLC with max_offset=500ms. Both add a wait: hold the transaction until the uncertainty window has passed."
+"Three specific failure modes: (1) Clock drift -- NTP syncs at intervals, between syncs clocks drift. Two nodes can be 50-200ms apart in normal operation. (2) Clock skew going backwards -- when NTP corrects a clock that's running fast, it can jump backwards. If Node A wrote at timestamp 1000ms and Node B wrote at timestamp 999ms (after correction), event ordering is wrong. (3) Leap seconds -- NTP handles these differently on different OS versions. Google uses leap smearing, others don't. For distributed transactions, even 1ms of ambiguity can mean a transaction appears to happen before another that it causally depended on. Spanner's solution: atomic clocks + GPS receivers -> TrueTime with +/-7ms uncertainty. CockroachDB's solution: HLC with max_offset=500ms. Both add a wait: hold the transaction until the uncertainty window has passed."
 
 ---
 
@@ -5346,7 +5346,7 @@ THE CULTURE RULE
 "It depends on your conflict resolution strategy. Usually last-write-wins based on timestamp."
 
 **L6:**
-"Last-write-wins (LWW) by timestamp is dangerous for offline edits because which timestamp is 'later' depends on which clock you trust, and offline devices can have wrong clocks. CRDTs flip the question: instead of asking 'who wins,' you design the data type so any two states can always merge into a valid third state with no coordination. For a text field: use a Sequence CRDT (like RGA or LSEQ) where each character has a unique identifier — concurrent inserts both survive, positioned by their IDs. For a counter: use a G-Counter where each node only increments its own slot. For a set: OR-Set where each add gets a unique tag. The trade-off: CRDT semantics aren't always what users expect. An OR-Set shopping cart with add-wins means removing an item on one device while adding it on another results in it being present — which is usually the wrong UX."
+"Last-write-wins (LWW) by timestamp is dangerous for offline edits because which timestamp is 'later' depends on which clock you trust, and offline devices can have wrong clocks. CRDTs flip the question: instead of asking 'who wins,' you design the data type so any two states can always merge into a valid third state with no coordination. For a text field: use a Sequence CRDT (like RGA or LSEQ) where each character has a unique identifier -- concurrent inserts both survive, positioned by their IDs. For a counter: use a G-Counter where each node only increments its own slot. For a set: OR-Set where each add gets a unique tag. The trade-off: CRDT semantics aren't always what users expect. An OR-Set shopping cart with add-wins means removing an item on one device while adding it on another results in it being present -- which is usually the wrong UX."
 
 ---
 
@@ -5370,14 +5370,14 @@ THE CULTURE RULE
 "Write unit tests for error cases. Test timeouts and retry logic in staging."
 
 **L6:**
-"Unit tests can only test failures you imagined. Chaos engineering tests failures you didn't imagine, and does it in real or near-real conditions. The approach: (1) Define steady state with specific numbers — p99 latency < 200ms, error rate < 0.1%, checkout completion > 99.5%. (2) Write a hypothesis: 'If we kill one of five API servers, the load balancer redistributes traffic within 10 seconds and steady state is maintained.' (3) Inject the failure in the smallest possible blast radius — staging first, then 1 prod instance, not all of prod. (4) Observe metrics in real time with a finger on the abort button. (5) Either validate the hypothesis (system is resilient) or find the weakness. (6) Fix the weakness, write a test for it, then re-run. The point isn't to prove you're resilient. It's to find out where you're not before a customer event does it for you."
+"Unit tests can only test failures you imagined. Chaos engineering tests failures you didn't imagine, and does it in real or near-real conditions. The approach: (1) Define steady state with specific numbers -- p99 latency < 200ms, error rate < 0.1%, checkout completion > 99.5%. (2) Write a hypothesis: 'If we kill one of five API servers, the load balancer redistributes traffic within 10 seconds and steady state is maintained.' (3) Inject the failure in the smallest possible blast radius -- staging first, then 1 prod instance, not all of prod. (4) Observe metrics in real time with a finger on the abort button. (5) Either validate the hypothesis (system is resilient) or find the weakness. (6) Fix the weakness, write a test for it, then re-run. The point isn't to prove you're resilient. It's to find out where you're not before a customer event does it for you."
 
 ---
 
 **Q: What's chaos engineering?**
 
 **L5:**
-"It's like Netflix's Chaos Monkey — you randomly kill servers to see if your system handles it."
+"It's like Netflix's Chaos Monkey -- you randomly kill servers to see if your system handles it."
 
 **L6:**
 "'Randomly killing servers' is the wrong mental model. Chaos engineering is a scientific process: you form a hypothesis about system behavior under stress, then run a controlled experiment to test it. The chaos is controlled, not random. Netflix's Chaos Monkey killed EC2 instances, but Netflix had years of resilience work before they did that. The full discipline includes: Chaos Monkey (instance kill), Chaos Kong (availability zone kill), Latency Monkey (network slowdowns), Chaos Gorilla (region failure). Each experiment has defined steady state metrics, an abort threshold, and a blast radius limit. The cultural piece is equally important: teams own their services' resilience. The tool is secondary. Starting with 'install Chaos Monkey in prod' without the culture and monitoring is just creating incidents on a schedule."
@@ -5390,13 +5390,13 @@ THE CULTURE RULE
 "Set up Chaos Monkey, run it in staging first, then production. Start small."
 
 **L6:**
-"Six concrete steps: (1) Observability first — you cannot do chaos without metrics. Define your steady state: specific numbers for error rate, latency, success rate. If you can't measure it, don't chaos it. (2) Pick the smallest, least critical service with the best monitoring. Your first experiment should be boring: 'restart the notification service, verify emails still queue.' (3) Write the hypothesis BEFORE running. Forces you to think about what you expect. (4) Staging before prod. Always. Get the mechanics right where failure doesn't page you. (5) Limit blast radius: one instance, then one AZ, never multi-region until you've done single-instance 50 times. (6) Debrief after every experiment — what did you learn, what do you fix, what experiment is next? The goal in month 1 is not resilience. It's developing the discipline of running experiments. Resilience comes from fixing what you find."
+"Six concrete steps: (1) Observability first -- you cannot do chaos without metrics. Define your steady state: specific numbers for error rate, latency, success rate. If you can't measure it, don't chaos it. (2) Pick the smallest, least critical service with the best monitoring. Your first experiment should be boring: 'restart the notification service, verify emails still queue.' (3) Write the hypothesis BEFORE running. Forces you to think about what you expect. (4) Staging before prod. Always. Get the mechanics right where failure doesn't page you. (5) Limit blast radius: one instance, then one AZ, never multi-region until you've done single-instance 50 times. (6) Debrief after every experiment -- what did you learn, what do you fix, what experiment is next? The goal in month 1 is not resilience. It's developing the discipline of running experiments. Resilience comes from fixing what you find."
 
 ---
 
 ## PART C: 20 MEATY BRAINSTORMING QUESTIONS
 
-Work through each question before reading ahead. These are L6 interview questions — expect to spend 10-15 minutes on each.
+Work through each question before reading ahead. These are L6 interview questions -- expect to spend 10-15 minutes on each.
 
 ---
 
@@ -5405,7 +5405,7 @@ Work through each question before reading ahead. These are L6 interview question
 **Question 1.**
 You're designing an order management system that spans an inventory service, a payment service, and a shipping service. A customer places an order. Trace exactly what happens in 2PC: which service is the coordinator, when does inventory get locked, what happens if the payment service crashes after voting YES but before the coordinator sends COMMIT?
 
-Specifically: (a) What does the customer see? (b) What state is each service in? (c) The inventory record shows "reserved" — is it reserved forever? (d) How does the recovery process work? (e) If you add a 5-minute timeout that auto-aborts hung transactions, what's the race condition you introduce? (f) Would you use 2PC for this in 2025, or would you choose a different pattern? If Saga, trace the compensating transactions.
+Specifically: (a) What does the customer see? (b) What state is each service in? (c) The inventory record shows "reserved" -- is it reserved forever? (d) How does the recovery process work? (e) If you add a 5-minute timeout that auto-aborts hung transactions, what's the race condition you introduce? (f) Would you use 2PC for this in 2025, or would you choose a different pattern? If Saga, trace the compensating transactions.
 
 ---
 
@@ -5414,7 +5414,7 @@ Your team is considering replacing 2PC with the Saga pattern for your checkout f
 
 Walk through this specific scenario: A user adds an item to their cart, proceeds to checkout, the Saga starts. Inventory service reserves the item (step 1). Payment service charges the card (step 2). Shipping service creates the shipment (step 3). The notification service fails to send confirmation (step 4). The Saga compensates: unshipment, refund, unreserve.
 
-(a) The refund takes 3-5 business days to appear. The user got charged and the charge disappeared — what does their bank statement show during those 3-5 days? (b) The user calls support after seeing the charge. What does your support team say? (c) How do you design the UI so users understand this isn't a bug? (d) What do you do if the compensating transaction for payment also fails? (e) At what point in this flow would you rather have 2PC instead of Saga, and why?
+(a) The refund takes 3-5 business days to appear. The user got charged and the charge disappeared -- what does their bank statement show during those 3-5 days? (b) The user calls support after seeing the charge. What does your support team say? (c) How do you design the UI so users understand this isn't a bug? (d) What do you do if the compensating transaction for payment also fails? (e) At what point in this flow would you rather have 2PC instead of Saga, and why?
 
 ---
 
@@ -5432,7 +5432,7 @@ State before partition:
 ---
 
 **Question 4.**
-Your team uses MySQL XA for distributed transactions across a users database and an orders database. During a peak traffic event, you notice that 0.3% of checkout attempts are hanging for 30+ seconds. Investigation reveals these are transactions stuck in PREPARE state — the XA transaction coordinator crashed during the peak.
+Your team uses MySQL XA for distributed transactions across a users database and an orders database. During a peak traffic event, you notice that 0.3% of checkout attempts are hanging for 30+ seconds. Investigation reveals these are transactions stuck in PREPARE state -- the XA transaction coordinator crashed during the peak.
 
 (a) What exact MySQL XA command do you run to list stuck transactions? What does the output tell you? (b) These stuck transactions have locks. What tables/rows are locked? What other queries are being blocked? How do you detect this in real-time? (c) Design the auto-recovery procedure: what process monitors for stuck XA transactions, what's the decision logic (commit vs. rollback), how do you handle the case where you don't know which participant voted YES? (d) The fix will require a human decision for some transactions. How do you present this to an on-call engineer at 3am? What information do they need? (e) After fixing the immediate incident, what architectural change prevents this class of incident from recurring? (f) What metric do you add to your dashboard so this is detected in under 60 seconds next time?
 
@@ -5443,7 +5443,7 @@ Your team uses MySQL XA for distributed transactions across a users database and
 **Question 5.**
 A social media app uses read replicas with 200ms average replication lag. A user makes a post and immediately refreshes their feed.
 
-(a) Trace the full request path: POST /posts → which server, what happens, what's stored where. GET /feed → which server is selected by the load balancer, what data is returned. What does the user see, and for how long?
+(a) Trace the full request path: POST /posts -> which server, what happens, what's stored where. GET /feed -> which server is selected by the load balancer, what data is returned. What does the user see, and for how long?
 
 (b) Now design the fix using (user_id, last_write_ts) in Redis. Specify: the exact Redis key format, the value format, the TTL value and how you calculated it, and the routing logic. Write it as pseudocode:
 ```
@@ -5464,13 +5464,13 @@ You're building a multi-device banking app. User makes a transfer on their iPhon
 
 At 2:03:30pm they pick up their laptop (different browser session, different session cookie, same user_id). They navigate to the balance page.
 
-(a) Is seeing $5,000 on the laptop a RYW violation? Technically — is it? The transfer happened on a different device. Does the guarantee apply across devices?
+(a) Is seeing $5,000 on the laptop a RYW violation? Technically -- is it? The transfer happened on a different device. Does the guarantee apply across devices?
 
-(b) Your current RYW solution stores (user_id → last_write_ts) in Redis keyed by user_id. Does this fix the multi-device case? Trace through the exact Redis lookup.
+(b) Your current RYW solution stores (user_id -> last_write_ts) in Redis keyed by user_id. Does this fix the multi-device case? Trace through the exact Redis lookup.
 
 (c) For a banking app, what's the user expectation? Compare to a social media app where seeing a stale post count for a few seconds is fine. What consistency guarantee does a bank user expect?
 
-(d) What if you implement this by routing ALL reads to primary for financial accounts? What's the performance trade-off? At what point does "always read from primary" become untenable — is it 1,000 users? 100,000? 10 million?
+(d) What if you implement this by routing ALL reads to primary for financial accounts? What's the performance trade-off? At what point does "always read from primary" become untenable -- is it 1,000 users? 100,000? 10 million?
 
 (e) Propose a solution that gives banking-grade consistency for balance reads without routing every read to primary. Hint: think about what "confirmed balance" means vs. "pending transactions."
 
@@ -5485,7 +5485,7 @@ A multiplayer game shows a leaderboard. Without monotonic reads, the leaderboard
 
 (c) The product team says: "The leaderboard only updates every 60 seconds anyway, so staleness is fine." Does this eliminate the consistency concerns you identified? Which ones go away, which ones don't?
 
-(d) The game has 1 million concurrent players checking the leaderboard every 10 seconds. That's 100,000 reads/second. You cannot route these to primary — primary would die. How do you provide monotonic reads at 100,000 rps without primary reads? Design the architecture.
+(d) The game has 1 million concurrent players checking the leaderboard every 10 seconds. That's 100,000 reads/second. You cannot route these to primary -- primary would die. How do you provide monotonic reads at 100,000 rps without primary reads? Design the architecture.
 
 (e) Is there a consistency violation on the leaderboard that you would intentionally accept? Which one, and what's your reasoning?
 
@@ -5496,15 +5496,15 @@ You're designing the read consistency model for a collaborative document editor 
 
 For each of the following pieces of state, choose a consistency model and justify it. Also describe what the user experiences if you choose wrong:
 
-(a) **Who's currently editing** — the "live cursors" showing where each user's cursor is. Does this need linearizability? Monotonic reads? Or is eventual consistency fine?
+(a) **Who's currently editing** -- the "live cursors" showing where each user's cursor is. Does this need linearizability? Monotonic reads? Or is eventual consistency fine?
 
-(b) **The document text itself** — characters, paragraphs, formatting. What happens if one user sees a version that's 2 seconds stale? What's the failure mode?
+(b) **The document text itself** -- characters, paragraphs, formatting. What happens if one user sees a version that's 2 seconds stale? What's the failure mode?
 
-(c) **Comments on the document** — a user adds a comment on line 47. Another user immediately opens comments panel. Do they see it? Does RYW apply here?
+(c) **Comments on the document** -- a user adds a comment on line 47. Another user immediately opens comments panel. Do they see it? Does RYW apply here?
 
 (d) **The "last saved at" timestamp** shown in the top bar. If this goes backwards (shows "saved at 2:05pm" then "saved at 2:04pm" on refresh), what's the user experience? What guarantee prevents this?
 
-(e) **Version history** — the list of past versions. A user clicks "Restore version from 2pm." After restoring, they see the version history update. Is this a case where you need linearizable reads? What breaks if you don't have it?
+(e) **Version history** -- the list of past versions. A user clicks "Restore version from 2pm." After restoring, they see the version history update. Is this a case where you need linearizable reads? What breaks if you don't have it?
 
 For each one: name the consistency model, name the implementation technique, and give a one-sentence description of the wrong UX if you pick a weaker model than needed.
 
@@ -5519,7 +5519,7 @@ HLC format: (wall_clock_ms, counter, node_id)
 
 Starting state:
 - Node A: HLC = (1000, 0, A)
-- Node B: HLC = (1030, 0, B) — Node B's NTP is 30ms ahead
+- Node B: HLC = (1030, 0, B) -- Node B's NTP is 30ms ahead
 
 Both accept a write to key "user:123:balance" at roughly the same real-world time.
 
@@ -5529,7 +5529,7 @@ Both accept a write to key "user:123:balance" at roughly the same real-world tim
 
 (c) Now Node A's clock is 600ms ahead. CockroachDB's max_offset is 500ms. What does CockroachDB do? What does the application see?
 
-(d) CockroachDB "commits in the future" — a transaction waits until its uncertainty window has passed before returning to the client. With max_offset=500ms, what's the worst-case added latency for a transaction? When does this matter in practice?
+(d) CockroachDB "commits in the future" -- a transaction waits until its uncertainty window has passed before returning to the client. With max_offset=500ms, what's the worst-case added latency for a transaction? When does this matter in practice?
 
 (e) A fintech company is considering CockroachDB for payment processing. They currently use a single-region PostgreSQL and are expanding to 3 regions. They ask: "Is the HLC-based consistency safe for financial transactions?" What do you tell them?
 
@@ -5558,7 +5558,7 @@ For each scheme:
 ---
 
 **Question 11.**
-Google Spanner uses TrueTime (atomic clocks + GPS, uncertainty ±7ms). CockroachDB uses HLC (max_offset ±500ms). A fintech startup can't afford Spanner ($3,000/month minimum vs. CockroachDB's open source option).
+Google Spanner uses TrueTime (atomic clocks + GPS, uncertainty +/-7ms). CockroachDB uses HLC (max_offset +/-500ms). A fintech startup can't afford Spanner ($3,000/month minimum vs. CockroachDB's open source option).
 
 (a) For a payment transaction that must be globally serializable: what specific guarantee does Spanner provide that CockroachDB approximates? What's the gap?
 
@@ -5573,15 +5573,15 @@ Google Spanner uses TrueTime (atomic clocks + GPS, uncertainty ±7ms). Cockroach
 ---
 
 **Question 12.**
-You're debugging a production incident: a user's profile update is flickering — it appears updated, then reverts, then updates again. The user is on a mobile app that auto-refreshes every 2 seconds.
+You're debugging a production incident: a user's profile update is flickering -- it appears updated, then reverts, then updates again. The user is on a mobile app that auto-refreshes every 2 seconds.
 
 From the logs:
 ```
-14:03:01 - User updates display_name to "Alice Smith" → PUT /profile → HTTP 200
-14:03:02 - GET /profile → returns {display_name: "Alice Jones"} (old value)
-14:03:04 - GET /profile → returns {display_name: "Alice Smith"} (new value)
-14:03:06 - GET /profile → returns {display_name: "Alice Jones"} (old value again)
-14:03:08 - GET /profile → returns {display_name: "Alice Smith"} (converged)
+14:03:01 - User updates display_name to "Alice Smith" -> PUT /profile -> HTTP 200
+14:03:02 - GET /profile -> returns {display_name: "Alice Jones"} (old value)
+14:03:04 - GET /profile -> returns {display_name: "Alice Smith"} (new value)
+14:03:06 - GET /profile -> returns {display_name: "Alice Jones"} (old value again)
+14:03:08 - GET /profile -> returns {display_name: "Alice Smith"} (converged)
 ```
 
 Investigation shows: two replicas (R1 and R2) with different HLC timestamps for the same key.
@@ -5591,8 +5591,8 @@ Investigation shows: two replicas (R1 and R2) with different HLC timestamps for 
 (b) Propose 3 possible root causes for a replica going backwards on HLC. For each one: what does it look like in the logs, what monitoring would have caught it earlier?
 
 (c) The HLC timestamps on the two replicas for this key are:
-- R1: (1677649381000, 0, R1) — writes display_name = "Alice Smith"
-- R2: (1677649380500, 2, R2) — writes display_name = "Alice Jones"
+- R1: (1677649381000, 0, R1) -- writes display_name = "Alice Smith"
+- R2: (1677649380500, 2, R2) -- writes display_name = "Alice Jones"
 
 Which HLC is "later"? Which value should win? (Hint: compare the tuples lexicographically.) Is this the right answer for the user?
 
@@ -5631,7 +5631,7 @@ Simulate this scenario:
 **Question 14.**
 You're building a distributed shopping cart using OR-Set. The cart is shared across all of a user's devices (phone, laptop, tablet).
 
-Starting state: cart = {apple(uuid-A1), banana(uuid-B1), cherry(uuid-C1)} — all synced to all devices.
+Starting state: cart = {apple(uuid-A1), banana(uuid-B1), cherry(uuid-C1)} -- all synced to all devices.
 
 All devices go offline simultaneously.
 
@@ -5675,15 +5675,15 @@ You're designing a real-time collaborative whiteboard (like Miro). Users can: ad
 
 For each operation, design the CRDT data model:
 
-(a) **Add sticky note** — Two users simultaneously add a note at position (100, 100). Both adds should survive (they're different objects). Which CRDT type? How does concurrent add resolve? What do users see?
+(a) **Add sticky note** -- Two users simultaneously add a note at position (100, 100). Both adds should survive (they're different objects). Which CRDT type? How does concurrent add resolve? What do users see?
 
-(b) **Move sticky note** — Two users grab the same sticky note and drag it to different positions: User A moves it to (200, 300), User B moves it to (500, 100). Both think they "have" the note. What CRDT semantics handle this? (Hint: position is a register — one value, concurrent writes conflict.) What do users see after sync? Is this the right UX?
+(b) **Move sticky note** -- Two users grab the same sticky note and drag it to different positions: User A moves it to (200, 300), User B moves it to (500, 100). Both think they "have" the note. What CRDT semantics handle this? (Hint: position is a register -- one value, concurrent writes conflict.) What do users see after sync? Is this the right UX?
 
-(c) **Edit text in sticky note** — User A changes text to "Meeting notes" while User B changes it to "Action items." These are concurrent writes to a text field. LWW gives one user's edit victory. A text CRDT (like a sequence CRDT) would merge them. Which do you choose for a short sticky note text field, and why?
+(c) **Edit text in sticky note** -- User A changes text to "Meeting notes" while User B changes it to "Action items." These are concurrent writes to a text field. LWW gives one user's edit victory. A text CRDT (like a sequence CRDT) would merge them. Which do you choose for a short sticky note text field, and why?
 
-(d) **Delete sticky note** — User A deletes a note. User B is concurrently editing the text in that note. After sync, is the note deleted or present with B's edits? This is the "delete vs. update" conflict. What's OR-Set's answer here? Is that the right product decision?
+(d) **Delete sticky note** -- User A deletes a note. User B is concurrently editing the text in that note. After sync, is the note deleted or present with B's edits? This is the "delete vs. update" conflict. What's OR-Set's answer here? Is that the right product decision?
 
-(e) **Resize** — User A resizes a note to 200x100px. User B resizes the same note to 300x50px. Propose a CRDT-based resolution. Now consider: what if there's a design constraint that notes must maintain aspect ratio? Does that change your CRDT design?
+(e) **Resize** -- User A resizes a note to 200x100px. User B resizes the same note to 300x50px. Propose a CRDT-based resolution. Now consider: what if there's a design constraint that notes must maintain aspect ratio? Does that change your CRDT design?
 
 For each: name the CRDT type, write the merge rule in plain English, and describe the user experience during and after conflict resolution.
 
@@ -5704,11 +5704,11 @@ Results:
 
 (a) You exceeded the abort threshold (2%) for 10 seconds. Do you count this as a pass or fail? The system self-healed without your intervention. Does that matter for the experiment verdict?
 
-(b) The 10 seconds above threshold — what was probably happening during that time? Name at least 3 mechanisms that could cause 10 seconds of elevated errors when a server disappears.
+(b) The 10 seconds above threshold -- what was probably happening during that time? Name at least 3 mechanisms that could cause 10 seconds of elevated errors when a server disappears.
 
 (c) You didn't abort because it was recovering on its own. Was that the right call? What's the danger of "it's recovering, wait a bit" reasoning during a chaos experiment?
 
-(d) Your hypothesis was "load balancer redistributes traffic, no errors to users." The hypothesis was wrong — there WERE errors. What went wrong in the load balancer behavior? What should the health check configuration look like to reduce the 10-second spike to under 2 seconds?
+(d) Your hypothesis was "load balancer redistributes traffic, no errors to users." The hypothesis was wrong -- there WERE errors. What went wrong in the load balancer behavior? What should the health check configuration look like to reduce the 10-second spike to under 2 seconds?
 
 (e) The team wants to run this experiment again after improving health checks. Before re-running, what do you change? Do you change the abort threshold? Do you change the steady state definition? What specifically makes the second experiment more informative than the first?
 
@@ -5719,18 +5719,18 @@ Design a chaos engineering program for a 100-person startup that just hit $1M AR
 
 (a) Maturity assessment: Netflix ran Chaos Monkey after years of resilience work and deep monitoring. Where is this startup on the chaos maturity curve? What's the honest answer to "are we ready for chaos engineering"?
 
-(b) Month 1 experiment: What is the FIRST chaos experiment you run, in which environment, with what specific hypothesis? Make it concrete and achievable. Not "kill a service" — specify exactly which service, in which environment, what hypothesis, what steady state metrics, what the abort condition is.
+(b) Month 1 experiment: What is the FIRST chaos experiment you run, in which environment, with what specific hypothesis? Make it concrete and achievable. Not "kill a service" -- specify exactly which service, in which environment, what hypothesis, what steady state metrics, what the abort condition is.
 
 (c) How do you pitch this to the VP of Sales who manages the Fortune 500 customer relationship and is terrified of any production incidents? Write the 3-sentence pitch that gets their buy-in.
 
-(d) Month 6 success metrics: How do you measure whether your chaos engineering program is working? Don't say "we're more resilient" — give 3 specific, measurable outcomes that prove value.
+(d) Month 6 success metrics: How do you measure whether your chaos engineering program is working? Don't say "we're more resilient" -- give 3 specific, measurable outcomes that prove value.
 
 (e) The startup gets acquired at month 7. The acquirer's CTO asks: "Tell me about your operational maturity." How does having a chaos engineering program change the answer? What does it signal to the acquirer about the team's culture?
 
 ---
 
 **Question 19.**
-A chaos experiment reveals the following cascade failure: when the payment service is down (injected failure), the checkout service makes calls to payment service with a default 30-second HTTP timeout. This exhausts the checkout service thread pool (100 threads, all blocked waiting for payment). This causes ALL checkout service endpoints — including the product catalog endpoint — to return 503. The entire storefront goes down because of a payment service outage.
+A chaos experiment reveals the following cascade failure: when the payment service is down (injected failure), the checkout service makes calls to payment service with a default 30-second HTTP timeout. This exhausts the checkout service thread pool (100 threads, all blocked waiting for payment). This causes ALL checkout service endpoints -- including the product catalog endpoint -- to return 503. The entire storefront goes down because of a payment service outage.
 
 (a) This is a classic cascade failure. Name the failure mode at each layer: what's wrong with the timeout value, what's wrong with thread pool design, what's the missing circuit breaker, what's the missing bulkhead?
 
@@ -5838,7 +5838,7 @@ def route_balance_read(user_id: str, session_id: str) -> str:
     ...
 ```
 
-(c) Multi-device handling: The Redis key is per user_id. Does this correctly handle: user transfers on phone → checks on laptop? Walk through the lookup.
+(c) Multi-device handling: The Redis key is per user_id. Does this correctly handle: user transfers on phone -> checks on laptop? Walk through the lookup.
 
 (d) Redis failure scenario: Redis is down. Write the fallback logic. Consider: fail open (route to replica, accept possible stale read) vs. fail closed (route to primary, accept higher load).
 
@@ -5939,7 +5939,7 @@ Node Z: HLC = (1000, 0, Z)
 
 HLC update rules:
 - On local event: HLC = (max(local_physical, current_hlc_physical), counter+1, node_id) if physical is same; else (new_physical, 0, node_id)
-- On receive(message_hlc): HLC = (max(local_physical, message_physical), if same → max(local_counter, message_counter)+1, node_id)
+- On receive(message_hlc): HLC = (max(local_physical, message_physical), if same -> max(local_counter, message_counter)+1, node_id)
 
 **Simulate these events in order:**
 
@@ -5948,7 +5948,7 @@ HLC update rules:
 3. Y sends message M2 to Z. Y's physical clock: 1003ms.
 4. Z receives M2. Z's physical clock: 1004ms.
 5. Z sends reply M3 to X. Z's physical clock: 1005ms.
-6. [200ms network delay on X's NTP sync — X's clock jumps ahead]
+6. [200ms network delay on X's NTP sync -- X's clock jumps ahead]
 7. X's physical clock is now 1300ms (200ms ahead of reality).
 8. X receives M3 from Z (sent at step 5, arriving now). X's physical clock: 1300ms.
 
@@ -5990,7 +5990,7 @@ E-commerce platform with 4 services:
 **Write the complete game day plan:**
 
 **(a) Steady State Definition**
-Define measurable steady state metrics. Be specific — include actual numbers:
+Define measurable steady state metrics. Be specific -- include actual numbers:
 ```
 Metric 1: ________ (threshold: ________)
 Metric 2: ________ (threshold: ________)
@@ -6087,7 +6087,7 @@ class ORSet:
 
 **Simulate this scenario:**
 
-Starting state: cart = {apple, banana, cherry} — all synced to 3 devices.
+Starting state: cart = {apple, banana, cherry} -- all synced to 3 devices.
 
 After sync, initial OR-Set state (each item was added once, unique IDs assigned):
 ```
@@ -6103,7 +6103,7 @@ All 3 devices go offline. Apply these operations on each device independently:
 
 - **Device A:** adds "date" (generates uuid-D1), removes "banana" (moves uuid-B1 to removes)
 - **Device B:** adds "elderberry" (generates uuid-E1), removes "apple" (moves uuid-A1 to removes), removes "banana" (moves uuid-B1 to removes)
-- **Device C:** adds "fig" (generates uuid-F1), adds "banana" (generates uuid-B2 — a NEW add, different uuid than uuid-B1)
+- **Device C:** adds "fig" (generates uuid-F1), adds "banana" (generates uuid-B2 -- a NEW add, different uuid than uuid-B1)
 
 All 3 reconnect. Show the merge:
 
@@ -6153,9 +6153,9 @@ What does this produce for the banana scenario? Is it better?
 
 1. **3PC fixes 2PC blocking but breaks under network partition.** Production systems use 2PC with timeout/recovery, or Raft/Paxos for consensus, or Saga for long-running flows. 3PC is a theory answer, not a production answer.
 
-2. **Read-your-writes:** Track `(user_id → last_write_ts)` in Redis with a short TTL. On reads, check Redis: if a recent write exists, route to primary. All other reads stay on replicas. You get scale AND correctness.
+2. **Read-your-writes:** Track `(user_id -> last_write_ts)` in Redis with a short TTL. On reads, check Redis: if a recent write exists, route to primary. All other reads stay on replicas. You get scale AND correctness.
 
-3. **Monotonic reads:** Sticky routing — hash(user_id) to a consistent replica. That user always reads from the same replica, so their reads never go backwards. Downside: that replica is their bottleneck.
+3. **Monotonic reads:** Sticky routing -- hash(user_id) to a consistent replica. That user always reads from the same replica, so their reads never go backwards. Downside: that replica is their bottleneck.
 
 4. **Consistent prefix:** Causal timestamps or ordered replication. Guarantees you never see a reply before the original message. Matters for message threads, audit logs, anything where sequence tells a story.
 
@@ -6165,9 +6165,9 @@ What does this produce for the banana scenario? Is it better?
 
 7. **OR-Set:** Each add creates a unique (item, uuid) pair. Remove marks all current uuids for that item. Merge = union of adds minus union of removes. "Add wins" on conflict: concurrent add + remove = add wins. Good for tags, shopping carts where add-wins makes sense.
 
-8. **CRDTs:** The big idea is that you design data so concurrent edits commute — any order of merging produces the same result. No coordination needed. The trade-off is metadata size and sometimes counterintuitive semantics at the edges.
+8. **CRDTs:** The big idea is that you design data so concurrent edits commute -- any order of merging produces the same result. No coordination needed. The trade-off is metadata size and sometimes counterintuitive semantics at the edges.
 
-9. **Chaos engineering:** The process is: define steady state with numbers → write hypothesis → inject minimum blast radius → observe → fix → repeat. Culture is the hard part. The tool (Chaos Monkey, Gremlin) is trivial. Running a disciplined experiment is the skill.
+9. **Chaos engineering:** The process is: define steady state with numbers -> write hypothesis -> inject minimum blast radius -> observe -> fix -> repeat. Culture is the hard part. The tool (Chaos Monkey, Gremlin) is trivial. Running a disciplined experiment is the skill.
 
 10. **Blast radius discipline:** Start in staging. Then 1 prod instance. Then 1 AZ. Then 1 region. Never skip steps. Your first production chaos experiment should be the most boring possible thing that still tells you something. Build the muscle before you flex it.
 
@@ -6179,10 +6179,10 @@ What does this produce for the banana scenario? Is it better?
 +---------------------+---------------------------+--------------------+-----------------------------------+
 | CONCEPT             | WHAT IT SOLVES            | USE WHEN           | ONE-LINER TO REMEMBER             |
 +---------------------+---------------------------+--------------------+-----------------------------------+
-| 2PC                 | Atomic cross-service      | Need all-or-nothing| "Prepare, then Commit — but       |
+| 2PC                 | Atomic cross-service      | Need all-or-nothing| "Prepare, then Commit -- but       |
 |                     | transactions              | across 2+ DBs      |  coordinator crash = blocked"      |
 +---------------------+---------------------------+--------------------+-----------------------------------+
-| 3PC                 | Unblocks 2PC coordinator  | Mostly never in    | "Adds PreCommit — fixes crash,    |
+| 3PC                 | Unblocks 2PC coordinator  | Mostly never in    | "Adds PreCommit -- fixes crash,    |
 |                     | crash scenario            | production         |  breaks partition"                 |
 +---------------------+---------------------------+--------------------+-----------------------------------+
 | Saga Pattern        | Long-running distributed  | Checkout, booking, | "Each step has a compensating     |
@@ -6221,8 +6221,8 @@ What does this produce for the banana scenario? Is it better?
 | Sequence CRDT       | Collaborative text editing| Docs, code editors,| "Each char has unique position ID.|
 |                     |                           | whiteboards        | Concurrent inserts both survive."  |
 +---------------------+---------------------------+--------------------+-----------------------------------+
-| Chaos Engineering   | Find weaknesses before    | Any system you     | "Hypothesize → inject → observe   |
-|                     | production finds them     | care about         | → fix → repeat. Culture > tool."   |
+| Chaos Engineering   | Find weaknesses before    | Any system you     | "Hypothesize -> inject -> observe   |
+|                     | production finds them     | care about         | -> fix -> repeat. Culture > tool."   |
 +---------------------+---------------------------+--------------------+-----------------------------------+
 | Circuit Breaker     | Prevent cascade failures  | Any service call   | "Fail fast when downstream is     |
 |                     |                           | that can hang      | sick. Half-open to probe recovery."|
@@ -6240,20 +6240,657 @@ What does this produce for the banana scenario? Is it better?
 ### The Interview Cheat Sheet: What to Say When
 
 **"How would you handle a distributed transaction?"**
-→ "What's the failure mode we care most about? If coordinator crash, use Saga + compensation. If you need atomicity and can afford blocking, 2PC with recovery timeout. Avoid 3PC in production — partition unsafe."
+-> "What's the failure mode we care most about? If coordinator crash, use Saga + compensation. If you need atomicity and can afford blocking, 2PC with recovery timeout. Avoid 3PC in production -- partition unsafe."
 
 **"What consistency do your read replicas give?"**
-→ "By default, eventual. I add read-your-writes for user-facing writes via Redis write-timestamp routing. For monotonic reads I use sticky replica assignment per user. Linearizable reads go to primary — only for operations where staleness has real consequences like balance checks."
+-> "By default, eventual. I add read-your-writes for user-facing writes via Redis write-timestamp routing. For monotonic reads I use sticky replica assignment per user. Linearizable reads go to primary -- only for operations where staleness has real consequences like balance checks."
 
 **"How does CockroachDB order globally distributed transactions?"**
-→ "HLC: physical clock plus a logical counter plus node ID. Causality via the counter, real time via the physical component, bounded drift via max_offset enforcement at 500ms. Compare tuples lexicographically."
+-> "HLC: physical clock plus a logical counter plus node ID. Causality via the counter, real time via the physical component, bounded drift via max_offset enforcement at 500ms. Compare tuples lexicographically."
 
 **"Two users edit the same document offline. How do you merge?"**
-→ "Depends on the data type. Text: use a sequence CRDT, both edits survive positioned by ID. Counter: G-Counter, merge is element-wise max. Set: OR-Set with add-wins. The key insight: design the data so concurrent operations commute. No coordination needed."
+-> "Depends on the data type. Text: use a sequence CRDT, both edits survive positioned by ID. Counter: G-Counter, merge is element-wise max. Set: OR-Set with add-wins. The key insight: design the data so concurrent operations commute. No coordination needed."
 
 **"How do you know your system is resilient?"**
-→ "You run controlled failure experiments. Define steady state with specific numbers first. Write a hypothesis. Inject the smallest possible failure. Observe. Find weaknesses. Fix them. Repeat. The monitoring has to exist before the chaos. Chaos engineering finds the gaps; it doesn't substitute for having observability."
+-> "You run controlled failure experiments. Define steady state with specific numbers first. Write a hypothesis. Inject the smallest possible failure. Observe. Find weaknesses. Fix them. Repeat. The monitoring has to exist before the chaos. Chaos engineering finds the gaps; it doesn't substitute for having observability."
 
 ---
 
-*Next chapter: Chapter 28 covers distributed data pipelines — batch vs. stream processing, Lambda vs. Kappa architecture, and backpressure patterns.*
+*Next chapter: Chapter 28 covers distributed data pipelines -- batch vs. stream processing, Lambda vs. Kappa architecture, and backpressure patterns.*
+
+---
+
+### Cross-chapter: Raft vs 2PC coordinator election (from Ch22)
+
+**Question 43 -- Raft leader election vs 2PC coordinator election (Ch22 + Ch27)**
+
+Raft treats leader election as a first-class consensus problem.
+Two-Phase Commit has an implicit coordinator (the transaction originator)
+with no built-in election or recovery mechanism.
+
+- The 2PC blocked state: the coordinator sends "prepare," all participants vote "yes,"
+  then the coordinator crashes before sending "commit."
+  Participants are blocked indefinitely. They cannot unilaterally commit or abort.
+  How long can they remain blocked? Is there any timeout that safely resolves this?
+- Raft's equivalent: the leader appends entry (term 5, index 101),
+  two followers acknowledge, then the leader crashes before the third acknowledgment.
+  The entry exists at 3 of 5 nodes (majority). When a new leader is elected,
+  what does Raft do with this entry? How does Raft's definition of "committed" differ
+  from 2PC's "committed"?
+- 3PC adds a "pre-commit" phase to break 2PC's deadlock.
+  Participants can make a unilateral decision after a timeout.
+  Does 3PC solve blocking completely?
+  Under what network model (synchronous vs asynchronous, fail-stop vs Byzantine)
+  does 3PC still fail?
+- Follow-up: Spanner uses Paxos within each replica group and 2PC across groups.
+  The 2PC coordinator is itself a Paxos group, not a single node.
+  Why does making the coordinator replicated resolve 2PC's blocking problem?
+  How does this compare to Raft leader election in terms of failure tolerance?
+
+---
+
+---
+
+## Supplemental Brainstorming: Chapter 27 -- Advanced Distributed Systems
+*Questions 21-42: Advanced topics and cross-chapter integration.*
+
+---
+
+### Section A: 2PC, 3PC, and Distributed Transactions (Q21-Q28)
+
+**Question 21 -- 2PC coordinator failure: which phase is catastrophic**
+
+Two-Phase Commit has two failure phases with very different consequences. A coordinator failure in Phase 1 (before sending Prepare) is recoverable: participants have not locked anything, the coordinator can simply restart and retry. A coordinator failure in Phase 2 (after sending Prepare, before sending Commit or Abort) is catastrophic: all participants are holding locks and waiting for a decision that may never come. This is the 2PC blocking problem.
+
+- Walk through the exact state of each participant when the Phase 2 coordinator crash occurs: (a) participant has said "yes" to Prepare, (b) participant is holding row-level locks, (c) participant cannot self-unilaterally decide to commit or abort (it does not know if other participants said yes), (d) participant waits indefinitely.
+- How long do locks typically time out in a blocked 2PC scenario? What happens to throughput when 30% of a table's rows are locked by a hung transaction?
+- Follow-up: Design the recovery process when a new coordinator takes over after the crashed coordinator restarts. Where is the transaction log stored? How does the new coordinator determine which participants said "yes" and complete the commit? What is the minimum data that must be durably written before Phase 2 begins?
+
+**Question 22 -- Saga pattern: 2PC alternative for microservices**
+
+The Saga pattern breaks a distributed transaction into a sequence of local transactions, each with a compensating transaction for rollback. Instead of locking across services (2PC's approach), Sagas use eventual consistency: each step commits locally, and if a later step fails, compensation transactions undo the earlier steps. This is AP-compatible: services remain available, but the distributed operation is not atomic.
+
+- Walk through the Saga for an e-commerce checkout: (a) reserve inventory, (b) charge payment, (c) create order record, (d) send confirmation email. For each step: what is the compensating transaction if a later step fails?
+- If step (c) "create order record" fails after (a) and (b) have committed: the inventory is reserved and payment is charged, but no order exists. Write the compensating sequence: (c-fail) abort order creation, (b-compensate) refund payment, (a-compensate) release inventory reservation. What is the user experience if the compensation itself fails?
+- Follow-up: Sagas have two orchestration styles: choreography (each service publishes events, next service listens) and orchestration (a central saga coordinator calls each service). Compare the failure modes. In choreography: if an event is lost, how does the Saga get stuck? In orchestration: if the coordinator crashes, what happens? Which is more observable?
+
+**Question 23 -- Why 3PC does not solve the CAP dilemma**
+
+3PC adds a PreCommit phase between Prepare and Commit, allowing participants to safely abort if the coordinator crashes after PreCommit (because they know the coordinator intended to commit). 3PC is theoretically non-blocking. But Chapter 26 showed that CAP makes non-blocking distributed consensus impossible during a partition. These two facts must be reconciled.
+
+- 3PC is non-blocking only when there is no network partition. Under a partition that isolates the coordinator, some participants enter PreCommit and some do not. The two partitions make different decisions (one commits, one aborts). This is the split-brain problem. 3PC is non-blocking but not partition-safe.
+- What does 3PC sacrifice to achieve non-blocking behavior? (It sacrifices partition safety. Under a partition, it can produce inconsistent outcomes.) Why do production systems prefer 2PC + timeout + manual recovery instead?
+- Follow-up: Raft and Paxos are also "non-blocking" consensus algorithms. How do they avoid the 3PC partition problem? (They require a quorum -- if you cannot reach a majority, you block. This is the correct trade-off: block when you cannot guarantee safety, rather than proceed and risk inconsistency.)
+
+**Question 24 -- Consensus vs 2PC: Raft as a distributed commit protocol**
+
+2PC requires exactly 1 coordinator and all N participants must respond. Raft (a consensus algorithm) requires a leader and a majority (quorum) of nodes. This difference makes Raft tolerant of minority failures: with 5 nodes, Raft can commit even if 2 nodes are unreachable. 2PC cannot commit if any single node is unreachable. Modern NewSQL databases (CockroachDB, TiDB, Spanner) use Raft-based replication instead of 2PC precisely because of this difference.
+
+- Compare 2PC and Raft across five dimensions: (a) coordinator failure tolerance, (b) participant failure tolerance, (c) message complexity (number of round trips), (d) lock duration, (e) production usage.
+- In CockroachDB, each range (shard) of data is replicated via Raft. A cross-range transaction must coordinate across multiple Raft groups. How does CockroachDB coordinate across Raft groups? (It uses a 2PC-like protocol at the transaction layer on top of Raft at the replication layer. The two are complementary, not competing.)
+- Follow-up: An interviewer asks "should you use 2PC or Raft for your distributed database?" The correct answer is: both, at different layers. Raft for replication within a shard group, 2PC-like coordination across shard groups. Describe this layered architecture in one diagram and two sentences.
+
+**Question 25 -- Distributed transactions in practice: what systems implement 2PC**
+
+2PC is not only a theoretical construct. It is implemented in production in relational databases (PostgreSQL XA transactions, MySQL XA), in some message brokers (older ActiveMQ), and in older distributed database middleware. Understanding where 2PC actually lives helps you recognize when you are implicitly using it.
+
+- PostgreSQL's XA transactions implement 2PC at the application layer. The application plays the role of the coordinator. What is the risk if the application crashes after PREPARE TRANSACTION but before COMMIT PREPARED?
+- In PostgreSQL, prepared (hanging) transactions block vacuum operations. If a prepared transaction is never committed or rolled back (orphaned 2PC), it can prevent table bloat cleanup indefinitely. How do you detect and recover from orphaned prepared transactions?
+- Follow-up: A team is using XA transactions across two PostgreSQL databases (one for orders, one for payments). This is 2PC at the application level. You are the Staff Engineer reviewing this. What do you recommend instead? (Saga with compensating transactions, or consolidating the data into one database.) What is the data modeling change required?
+
+**Question 26 -- The Saga compensating transaction problem: idempotency is not optional**
+
+Compensating transactions in Sagas must be idempotent. If a compensating transaction is called twice (network retry, duplicate delivery), it must produce the same result as calling it once. A non-idempotent compensation (like "refund $50") called twice would refund $100. This is not theoretical -- network retries are common, and Saga frameworks often deliver messages at least once.
+
+- Design idempotent compensating transactions for: (a) inventory reservation release, (b) payment refund, (c) order cancellation notification email.
+- For the payment refund: the naive implementation calls "refund $50" to the payment processor. If called twice, the customer receives $100 back. The idempotent implementation uses an idempotency key: "refund transaction ID xyz, amount $50, if not already refunded." Walk through the implementation.
+- Follow-up: Your Saga framework guarantees at-least-once delivery. A compensating transaction is called 3 times (network instability). Your idempotency key mechanism prevents duplicate refunds. But the third call arrives after the idempotency record has been garbage collected (TTL expired). What happens? Design the TTL policy for Saga idempotency records.
+
+**Question 27 -- 2PC lock contention under high load**
+
+2PC holds database row locks during the prepare-to-commit window. Under high load with many concurrent 2PC transactions, this lock contention can become the system's bottleneck -- not CPU, not I/O, but lock wait time. A single slow coordinator causes all participants to hold locks longer, which cascades into lock contention for other transactions trying to access the same rows.
+
+- Model the lock contention: 2PC transaction takes 50ms (prepare: 10ms, network: 20ms, commit: 20ms). Lock is held for all 50ms. At 1K concurrent transactions accessing the same rows: average lock wait time = ?
+- If the coordinator slows to 200ms (network degradation): lock hold time doubles. How does this affect the throughput of the system? At what point does lock contention cause a cascade failure (each slow transaction blocks more transactions, which slows the coordinator further)?
+- Follow-up: Design the circuit breaker for 2PC lock contention. What metric triggers the circuit breaker? (Lock wait time P99, or lock queue depth.) What does the circuit breaker do when tripped? (Reject new 2PC transactions, queue them, serve them when contention drops.) How do you prevent queue saturation?
+
+**Question 28 -- When to use 2PC vs Saga vs Raft: the decision framework**
+
+Engineers often ask "which distributed transaction approach should I use?" The answer depends on four factors: (a) how many services/databases are involved, (b) whether the operation needs strict atomicity or eventual consistency is acceptable, (c) how long the operation takes (lock duration sensitivity), and (d) whether you can design idempotent compensating transactions.
+
+- Fill in the decision matrix: (a) 2-service financial transaction (debit + credit), must be atomic, sub-100ms -> which approach? (b) 5-service e-commerce checkout, can tolerate eventual consistency, 2-second max -> which approach? (c) 10-service batch operation, long-running (5 minutes), eventual consistency acceptable -> which approach?
+- For each choice: what is the failure mode you are accepting? 2PC: blocking on coordinator crash. Saga: temporary inconsistency during compensation. Raft: minority partition unavailability.
+- Follow-up: A team presents a design using 2PC across 7 microservices. You are the Staff Engineer. Write the three questions in your design review that expose why this is dangerous and what the alternative should be. (Hint: focus on lock duration, coordinator failure blast radius, and compensating transaction design.)
+
+---
+
+### Section B: HLC, CRDTs, and Chaos Engineering (Q29-Q35)
+
+**Question 29 -- HLC format and behavior: the details that matter**
+
+Hybrid Logical Clocks encode real wall-clock time AND a logical counter in a single timestamp. The format is typically (wall_clock_ms, counter, node_id). The wall_clock component keeps HLC timestamps close to real time (enabling time-based queries). The counter breaks ties when wall clocks are identical. The node_id breaks ties between nodes at the same wall clock and counter.
+
+- Walk through the HLC update rules: (a) on a send event: HLC = max(local_HLC, system_clock) + 1. (b) on a receive event: HLC = max(local_HLC, message_HLC, system_clock) + 1. Why is max(system_clock) important in both cases? What happens if you omit it?
+- CockroachDB enforces a maximum clock offset (default 500ms) between nodes. If a node's clock drifts beyond this threshold, CockroachDB refuses to serve requests. Why is this limit necessary? What happens without it?
+- Follow-up: A node's HLC counter reaches its maximum value (counter overflow). What does the system do? (Advance the wall clock component by 1ms and reset the counter.) In what scenario could HLC counter overflow actually occur in production? (Millions of events within a single millisecond on the same node -- unusual but possible in batch processing.)
+
+**Question 30 -- HLC vs vector clocks: when you need one vs the other**
+
+Vector clocks track causal relationships between events: if event A happened before event B, the vector clock of B "dominates" A's. This lets you detect concurrency (neither vector clock dominates the other = concurrent events). HLC tracks approximate real time AND causality, but sacrifices some precision for real-time proximity. The choice between them depends on whether you need real-time queries or just causal ordering.
+
+- When do you need vector clocks vs HLC? (Vector clocks: when you need to detect concurrency precisely and do not care about wall clock time. HLC: when you need causal ordering AND time-based queries, such as "show me all events in the last 5 minutes in causal order.")
+- Vector clock size grows linearly with the number of nodes. At 100 nodes: every event carries a 100-element vector. HLC is always 3 fields regardless of cluster size. What does this mean for gossip protocol overhead and storage in a large cluster?
+- Follow-up: Google's Spanner uses TrueTime (bounded uncertainty intervals over GPS-synchronized clocks) instead of HLC. TrueTime gives each timestamp a range [earliest, latest]. A commit waits until the latest timestamp has passed (the "commit wait"). What is the latency cost of commit wait? (Typically 7-10ms.) When is this latency justified, and when should you use HLC (lower overhead, smaller cluster) instead?
+
+**Question 31 -- G-Counter and PN-Counter: the math behind conflict-free increment**
+
+G-Counter (grow-only counter) is the simplest CRDT. Each replica maintains its own count. The global count is the sum of all replica counts. Merge is simply: for each replica's slot, take the maximum. This makes merge commutative (order does not matter), associative (grouping does not matter), and idempotent (applying the same state twice gives the same result -- the three properties that guarantee convergence).
+
+- Prove that G-Counter merge is idempotent: if you merge a replica's state with itself, what do you get? (The same state -- max of identical values = same value.)
+- PN-Counter adds a "decrement" vector by tracking increments in P (positive) and decrements in N (negative) vectors. Total = sum(P) - sum(N). Walk through: replica A increments 3 times, replica B decrements 2 times. After merge: P=[3,0], N=[0,2]. Total = 3 - 2 = 1. Is this correct?
+- Follow-up: PN-Counter can reach any integer, but it cannot be bounded. A business rule says "inventory counter must never go below 0." A PN-Counter cannot enforce this invariant without coordination. Design the approach: either use a G-Counter with out-of-band bounding (periodic rebalance), or accept that the invariant can be temporarily violated during a partition and corrected after. Which do you choose for an e-commerce inventory counter?
+
+**Question 32 -- OR-Set vs G-Set: why remove-then-add ordering matters**
+
+G-Set only supports add operations. OR-Set supports both add and remove with add-wins semantics. The key mechanism: each add gives the element a unique tag. Remove targets specific tags. If an element is added (new tag) and removed (old tag) concurrently, the new add survives because its tag was not part of the remove operation.
+
+- Walk through the concurrent add-and-remove scenario: User A removes item X (which has tag T1). Concurrently, User B adds item X with tag T2 (User B does not know about X's current presence). After merge: T1 is removed, T2 is present. Item X survives. Is this correct?
+- Design the shopping cart use case for OR-Set: items in cart are the set, each "add to cart" creates a new unique tag. "Remove from cart" removes specific tags. What happens if the same item is added twice (two tags for the same item)? How does the cart handle quantity?
+- Follow-up: OR-Set metadata grows with each add-remove cycle: each add creates a tag, each remove records a tombstone. Over time, the tombstone set grows unboundedly. Design the garbage collection strategy: when is it safe to remove a tombstone? (When all replicas have seen the remove.) What protocol ensures "all replicas have seen it"?
+
+**Question 33 -- Operational Transform vs CRDT for collaborative document editing**
+
+Google Docs uses Operational Transform (OT). Figma and Notion use CRDTs. Both solve the collaborative editing problem (concurrent edits from multiple users merging correctly), but with different approaches. OT transforms operations against each other (mathematically complex, requires a central server for ordering). CRDTs use commutative data structures (simpler math, can work offline and peer-to-peer).
+
+- OT requires a central server to order operations. If User A and User B both insert text at position 5 simultaneously, the server receives both, orders them, transforms each against the other, and sends the transformed operations to both clients. What happens if the central server is unavailable? (OT-based collaboration stops -- it cannot work offline.)
+- CRDTs for text editing use a sequence CRDT (like LSEQ or RGA). Each character gets a unique identifier that encodes its position relationally. Concurrent inserts at the "same position" get unique IDs and are merged deterministically. What is the user-visible result when two users simultaneously type at the same position?
+- Follow-up: OT is mathematically complex to implement correctly (the transform functions must satisfy two properties: TP1 and TP2). CRDTs are simpler to implement but produce larger data structures (every character carries metadata). For a new collaborative document product: OT or CRDT? Justify your choice based on: team expertise, offline requirement, and expected document size.
+
+**Question 34 -- Chaos engineering: designing the blast radius**
+
+A chaos experiment must define its blast radius before it runs: the maximum scope of impact if the experiment goes wrong. A blast radius that is too large risks real production incidents. A blast radius that is too small does not test meaningful failure scenarios. Blast radius has two dimensions: scope (which users/services are affected) and depth (how severe the failure is).
+
+- Define blast radius constraints for a chaos experiment that kills a single Cassandra node in production: (a) which percentage of users could be affected (if the node holds their partition key), (b) which operations fail (writes to QUORUM if that node was in the quorum), (c) how long before Cassandra routes around the failed node.
+- Design the pre-experiment checklist: (a) steady-state metrics defined (what does "healthy" look like before the experiment?), (b) hypothesis written ("we believe the system will recover within X seconds because Y"), (c) abort threshold defined (if metric Z drops below threshold T, kill the experiment immediately), (d) rollback plan documented.
+- Follow-up: Your abort threshold triggers during the experiment: the system is recovering slower than expected. What is the exact sequence of steps to abort? Who has the authority to abort a running chaos experiment in production? How do you document the failure and create a follow-up ticket?
+
+**Question 35 -- Chaos engineering: game days and cultural barriers**
+
+The technical side of chaos engineering is the easier part. The harder part is the organizational and cultural change required to inject failures into production intentionally. Engineers fear breaking things on purpose. Managers fear the liability. Legal and compliance teams fear audit findings. Overcoming these barriers requires a structured "game day" approach that demonstrates value safely.
+
+- Describe the game day format: (a) pre-game (scope, hypothesis, blast radius, abort criteria), (b) the game (structured failure injection with real-time monitoring), (c) post-game (retrospective, learnings, remediation tracking). How long does each phase take for a first game day?
+- What is the argument for chaos engineering in a regulated industry (finance, healthcare)? How do you reframe "we broke production on purpose" as "we proactively discovered and remediated a compliance risk"?
+- Follow-up: Netflix's Chaos Monkey runs in production automatically (not just during game days). It randomly terminates EC2 instances on a schedule. Your organization wants to adopt this. What is the minimum maturity level required before you can run automated chaos in production? (Hint: automated rollback, comprehensive alerting, on-call procedures, blast radius controls.) What is the consequence of running automated chaos before reaching this maturity?
+
+---
+
+
+### Cross-chapter from Ch26: CRDT vs LWW for the like count use case
+
+**Question 34 -- Ch26 + Ch27: CRDT vs LWW for the like count use case**
+
+Chapter 27's G-Counter CRDT provides a mathematically correct solution to the like-count problem that LWW cannot. With LWW, if two replicas simultaneously increment a counter, one increment is silently dropped (the one with the earlier timestamp). With a G-Counter CRDT, each replica tracks its own count independently, and the merge sums all replicas. No increment is ever lost.
+
+- Implement the G-Counter mental model: with 3 replicas, each storing a vector [A, B, C] representing each replica's contribution. Replica A increments 5 times, replica B increments 3 times, replica C increments 7 times. After merge: what is the total count? What is the vector state?
+- During a 5-minute partition, 10K likes arrive at replica A and 8K at replica B. After reconciliation: LWW total vs G-Counter total. Which is correct? What is the business impact of the LWW answer?
+- Follow-up: G-Counter metadata size grows linearly with the number of replicas. At 100 replicas, every counter value carries a 100-element vector. For a system with 1B posts, each with a like count: calculate the total metadata storage overhead. Is this acceptable? What is the engineering trade-off between correctness and storage cost?
+
+
+### Ch27+Ch22: Replacing 2PC coordinator with Raft leader
+
+**Question 36 -- Ch27 + Ch22: replacing 2PC coordinator with Raft leader**
+
+2PC's coordinator is a single point of failure. If the coordinator crashes in Phase 2, the entire transaction is blocked. Chapter 22 introduced Raft leader election: if the leader crashes, a new leader is elected within seconds. Using a Raft-elected leader as the 2PC coordinator gives you automatic coordinator failover without human intervention.
+
+- In a Raft-based 2PC: the Raft leader is the 2PC coordinator. When the leader crashes, a new Raft leader is elected. The new leader inherits the transaction log from the crashed leader (because Raft replicates the log to a majority). The new leader resumes the commit or abort decision. Walk through the exact state of participants during this failover window.
+- CockroachDB implements this: each shard (range) has a Raft leader. Cross-range transactions use a transaction coordinator (any node can be coordinator). The coordinator's state is checkpointed in the transaction record, which is itself Raft-replicated. If the coordinator fails, the transaction record survives. How does the recovery work?
+- Follow-up: In a Raft-based system, the coordinator failover adds latency to transactions that span a coordinator crash. Design the monitoring: what is the P99 transaction latency spike during a coordinator failover? How do you distinguish a "coordinator failover spike" from "the database is degrading"? What is the acceptable spike duration?
+
+
+### Ch27+Ch23: Backpressure for 2PC lock contention
+
+**Question 37 -- Ch27 + Ch23: backpressure for 2PC lock contention**
+
+Chapter 23 introduced backpressure: when a downstream system is overwhelmed, upstream systems must slow down or shed load. 2PC creates implicit backpressure through lock contention: a slow coordinator slows all participants, which blocks all transactions trying to access locked rows. This is backpressure via lock queuing, not via explicit rate limiting -- and it is much harder to control.
+
+- Model the lock backpressure cascade: coordinator slows from 10ms to 50ms (network degradation). Participants hold locks 5x longer. Transactions waiting for locked rows queue up. Queue depth grows. New incoming transactions are rejected because the queue is full. Map this to the backpressure patterns from Chapter 23: which pattern does implicit lock backpressure most resemble?
+- Design the explicit backpressure control for a 2PC-heavy system: (a) monitor lock wait time P99, (b) if P99 exceeds threshold (e.g., 100ms), reduce the rate of new 2PC transactions (rate limiter at ingress), (c) if P99 drops below threshold, increase rate. This is load-shedding plus rate limiting. What is the feedback loop time constant?
+- Follow-up: The backpressure you designed rejects new 2PC transactions when lock contention is high. Where do the rejected transactions go? (Queue? Error to client? Retry-after response?) If they queue, the queue becomes a secondary source of backpressure when it fills. Design the three-tier response: (a) slow down (rate limit), (b) queue (buffer), (c) shed (reject with retry-after). At what thresholds do you escalate from tier 1 to tier 2 to tier 3?
+
+
+### Ch27+Ch26: Why 3PC does not solve CAP
+
+**Question 38 -- Ch27 + Ch26: why 3PC does not solve CAP**
+
+This question was foreshadowed in Chapter 26 (CAP) and completed in Chapter 27 (3PC). The intellectual synthesis: CAP says no distributed system can be consistent and available during a partition. 3PC claims to be non-blocking (available) and consistent. These two claims appear to contradict each other. Resolving the contradiction is a Staff-level synthesis.
+
+- 3PC resolves the blocking problem under a coordinator crash (no partition). Under a partition that splits the cluster, participants in different partitions enter different 3PC phases and make conflicting decisions. Describe the exact scenario: coordinator is in partition A, some participants in partition B. Partition B participants time out, transition to "pre-commit can abort," and abort. Partition A commits. Split-brain.
+- 3PC is safe under: (a) coordinator crash without partition (non-blocking recovery). 3PC is unsafe under: (b) network partition (split-brain). What does 3PC sacrifice to gain non-blocking behavior? (It sacrifices partition safety -- the same thing CAP says you must sacrifice for availability.)
+- Follow-up: An interviewer says "3PC is better than 2PC, why don't databases use it?" Write the four-sentence answer: (a) 3PC is non-blocking only without partitions, (b) real distributed systems have partitions, (c) under partition, 3PC can produce split-brain (worse than 2PC's blocking), (d) production systems prefer 2PC + timeout recovery or Raft-based consensus which correctly handles partitions.
+
+---
+
+## Part D: Additional Production Incidents -- 2PC and CRDTs
+
+---
+
+## Production Incident: Google Spanner Cross-Shard 2PC Latency at Global Scale
+**Company:** Google | **Year:** Documented behavior (Spanner paper 2012, production observations ongoing) | **System:** Google Spanner (CP, Paxos + 2PC for cross-shard transactions)
+
+### What Happened (analogy first, then mechanics)
+
+Imagine a large accounting firm where every transaction that touches more than one filing cabinet requires a supervisor in each room to sign off before the transaction is finalized. When all filing cabinets are in the same building, the supervisor walk takes 10ms. But when the filing cabinets are in different cities, the supervisor walk is a plane ticket. The firm only discovered this cost after they opened offices in five countries and tried to process the same single transactions they had always processed.
+
+Google Spanner organizes data into Paxos groups (roughly: a shard has a Paxos group that manages its consensus). A transaction that reads and writes within a single Paxos group is handled entirely by that group -- fast, local, no 2PC. But a transaction that touches rows in multiple Paxos groups requires 2PC: a coordinator collects Prepare votes from each participant group, waits for all votes, then broadcasts Commit. At global scale, with shards spread across North America, Europe, and Asia, the latency profile of a cross-shard transaction is dominated by WAN round-trips.
+
+The specific "incident" was not a failure. It was a design discovery during rollout of a feature that required transactions across 10+ shards simultaneously (a global aggregation write). The measured latency breakdown was:
+
+- 10 parallel Prepare messages to 10 Paxos group leaders: ~45ms (fan-out, bounded by the slowest shard)
+- Each Paxos group leader running Paxos internally to commit its Prepare record: ~15ms
+- All Prepare acks returned to coordinator: ~45ms (fan-in)
+- Coordinator decides Commit, broadcasts 10 Commit messages: ~45ms fan-out
+- Each group applies commit: ~10ms
+- Coordinator receives all Commit acks: ~45ms fan-in
+- Total p99: ~200ms for a 10-shard cross-region transaction
+
+This was 20x slower than the 10ms target the team had designed against. The 200ms p99 was discovered in load testing before full production rollout, but it forced a redesign of the feature's transaction model.
+
+### The CAP Analysis
+
+- **Which CAP choice did this system make?** CP. Spanner is explicitly CP: TrueTime-based external consistency, no stale reads, no split-brain. The 2PC cost is the direct price of CP correctness in a globally distributed setting.
+- **What did the system sacrifice?** Latency. Under PACELC: even Else (no partition), Spanner chooses Consistency over Latency. The 200ms p99 is not a failure -- it is the consistent, correct, expected behavior for a 10-shard global transaction.
+- **Was this the right choice?** For the use case (financial records, global inventory) yes. But the application design was wrong: a feature requiring 10-shard transactions in a globally distributed CP system was designed without measuring the latency budget.
+
+### ASCII Diagram: 2PC Across 10 Paxos Groups
+
+```
+  TRANSACTION: update 10 shards globally
+
+  Coordinator (US-East)
+  +------------------------+
+  |  Begin 2PC             |
+  |  Prepare fan-out       |
+  +------------------------+
+    |      |      |      |
+    v      v      v      v    (... 10 total, shown as 4 for space)
+  +----+ +----+ +----+ +----+
+  |SH1 | |SH2 | |SH3 | |SH10|  Paxos groups (spread across US, EU, Asia)
+  |US  | |EU  | |EU  | |Asia|
+  +----+ +----+ +----+ +----+
+    |      |      |      |
+    |   each shard runs Paxos internally to record Prepare (~15ms)
+    |      |      |      |
+    v      v      v      v
+  Prepare ACKs return to coordinator (bounded by slowest: Asia, ~90ms)
+  +------------------------+
+  |  Coordinator           |
+  |  All Prepares received |
+  |  Decision: COMMIT      |
+  +------------------------+
+    |      |      |      |
+    v      v      v      v
+  Commit fan-out to all 10 shards (~45ms)
+  Each shard applies commit (~10ms)
+  Commit ACKs return (~45ms)
+  +------------------------+
+  |  Coordinator           |
+  |  Transaction done      |
+  |  Total: ~200ms p99     |
+  +------------------------+
+  For comparison: single-shard Spanner transaction = ~10ms
+```
+
+### Root Cause
+
+Application design assumed single-shard transaction latency (~10ms) for an operation that mechanically required 10-shard 2PC. The Spanner documentation is explicit about the cross-shard 2PC cost, but it was not accounted for during feature design. The number of shards touched per transaction was not a design input -- it was an emergent consequence of the data model.
+
+### Fix Applied
+
+Three changes to reduce the cross-shard fan-out:
+
+1. **Denormalize hot aggregation data.** The feature that required 10-shard reads was aggregating a global counter. The counter was denormalized into a single summary row that is updated asynchronously, reducing the transaction scope from 10 shards to 1.
+2. **Colocate related data.** Rows that are frequently updated in the same transaction were moved to the same key range (same shard) using interleaved tables (Spanner's native colocation mechanism). A transaction that previously touched 3 shards now touches 1.
+3. **Saga for non-critical cross-entity updates.** For updates where strict atomicity was not required (e.g., incrementing a "posts count" alongside a new post write), the operation was decomposed into a Saga: write the post (single-shard), then asynchronously update the count. 2PC was only kept for operations where atomicity was a hard requirement.
+
+Post-fix p99: 18ms (single-shard) for 95% of transactions; 200ms remaining for the 5% that still required true cross-shard atomicity -- but now those 5% were explicitly audited and accepted.
+
+### Staff Engineer CAP Lessons
+
+- The 2PC cost in a globally distributed system is not a constant overhead -- it scales with the number of shards and the WAN RTT to the slowest shard. Measure both before committing to an architecture.
+- "Fan-out + fan-in" is the latency model for 2PC. P99 latency is determined by the slowest participant, not the average. One slow shard in Asia makes your entire 10-shard transaction slow.
+- Spanner's paper is explicit: single-shard transactions are fast (no 2PC). Cross-shard transactions are slow (2PC). Designing for Spanner means minimizing cross-shard transaction scope, not treating all transactions as equivalent.
+- When a feature requires 2PC across N shards, the right question is: "can I redesign the data model to reduce N?" Denormalization, colocation, and Sagas are all tools for reducing N.
+
+---
+
+## Production Incident: Figma CRDT Type Mismatch During Collaborative Vector Editing
+**Company:** Figma | **Year:** 2022-era | **System:** Figma's collaborative editing engine (CRDT-based, custom CRDT types per element)
+
+### What Happened (analogy first, then mechanics)
+
+Imagine two architects working on the same blueprint at the same time, one in Sydney and one in London. They are using a special "conflict-free" drafting system: whatever changes each makes will automatically merge without anyone having to negotiate. The system works perfectly for adding notes -- both notes survive. But one architect moves the corner of a wall from point A to point B. The other architect independently moves the same corner from point A to point C. The system merges the two moves by... keeping both -- resulting in a wall corner that is simultaneously at B and C. The draft is technically correct according to the merge rules, but structurally meaningless as an architectural drawing.
+
+Figma uses CRDTs extensively for real-time collaborative editing. Text elements, properties, and UI layers are all represented using CRDT types appropriate to their semantics. The incident occurred when a user in Australia and a user in London simultaneously edited the same vector path -- specifically, two control points on a Bezier curve handle. The control points define the curvature of the path between two anchor points.
+
+The CRDT type used for vector control points was a G-Set (Grow-only Set): new positions can be added, merges take the union of all positions seen. This is correct for text characters (you want all characters to survive a concurrent edit). It is wrong for vector control points, where each anchor can have exactly one control point pair and the position is a continuous value, not a set member.
+
+When the partition between Australia and London healed, the CRDT merge produced a union: both control point positions survived. The Bezier curve render engine took both control points and interpolated between them, producing a path with a visual kink that neither user had drawn. Neither user received an error. The document saved successfully. The client in London opened the file the next morning and saw a broken product illustration.
+
+### The CAP Analysis
+
+- **Which CAP choice did this system make?** AP with CRDT convergence. Figma's collaborative engine is explicitly AP: users can continue editing without coordination, and convergence is guaranteed. No user is ever blocked waiting for the other to "release" the document.
+- **What did the system sacrifice?** Semantic correctness for non-set-semantics data types. Convergence is guaranteed (the CRDT will converge to a single state), but the converged state may not satisfy application-layer constraints (one control point per anchor, not a union of control points).
+- **Was this the right choice?** AP with CRDTs is correct for collaborative editing in general -- you cannot block a user's edits waiting for network consensus. But the CRDT type selection was wrong for vector graphics semantics.
+
+### ASCII Diagram: CRDT Merge on Vector Control Points
+
+```
+  SHARED STATE before partition: Bezier path, anchor P1, control point at position (50, 30)
+
+  +------------------+   network   +------------------+
+  |  Figma Client    |<----------->|  Figma Client    |
+  |  Australia       |             |  London          |
+  |  ctrl_pt: (50,30)|             |  ctrl_pt: (50,30)|
+  +------------------+             +------------------+
+
+  PARTITION (high-latency mobile, ~8s gap)
+
+  Australia user drags       London user drags
+  control point to (60, 20)  control point to (40, 45)
+
+  +------------------+   X   X   X   +------------------+
+  |  ctrl_pt: (60,20)|               |  ctrl_pt: (40,45)|
+  |  G-Set: {(60,20)}|               |  G-Set: {(40,45)}|
+  +------------------+               +------------------+
+
+  PARTITION HEALS -- CRDT G-Set merge: union of both sets
+  +------------------+    merge      +------------------+
+  |  ctrl_pt:        |<------------->|  ctrl_pt:        |
+  |  G-Set:          |               |  G-Set:          |
+  |  {(60,20),(40,45)}               |  {(60,20),(40,45)}
+  +------------------+               +------------------+
+  Both control points survive. Bezier renderer uses BOTH.
+  Path has a kink at anchor P1 -- visually broken, saved silently.
+
+  Correct result should have been: last-write-wins OR user-prompted conflict
+  for positional (non-set) data.
+```
+
+### Root Cause
+
+The CRDT type chosen for vector control points (G-Set) was semantically correct for text (characters form a set; concurrent adds both survive) but semantically wrong for vector positions (a control point is a scalar position, not a set member; having two positions is physically impossible in vector graphics).
+
+The root cause was a data type mismatch, not a CRDT implementation bug. Figma's CRDT engine was working exactly as designed. The design decision -- which CRDT type to use for which element -- was made without fully modeling the application semantics of vector control points.
+
+### Fix Applied
+
+Two changes to Figma's CRDT type registry:
+
+1. **LWW-Register for positional data.** Vector control point positions were migrated from G-Set semantics to a Last-Write-Wins Register (LWW-Register) CRDT type. An LWW-Register holds a single value with a timestamp; concurrent writes are resolved by keeping the higher timestamp. For a position, "last writer wins" is more semantically correct than "all writers survive." The losing user sees their edit silently overridden (same as Google Docs behavior on simultaneous character edits to the same position).
+2. **Intent-preserving CRDTs for path operations.** For more complex vector operations (add anchor, delete anchor, split path), Figma designed intent-preserving CRDT operations: instead of recording the resulting state change, they record the user's intent (e.g., "insert anchor at parametric position t=0.5"). Two concurrent "insert anchor" operations with different parametric positions both survive and produce two new anchors, which is semantically correct.
+
+### Staff Engineer CAP Lessons
+
+- CRDTs have types, and the type must match the application semantics. G-Set (union of additions) is right for text; LWW-Register (single scalar, last writer wins) is right for positional values; PN-Counter (increment/decrement) is right for counts. Using the wrong CRDT type gives you convergence but not correctness.
+- "CRDT convergence is guaranteed" is often misunderstood as "CRDT output is correct." Convergence means all replicas reach the same state, not that the state is meaningful. A G-Set with two control points converges correctly and renders a broken path. Both things are true simultaneously.
+- The gap between "converges correctly" and "business-correct" is where CRDT design work actually lives. For collaborative applications, model each data type's semantics before picking a CRDT type. Ask: "if two users concurrently change this value, which outcomes are acceptable to a user?"
+- CRDTs are appropriate when you can tolerate any merge outcome (text, comments, presence indicators) or when the merge outcome has clear semantics (counters, sets of tags). For data with tight semantic constraints (positions, financial amounts), either use LWW (accept last-write semantics) or fall back to CP coordination for that specific operation.
+
+---
+
+## Part E: L5 vs L6 Calibration Table -- Advanced Distributed Systems
+
+| Dimension | L5 (Senior Engineer) | L6 (Staff Engineer) |
+|-----------|----------------------|---------------------|
+| **2PC understanding** | Knows 2PC phases (Prepare, Commit); knows it blocks on coordinator crash | Quantifies the blocking window (coordinator crash to timeout), designs the recovery path (Saga rollback, Raft-based coordinator failover), knows when 2PC is the right tool vs. when Saga is better |
+| **Saga pattern design** | Knows Saga exists as an alternative to 2PC | Designs Saga compensation logic for each step, handles partial failure modes explicitly (what happens if step 3 succeeds and step 4 fails?), knows choreography vs. orchestration trade-offs and which fits which use case |
+| **Distributed transaction decision** | Asks "do I need 2PC here?" and answers yes/no | Asks "how many shards does this transaction touch, what is the WAN RTT to each, what is the p99 latency budget, and is there a data model change that reduces shard count?" before committing to 2PC |
+| **HLC vs vector clocks** | Knows clocks in distributed systems are a problem; has heard of Lamport clocks | Chooses between HLC (hybrid logical clock) and vector clocks for specific use cases: HLC for events needing wall-clock correlation (log correlation across services), vector clocks for causal ordering within a single system; knows the storage cost of vector clocks grows with node count |
+| **CRDT type selection** | Knows CRDTs enable conflict-free merging; uses G-Set or counter as examples | Maps application data types to CRDT types: G-Set for append-only sets, LWW-Register for scalar values, PN-Counter for bidirectional counts, RGA or Logoot for ordered sequences (text); rejects CRDTs for data types where convergence does not imply correctness |
+| **Chaos engineering design** | Knows chaos engineering means injecting failures; mentions Chaos Monkey | Designs a full chaos experiment: hypothesis (e.g., "our system handles single-node partition within 10s"), blast radius (which nodes, which traffic percentage), success criteria (measurable SLO), rollback procedure; distinguishes game-day exercises from automated continuous chaos |
+| **Read consistency at scale** | Knows strong vs. eventual consistency; picks strong for "important" reads | Designs a read routing layer: read-your-writes routing (route read to same replica as last write), bounded staleness (reject reads more than Xms stale), monotonic reads (route to replica that has the data from the last read); knows the throughput cost of each |
+| **Raft vs 2PC trade-offs** | Treats Raft and 2PC as interchangeable "distributed consensus" tools | Distinguishes them cleanly: Raft is for replicated state machine (all nodes converge on the same log, leader handles all writes); 2PC is for atomic cross-node transactions (different nodes hold different data, all must commit atomically); uses Raft-leader as 2PC coordinator to eliminate single point of failure |
+| **Coordinator failure recovery** | Knows coordinator crash blocks 2PC | Designs coordinator failure recovery specifically: (a) transaction record checkpointed in durable store before Phase 2, (b) any node can resume coordinator role by reading the record, (c) participant timeout triggers recovery coordinator election; can describe how CockroachDB and Spanner implement this |
+| **3PC limitations** | Knows 3PC is "non-blocking 2PC" and sees it as strictly better than 2PC | Explains precisely where 3PC fails: under network partition (not just coordinator crash), partition-B participants time out and abort independently while partition-A commits -- split-brain; knows this is why production databases do not use 3PC and prefer Raft-based consensus instead |
+| **TrueTime / HLC awareness** | Aware that Google Spanner uses TrueTime for external consistency | Explains TrueTime's commit-wait: Spanner waits for the uncertainty window to expire before returning a commit ACK, ensuring no future transaction can have a lower timestamp; compares to HLC (available to any system, uses NTP + logical offset, no atomic clocks required) and knows when HLC suffices |
+| **Production distributed systems instinct** | Identifies distributed systems problems when given a failure description | Reverse-engineers the failure from symptoms: "users see stale data right after write" -> read-your-writes missing; "2am balance flip-flop" -> replica lag with round-robin reads; "double-booking" -> AP system with no conditional write; reaches for the specific mechanism, not the category |
+
+---
+
+## How Your Thinking Evolves: Intern to Staff Engineer
+
+*Same problem at four levels: you need to transfer $100 between two bank accounts that live in different microservices (Account Service and Ledger Service).*
+
+### Intern Level: "Update both in a loop"
+
+```python
+# INTERN CODE
+account_service.deduct(user_id, 100)
+ledger_service.add(transaction_id, 100)
+```
+
+Think of this like mailing two letters and hoping both arrive. If `account_service.deduct` succeeds but `ledger_service.add` fails (network error), the $100 is gone from the account but not in the ledger. Money vanished. No error in the caller -- just a silent inconsistency.
+
+### Mid-Level (L4): "Use a database transaction"
+
+L4 puts both operations in a single database transaction. ACID guarantees atomicity: either both happen or neither does.
+
+This works perfectly -- if both services share the same database. They don't. Account Service has its own database. Ledger Service has its own database. You cannot span a database transaction across two separate databases. ACID transactions are per-database. L4's solution doesn't work in a microservices architecture.
+
+### Senior (L5): "Use 2PC or saga"
+
+L5 knows about distributed transactions. Two options:
+
+**2PC (Two-Phase Commit):**
+```
+Phase 1 (Prepare):
+  Coordinator -> Account Service: "Can you deduct $100? Lock the row."
+  Account Service: "Yes, I've locked it." (vote: yes)
+  Coordinator -> Ledger Service: "Can you add $100? Lock the row."
+  Ledger Service: "Yes, I've locked it." (vote: yes)
+
+Phase 2 (Commit):
+  Coordinator -> Account Service: "Commit."
+  Coordinator -> Ledger Service: "Commit."
+  Both commit. Both release locks.
+```
+
+2PC is correct. But: if the coordinator crashes after Phase 1 and before Phase 2, both services are locked indefinitely. No one can commit or abort. The transaction is stuck until the coordinator recovers.
+
+**Saga pattern (L5's preferred alternative):**
+1. Deduct $100 from account (step 1). If this fails, no compensating action needed (nothing happened).
+2. Add $100 to ledger (step 2). If this fails, run compensating action: re-add $100 to account (undo step 1).
+
+Saga is eventually consistent, not ACID-atomic. But it's non-blocking -- no distributed locks held across services.
+
+### Staff (L6): "Choose 2PC vs saga based on correctness requirements, then design for failure"
+
+L6 asks: "Does this transfer require absolute atomicity (both happen or neither), or is eventual consistency acceptable?"
+
+For a $100 bank transfer: absolute atomicity is required. A user cannot be in a state where $100 is deducted but not added. 2PC is the correct choice -- despite its blocking behavior. The coordinator failure window is short (milliseconds) and detectable.
+
+But L6 doesn't just choose 2PC and stop. They design for coordinator failure:
+
+"The coordinator is a single point of failure. We make the coordinator itself replicated using Raft. The coordinator state (which transactions are in which phase) is stored in etcd. If the primary coordinator fails, a new Raft leader takes over and either completes or aborts the in-flight transaction. This is how Spanner does it."
+
+L6 also thinks about CRDT alternatives: "For commutative operations (like incrementing a balance that can only go up), a CRDT G-Counter is a better tool than 2PC. It's always AP, never blocks, and converges without coordination. The bank account example specifically requires 2PC because the operation is conditional (can't deduct if insufficient funds) -- CRDTs can't express conditional logic."
+
+```
+L6 DISTRIBUTED TRANSACTION DECISION:
+  Is operation atomic across services? (both succeed or neither)
+       NO -> Saga (compensating transactions, eventual consistency)
+       YES -> Is operation conditional? (if balance > amount, deduct)
+              YES -> 2PC (with replicated coordinator)
+              NO  -> CRDT (if commutative operation like increment)
+
+  For $100 transfer: conditional + atomic = 2PC
+  For like count: commutative + AP ok = G-Counter CRDT
+  For order cancellation: multi-step + non-atomic = Saga
+```
+
+### The Pattern
+
+- Intern: sequential calls (silent inconsistency on partial failure)
+- L4: database transaction (doesn't work across multiple databases)
+- L5: 2PC for atomicity, saga for eventual consistency -- knows when to use each
+- L6: chooses based on correctness requirements, designs coordinator for failure, recognizes CRDT alternatives for commutative operations
+
+---
+
+
+# Homework Exercises: Chapter 27 -- Advanced Distributed Systems
+
+## Exercise 1: 2PC Failure Mode Analysis
+
+For each 2PC failure scenario below, describe: what state each participant is in, whether the transaction can be resolved automatically, and how long it blocks.
+
+a) Coordinator crashes after sending Prepare, before receiving all votes
+b) Coordinator crashes after receiving all Yes votes, before sending Commit
+c) One participant crashes after voting Yes, before receiving Commit
+d) Network partition between coordinator and one participant after Commit is sent
+e) Coordinator recovers from scenario (b) -- what does it do first?
+
+For scenario (b) specifically: this is the classic 2PC blocking problem. Explain in plain language why no participant can safely abort or commit on their own, and what the minimum information the coordinator must persist to WAL before sending Commit.
+
+```
+2PC Timeline (scenario b):
+  Coordinator     Participant A     Participant B
+      |                |                 |
+   [Prepare] --------> |                 |
+      |        Yes <-- |                 |
+   [Prepare] -------->                   |
+      |                          Yes <-- |
+  (all Yes received)
+  [CRASH HERE]         <- locked ->      <- locked ->
+      |
+  (recovery) ???
+```
+
+Fill in: what does recovery look like? What does the coordinator read from WAL?
+
+---
+
+## Exercise 2: Saga Design
+
+Design a saga for hotel booking with four steps: (1) Reserve room, (2) Charge credit card, (3) Send confirmation email, (4) Update loyalty points.
+
+For each step write:
+- Forward action (the operation)
+- Compensating action (what undoes it if a later step fails)
+- What happens if the compensating action itself fails
+
+Then draw the full saga state machine in ASCII showing all success and failure paths:
+
+```
+START
+  |
+  v
+[Reserve Room] --> success --> [Charge Card] --> success --> [Send Email] --> ...
+  |                               |
+  fail                            fail
+  |                               v
+END (no compensation needed)  [Cancel Room]
+                                  |
+                             (cancel ok?) --> ...
+```
+
+Answer: at what step does the saga become non-compensatable (the point of no return where you cannot cleanly undo)? For a hotel booking saga, that is usually after credit card charge succeeds -- explain why and what you do instead of compensating.
+
+---
+
+## Exercise 3: CRDT Selection
+
+For each use case, choose the most appropriate CRDT type from: G-Counter, PN-Counter, G-Set, OR-Set, LWW-Register, MV-Register. Justify in 2-3 sentences.
+
+a) Like count on a post (users can like and unlike)
+b) Tags on a document (users can add and remove tags concurrently across devices)
+c) A user's display name (most recent write should win on conflict)
+d) Active session count for a user (increment on login, decrement on logout)
+e) A shopping cart (add and remove items concurrently across devices)
+f) A distributed rate limiter counter (only increments, shared across nodes)
+
+For each: describe one concrete scenario where this CRDT gives the correct result automatically, where a naive approach (last write wins on the whole object) would either lose data or require manual conflict resolution.
+
+---
+
+## Exercise 4: Hybrid Logical Clock Design
+
+Your distributed system has 5 nodes. NTP synchronization gives max clock drift of 250ms. You need to order events across nodes for an audit log.
+
+Design the HLC implementation:
+
+A) HLC format: specify the bit layout. How many bits for physical time (milliseconds), how many for the logical counter? What is the maximum logical counter value before you need to increment physical time?
+
+B) Update rule: Node A sends a message with HLC timestamp T_A to Node B whose local HLC is T_B. Write the update rule B applies on receiving the message.
+
+C) Uncertainty window: with 250ms NTP drift, what is the maximum time skew between any two nodes? How does HLC bound this?
+
+D) Lamport vs HLC: Lamport clocks track causality but not wall time. HLC tracks both. Give one specific audit log query that is possible with HLC but impossible with Lamport clocks.
+
+E) Audit log schema: design the table using HLC as the timestamp. What type is the HLC column? How do you sort it correctly?
+
+---
+
+## Exercise 5: Chaos Engineering Plan for a Payment System
+
+Design a chaos engineering plan for a distributed payment system using Raft for leader election and 2PC for cross-shard transactions.
+
+Design 4 experiments:
+
+Experiment 1: Kill the Raft leader during active transactions
+- Hypothesis: what should happen (leader election time, in-flight transaction outcome)?
+- Measurement: which metric confirms the hypothesis?
+- Blast radius limit: maximum acceptable customer impact
+- Stop condition: what triggers experiment rollback?
+
+Experiment 2: Inject 500ms latency on the 2PC coordinator network interface
+- Hypothesis: what happens to lock wait times and transaction throughput?
+- Measurement: which metric?
+- Blast radius limit?
+- Stop condition?
+
+Experiment 3: Partition one shard from the others for 30 seconds
+- Hypothesis: CP behavior -- transactions to that shard block or fail. AP behavior -- they succeed with risk of inconsistency. Which does your system do and is that correct?
+- Measurement?
+
+Experiment 4: Slow the coordinator's disk so WAL writes take 2 seconds instead of 5ms
+- Hypothesis: what does this do to commit latency? What does this do to the prepare timeout?
+- Measurement?
+
+For all 4: specify who runs the experiment, who watches the dashboard, and who has authority to roll back.
+
+---
+
+## Exercise 6: System Design -- Distributed Like Count at Scale
+
+Design a distributed like count system for a social media platform. 1 billion likes/day.
+
+Requirements:
+- Counts are approximate (within 1% error is acceptable)
+- Never lose a like (every like must eventually be counted)
+- Display latency must be under 100ms
+- Cost must be feasible (cannot afford strongly consistent global coordination per like)
+
+Evaluate three options:
+
+Option A: Centralized counter with PostgreSQL row lock
+- Scalability limit: at what likes/second does this break?
+- Consistency: exact or approximate?
+- Estimated cost at 1B likes/day (RDS instance size)
+- Failure mode: what causes incorrect counts?
+
+Option B: CRDT G-Counter replicated across 3 regions
+- Scalability limit?
+- Consistency: eventual -- how eventual? (seconds? minutes?)
+- Estimated cost?
+- Failure mode?
+
+Option C: Eventually consistent counter -- Redis per-shard increment + Spark batch aggregation hourly
+- Scalability limit?
+- Consistency: what is the display lag during batch window?
+- Estimated cost?
+- Failure mode: what happens if Redis crashes before Spark reads it?
+
+Choose one option. Justify in a paragraph covering: why its trade-offs are acceptable for a like count specifically (not for a bank balance), and what monitoring you add to detect when counts drift beyond 1% error.
+
+---
