@@ -4982,3 +4982,854 @@ CHAPTER COMPLETENESS:
 REMAINING GAPS:
 None. Chapter is complete for Staff Engineer (L6) scope.
 ```
+
+---
+
+# Part 19: SSE Deep Dives (Google L6 Gap Coverage)
+
+These four topics are the ones Google L6 interviews probe that the rest of this chapter covers only partially. Each is a distinct design area where a Staff Engineer is expected to go beyond "I'd defer this."
+
+---
+
+## 19.1 Distributed ID Generation at Google Scale
+
+### Why Redis INCR Breaks at Scale
+
+The hybrid counter approach (Part 7) uses a single Redis INCR as the source of uniqueness. This works fine at 40 writes/sec. The problem surfaces when:
+
+- **Redis becomes the write bottleneck**: A single Redis instance handles ~100K INCR/sec. That sounds like headroom—until you factor in replication lag, network round-trips from multiple regions, and Redis failover time.
+- **Counter is a single point of failure**: If Redis is down for 30 seconds, all URL creation stops. The fallback (random + collision check) temporarily degrades quality.
+- **Cross-region coordination**: If you need URL creation in multiple regions simultaneously, a centralized Redis counter creates a cross-region write for every create operation.
+
+```
+PROBLEM: Global Redis counter for URL creation
+
+Region US  →  redis.incr("url:counter")  →  Redis (us-east-1)
+Region EU  →  redis.incr("url:counter")  →  Redis (us-east-1)  ← cross-region write!
+Region Asia → redis.incr("url:counter")  →  Redis (us-east-1)  ← cross-region write!
+
+Each create from EU/Asia adds ~100-150ms just for the counter call.
+```
+
+### Snowflake-Style IDs
+
+Twitter's Snowflake (and Google's equivalent) generates 64-bit IDs that are unique without central coordination:
+
+```
+64-BIT SNOWFLAKE ID LAYOUT:
+┌──────────────────────────────────────────────────────────────────┐
+│  Bit 63   │  Bits 62-22 (41 bits)  │  Bits 21-12 (10 bits)  │  Bits 11-0 (12 bits)  │
+│  Sign=0   │  Timestamp (ms)        │  Machine ID            │  Sequence number       │
+└──────────────────────────────────────────────────────────────────┘
+
+BREAKDOWN:
+- Sign bit:         Always 0 (positive)
+- Timestamp:        Milliseconds since custom epoch (2024-01-01)
+                    41 bits = 2^41 ms = ~69 years of headroom
+- Machine ID:       10 bits = up to 1024 unique app servers
+                    Each server has a unique ID (assigned at startup)
+- Sequence:         12 bits = up to 4096 unique IDs per millisecond per server
+                    If sequence overflows, wait until next millisecond
+
+RESULT:
+- Globally unique without any coordination
+- Sortable by time (useful for analytics, not needed here)
+- 1024 servers × 4096 IDs/ms = 4 million IDs/ms = 4 billion IDs/sec capacity
+```
+
+```
+// Pseudocode: Snowflake ID generator
+
+CLASS SnowflakeGenerator:
+    EPOCH = 1704067200000  // 2024-01-01 00:00:00 UTC in ms
+    machine_id = get_machine_id()  // Assigned at startup from config
+    last_ms = 0
+    sequence = 0
+    lock = Mutex()
+    
+    FUNCTION next_id():
+        WITH lock:
+            now_ms = current_timestamp_millis() - EPOCH
+            
+            IF now_ms == last_ms:
+                sequence = (sequence + 1) MOD 4096
+                IF sequence == 0:
+                    // Sequence exhausted for this ms, wait for next
+                    now_ms = wait_until_next_ms(last_ms)
+            ELSE:
+                sequence = 0
+            
+            last_ms = now_ms
+            
+            RETURN (now_ms << 22) | (machine_id << 12) | sequence
+    
+    FUNCTION get_machine_id():
+        // Read from environment variable, consul, or hostname hash
+        // Must be unique across all running instances
+        RETURN parse_int(env.get("MACHINE_ID", "0")) % 1024
+```
+
+**Then encode to base62:**
+
+```
+FUNCTION generate_short_code():
+    id = snowflake.next_id()
+    code = base62_encode(id)
+    // 64-bit integer → ~11 base62 chars
+    // Truncate to 7 chars if needed (still enough entropy at our scale)
+    RETURN code[0:7]
+```
+
+### Range-Lease Approach (Simpler Alternative)
+
+If Snowflake is too complex, use range leases from a central coordinator (like Zookeeper, or even a database):
+
+```
+RANGE LEASE APPROACH:
+
+Central DB has a table:
+    CREATE TABLE id_ranges (
+        server_id VARCHAR(50) PRIMARY KEY,
+        current_start BIGINT,
+        current_end   BIGINT,
+        updated_at    TIMESTAMP
+    );
+
+Each app server:
+    1. At startup, claims a range: e.g., rows 5,000,001 to 6,000,000
+    2. Generates IDs locally from that range (no coordination needed)
+    3. When 80% used, pre-fetches next range
+    4. Range size = 1,000,000 IDs per server
+
+WHY THIS WORKS:
+- 99.9% of ID generation is local (in-memory counter)
+- Range renewal is rare (once per million IDs)
+- Central DB is write-rarely, no hot path
+- If server crashes, unused range is orphaned (acceptable gap)
+```
+
+```
+// Pseudocode: Range lease generator
+
+CLASS RangeLeasedGenerator:
+    range_start = 0
+    range_end = 0
+    current = 0
+    RANGE_SIZE = 1_000_000
+    RENEW_THRESHOLD = 0.8  // Renew when 80% used
+    
+    FUNCTION init():
+        this.claim_new_range()
+    
+    FUNCTION next_id():
+        IF current > range_end:
+            // Exhausted - this shouldn't happen if renewal works
+            this.claim_new_range()
+        
+        id = current
+        current += 1
+        
+        // Background: pre-fetch next range when approaching end
+        IF current > range_start + (RANGE_SIZE * RENEW_THRESHOLD):
+            background.run(this.pre_fetch_next_range)
+        
+        RETURN id
+    
+    FUNCTION claim_new_range():
+        // Atomic claim in database
+        new_start = database.execute(
+            "UPDATE id_ranges 
+             SET current_start = current_start + ?,
+                 updated_at = NOW()
+             WHERE server_id = ?
+             RETURNING current_start",
+            [RANGE_SIZE, server_id]
+        )
+        range_start = new_start
+        range_end = new_start + RANGE_SIZE - 1
+        current = new_start
+```
+
+### Comparison: Which Approach to Use When
+
+| Approach | Best For | Bottleneck | Failure Mode |
+|----------|----------|-----------|--------------|
+| Redis INCR | < 10K writes/sec, single region | Redis availability | 30s write outage on Redis failure |
+| Snowflake | Multi-region, high throughput | Clock skew (rare) | None (fully local) |
+| Range Lease | Medium scale, teams familiar with DB | DB write on renewal | Wasted IDs on crash (acceptable) |
+
+**Staff-level recommendation:** Start with Redis INCR. Migrate to range-lease when writes exceed 5K/sec or when multi-region is needed. Snowflake only if you're operating at Twitter/TikTok scale.
+
+**One-liner:** *"The counter approach trades central coordination for uniqueness guarantees. At Google scale, you eliminate that coordination entirely with machine-local generation."*
+
+---
+
+## 19.2 Multi-Region Architecture (Actual Design)
+
+### The Problem With Single-Region
+
+The V1 design is single-region (say, us-east-1). For a global user base:
+
+- User in Tokyo visiting `short.url/abc123` makes a TCP connection across the Pacific (~150ms RTT alone)
+- The redirect itself is sub-10ms, but network latency dominates
+- 99th percentile for Tokyo users: 300ms+ (unacceptable)
+
+### The Read-Write Asymmetry Solution
+
+URL shortener traffic is 99% reads (redirects) and 1% writes (creates). This asymmetry makes multi-region tractable:
+
+```
+MULTI-REGION DESIGN PRINCIPLE:
+- Writes: Accept higher latency (creates can tolerate 200ms)
+- Reads: Optimize aggressively (redirects must be < 20ms globally)
+
+→ Route all writes to PRIMARY REGION
+→ Serve reads from NEAREST REGION (with eventual consistency)
+```
+
+### Architecture: Single-Write, Multi-Read
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     MULTI-REGION URL SHORTENER                              │
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                     GLOBAL LOAD BALANCER (Anycast)                   │   │
+│  │         Routes to nearest healthy region by IP geolocation           │   │
+│  └──────────────────┬──────────────────────────┬────────────────────────┘   │
+│                     │                          │                            │
+│         ┌───────────▼────────────┐  ┌──────────▼─────────────┐             │
+│         │    REGION: US-EAST     │  │    REGION: EU-WEST      │             │
+│         │    (PRIMARY)           │  │    (REPLICA)            │             │
+│         │                        │  │                         │             │
+│         │  ┌──────────────────┐  │  │  ┌──────────────────┐  │             │
+│         │  │  App Servers     │  │  │  │  App Servers     │  │             │
+│         │  └────────┬─────────┘  │  │  └────────┬─────────┘  │             │
+│         │           │            │  │           │            │             │
+│         │  ┌────────▼─────────┐  │  │  ┌────────▼─────────┐  │             │
+│         │  │  Redis Cache     │  │  │  │  Redis Cache     │  │             │
+│         │  └────────┬─────────┘  │  │  └────────┬─────────┘  │             │
+│         │           │            │  │           │            │             │
+│         │  ┌────────▼─────────┐  │  │  ┌────────▼─────────┐  │             │
+│         │  │  PostgreSQL      │  │  │  │  PostgreSQL      │  │             │
+│         │  │  (PRIMARY)  ─────┼──┼──┼─▶│  (READ REPLICA) │  │             │
+│         │  │  Accepts writes  │  │  │  │  Read-only       │  │             │
+│         │  └──────────────────┘  │  │  └──────────────────┘  │             │
+│         └────────────────────────┘  └─────────────────────────┘             │
+│                                                                             │
+│  WRITES: Always route to PRIMARY region (US-EAST)                          │
+│  READS:  Route to nearest region (EU user → EU replica)                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Write Path in Multi-Region
+
+```
+USER IN EU CREATES A SHORT URL:
+
+1. EU App Server receives: POST /api/shorten {url: "..."}
+2. EU App Server detects: "This is a WRITE operation"
+3. EU App Server forwards to PRIMARY region (US-EAST) via internal API
+   - Added latency: ~100ms (EU → US network)
+   - This is acceptable (creates are < 1% of traffic)
+4. US-EAST primary creates the URL, returns short_code
+5. EU App Server returns short_code to user
+6. Replication: US-EAST → EU-WEST replica (async, ~200ms lag)
+
+TOTAL CREATE LATENCY for EU user: ~300ms
+TOTAL REDIRECT LATENCY for EU user: ~10ms (served from EU cache/replica)
+
+The asymmetry is acceptable because creates are rare.
+```
+
+```
+// Pseudocode: Multi-region write routing
+
+FUNCTION handle_create(request):
+    IF current_region == PRIMARY_REGION:
+        // We are primary - handle directly
+        RETURN create_url_locally(request)
+    ELSE:
+        // We are a replica - forward to primary
+        primary_url = config.primary_region_endpoint + "/api/shorten"
+        response = http_post(primary_url, request.body, timeout=5000ms)
+        RETURN response
+
+FUNCTION current_region():
+    // Read from environment variable set at deploy time
+    RETURN env.get("REGION", "us-east-1")
+
+PRIMARY_REGION = "us-east-1"
+```
+
+### Read Path: Replication Lag and Stale Reads
+
+The EU replica lags behind primary by ~200ms (async replication). This means:
+
+```
+CONSISTENCY SCENARIO:
+T+0:    User creates short URL in US-EAST (primary). Returns "abc123".
+T+0:    User immediately shares "abc123" with colleague in EU.
+T+50ms: Colleague in EU clicks "abc123".
+T+50ms: EU replica doesn't have "abc123" yet (replication lag = 200ms)
+T+50ms: EU replica returns 404 ← PROBLEM
+
+SOLUTION: Read-after-write routing
+
+When the creating user immediately accesses their new URL:
+- Pass a "created_after" hint in cookie or header
+- EU app server checks: "This URL was created < 500ms ago, route to primary"
+- After 1 second, serve from local replica
+
+// Pseudocode: Smart read routing
+
+FUNCTION handle_redirect(request):
+    short_code = extract_code(request)
+    
+    // Check if user just created this URL (read-after-write hint)
+    created_at = request.cookie.get("url_created_at")
+    IF created_at AND (now() - created_at) < 2000ms:
+        // Recent create - route to primary for consistency
+        RETURN route_to_primary(request)
+    
+    // Normal path: serve from local region
+    RETURN handle_redirect_locally(request)
+```
+
+### Replication Configuration
+
+```
+PostgreSQL STREAMING REPLICATION SETUP:
+
+PRIMARY (us-east-1):
+    postgresql.conf:
+        wal_level = replica
+        max_wal_senders = 5
+        wal_keep_size = 1GB   // Keep WAL for slow replicas
+
+REPLICA (eu-west-1):
+    recovery.conf:
+        standby_mode = on
+        primary_conninfo = 'host=us-east-1.db.internal port=5432'
+        recovery_target_timeline = latest
+
+REPLICATION LAG MONITORING:
+    SELECT 
+        client_addr,
+        state,
+        sent_lsn - write_lsn AS write_lag,
+        write_lsn - flush_lsn AS flush_lag,
+        flush_lsn - replay_lsn AS replay_lag
+    FROM pg_stat_replication;
+
+ALERT: replay_lag > 1000ms → "Replication falling behind"
+ALERT: replay_lag > 10000ms → "Replica unhealthy, stop routing reads to it"
+```
+
+### Failure Mode: Primary Region Goes Down
+
+```
+SCENARIO: us-east-1 primary goes down completely
+
+IMPACT:
+- Redirects in all regions: Still work (replicas are read-only)
+  → EU replica serves EU traffic
+  → Asia replica serves Asia traffic
+  → Only traffic needing us-east-1 reads is affected
+  
+- URL creation: Completely down in all regions
+  → No region accepts writes (all are read-only replicas)
+  
+RECOVERY (manual failover):
+1. Promote EU replica to primary: pg_promote()
+2. Update DNS / config to point writes to EU primary
+3. Other replicas start replicating from EU
+4. ETA: 5-10 minutes (manual) or 30-60 seconds (automated)
+
+AUTOMATED FAILOVER OPTIONS:
+- Patroni + etcd: Automatic primary election, <30s failover
+- AWS RDS Multi-AZ: <60s automated failover
+- Google Cloud SQL HA: <20s failover
+
+STAFF ENGINEER DECISION:
+"Automated failover is worth the additional complexity at 99.99% availability target.
+For 99.9%, manual failover within 10 minutes is acceptable."
+```
+
+### Consistency Model Across Regions
+
+```
+MULTI-REGION CONSISTENCY MODEL:
+
+STRONG CONSISTENCY (guaranteed):
+- CREATE operation: Synchronous to primary only
+  → The creating user always sees their URL via read-after-write routing
+  
+EVENTUAL CONSISTENCY (explicitly accepted):
+- REDIRECT from replica: Up to 500ms lag after creation
+  → A link shared immediately after creation may 404 for other region users
+  → Workaround: Add 1-second delay before sharing, or always link via primary region
+
+ANALYTICS (weak consistency):
+- Click events queued and processed asynchronously
+- Each region processes its own analytics
+- Aggregation across regions is periodic (hourly batch job)
+
+STAFF DECISION TO DOCUMENT FOR DOWNSTREAM TEAMS:
+"URL creation is strongly consistent at origin. 
+Redirect availability is eventually consistent globally with up to 1 second lag.
+Do not assume a URL created in US is immediately accessible in EU."
+```
+
+**One-liner:** *"Multi-region URL shortener: writes go to one home, reads go everywhere. The asymmetry (99% reads) makes this tractable."*
+
+---
+
+## 19.3 Analytics Pipeline Depth
+
+### Why the Simple Queue Is Not Enough
+
+The V1 analytics design (Part 9) uses a fire-and-forget queue with a background worker doing batch inserts. This works at low scale. It breaks when:
+
+- **Volume exceeds worker throughput**: 10,000 clicks/sec × 100 bytes = 1 MB/sec into a click_events table. MySQL/PostgreSQL can handle this, but the table becomes a write bottleneck.
+- **Analytics queries contend with redirect reads**: Both use the same database. A slow GROUP BY query for a dashboard can starve redirect lookups.
+- **No streaming aggregations**: If someone wants "clicks in the last 60 seconds" you can't query 600M rows every 60 seconds.
+
+### Two-Tier Analytics Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     ANALYTICS PIPELINE ARCHITECTURE                         │
+│                                                                             │
+│   App Servers                                                               │
+│       │                                                                     │
+│       │  Click events (fire-and-forget)                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────┐                                            │
+│  │   MESSAGE QUEUE             │                                            │
+│  │   (Kafka / Google Pub/Sub)  │  ← High-throughput, durable, replayable   │
+│  │   Topic: "click_events"     │                                            │
+│  └──────────────┬──────────────┘                                            │
+│                 │                                                           │
+│        ┌────────┴──────────┐                                                │
+│        │                   │                                                │
+│        ▼                   ▼                                                │
+│  ┌───────────────┐   ┌─────────────────────────────────────┐               │
+│  │  REAL-TIME    │   │  BATCH PIPELINE                     │               │
+│  │  AGGREGATOR   │   │  (Dataflow / Spark / Flink)         │               │
+│  │               │   │                                     │               │
+│  │  - Redis      │   │  - Hourly/daily aggregations        │               │
+│  │    counters   │   │  - Raw events → parquet/ORC         │               │
+│  │  - 5-min      │   │  - Long-term storage (GCS/S3)       │               │
+│  │    windows    │   │  - Historical queries               │               │
+│  └───────┬───────┘   └────────────────┬────────────────────┘               │
+│          │                            │                                     │
+│          ▼                            ▼                                     │
+│  ┌───────────────┐   ┌────────────────────────────────────┐                │
+│  │  DASHBOARD DB │   │  DATA WAREHOUSE                    │                │
+│  │  (Postgres)   │   │  (BigQuery / Redshift / ClickHouse)│                │
+│  │  - Last 24h   │   │  - All historical data             │                │
+│  │  - Per-minute │   │  - OLAP queries                    │                │
+│  │    granularity│   │  - Funnel analysis                 │                │
+│  └───────────────┘   └────────────────────────────────────┘                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Kafka / Pub-Sub as the Foundation
+
+```
+WHY NOT WRITE DIRECTLY TO DATABASE:
+- Click spikes (viral URL) = write spike → DB overload
+- Analytics writes compete with redirect reads on same DB
+- No replay: If aggregation code has a bug, you can't reprocess
+
+WHY KAFKA / PUB-SUB:
+- Decouples producers (app servers) from consumers (aggregators)
+- Buffer absorbs traffic spikes: 10,000 events/sec becomes manageable
+- Durable: Messages retained for 7 days (replay if aggregation fails)
+- Multiple consumers: Real-time counter + batch pipeline read independently
+
+MESSAGE SCHEMA:
+{
+    "event_id":   "uuid-abc",
+    "short_code": "abc123",
+    "clicked_at": "2024-01-15T10:00:00.123Z",
+    "ip_address": "1.2.3.4",       // For geo lookup
+    "user_agent": "Mozilla/5...",   // For device detection
+    "referrer":   "https://...",    // Traffic source
+    "region":     "eu-west-1"       // Which region served the request
+}
+```
+
+### Real-Time Aggregation Layer
+
+For dashboards showing "clicks in last 5 minutes" or "top URLs right now":
+
+```
+// Pseudocode: Real-time aggregator (streaming processor)
+
+CONSUMER GROUP: "realtime-aggregator"
+
+FUNCTION process_click_event(event):
+    code = event.short_code
+    ts = event.clicked_at
+    
+    // 1. Increment rolling counters in Redis
+    minute_key = "clicks:" + code + ":" + floor(ts / 60)
+    hour_key   = "clicks:" + code + ":" + floor(ts / 3600)
+    day_key    = "clicks:" + code + ":" + floor(ts / 86400)
+    
+    PIPELINE:
+        redis.incr(minute_key);  redis.expire(minute_key, 7200)   // Keep 2 hours
+        redis.incr(hour_key);    redis.expire(hour_key, 172800)   // Keep 48 hours
+        redis.incr(day_key);     redis.expire(day_key, 2592000)   // Keep 30 days
+    
+    // 2. Update top-URLs leaderboard (sorted set)
+    redis.zincrby("top_urls:today", 1, code)
+    
+    // 3. Track unique clicks (HyperLogLog for approximation)
+    redis.pfadd("unique:" + code + ":today", event.ip_address)
+
+// Dashboard query
+FUNCTION get_clicks_last_5_minutes(short_code):
+    now = current_unix_timestamp()
+    result = 0
+    FOR minute IN [floor(now/60) - 5 .. floor(now/60)]:
+        result += redis.get("clicks:" + short_code + ":" + minute) OR 0
+    RETURN result
+
+FUNCTION get_top_urls_today():
+    RETURN redis.zrevrange("top_urls:today", 0, 9, WITHSCORES)
+```
+
+### Batch Pipeline for Historical Data
+
+```
+BATCH PIPELINE (runs every hour):
+
+INPUT:  Kafka topic "click_events" (last hour)
+OUTPUT: BigQuery / Data Warehouse
+
+STEPS:
+1. Consumer reads from Kafka, groups by hour
+2. Enrichment: IP → country (GeoIP), user_agent → device
+3. Aggregation: clicks per (short_code, hour, country, device)
+4. Write to BigQuery partition:
+   
+   TABLE: click_aggregates
+   SCHEMA:
+     short_code    STRING
+     hour_bucket   TIMESTAMP
+     country_code  STRING (2-char)
+     device_type   STRING (mobile/desktop/bot)
+     click_count   INT64
+     unique_ips    INT64 (approximation from HLL)
+
+5. For raw data: Write parquet files to GCS/S3
+   Partitioned by: year=2024/month=01/day=15/hour=10/
+
+WHY SEPARATE BATCH FROM REAL-TIME:
+- Real-time: Redis, fast, approximate, short retention
+- Batch: BigQuery, slow, exact, permanent
+- Dashboard uses real-time for last 24h, batch for historical
+```
+
+### What "Exactly-Once" Means Here
+
+```
+DELIVERY SEMANTICS TRADE-OFF:
+
+AT-MOST-ONCE (fire-and-forget):
+  Pros: Lowest latency, simplest
+  Cons: Clicks lost if server crashes before enqueue
+  Use when: Click count accuracy < redirect latency
+
+AT-LEAST-ONCE (retry on failure):
+  Pros: No clicks lost
+  Cons: Duplicate events possible → inflate counts
+  Mitigation: Dedup by event_id in aggregator
+
+EXACTLY-ONCE (Kafka transactions):
+  Pros: Perfect accuracy
+  Cons: 2× latency overhead, complex setup
+  Use when: Financial reporting, billing by click
+
+OUR CHOICE: At-least-once with dedup
+  - App server retries enqueue up to 3 times on failure
+  - Aggregator deduplicates by event_id within 1-hour window
+  - ~99.9% accurate count (missing catastrophic failures only)
+  
+One-liner: "Exact analytics isn't worth 2× redirect latency."
+```
+
+---
+
+## 19.4 CDN Redirect Caching (Actual Design)
+
+### Why CDN Is a Natural Fit
+
+A URL redirect is the ideal CDN cache target:
+- Response is tiny (~200 bytes with headers)
+- The response depends only on the short code (URL path)
+- Most URLs never change destination
+- Globally distributed CDN edge nodes eliminate cross-ocean RTT
+
+Without CDN: EU user → us-east-1 server (~100ms network) + 3ms processing = ~103ms
+With CDN: EU user → CDN edge in Frankfurt (< 5ms) = ~5ms
+
+### The 301 vs 302 Problem at CDN Layer
+
+This is where the 301/302 tradeoff from Part 15 becomes critical:
+
+```
+301 (Permanent) with CDN:
+    - CDN edge caches the redirect
+    - Browser also caches it
+    - User gets fast response: CDN hit < 5ms
+    - PROBLEM: Redirect cached in BOTH CDN and browser
+      → URL destination update doesn't propagate until:
+        a. CDN cache expires (TTL)
+        b. Browser cache expires (max-age)
+      → Cannot manually purge from user's browser
+      → Actual staleness window = max(CDN TTL, browser max-age)
+
+302 (Temporary) with CDN:
+    - CDN edge CAN cache (if Cache-Control header set explicitly)
+    - Browser does NOT cache (must always check CDN/origin)
+    - ADVANTAGE: Accurate click counting (every click hits CDN at minimum)
+    - ADVANTAGE: URL update propagates after CDN TTL (browser has no stale copy)
+
+OUR CHOICE: Use 302 with explicit CDN caching
+    - Add header: Cache-Control: public, max-age=3600, s-maxage=86400
+    - s-maxage: CDN-specific TTL (24 hours = high cache hit rate)
+    - max-age: Browser TTL (1 hour or 0 to disable browser caching)
+    
+    Why: We want CDN caching benefits but retain ability to purge.
+         Browser caching 301 forever is an operational nightmare.
+```
+
+### Architecture: CDN in Front of Origin
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CDN-INTEGRATED URL SHORTENER                             │
+│                                                                             │
+│  Browser                                                                    │
+│     │  GET short.url/abc123                                                 │
+│     ▼                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐        │
+│  │              CDN EDGE (Cloudflare / Fastly / CloudFront)        │        │
+│  │                                                                 │        │
+│  │  Cache Hit?                                                     │        │
+│  │  ┌─────────────────────────────────────────────────────────┐   │        │
+│  │  │  YES: Return cached 302 redirect immediately            │   │        │
+│  │  │       No origin request needed (~2ms)                   │   │        │
+│  │  │                                                         │   │        │
+│  │  │  NO:  Forward to origin, cache response for TTL         │   │        │
+│  │  │       Origin responds in ~10ms (first request only)     │   │        │
+│  │  └─────────────────────────────────────────────────────────┘   │        │
+│  │                                                                 │        │
+│  │  Cache Key: short_code (URL path only, no query params)        │        │
+│  └───────────────────────────────┬─────────────────────────────────┘        │
+│                                  │ (cache miss only)                        │
+│                                  ▼                                          │
+│                    ┌─────────────────────────────┐                          │
+│                    │       ORIGIN SERVERS        │                          │
+│                    │   (App servers + Redis + DB) │                          │
+│                    └─────────────────────────────┘                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### CDN Cache Key Design
+
+```
+CACHE KEY MUST BE: short code only
+
+// Correct cache key
+GET /abc123 → cache key: "/abc123"
+
+// WRONG: If CDN includes query params in key
+GET /abc123?utm_source=twitter → cache key: "/abc123?utm_source=twitter"
+GET /abc123?utm_source=email  → cache key: "/abc123?utm_source=email"
+→ Two separate cache entries for same URL → 0% hit rate for tracked links
+
+CDN CONFIGURATION (Cloudflare example):
+    Cache Rule: URL path matches /[a-zA-Z0-9]{6,10}
+    Cache Key: URL path only (ignore query string)
+    Edge TTL: 24 hours
+    Browser TTL: 0 (don't let browser cache, rely on CDN)
+
+// Response headers to set at origin:
+FUNCTION handle_redirect(request):
+    ...
+    RETURN Response(
+        status=302,
+        headers={
+            "Location": long_url,
+            "Cache-Control": "public, s-maxage=86400, max-age=0",
+            // s-maxage: CDN caches for 24h
+            // max-age=0: Browser must revalidate (don't cache in browser)
+            "Vary": "Accept-Encoding",  // Safe to vary
+            // Do NOT Vary on: User-Agent, Cookie (would kill hit rate)
+        }
+    )
+```
+
+### Cache Invalidation at CDN Layer
+
+When a URL destination is updated or deleted:
+
+```
+// Pseudocode: URL update with CDN purge
+
+FUNCTION update_url(short_code, new_long_url):
+    // Step 1: Update database
+    database.update("url_mappings", SET long_url = new_long_url,
+                    WHERE short_code = short_code)
+    
+    // Step 2: Invalidate local Redis cache
+    cache.delete("url:" + short_code)
+    
+    // Step 3: Purge CDN cache
+    cdn.purge_path("/" + short_code)
+    // Cloudflare: POST /zones/{zone_id}/purge_cache {"files": ["/abc123"]}
+    // Fastly:     PURGE https://short.url/abc123
+    // CloudFront: Create invalidation for "/abc123"
+    
+    // Purge is eventual (may take 5-30 seconds globally)
+    // During purge: a few users may still see old destination
+    // This is acceptable for our consistency model
+
+FUNCTION delete_url(short_code):
+    database.update("url_mappings", SET is_active = false,
+                    WHERE short_code = short_code)
+    cache.delete("url:" + short_code)
+    cdn.purge_path("/" + short_code)
+    // After purge: CDN will forward to origin, origin returns 404/410
+```
+
+### Analytics Accuracy With CDN
+
+CDN caching directly affects analytics accuracy. This requires careful handling:
+
+```
+PROBLEM: If CDN caches a redirect for 24 hours, clicks served from CDN
+         edge never reach origin → click analytics are undercounted.
+
+OPTIONS:
+
+Option A: Disable CDN caching for analytics-enabled URLs (simple but defeats purpose)
+    → Too conservative; kills CDN benefit for most URLs
+
+Option B: Use CDN edge workers to log clicks before caching
+    → Cloudflare Workers / Lambda@Edge runs code at edge
+    → Log click event to analytics queue without hitting origin
+    
+    // Cloudflare Worker pseudocode
+    async function handleRequest(request):
+        code = url.pathname.substring(1)
+        
+        // Check cache
+        cached = await caches.default.match(request)
+        
+        IF cached:
+            // Log click at edge
+            await analytics_queue.enqueue({
+                short_code: code,
+                timestamp:  Date.now(),
+                cf:         request.cf  // Cloudflare provides country, device
+            })
+            RETURN cached
+        
+        // Cache miss: forward to origin
+        response = await fetch(request)
+        await caches.default.put(request, response.clone())
+        RETURN response
+
+Option C: Accept CDN-served clicks are not counted (explicitly accepted gap)
+    → 85% cache hit rate → 85% clicks not counted
+    → Not acceptable for paying analytics customers
+    → Acceptable for internal tracking (use CDN logs instead)
+
+RECOMMENDATION: Option B for customers who pay for analytics.
+                Option C (CDN access logs) for internal metrics.
+```
+
+### CDN-Specific Failure Mode: Cache Stampede on Purge
+
+```
+SCENARIO: Popular URL ("abc123" — 50K clicks/sec) gets destination updated.
+
+T+0:    Admin calls update_url("abc123", new_destination)
+T+0:    Redis cache invalidated
+T+0:    CDN purge triggered (takes 5 seconds to propagate globally)
+T+1s:   CDN cache for abc123 expires at US edge
+T+1s:   50K req/sec all become cache misses simultaneously
+T+1s:   50,000 requests hit origin → thundering herd
+
+SOLUTION: Staggered invalidation
+    Don't purge CDN immediately; let TTL expire naturally
+    OR: Use "stale-while-revalidate" header
+    
+    Cache-Control: public, s-maxage=3600, stale-while-revalidate=60
+    
+    // Meaning: Cache for 1 hour. After 1 hour, serve stale while
+    // fetching fresh in background. At most 60 seconds of stale data.
+    // Prevents simultaneous cache misses.
+
+FOR CRITICAL PURGES (URL pointing to malware):
+    Accept the thundering herd. Safety > performance.
+    Pre-scale origin before purging.
+    Implement request coalescing at origin (Part 10).
+```
+
+### CDN vs Edge Cache vs Local Cache: The Three Layers
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         THREE-LAYER CACHE HIERARCHY                         │
+│                                                                             │
+│  Layer 1: Browser cache (if max-age > 0)                                   │
+│           Hit: 0ms | TTL: max-age | Invalidation: impossible                │
+│           Our choice: max-age=0 (disabled—can't purge from browsers)       │
+│                                                                             │
+│  Layer 2: CDN edge cache (s-maxage)                                        │
+│           Hit: 1-5ms | TTL: 24h | Invalidation: CDN purge API (5-30s)     │
+│           Our choice: ENABLED — best latency win for lowest complexity      │
+│                                                                             │
+│  Layer 3: Redis cache at origin (Part 7)                                   │
+│           Hit: 1ms (but requires origin server) | TTL: 1h                  │
+│           Invalidation: redis.del() (immediate)                            │
+│           Our choice: ENABLED — handles CDN misses efficiently             │
+│                                                                             │
+│  Layer 4: Database (no cache)                                              │
+│           Hit: 5-10ms | No TTL | Source of truth                          │
+│           Always available as final fallback                               │
+│                                                                             │
+│  CACHE HIT RATE WITH CDN:                                                  │
+│    CDN:    ~95% (hot URLs dominate traffic)                                │
+│    Redis:  ~80% of CDN misses (recently accessed URLs)                     │
+│    DB:     Remainder                                                        │
+│                                                                             │
+│  EFFECTIVE ORIGIN LOAD WITH CDN: 5% of total traffic                      │
+│  vs. WITHOUT CDN: 20% of total traffic                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**One-liner:** *"CDN moves the hot path to the edge; Redis serves the warm path at origin; DB is the cold path. Design each tier's TTL and invalidation independently."*
+
+---
+
+## 19.5 SSE Judgment Contrasts: The Four Deep Topics
+
+How a Google L6 interview probes these areas, and what separates L5 from L6:
+
+| Probe | L5 Answer | L6 (Staff) Answer |
+|-------|-----------|-------------------|
+| "Your Redis counter is failing. What's the blast radius?" | "Writes fail. Fall back to random." | "Writes in this region fail for up to 30s. Blast radius: new URL creates only, no read impact. Document this as SLA: creates may fail during Redis failover. Evaluate range-lease migration if this happens > once per quarter." |
+| "We're expanding to EU. What do you change?" | "Add a region, replicate the DB." | "Write path stays in US-EAST (single write region). EU gets a read replica. EU users creating URLs pay +100ms—acceptable at < 1% of traffic. Document this in the API contract. Real-time analytics needs per-region aggregation, then merge. Plan cache invalidation across regions." |
+| "Marketing wants per-second click counts on their dashboard." | "Switch to synchronous click recording." | "Per-second requires streaming, not batch. Add Kafka, a real-time aggregator writing to Redis, and serve from there. Don't touch the redirect path. Cost: ~$500/month. Accuracy: within 5 seconds. Agree on 'near-real-time' framing with marketing before building exact real-time." |
+| "Can we put Cloudflare in front?" | "Yes, that would help with latency." | "Yes for redirects; no for creates without careful routing. Cache key must strip query params or tracked links have 0% hit rate. Use 302 not 301—can't purge 301s from browsers. Analytics gap: CDN-served clicks don't reach origin, need edge workers or accept CDN log-based counting. Purge strategy on URL updates needed before launch." |
