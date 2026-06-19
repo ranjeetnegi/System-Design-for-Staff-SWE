@@ -1,4 +1,4 @@
-# Chapter 3: OS Fundamentals -- Process, Thread, Memory, CPU, and Disk
+# Chapter 9: OS Fundamentals -- Process, Thread, Memory, CPU, and Disk
 
 > **Target audience**: Recent college graduate preparing for Google Staff Engineer (L6) system design interviews.
 > **Goal**: Move from "I know CS theory" to "I can reason about production systems using these fundamentals."

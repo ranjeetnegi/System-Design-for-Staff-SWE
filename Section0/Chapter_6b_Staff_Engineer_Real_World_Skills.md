@@ -1,4 +1,4 @@
-# Chapter 12b: The Real Work of a Staff Engineer
+# Chapter 6b: The Real Work of a Staff Engineer
 
 > What interviews don't test, but your first 6 months on the job will.
 
@@ -6,7 +6,7 @@
 
 ```
 +===========================================================================+
-|          CHAPTER 12b: THE REAL WORK OF A STAFF ENGINEER                   |
+|          CHAPTER 6b: THE REAL WORK OF A STAFF ENGINEER                   |
 +===========================================================================+
 |                                                                           |
 |  CORE INSIGHT: Staff engineers operate on PEOPLE and SYSTEMS              |

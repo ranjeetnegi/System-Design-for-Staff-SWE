@@ -1,4 +1,4 @@
-# Chapter 5: Numbers Every Engineer Must Know -- Estimation, QPS, Scale, and Availability
+# Chapter 11: Numbers Every Engineer Must Know -- Estimation, QPS, Scale, and Availability
 
 ---
 

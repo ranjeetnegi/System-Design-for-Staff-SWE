@@ -1,4 +1,4 @@
-# Chapter 9: Designing Systems That Scale Across Teams
+# Chapter 3: Designing Systems That Scale Across Teams
 
 ---
 
@@ -4426,7 +4426,7 @@ mindmap
       Action items with owners
 ```
 
-**The one thing to remember from Chapter 9:**
+**The one thing to remember from Chapter 3:**
 
 > "Organizational scale is harder than technical scale. You can add more servers in minutes. You cannot add more teams in minutes. Design your systems so that adding a team makes things better, not worse."
 

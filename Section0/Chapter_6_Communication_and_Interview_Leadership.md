@@ -1,4 +1,4 @@
-# Chapter 12: Communication and Interview Leadership for Google Staff Engineers
+# Chapter 6: Communication and Interview Leadership for Google Staff Engineers
 
 > **Who this is for**: A recent college graduate who is technically strong but has never led a high-stakes system design discussion. You know your data structures. You can code. Now you need to learn how to *communicate like an owner* in a 45-minute Google Staff Engineer interview -- and understand exactly why it matters, what interviewers are measuring, and how to practice.
 

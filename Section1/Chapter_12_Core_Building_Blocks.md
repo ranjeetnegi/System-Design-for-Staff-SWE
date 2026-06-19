@@ -1,4 +1,4 @@
-# Chapter 6: Core Building Blocks -- Hash, Cache, State, Idempotency, Queues, Sync/Async
+# Chapter 12: Core Building Blocks -- Hash, Cache, State, Idempotency, Queues, Sync/Async
 
 ---
 
@@ -2766,11 +2766,11 @@ This is why a jump from 90% to 95% hit rate is worth engineering effort -- it ha
 
 ---
 
-### Visual Summary: Chapter 6 in One Picture
+### Visual Summary: Chapter 12 in One Picture
 
 ```mermaid
 mindmap
-  root((Chapter 6\nBuilding Blocks))
+  root((Chapter 12\nBuilding Blocks))
     Hash
       Consistent hashing
       Virtual nodes

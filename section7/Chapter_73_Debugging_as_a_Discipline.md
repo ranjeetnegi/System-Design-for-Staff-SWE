@@ -1,4 +1,4 @@
-# Chapter 41b: Debugging as a Discipline
+# Chapter 73: Debugging as a Discipline
 
 > You have spent 41 chapters learning how systems are built.
 > This chapter teaches you what to do when they break and nobody knows why.
@@ -7,7 +7,7 @@
 
 ```
 +===========================================================================+
-|            CHAPTER 41b: DEBUGGING AS A DISCIPLINE                         |
+|            CHAPTER 73: DEBUGGING AS A DISCIPLINE                         |
 +===========================================================================+
 |                                                                           |
 |  CORE INSIGHT: Debugging is not luck or experience. It is a method.      |
@@ -3179,4 +3179,4 @@ For your most complex or most frequently broken service, write a "debugging runb
 
 ---
 
-*Chapter 41b complete.*
+*Chapter 73 complete.*

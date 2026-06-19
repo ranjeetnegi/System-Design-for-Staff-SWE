@@ -1,4 +1,4 @@
-# Chapter 2: APIs, Frontend, Backend, and Databases -- The Building Blocks
+# Chapter 8: APIs, Frontend, Backend, and Databases -- The Building Blocks
 
 ---
 
@@ -1845,7 +1845,7 @@ That chain of reasoning -- product requirement to API shape to data model to dat
 
 ---
 
-## 12. Chapter 2 -- The Complete Mental Model
+## 12. Chapter 8 -- The Complete Mental Model
 
 ### The Full System in One Diagram
 

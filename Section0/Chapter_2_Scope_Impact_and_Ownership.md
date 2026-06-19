@@ -1,4 +1,4 @@
-# Chapter 8: Scope, Impact, and Ownership at Google Staff Engineer Level
+# Chapter 2: Scope, Impact, and Ownership at Google Staff Engineer Level
 ## A Complete Learning Guide for Recent Graduates Targeting L6
 
 ---
@@ -2604,7 +2604,7 @@ mindmap
       Authority is rare credibility is earned
 ```
 
-**The one-sentence summary of Chapter 8:**
+**The one-sentence summary of Chapter 2:**
 
 Staff Engineers create scope by looking beyond their assigned boundaries, demonstrate impact by connecting technical work to outcomes that non-engineers care about, and own problem spaces by accepting responsibility for user experience even when the root cause is in someone else's code.
 

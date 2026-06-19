@@ -1,4 +1,4 @@
-# Chapter 10: Staff Engineer Mindset -- Designing Under Ambiguity
+# Chapter 4: Staff Engineer Mindset -- Designing Under Ambiguity
 
 ---
 

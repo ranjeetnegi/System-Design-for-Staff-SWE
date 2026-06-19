@@ -1,4 +1,4 @@
-# Chapter 4: Networking Foundations -- HTTP, TCP, Sockets, and the OSI Model
+# Chapter 10: Networking Foundations -- HTTP, TCP, Sockets, and the OSI Model
 
 ---
 

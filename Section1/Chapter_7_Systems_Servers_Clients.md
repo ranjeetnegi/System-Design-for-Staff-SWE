@@ -1,4 +1,4 @@
-# Chapter 1: Systems, Servers, and Clients -- The Foundation of Everything
+# Chapter 7: Systems, Servers, and Clients -- The Foundation of Everything
 
 ---
 
@@ -1810,7 +1810,7 @@ L5 thinks in components (I built the cache layer). L6 thinks in systems (the cac
 
 ```mermaid
 flowchart TD
-    subgraph FOUNDATION["Chapter 1 Foundation"]
+    subgraph FOUNDATION["Chapter 7 Foundation"]
         SYSTEM["SYSTEM\nMany parts, one purpose\nBoundaries define ownership\nBlast radius = failure scope"]
         SERVER["SERVER\nListens on port\nWaits for requests\nResponds when asked"]
         CLIENT["CLIENT\nInitiates connection\nSends requests\nWaits for response"]
@@ -2576,13 +2576,13 @@ Use these deliberately at the start of a design discussion. They signal you thin
 
 ---
 
-### E8: Chapter 1 -- The Complete Mental Model
+### E8: Chapter 7 -- The Complete Mental Model
 
 #### Six Key Insights in One View
 
 ```mermaid
 mindmap
-    root((Chapter 1\nFoundation))
+    root((Chapter 7\nFoundation))
         System
             Many parts, one purpose
             Defined by boundary
@@ -2636,7 +2636,7 @@ mindmap
 
 ---
 
-*End of Chapter 1. Next chapter: APIs, Frontend/Backend Boundaries, and Databases.*
+*End of Chapter 7. Next chapter: APIs, Frontend/Backend Boundaries, and Databases.*
 
 ---
 
