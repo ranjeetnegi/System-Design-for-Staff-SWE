@@ -2417,4 +2417,226 @@ handling of in-flight jobs during master transition, and recovery from split-bra
 
 ---
 
+---
+
+## Part 12 (Extended): Chubby Client Library Internals
+
+### 12.3 How the Client Library Handles Caching
+
+The Chubby client library is not just a thin RPC wrapper. It contains significant
+logic to reduce load on the Chubby cell through caching. This caching is essential
+to making Chubby practical at Google's scale — without it, every GFS chunk server
+verifying a sequencer token would require an RPC to the Chubby cell, and at Google's
+request rates this would be millions of RPCs per second to a service designed to
+handle thousands.
+
+The client library caches two categories of data:
+
+**Lock state cache**: The client library caches which locks are currently held and
+by which session. When other clients ask "is the GFS master lock held?" the library
+can answer from its local cache without going to the Chubby cell. The cache is kept
+consistent via invalidation notifications: when the lock state changes, the Chubby
+master sends an invalidation to all clients that have that lock state cached. Clients
+must acknowledge the invalidation before the Chubby master considers the change
+committed.
+
+This creates a two-phase update: (1) Chubby sends invalidations to all caching clients,
+(2) clients acknowledge, (3) Chubby commits the change. Only after step 3 is the
+change visible. This ensures that all clients see a consistent view — you never have
+one client seeing "lock is free" while another sees "lock is held by server-42."
+
+**File content cache**: Small file contents (like the master's address stored in a
+lock file) are cached in the client library. Reads of frequently-accessed files are
+served from cache. Invalidations work the same way as lock state cache invalidations.
+
+The practical effect: in a large Google deployment, the Chubby cell might be serving
+only a few thousand RPCs per second despite tens of thousands of client processes,
+because the vast majority of reads hit the local client cache.
+
+### 12.4 The Proxy and Partitioning Architecture
+
+For very large deployments, the direct client-to-cell connection model runs into
+scalability limits. Each client maintains a session, which requires memory and
+processing on the Chubby master. With tens of thousands of clients, session management
+overhead becomes significant.
+
+The Chubby paper describes two techniques for scaling:
+
+**Proxies**: A proxy server sits between clients and the Chubby cell. Multiple clients
+connect to the proxy rather than directly to the cell. The proxy maintains a single
+session with the Chubby cell on behalf of all its clients. From the Chubby cell's
+perspective, it sees one session instead of thousands. The proxy handles client
+multiplexing and local caching.
+
+The tradeoff: the proxy becomes a single point of failure for all its clients. If the
+proxy crashes, all its clients lose their Chubby connection simultaneously. You need
+multiple proxies with client-side load balancing to mitigate this.
+
+**Partitioning**: The Chubby namespace is divided into shards, with different shards
+served by different Chubby cells. For example, `/ls/cell-gfs/...` is served by
+the GFS Chubby cell and `/ls/cell-bigtable/...` is served by the Bigtable Chubby
+cell. Different teams' services use different cells, so one team's traffic does not
+affect another's.
+
+The naming convention `ls/<cell-name>/...` in the Chubby path reflects this partitioning.
+The cell name in the path tells the client library which Chubby cell to connect to.
+This is how Chubby scales from a single shared service to a federated set of
+specialized cells.
+
+### 12.5 Monitoring and Operational Considerations
+
+Operating Chubby in production requires monitoring specific metrics that are unique
+to lock services:
+
+**Jeopardy events per cell per hour**: If this number spikes, the Chubby cell is
+having trouble (network issues, overload, master failover). A healthy cell has near-zero
+jeopardy events.
+
+**Lock acquisitions per second**: Should be low (consistent with coarse-grained
+locking). Spikes indicate either a thundering herd event or misuse (fine-grained locking).
+
+**Session count**: Should grow slowly as services scale. Sudden drops indicate mass
+disconnections (possible Chubby master failover or network event).
+
+**Paxos rounds per second**: Each write (lock acquisition, lock release, file write)
+requires a Paxos round. This is the true write throughput of the Chubby cell.
+
+**Cache hit rate**: Should be very high (>99%). A low cache hit rate means clients
+are generating more Chubby load than expected, possibly due to incorrect cache
+invalidation or clients not using the library correctly.
+
+**Client library version distribution**: Old client library versions may have bugs
+in jeopardy handling or session management. Keeping all clients on current versions
+is operationally important.
+
+---
+
+### Part 12 Brainstorming Questions
+
+**Q: How does the cache invalidation protocol interact with Paxos? If a client is
+slow to acknowledge an invalidation, does it block Paxos?**
+
+Yes, effectively — the Chubby master must collect acknowledgments from all caching
+clients before committing a change. A slow client delays the commit. Chubby handles
+this by giving clients a limited time window to acknowledge. If a client does not
+acknowledge within the window, its cache is forcibly invalidated (the client is told
+"your cache is no longer valid, re-read from source"), and the commit proceeds without
+waiting for that client.
+
+This is a graceful degradation: the system does not get permanently blocked by a
+slow client. The slow client experiences a temporary degradation (must re-read from
+Chubby instead of from cache) but does not hold up other clients. In practice,
+cache invalidations happen quickly because the client library prioritizes them, and
+forced invalidations are rare.
+
+**Q: What happens if the proxy crashes? How do its clients recover?**
+
+Proxy crash is treated like a Chubby cell master failover from the clients' perspective.
+Clients lose their connection to the proxy (and through it, their Chubby session).
+They enter jeopardy state and try to reconnect. Since multiple proxies exist (for
+fault tolerance), clients re-resolve DNS for the proxy address, connect to a different
+proxy, and re-establish their Chubby session through the new proxy.
+
+The key difference from direct cell connection: if the proxy crash coincides with a
+network partition between the proxy and the cell, clients might reconnect to a new
+proxy but that proxy might also be unable to reach the cell. The recovery path is
+the same (jeopardy → grace period → session expiry if unreachable), but the failure
+mode is more complex. Proxy deployments require careful monitoring of proxy-to-cell
+connectivity, not just client-to-proxy connectivity.
+
+**Q: In Chubby's partitioning model, what if a service needs locks from two different
+cells simultaneously?**
+
+A client can hold sessions with multiple Chubby cells simultaneously. The client
+library supports this — each cell has its own session, its own keepalive thread,
+and its own cache. A service that needs locks from cells A and B simply opens sessions
+with both cells concurrently.
+
+The complication is transactional consistency across cells. If you need to atomically
+acquire a lock in cell A and a lock in cell B (both or neither), Chubby provides
+no cross-cell transaction. You must implement two-phase locking manually: acquire A's
+lock, then acquire B's lock, and if B's acquisition fails, release A's lock and retry.
+This is complex and prone to deadlock (if another process acquires B then A while you
+are acquiring A then B). The standard advice: avoid cross-cell locking if possible
+by carefully choosing which locks live in which cell.
+
+---
+
+## Appendix: Paxos in Plain Language
+
+### A.1 Why Consensus Is Hard
+
+Consensus sounds simple: "everyone agrees on the same value." But in a distributed
+system where messages can be lost, servers can crash, and there is no shared clock,
+achieving consensus is provably difficult.
+
+The FLP impossibility result (Fischer, Lynch, Paterson, 1985) proves that in an
+asynchronous distributed system (where message delays are unbounded), no deterministic
+algorithm can guarantee consensus in the presence of even one faulty process. This
+seems to doom all consensus algorithms.
+
+The escape hatch: real networks are not purely asynchronous. Message delays are
+usually bounded (within a few seconds), even if not perfectly predictable. Paxos
+works correctly in the common case (bounded delays) and degrades gracefully (does
+not make incorrect decisions) when delays are unusually large.
+
+### A.2 Paxos Step by Step with a Concrete Example
+
+Let's say five Chubby replicas are trying to agree on who should be the new Chubby
+cell master. The replicas are R1, R2, R3, R4, R5. R1 wants to become master.
+
+**Phase 1a (Prepare)**: R1 picks a ballot number N=7 (must be larger than any
+previously used ballot). R1 sends "PREPARE(7)" to all replicas.
+
+**Phase 1b (Promise)**: Each replica that receives PREPARE(7) responds with
+"PROMISE(7, previous_accepted)" if 7 is the highest ballot they have seen. They
+promise not to accept any proposal with a ballot number less than 7. If a replica
+has already accepted a value (say, from a previous round), it includes that value
+in its promise so R1 knows about it.
+
+**Phase 2a (Accept)**: R1 receives promises from R1, R2, R3 (a majority of 5).
+If any promise included a previously accepted value, R1 must propose that value.
+Otherwise, R1 proposes its desired value: "I (R1) should be master." R1 sends
+"ACCEPT(7, R1-is-master)" to all replicas.
+
+**Phase 2b (Accepted)**: Each replica that receives ACCEPT(7, R1-is-master) and
+has not promised a higher ballot accepts it and responds "ACCEPTED(7, R1-is-master)."
+
+**Commit**: R1 receives ACCEPTED from R1, R2, R3 (majority). The value "R1 is master"
+is committed. R1 sends COMMIT to all replicas. Consensus achieved.
+
+### A.3 What Paxos Guarantees
+
+**Safety** (never violated, even with arbitrary failures):
+No two replicas ever commit different values for the same slot. If "R1 is master" is
+committed, no other replica can commit "R2 is master" for the same election slot.
+
+**Liveness** (guaranteed only with eventually stable network):
+If a majority of replicas are alive and can communicate, Paxos will eventually reach
+a decision. If the network is partitioned indefinitely, Paxos may not terminate
+(FLP impossibility applies), but it will never make an incorrect decision.
+
+This asymmetry — safety is unconditional, liveness is conditional — is the right
+tradeoff for a lock service. You would rather the lock service occasionally be
+unavailable (cannot make a decision) than ever be incorrect (makes two conflicting
+decisions).
+
+### A.4 Multi-Paxos: The Optimized Version Chubby Uses
+
+Basic Paxos requires two round trips (Prepare + Accept) for every decision. For a
+lock service making thousands of decisions per second, this is expensive.
+
+Multi-Paxos optimizes by electing a stable leader (the Chubby master) who can skip
+Phase 1 for multiple consecutive decisions. Once a leader is established with a given
+ballot number, it can send ACCEPT directly without PREPARE for as long as it remains
+leader. This reduces the common-case cost to one round trip.
+
+The leader's authority is bounded by the master lease (as described in Part 3). As
+long as the leader holds the lease, it can serve reads without any Paxos round, and
+serve writes with one Paxos round (just Phase 2). The full two-phase protocol is only
+needed when a new leader is being elected (which is rare — only on master crash or
+deliberate failover).
+
+---
+
 *Chapter 83 complete. Next: Chapter 84 — Spanner: Google's Globally Distributed Database.*
