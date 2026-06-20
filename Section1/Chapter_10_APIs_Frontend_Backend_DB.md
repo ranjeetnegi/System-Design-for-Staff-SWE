@@ -2256,3 +2256,124 @@ TIMELINE:
 **Staff lesson:** In a multi-tenant system, the blast radius of any infrastructure operation scales with the number of tenants on the affected resource. Operational runbooks for shared infrastructure must treat DDL commands as high-risk changes requiring the same review process as a production code deploy. At L6, you design operational safeguards into the platform itself: the tooling should make it hard to accidentally target a shared resource when you meant a tenant-scoped one. "Humans make mistakes" is not a postmortem finding -- it is a design constraint you plan for.
 
 ---
+
+## 13. Common Interview Mistakes -- and Exactly How to Fix Them
+
+These are the six mistakes that reliably separate L4/L5 answers from L6 answers. Each one is described in enough detail that you can recognize it in your own draft answers and correct it before the interviewer does.
+
+### Mistake 1: Choosing a Database Without Justifying the Choice
+
+**What it looks like.** The candidate says "I'd use MongoDB for the user service" or "we'll use PostgreSQL" and moves on. No analysis of the access patterns, no mention of consistency requirements, no trade-off acknowledgment.
+
+**Why it signals junior thinking.** Database selection is one of the highest-leverage decisions in a system design. The wrong choice leads to expensive migrations, query performance problems, or consistency bugs that are invisible at low scale and catastrophic at high scale. A Staff engineer does not have a favorite database -- they have a framework for selecting the right one for the problem at hand.
+
+**The fix.** Before naming a database, name your top three access patterns. "Our primary queries are: fetch a user by ID (key lookup), list all orders for a user (indexed scan by user_id), and join orders with payments for a receipt view (join). That access pattern -- key lookup, indexed scan, and join -- fits PostgreSQL's strengths exactly. MongoDB would force us to do the join in application code, and Cassandra's query model doesn't support joins at all. PostgreSQL with a composite index on (user_id, created_at) serves all three queries efficiently." That chain of reasoning is what L6 sounds like.
+
+---
+
+### Mistake 2: Proposing Pagination Without Specifying the Strategy
+
+**What it looks like.** The candidate designs a `GET /posts` endpoint and says it returns a paginated list. When the interviewer asks how pagination works, the candidate says "offset and limit, like `?page=2&per_page=20`." That's the end of the answer.
+
+**Why it signals junior thinking.** Offset pagination is wrong for any list that changes over time. For a social feed, a product catalog with real-time inventory updates, or any time-ordered event stream, new items inserted between page 1 and page 2 requests cause page 2 to skip or repeat items. At production scale, this is not a theoretical problem -- users on infinite-scroll apps visibly see duplicate posts or notice gaps in their feeds.
+
+**The fix.** Specify the pagination strategy based on the data's mutability. For feeds and time-ordered lists: "We use cursor-based pagination. The response includes a `next_cursor` field -- a base64-encoded JSON object containing the ID and timestamp of the last item returned. The next request sends `?cursor=<value>`, and the query is `WHERE (created_at, id) < (cursor.created_at, cursor.id) ORDER BY created_at DESC LIMIT 20`. This is stable under inserts and deletes because it anchors to a specific row, not a position." For admin UIs with static data where users navigate directly to page 5, offset is acceptable -- but name the trade-off.
+
+---
+
+### Mistake 3: Designing an API Without Addressing Backward Compatibility
+
+**What it looks like.** The candidate designs a clean v1 API. The interviewer asks "how would you add a new required field to the request?" or "what happens when you need to rename a field?" The candidate says "I'd update the field and push v2." No mention of existing consumers, migration windows, or deprecation process.
+
+**Why it signals junior thinking.** In isolation, "push v2" is technically correct. But it ignores the operational reality: every existing consumer of v1 must be identified, notified, migrated, and verified before v1 can be retired. For a public API with 500 partner integrations, that migration is months of coordinated engineering work across many organizations that are not yours to command. At L6, you demonstrate awareness that the API serves external teams as much as it serves the product.
+
+**The fix.** For any change to an existing field: "First, is this a breaking change? Renaming a field is always breaking -- clients reading the old name get undefined. Adding a new optional field is not breaking -- clients ignore unknown fields. For the rename case, I use expand-contract: I add `unit_price` alongside the existing `price` field. Both contain the same value. Old clients keep reading `price` and work fine. New clients start using `unit_price`. I add `Deprecation: true` and `Sunset: 2025-06-01` headers. I monitor per-client usage of `price` in our logs -- keyed by API key or service name. After 90 days, if usage of `price` is at zero, I remove it. If it is not zero, I reach out directly to whoever is still reading it." That specificity is what L6 looks like.
+
+---
+
+### Mistake 4: Treating the Frontend as the Security Boundary
+
+**What it looks like.** The candidate describes client-side validation as if it enforces business rules. "The mobile app will check that the quantity is positive before sending the order." Or: "We validate the email format in JavaScript before the form submits." The backend API accepts whatever the frontend sends.
+
+**Why it signals junior thinking.** Any user with basic developer tools can bypass JavaScript validation in under 60 seconds. The HTTP request can be constructed directly without a browser -- curl, Postman, or any HTTP client can send an order with a negative quantity or a malformed email regardless of what the frontend checks. Client-side validation is a UX feature. It gives users instant feedback without a network round-trip. But it is not a security mechanism.
+
+**The fix.** Separate UX validation from security validation explicitly. "All security-sensitive validation happens on the backend -- that includes quantity bounds, price calculations, permission checks, and rate limits. The frontend validates for UX: instant feedback on email format, required field indicators, character count limits. But the backend always re-validates every field it receives, regardless of what the frontend claimed to check. The API contract specifies which fields are required, what types they must be, and what ranges are valid -- and the backend enforces this contract on every request, always." Add: "We return 400 Bad Request with a structured error body specifying the field and the violation so the frontend can surface useful error messages even for backend-caught issues."
+
+---
+
+### Mistake 5: Confusing Read Replicas With a Backup Strategy
+
+**What it looks like.** The candidate adds read replicas to their database design and mentions them as part of the "reliability story." When asked about backups or disaster recovery, they point to the replicas. "If the primary fails, we fail over to a replica."
+
+**Why it signals junior thinking.** Read replicas replicate data changes -- all of them, including accidental deletes and corrupt writes. If a developer runs `DELETE FROM users WHERE status = 'inactive'` and accidentally omits an AND clause that was supposed to scope it, that deletion replicates to all replicas within seconds. The read replicas faithfully contain a copy of the mistake. Failover to a replica after a data loss event gives you a different server running the same corrupted dataset. Replicas solve availability problems (primary crashes, failover is fast). They do not solve data loss problems.
+
+**The fix.** Distinguish the two dimensions explicitly. "We address availability and data durability separately. For availability: two read replicas with automatic failover -- if the primary fails, one replica is promoted within 30-60 seconds. For data durability: continuous WAL archiving to S3, enabling point-in-time recovery. This means if someone accidentally deletes a table at 3:47 PM, we can restore to 3:46 PM -- we are not stuck with the deletion. Our RPO is under 5 minutes for data loss; our RTO is under 5 minutes for availability failures. These are different failure modes with different mitigations. Replicas do not help if the data itself is corrupted. WAL backups do not help if what you need is sub-minute failover. Both are required."
+
+---
+
+### Mistake 6: Picking REST vs. GraphQL Without Quantifying the Problem
+
+**What it looks like.** The candidate either reflexively picks REST ("it's simpler") or reflexively picks GraphQL ("we have multiple clients"). When asked to justify, the reasoning is vague: "GraphQL gives us flexibility" or "REST is more standard." No measurement, no specific trade-off analysis.
+
+**Why it signals junior thinking.** Both answers can be correct. The problem is the reasoning -- or lack of it. "Flexibility" and "standardness" are not architectural arguments; they are preferences. A Staff engineer's answer quantifies the problem: how many clients are there, how different are their data needs, what is the measured over-fetch ratio on mobile, what is the team's experience with DataLoader and query cost limiting.
+
+**The fix.** Anchor the decision to a measurable problem. "Our mobile client fetches the product list view and needs 8 fields per product. Our web client fetches the product detail page and needs all 50 fields. With a single REST endpoint returning 50 fields, the mobile app over-fetches by 6x. At 50K mobile requests per minute on 3G connections, that's roughly 200MB of wasted bandwidth per minute. That's a measurable problem worth solving. GraphQL solves it by letting mobile query only the 8 fields it needs. The cost is DataLoader complexity to prevent N+1 queries and query complexity scoring to prevent expensive deep-nesting attacks. Given we have 4 client types and a dedicated frontend team, that trade-off is justified." If the mobile over-fetch ratio is not measurable or the client types are similar, that's a reason to stay with REST and say so.
+
+---
+
+## 14. Additional Exercises
+
+### Exercise 7: Database Selection for a Notification System
+
+A notification system needs to: store 1 billion notifications per month (mostly delivered, never deleted), support "fetch last 50 notifications for user X" as the only read query, and handle 200K writes per second at peak. The system runs across 3 geographic regions.
+
+Design the database layer:
+- What database type fits this access pattern and why?
+- How do you partition the data (what is the partition key)?
+- How do you handle multi-region replication -- active-active or active-passive?
+- What is the consistency model you accept and why?
+- What happens to notifications written during a region outage?
+
+Justify each decision with the specific constraint it serves. Do not just name a database -- show that the access pattern, write volume, and multi-region requirement together point to a specific choice.
+
+---
+
+### Exercise 8: Designing a Rate Limiter from Scratch
+
+Design a distributed rate limiter that enforces per-user limits of 1,000 requests per minute across a fleet of 50 API gateway instances.
+
+Specify:
+- What data structure and algorithm does each gateway instance use?
+- Where is the shared state stored, and why?
+- How do you avoid a race condition where two gateways simultaneously allow the 1,001st request for the same user?
+- What is the behavior if the shared state store becomes unavailable -- do you fail open (allow all) or fail closed (deny all)?
+- How do you return rate limit status in the response (which headers, what values)?
+- What is the performance budget for the rate limiting check (it is on the hot path of every request)?
+
+---
+
+## 15. Homework Problems
+
+These problems are designed to be worked through outside the interview setting. They require more thought and research than the exercises. Spend at least 30 minutes on each before looking up answers.
+
+### Homework 1: The N+1 Problem in Practice
+
+Set up a small application (any language) with a PostgreSQL database. Create a `posts` table and a `users` table. Write a GraphQL resolver (or simulate one with REST) that fetches 100 posts and each post's author name. Observe the number of SQL queries generated. Then implement DataLoader batching and observe how the query count changes. Write a one-page explanation of: (a) how the N+1 problem manifests, (b) what DataLoader does at the SQL level, and (c) when DataLoader is not sufficient and you need a different strategy.
+
+### Homework 2: Measure Your Own System's Read/Write Ratio
+
+Pick any production system you have access to (work project, personal project, or a sample system you build for this exercise). Add instrumentation to count database reads versus writes per minute for 24 hours. Plot the ratio over time. Answer: Is it what you expected? Does it vary significantly by time of day? What does the ratio imply for your caching and replication strategy? What would you change in the architecture based on this measurement?
+
+### Homework 3: Schema Migration on a Large Table
+
+Using a PostgreSQL instance (Docker is fine), create a table with 5 million rows. Time the following operations and record results: (a) `ALTER TABLE ADD COLUMN nullable_col TEXT`, (b) `ALTER TABLE ADD COLUMN not_null_col TEXT NOT NULL DEFAULT 'default'`, (c) `ALTER TABLE ADD COLUMN not_null_no_default TEXT NOT NULL` (watch what happens), (d) the safe multi-step migration: add nullable, backfill in batches of 10,000, then add constraint. Write up what you observe about lock behavior and timing for each approach. This is the kind of empirical knowledge that separates engineers who have done migrations from engineers who have only read about them.
+
+### Homework 4: Build and Test an Idempotency Key System
+
+Implement a simple payment endpoint that accepts `POST /payments` with an `Idempotency-Key` header. The endpoint should: store the key and result in a table, return the stored result if the same key is used again, handle the case where the same key arrives concurrently from two requests at exactly the same time (hint: database uniqueness constraint plus optimistic retry). Test it: call the endpoint twice with the same key simultaneously using a script that fires two requests in parallel. Verify only one charge is created. Write up: what concurrency mechanism prevents double-processing, and what happens if the first request fails after saving the key but before completing the charge?
+
+### Homework 5: Instrument and Analyze API Latency
+
+For any web API you can access (your own project or a public API), add latency instrumentation at three points: (a) total request duration from the client's perspective, (b) time spent in the application layer (business logic), (c) time spent waiting on the database. Run 1,000 requests and compute p50, p95, and p99 latency for each tier. Answer: Which tier dominates the latency? Is the database the bottleneck, or is it the application logic? What would you optimize first based on this data, and why? What does the p99 versus p50 gap tell you about the tail latency characteristics of your system?
+
+---

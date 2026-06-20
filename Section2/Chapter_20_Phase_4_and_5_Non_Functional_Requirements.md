@@ -2432,3 +2432,118 @@ L6 NFR = NFR + justification + cost + trade-off
     Cost: requires synchronous secondary region (adds 80ms)
     Trade-off: async saves 80ms latency but risks 0.01% data loss
 ```
+
+### Principal / Distinguished (L7+): "NFRs as organizational alignment tools"
+
+The jump from L6 to L7 is not about knowing more NFRs -- it is about understanding that NFRs operate at an organizational level, not just a system level. At L7, NFRs become the mechanism through which reliability posture is negotiated across engineering, product, legal, and finance. A Principal engineer rarely designs a single system in isolation. They set the NFR standards that ten teams will use, define the error budget policy that determines release velocity across an entire product area, and translate reliability commitments into contractual SLAs with enterprise customers.
+
+The L7 pattern looks like this: "I'm not just setting the availability NFR for this service. I'm establishing the reliability taxonomy that the platform team will reference when onboarding new services. When I say 99.99%, I'm also setting an expectation that this service has automated failover tested quarterly, an error budget dashboard that feeds into engineering planning cycles, and a documented degradation playbook that legal and support have reviewed. The NFR is not a number in a document -- it is a commitment that has organizational weight."
+
+At L7, an engineer will also challenge the NFR framework itself when it is insufficient. For example: "P99 latency as a primary SLI is the wrong model for a batch data platform. Latency for batch means time-to-completion, not request-response time. The right SLO is: 99.5% of batch jobs complete within their defined SLA window. Here is how I would instrument that and how the error budget would be calculated." L7 engineers do not just fill in NFR templates -- they redesign the template when it does not fit.
+
+---
+
+## Additional Brainstorming Q&A: Advanced NFR Reasoning
+
+These questions go beyond surface-level NFR identification. Practice answering each as a two-to-three-paragraph response -- not bullet lists.
+
+**Q: A service has a latency NFR of P99 < 100ms. In testing it achieves P99 = 85ms. In production it shows P99 = 340ms. What happened and how do you diagnose it?**
+
+The most common cause of this gap is that load testing does not replicate real production conditions. Tests typically use a controlled number of concurrent users, clean cache state, and uniform request distributions -- none of which reflect production reality. In production you get cold cache hits from long-tail users, variable request payloads, concurrent writes competing for the same database rows, and noisy neighbors on shared infrastructure. When latency looks fine in testing but breaks in production, the first diagnostic question is: what is different between the test environment and production? Usually the answer is one of three things -- the access pattern (hot keys in production that tests did not model), the infrastructure configuration (shared database connection pool being exhausted at production QPS), or a dependency that was mocked in testing (a vendor API that is fast in us-east-1 and slow in ap-southeast-1).
+
+To diagnose systematically: pull the distributed trace for a P99 request (not a P50 request -- they will look different). Identify which service and which operation is consuming the most time in that trace. Check whether the slow operation is a cache miss or cache hit -- cold cache paths look very different from warm paths. Then look at infrastructure metrics for that time window: are database connections exhausted? Is CPU near saturation? Is there garbage collection pausing the JVM? Most latency regressions have a single dominant cause that accounts for 80% of the latency increase. Find that cause first.
+
+The longer-term fix is to instrument your latency percentiles broken down by cache hit/miss, by request type, by database shard, and by downstream dependency. A single P99 number at the API gateway tells you something is slow but not what or where. The diagnostic power comes from having latency histograms at every service boundary so you can compare the distribution in production against the distribution in load tests and identify exactly where the divergence begins.
+
+---
+
+**Q: Your company is launching in a new country. The legal team says "all data must stay in that country." How does this single constraint cascade through your NFR set?**
+
+A data residency constraint is not just a storage requirement -- it is an architectural constraint that reshapes nearly every NFR you have already defined. Start with availability: your existing 99.9% availability is achieved via multi-AZ replication within a single region, but now you cannot replicate to your existing regions. If the new country only has one cloud availability zone from your provider, your availability ceiling is capped by single-AZ hardware failure rates -- probably 99.5% without significant additional investment. Your latency NFR will also change: if your global CDN caches data in edge nodes outside the country, you cannot use it for this data type, which may add 50-150ms for users who previously hit a nearby cache. You need a country-local CDN configuration or in-country edge nodes.
+
+The consistency model is also affected. If you currently achieve strong consistency via synchronous replication between AZs, and now those AZs must be within a single country's boundaries, you need to verify that your cloud provider has at least two AZs within that country. Many smaller markets do not. If there is only one AZ, the only way to achieve redundancy is through a geographically distributed configuration within the country -- which some providers do not offer -- or by accepting a weaker availability guarantee.
+
+Security NFRs change as well. Data residency laws typically come with audit requirements: you must be able to demonstrate that data never left the country's borders. This means your logging and monitoring pipelines, which likely ship logs to a centralized region, must be modified so that PII or regulated data fields are stripped before leaving the country. Your backup strategy must also change: backups cannot go to your standard S3 region if that region is outside the country. The cascade from one constraint to NFR changes in availability, latency, consistency, and security is the reason Staff engineers do Phase 5 before designing -- constraints of this type invalidate significant portions of a design if discovered mid-session.
+
+---
+
+## Common Interview Mistakes: Phase 4 and Phase 5 Specific Pitfalls
+
+These are the five most reliable signals that a candidate has not internalized Phase 4 and Phase 5 thinking. Each is paired with the specific fix an L6 engineer uses.
+
+**Mistake 1: Stating NFRs as a list and moving on without tracing them to architecture.**
+
+The mistake is treating Phase 4 as a checkbox exercise. The candidate lists six NFRs, the interviewer nods, and the candidate starts drawing boxes -- with no explicit connection between the NFRs and the components chosen. The fix is to state each architecture decision by referencing the NFR it serves: "Because availability is 99.99% and we cannot have a single point of failure, I'm adding a load balancer with health checks here. Because P99 must be under 200ms and the database round-trip is 50ms, I need a cache in front of it -- without that cache, a single database call with serialization overhead is already at 80ms, leaving no margin."
+
+**Mistake 2: Saying "we'll monitor it" without specifying what the monitor checks.**
+
+Candidates often say "we'll add monitoring for latency" as if that closes the loop. It does not. The L6 fix is to name the metric, the threshold, and the alert condition at design time: "The SLI is the 99th percentile of API response time over a 5-minute rolling window. The alert fires when this exceeds 250ms -- that is 25% above our 200ms SLO -- sustained for two consecutive windows. We page off-hours only if it is above 400ms for 10 minutes, to avoid alert fatigue for brief spikes." Without this specificity, "we'll monitor it" is equivalent to "we'll notice when users complain."
+
+**Mistake 3: Not probing whether the stated consistency model is actually tolerable for every feature.**
+
+A candidate says "eventual consistency is fine for this system" and the interviewer accepts it -- until 20 minutes later when the candidate designs a feature where eventual consistency is actually catastrophic. The classic example is preferences. If a user mutes a notification type and the mute takes 30 seconds to propagate (because you chose eventual consistency), they receive another notification during that 30-second window. For many users, receiving a notification after muting it destroys trust. The fix is to enumerate the features that touch each data type and ask "for each feature, what is the user-visible impact of seeing stale data for X seconds?" This forces you to identify the subset of features that need read-your-writes or stronger, even within a system that is otherwise eventually consistent.
+
+**Mistake 4: Accepting 99.99% availability without modeling what it requires.**
+
+Many candidates write "99.99%" without being able to describe what architecture achieves it. The L6 fix is to know the exact infrastructure requirements for each availability tier. 99.99% requires: no single point of failure at any layer (each component has at least one standby), automated failover that completes in under 30 seconds (because a 5-minute manual failover consumes the entire monthly error budget in one event), and health checks granular enough to detect partial failures, not just complete outages. If a candidate cannot name these requirements, they have written 99.99% as an aspiration rather than a commitment.
+
+**Mistake 5: Treating Phase 5 as optional or rushing through it.**
+
+Candidates sometimes skip Phase 5 entirely, or treat it as "let me quickly say I'm simplifying some things." The fix is to treat Phase 5 as a collaboration checkpoint -- a moment to explicitly surface the assumptions that, if wrong, would most significantly change the design. Ask the interviewer: "Before I start designing, I want to confirm two assumptions that would most affect my architecture. First, I'm assuming traffic is US-only with a single peak pattern -- is that correct? Second, I'm assuming authentication is handled externally. If either of those is wrong, the design changes substantially." This turns Phase 5 from a formality into a signal that you know which assumptions carry the most design weight.
+
+---
+
+```
++=============================================================================+
+|                              KEY TAKEAWAYS                                  |
+|                   Chapter 18: Phase 4 & 5 -- NFRs, Assumptions              |
++=============================================================================+
+|                                                                             |
+|  1. NFRs DRIVE ARCHITECTURE                                                 |
+|     Same features + different NFRs = completely different systems.          |
+|     State NFRs before drawing a single component.                           |
+|                                                                             |
+|  2. QUANTIFY EVERYTHING                                                     |
+|     "Fast" is not an NFR. "P99 < 200ms" is.                                 |
+|     Every NFR must be measurable or it cannot be designed to.               |
+|                                                                             |
+|  3. YOU CANNOT MAXIMISE ALL NFRs                                            |
+|     Name the trade-off explicitly. State which NFR wins and why.            |
+|     "Prioritising availability over consistency because reads can be         |
+|      stale by 5 seconds -- users will not notice."                          |
+|                                                                             |
+|  4. DEFINE FAILURE PATHS, NOT JUST TARGETS                                  |
+|     Every NFR has an acceptable failure mode. Define it at design time.     |
+|     "When availability drops below 99.9%, personalisation degrades          |
+|      first. Core read/write is the last thing to go."                       |
+|                                                                             |
+|  5. OPERATIONAL NFRs ARE FIRST-CLASS                                        |
+|     Observability, deployability, debuggability, and operability are        |
+|     NFRs -- not afterthoughts. Without them, every incident is a            |
+|     guesswork exercise instead of a 4-minute root-cause find.               |
+|                                                                             |
+|  6. PHASE 5 PROTECTS YOUR DESIGN                                            |
+|     State assumptions explicitly -- invite correction early.                |
+|     Probe constraints -- some are negotiable.                               |
+|     Name simplifications -- they signal deliberate judgment, not gaps.      |
+|                                                                             |
+|  7. NFRs EVOLVE -- DESIGN V1 TO NOT BLOCK V2                                |
+|     Choose partition keys, stateless services, and metric emission          |
+|     from day 1 so NFR upgrades are operational changes, not rewrites.       |
+|                                                                             |
+|  8. PAIR EVERY NFR WITH A METRIC, ALERT, AND RESPONSE                       |
+|     An NFR without monitoring is an aspiration. Wire the SLI, alert         |
+|     threshold, and degradation response at design time -- not in            |
+|     the post-mortem.                                                        |
+|                                                                             |
+|  9. RIGHT-SIZE THE NINES                                                    |
+|     99% -> 99.9% costs ~3x. 99.9% -> 99.99% costs ~10x.                    |
+|     Match the availability target to the business cost of downtime.         |
+|     An over-specified SLA wastes engineering capacity.                      |
+|                                                                             |
+|  10. THE L6 ONE-LINER FOR EVERY PHASE                                       |
+|      Phase 4: "Because we need [NFR], I designed [component] to achieve it."| 
+|      Phase 5: "I'm assuming [X]. Correct me if wrong. I'm simplifying [Y]." |
+|                                                                             |
++=============================================================================+
+```

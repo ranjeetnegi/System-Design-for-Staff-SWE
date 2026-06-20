@@ -268,6 +268,8 @@ Caching trades consistency for latency. Events trade debuggability for decouplin
 | [Ch 35: Batch Processing](Chapter_35_Batch_Processing_and_Data_Pipelines.md) | Batch vs stream, ETL, MapReduce/Spark | Reference | Full |
 | [Ch 40: Deployment & Ops](Chapter_40_Deployment_Strategies_and_Operations.md) | SLO/error budget, runbooks, observability | **Recommended** | **Required** |
 | [Ch 41: Service Mesh](Chapter_41_Service_Mesh_When_Why_and_Trade_offs.md) | Istio/Envoy, when to adopt, trade-offs | Skip | **Recommended** |
+| [Ch 41a: ML System Design](Chapter_41a_ML_System_Design.md) | Feature stores, training pipelines, online/batch serving, drift | Skip | **Required** |
+| [Ch 41b: Google's Foundational Systems](Chapter_41b_Google_Foundational_Systems.md) | GFS, Bigtable, MapReduce, Chubby, Spanner, Borg | Skip | **Required** |
 
 ---
 
@@ -282,10 +284,12 @@ Caching trades consistency for latency. Events trade debuggability for decouplin
 | Chapter 37 | Data Locality & Compliance | 45–60 minutes | 45 minutes applied exercises |
 | Chapter 38 | Cost & Sustainable Design | 60–90 minutes | 1 hour cost modeling practice |
 | Chapter 39 | Evolution & Migration | 60–90 minutes | 1 hour migration planning practice |
+| Chapter 41a | ML System Design | 75–90 minutes | 2 hours practice (interview patterns) |
+| Chapter 41b | Google's Foundational Systems | 60–75 minutes | 1 hour name-drop drills |
 
 **Supplements**: 20–45 minutes each, depending on depth.
 
-**Total Section**: ~7–10 hours reading + ~6–7 hours practice (+ supplements as needed)
+**Total Section**: ~9–12 hours reading + ~8–9 hours practice (+ supplements as needed)
 
 ---
 

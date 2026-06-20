@@ -173,6 +173,35 @@ The chapters in this section answer the fundamental question: **What does it mea
 
 ---
 
+### Chapter 6c: Interview Execution Strategy
+
+**Core Question**: You know the material — how do you actually perform in the room?
+
+**Key Concepts**:
+- The 45-minute time map: Setup → HLD → Deep Dive → Wrap Up → Questions
+- The 5 golden clarification questions that apply to almost every system
+- The "north star statement" — framing before building
+- Reading interviewer signals (green / yellow / red)
+- Handling "I don't know" with first-principles reasoning
+- Recovering from wrong paths without losing credibility
+- The Google scorecard: what distinguishes L5 from L6 signals
+- Company-specific differences: Google vs Meta vs Amazon vs Netflix
+
+**Intern → Staff contrast on time management**:
+| Level | Time behavior |
+|-------|--------------|
+| Intern | No structure. Spends 40 min on one part. |
+| L3 | Talks about requirements for 20 min, no diagram. |
+| L4 | Good structure but goes deep in one area, runs out of time. |
+| L5 | Covers everything but waits to be redirected. |
+| L6 | States the time plan, signals transitions, checks in at midpoint. Drives. |
+
+**Key Insight**: The L6 signal is not knowing the answer. It is asking the question the interviewer didn't think to ask — surfacing the non-obvious problem in your own design before they do.
+
+**Includes**: 6 real interview execution stories, 7 exercises, 5 homework assignments.
+
+---
+
 ## How to Use This Section
 
 1. **Read sequentially first time**: The chapters build on each other conceptually
@@ -241,8 +270,9 @@ After completing Section 1, you'll be ready for:
 | Chapter 10 | 60-90 minutes | 1 hour practice |
 | Chapter 11 | 60-90 minutes | 1 hour practice |
 | Chapter 12 | 45-60 minutes | 2 hours mock interviews |
+| Chapter 6c | 60-75 minutes | 3 hours practice (exercises + mock interviews) |
 
-**Total Section**: ~6-8 hours reading + practice
+**Total Section**: ~9-11 hours reading + practice
 
 ---
 

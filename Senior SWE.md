@@ -12,33 +12,34 @@ A condensed study path through the [main repo](README.md) for **Senior SWE** (Go
 
 ---
 
-## Section 0 — Fundamentals (Basics)
+## Section 1 — Fundamentals (Basics)
 
 Systems, servers, clients, APIs, frontend/backend/DB, OS (process/memory/CPU/disk), networking, back-of-envelope numbers, and core building blocks (hash, cache, state, idempotency, queue, sync/async). **Do this first if fundamentals are rusty** — it underpins the framework and design problems.
 
 | Ch | Link |
 |----|------|
-| 1 | [Ch 1: Systems, Servers, Clients](Section0/Chapter_1_Systems_Servers_Clients.md) |
-| 2 | [Ch 2: APIs, Frontend, Backend, DB](Section0/Chapter_2_APIs_Frontend_Backend_DB.md) |
-| 3 | [Ch 3: OS Fundamentals](Section0/Chapter_3_OS_Fundamentals.md) |
-| 4 | [Ch 4: Networking Foundations](Section0/Chapter_4_Networking_Foundations.md) |
-| 5 | [Ch 5: Numbers & Estimation](Section0/Chapter_5_Numbers_Estimation.md) |
-| 6 | [Ch 6: Core Building Blocks](Section0/Chapter_6_Core_Building_Blocks.md) |
+| 9  | [Ch 9: Systems, Servers, Clients](Section1/Chapter_9_Systems_Servers_Clients.md) |
+| 10 | [Ch 10: APIs, Frontend, Backend, DB](Section1/Chapter_10_APIs_Frontend_Backend_DB.md) |
+| 11 | [Ch 11: OS Fundamentals](Section1/Chapter_11_OS_Fundamentals.md) |
+| 12 | [Ch 12: Networking Foundations](Section1/Chapter_12_Networking_Foundations.md) |
+| 13 | [Ch 13: Numbers & Estimation](Section1/Chapter_13_Numbers_Estimation.md) |
+| 14 | [Ch 14: Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) |
 
 *When to use:* Before or alongside Section 2. Use for quick reference on request paths, capacity math, API/DB trade-offs, and building-block choices during design.
 
 ---
 
-## Section 1 — Mindset (skim)
+## Section 0 — Mindset (skim)
 
-Skim for interview presence: designing under ambiguity and leading the conversation.
+Skim for interview presence: designing under ambiguity, leading the conversation, and trade-off reasoning.
 
 | Ch | Link |
 |----|------|
-| 10 | [Ch 10: Staff Engineer Mindset](Section1/Chapter_10_Staff_Engineer_Mindset_Designing_Under_Ambiguity.md) |
-| 12 | [Ch 12: Communication and Interview Leadership](Section1/Chapter_12_Communication_and_Interview_Leadership.md) |
+| 4  | [Ch 4: Staff Engineer Mindset / Designing Under Ambiguity](Section0/Chapter_4_Staff_Engineer_Mindset_Designing_Under_Ambiguity.md) |
+| 6  | [Ch 6: Communication and Interview Leadership](Section0/Chapter_6_Communication_and_Interview_Leadership.md) |
+| 8  | [Ch 8: Interview Execution Strategy](Section0/Chapter_8_Interview_Execution_Strategy.md) |
 
-*Optional:* Ch 7–9, 11 for full mindset context.
+*Optional:* Ch 1–3, 5, 7 for full mindset context. Ch 8 is especially valuable — covers the 45-minute time map, clarification art, reading interviewer signals, and two full annotated mock interviews.
 
 ---
 
@@ -46,13 +47,13 @@ Skim for interview presence: designing under ambiguity and leading the conversat
 
 | Ch | Link |
 |----|------|
-| 13 | [Ch 13: System Design Framework](Section2/Chapter_13_System_Design_Framework.md) |
-| 14 | [Ch 14: Phase 1 — Users and Use Cases](Section2/Chapter_14_Phase_1_Users_and_Use_Cases.md) |
-| 15 | [Ch 15: Phase 2 — Functional Requirements](Section2/Chapter_15_Phase_2_Functional_Requirements.md) |
-| 16 | [Ch 16: Phase 3 — Scale, Capacity, Growth](Section2/Chapter_16_Phase_3_Scale_Capacity_Planning_and_Growth.md) |
-| 17 | [Ch 17: Cost Efficiency](Section2/Chapter_17_Cost_Efficiency_and_Sustainable_System_Design.md) |
-| 18 | [Ch 18: Phase 4 & 5 — Non-Functional Requirements](Section2/Chapter_18_Phase_4_and_5_Non_Functional_Requirements.md) |
-| 19 | [Ch 19: End-to-End 5-Phase Framework](Section2/Chapter_19_End_to_End_System_Design_5_Phase_Framework.md) |
+| 15 | [Ch 15: System Design Framework](Section2/Chapter_15_System_Design_Framework.md) |
+| 16 | [Ch 16: Phase 1 — Users and Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) |
+| 17 | [Ch 17: Phase 2 — Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) |
+| 18 | [Ch 18: Phase 3 — Scale, Capacity, Growth](Section2/Chapter_18_Phase_3_Scale_Capacity_Planning.md) |
+| 19 | [Ch 19: Cost Efficiency](Section2/Chapter_19_Cost_Efficiency_and_Sustainable_System_Design.md) |
+| 20 | [Ch 20: Phase 4 & 5 — Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) |
+| 21 | [Ch 21: End-to-End 5-Phase Framework](Section2/Chapter_21_End_to_End_5_Phase_Framework.md) |
 
 ---
 
@@ -60,14 +61,14 @@ Skim for interview presence: designing under ambiguity and leading the conversat
 
 | Ch | Link |
 |----|------|
-| 20 | [Ch 20: Consistency Models](Section3/Chapter_20_Consistency_Models.md) |
-| 21 | [Ch 21: Replication and Sharding](Section3/Chapter_21_Replication_and_Sharding.md) |
-| 22 | [Ch 22: Leader Election, Coordination, Locks](Section3/Chapter_22_Leader_Election_Coordination_and_Distributed_Locks.md) *(optional)* |
-| 23 | [Ch 23: Backpressure, Retries, Idempotency](Section3/Chapter_23_Backpressure_Retries_and_Idempotency.md) |
-| 24 | [Ch 24: Queues, Logs, Streams](Section3/Chapter_24_Queues_Logs_and_Streams.md) |
-| 25 | [Ch 25: Failure Models and Partial Failures](Section3/Chapter_25_Failure_Models_and_Partial_Failures.md) |
-| 26 | [Ch 26: CAP — Case Studies](Section3/Chapter_26_CAP_Theorem_Applied_Case_Studies.md) *(optional)* |
-| 27 | [Ch 27: Advanced Distributed Systems](Section3/Chapter_27_Advanced_Distributed_Systems.md) *(optional)* |
+| 22 | [Ch 22: Consistency Models](Section3/Chapter_22_Consistency_Models.md) |
+| 23 | [Ch 23: Replication and Sharding](Section3/Chapter_23_Replication_and_Sharding.md) |
+| 24 | [Ch 24: Leader Election, Coordination, Locks](Section3/Chapter_24_Leader_Election_Coordination_and_Distributed_Locks.md) *(optional)* |
+| 25 | [Ch 25: Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_and_Idempotency.md) |
+| 26 | [Ch 26: Queues, Logs, Streams](Section3/Chapter_26_Queues_Logs_and_Streams.md) |
+| 27 | [Ch 27: Failure Models and Partial Failures](Section3/Chapter_27_Failure_Models_and_Partial_Failures.md) |
+| 28 | [Ch 28: CAP — Case Studies](Section3/Chapter_28_CAP_Theorem_Applied_Case_Studies.md) *(optional)* |
+| 29 | [Ch 29: Advanced Distributed Systems](Section3/Chapter_29_Advanced_Distributed_Systems.md) *(optional)* |
 
 ---
 
@@ -77,23 +78,23 @@ Use when practicing problems that need DB, cache, or async flows. Don't skip —
 
 | Ch | Link |
 |----|------|
-| 28 | [Ch 28: Databases](Section4/Chapter_28_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
-| 31 | [Ch 31: Caching at Scale](Section4/Chapter_31_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
-| 33 | [Ch 33: Event-Driven Architectures, Kafka](Section4/Chapter_33_Event_Driven_Architectures_Kafka_and_Streams.md) |
+| 30 | [Ch 30: Databases](Section4/Chapter_30_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
+| 33 | [Ch 33: Caching at Scale](Section4/Chapter_33_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
+| 35 | [Ch 35: Event-Driven Architectures, Kafka](Section4/Chapter_35_Event_Driven_Architectures_Kafka_and_Streams.md) |
 
 ### Supplements (use as needed)
 
 | Supplement | Senior (L5) | Staff (L6) | When to use |
 |------------|-------------|------------|-------------|
-| [Ch 29: DB Internals](Section4/Chapter_29_Database_Internals_Deep_Dive.md) | Optional | Recommended | Deep DB questions (B-tree, WAL, MVCC) |
-| [Ch 30: Data Encoding & Schema Evolution](Section4/Chapter_30_Data_Encoding_and_Schema_Evolution.md) | Skim | Full | API contracts, Kafka schema, Protobuf vs JSON |
-| [Ch 32: Redis Internals](Section4/Chapter_32_Redis_and_Cache_Internals.md) | Optional | Recommended | Cache design, Redis Cluster, eviction |
-| [Ch 34: Kafka Internals](Section4/Chapter_34_Kafka_Internals.md) | Optional | Recommended | Kafka partitions, consumer lag, ISR |
-| [Ch 35: Batch Processing](Section4/Chapter_35_Batch_Processing_and_Data_Pipelines.md) | Reference | Full | Ch 50 (Background Jobs), ETL, batch vs stream |
-| [Ch 40: Deployment & Ops](Section4/Chapter_40_Deployment_Strategies_and_Operations.md) | **Recommended** | **Required** | SLO/error budget, runbooks, observability, rollback |
-| [Ch 41: Service Mesh](Section4/Chapter_41_Service_Mesh_When_Why_and_Trade_offs.md) | Skip | **Recommended** | 50+ services, mTLS, retry consistency |
+| [Ch 31: DB Internals](Section4/Chapter_31_Database_Internals_Deep_Dive.md) | Optional | Recommended | Deep DB questions (B-tree, WAL, MVCC) |
+| [Ch 32: Data Encoding & Schema Evolution](Section4/Chapter_32_Data_Encoding_and_Schema_Evolution.md) | Skim | Full | API contracts, Kafka schema, Protobuf vs JSON |
+| [Ch 34: Redis Internals](Section4/Chapter_34_Redis_and_Cache_Internals.md) | Optional | Recommended | Cache design, Redis Cluster, eviction |
+| [Ch 36: Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) | Optional | Recommended | Kafka partitions, consumer lag, ISR |
+| [Ch 37: Batch Processing](Section4/Chapter_37_Batch_Processing_and_Data_Pipelines.md) | Reference | Full | Background Jobs, ETL, batch vs stream |
+| [Ch 42: Deployment & Ops](Section4/Chapter_42_Deployment_Strategies_and_Operations.md) | **Recommended** | **Required** | SLO/error budget, runbooks, observability, rollback |
+| [Ch 43: Service Mesh](Section4/Chapter_43_Service_Mesh_When_Why_and_Trade_offs.md) | Skip | **Recommended** | 50+ services, mTLS, retry consistency |
 
-*Full section also includes:* Ch 36 (Multi-Region), Ch 37 (Data Locality), Ch 38 (Cost Efficiency), Ch 39 (System Evolution).
+*Full section also includes:* Ch 38 (Multi-Region), Ch 39 (Data Locality), Ch 40 (Cost Efficiency), Ch 41 (System Evolution).
 
 ---
 
@@ -107,24 +108,24 @@ Practice end-to-end with these 13 problems. Each has a full walkthrough: require
 
 | Ch | Link |
 |----|------|
-| 42 | [Ch 42: URL Shortener](Section5/Chapter_42_URL_Shortener.md) |
-| 43 | [Ch 43: Single-Region Rate Limiter](Section5/Chapter_43_Single_Region_Rate_Limiter.md) |
-| 44 | [Ch 44: Distributed Cache](Section5/Chapter_44_Distributed_Cache_Single_Cluster.md) |
-| 45 | [Ch 45: Object and File Storage](Section5/Chapter_45_Object_and_File_Storage_System.md) |
-| 46 | [Ch 46: Notification System](Section5/Chapter_46_Notification_System.md) |
-| 53 | [Ch 53: Real-Time Chat](Section5/Chapter_53_Real_Time_Chat.md) |
+| 49 | [Ch 49: URL Shortener](Section5/Chapter_49_URL_Shortener.md) |
+| 50 | [Ch 50: Single-Region Rate Limiter](Section5/Chapter_50_Single_Region_Rate_Limiter.md) |
+| 51 | [Ch 51: Distributed Cache](Section5/Chapter_51_Distributed_Cache_Single_Cluster.md) |
+| 52 | [Ch 52: Object and File Storage](Section5/Chapter_52_Object_and_File_Storage_System.md) |
+| 53 | [Ch 53: Notification System](Section5/Chapter_53_Notification_System.md) |
+| 60 | [Ch 60: Real-Time Chat](Section5/Chapter_60_Real_Time_Chat.md) |
 
 ### Second tier
 
 | Ch | Link |
 |----|------|
-| 47 | [Ch 47: Authentication System](Section5/Chapter_47_Authentication_System.md) |
-| 48 | [Ch 48: Search System](Section5/Chapter_48_Search_System.md) |
-| 49 | [Ch 49: Metrics Collection](Section5/Chapter_49_Metrics_Collection_System.md) |
-| 50 | [Ch 50: Background Job Queue](Section5/Chapter_50_Background_Job_Queue.md) |
-| 51 | [Ch 51: Payment Flow](Section5/Chapter_51_Payment_Flow.md) |
-| 52 | [Ch 52: API Gateway](Section5/Chapter_52_API_Gateway.md) |
-| 54 | [Ch 54: Configuration Management](Section5/Chapter_54_Configuration_Management.md) |
+| 54 | [Ch 54: Authentication System](Section5/Chapter_54_Authentication_System.md) |
+| 55 | [Ch 55: Search System](Section5/Chapter_55_Search_System.md) |
+| 56 | [Ch 56: Metrics Collection](Section5/Chapter_56_Metrics_Collection_System.md) |
+| 57 | [Ch 57: Background Job Queue](Section5/Chapter_57_Background_Job_Queue.md) |
+| 58 | [Ch 58: Payment Flow](Section5/Chapter_58_Payment_Flow.md) |
+| 59 | [Ch 59: API Gateway](Section5/Chapter_59_API_Gateway.md) |
+| 61 | [Ch 61: Configuration Management](Section5/Chapter_61_Configuration_Management.md) |
 
 ---
 
@@ -139,15 +140,15 @@ Practice end-to-end with these 13 problems. Each has a full walkthrough: require
 
 ## Roadmap Summary
 
-| Section | Chapters | Supplements |
-|---------|----------|-------------|
-| 0 | Ch 1–6 (fundamentals; do first if rusty) | — |
-| 1 | Skim Ch 10, 12 | — |
-| 2 | Ch 13–19 (full) | — |
-| 3 | Ch 20–27 (Ch 27 optional) | — |
-| 4 | Ch 28, 31, 33 (core); Ch 36–39 as needed | Ch 40 (Deployment & Ops) **recommended** |
-| 5 | Ch 42–54; prioritize 6–8 in depth (must-practice first) | — |
-| 6 | Skip for Senior | — |
+| Section | Chapters | Notes |
+|---------|----------|-------|
+| 1 | Ch 9–14 (fundamentals; do first if rusty) | — |
+| 0 | Skim Ch 4, 6, 8 | Ch 8 especially valuable for interview execution |
+| 2 | Ch 15–21 (full) | Core design framework |
+| 3 | Ch 22–27 (Ch 28–29 optional) | Distributed systems essentials |
+| 4 | Ch 30, 33, 35 (core); supplements as needed | Ch 42 (Deployment & Ops) **recommended** |
+| 5 | Ch 49–61; prioritize 6–8 in depth | Must-practice first |
+| 6 | Skip for Senior | Staff-level case studies |
 
 ---
 
@@ -157,7 +158,9 @@ If preparing for **Staff Engineer (L6)** interviews, add:
 
 | Section | Additional material |
 |---------|---------------------|
-| **4** | All supplements; especially Ch 41 (Service Mesh), Ch 30 (Data Encoding), Ch 35 (Batch Processing) |
-| **6** | Full Section 6 (Ch 55–72) — 18 Staff-level design problems |
+| **0** | All of Section 0 (Ch 1–8) — Staff mindset, scope/impact, trade-off reasoning |
+| **4** | All supplements; especially Ch 43 (Service Mesh), Ch 32 (Data Encoding), Ch 37 (Batch Processing) |
+| **6** | Full Section 6 (Ch 62–93) — Staff-level design problems + Google foundational systems (GFS, Bigtable, MapReduce, Chubby, Spanner, Borg) |
+| **7** | Section 7 (Ch 94–106) — Engineering craft (debugging, on-call, migrations, code review) |
 
-See [README](README.md) for the full Staff path.
+See [README](README.md) and [TODO_MASTER_PLAN.md](TODO_MASTER_PLAN.md) for the full Staff path and chapter status.
