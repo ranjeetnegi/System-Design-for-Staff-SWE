@@ -2810,3 +2810,119 @@ Brainstorming (Part 18):
 ✓ Correctness: Idempotency, corruption prevention, silent data loss detection
 ✓ Evolution: Recording rules, schema migration, push gateway
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between push-based and pull-based metrics collection? When do you use each?**
+
+In pull-based collection, the collector scrapes each service's /metrics endpoint on a fixed interval -- the collector controls the rate. In push-based, services send metrics to a central endpoint whenever they want. Pull is simpler to debug (just curl the endpoint), prevents thundering-herd floods on the collector, and gives you an instant health signal when a scrape fails. Use push for short-lived jobs like cron or lambdas that finish before any scraper can reach them. The practical answer is: pull for long-running services, push gateway for ephemeral jobs.
+
+---
+
+**Q2: What is a time-series database? Why not use a regular relational database for metrics?**
+
+A time-series database is optimized for append-heavy workloads where data arrives in timestamp order and queries are almost always range scans over time. Regular relational databases like PostgreSQL handle roughly 10-20K inserts per second with tuning; a moderate metrics system needs 67K+ per second. Beyond throughput, relational databases don't do gorilla or delta-of-delta compression, which gives TSDB a 10:1 compression ratio. Their row-based storage also performs poorly on the range scans that dominate metrics queries. TimescaleDB closes the gap for small deployments under 100K series, but beyond that a purpose-built TSDB wins on every axis.
+
+---
+
+**Q3: What is a counter vs a gauge vs a histogram? Give examples of each.**
+
+A counter is a monotonically increasing integer that resets to zero on process restart -- you always derive rates from it, never use the raw value. Example: http_requests_total. A gauge is a number that goes up and down freely and is queried directly. Example: memory_usage_bytes or active_connections. A histogram tracks the distribution of a measurement by bucketing observations into pre-defined ranges and storing a count per bucket plus a running sum and total count. Example: http_request_duration_ms_bucket{le="100"} = 950 means 950 of the last requests finished within 100ms. Histograms let you compute percentiles like P99 across time.
+
+---
+
+**Q4: How does Prometheus work at a high level?**
+
+Prometheus is a pull-based metrics system. Each service exposes a /metrics HTTP endpoint in a text format. Prometheus discovers scrape targets from service discovery (Kubernetes API, Consul, or a static file) and scrapes every target on a configurable interval, typically 15 seconds. Each scraped sample is stored in Prometheus's local TSDB, which keeps a 2-hour in-memory head block and flushes compressed immutable blocks to disk. PromQL is the query language for aggregating and transforming these time series. Alerting is handled by the Alertmanager, which receives alerts from Prometheus's rule evaluator and routes them to PagerDuty, Slack, or email with deduplication and grouping.
+
+---
+
+**Q5: What is downsampling? Why is it needed for long-term metric storage?**
+
+Downsampling is the process of replacing many high-resolution data points with fewer lower-resolution aggregates. For example, collapsing 20 raw 15-second samples into a single 5-minute average, min, max, sum, and count. It is needed because keeping every raw sample for a year is prohibitively expensive. One million series at 15-second resolution for one year would be tens of terabytes. With downsampling you might keep 15-second data for 48 hours (for incident investigation), 5-minute data for 30 days (for trend analysis), and 1-hour data for one year (for capacity planning). The total storage drops from terabytes to under 30 GB. You always store min/max/sum/count -- never just the average -- so any downstream aggregate is still mathematically correct.
+
+---
+
+**Q6: How do you handle a metrics spike -- 10,000 services all sending data simultaneously?**
+
+The first protection is that pull-based collection inherently limits this: the collector controls the scrape rate and scrapes targets sequentially within each goroutine, so there is no simultaneous flood by default. If you are on a push-based system, you accept the data through a message queue (like Kafka) which absorbs the burst and lets the storage layer drain at its own pace. On the write path, the ingestion router uses exponential backoff with jitter so that retries from 10,000 collectors do not all hit storage at the same millisecond. The collector also has a bounded in-memory buffer, dropping oldest data if the buffer fills rather than amplifying backpressure upstream.
+
+---
+
+**Q7: What is a cardinality explosion? How does it happen and why is it dangerous?**
+
+Cardinality is the number of unique time series, which is determined by the number of distinct label combinations for each metric. A cardinality explosion happens when a developer adds a high-cardinality label like user_id to a metric: one million users times ten endpoints suddenly creates ten million new series instead of ten. This is dangerous because each active series lives in the in-memory head block. At roughly 1 KB per series, ten million series consumes 10 GB of RAM per shard, triggering OOM kills. Write throughput spikes proportionally, query latency degrades as the label index grows, and the damage is system-wide since metrics is shared infrastructure. The mitigation is to enforce hard per-metric series limits at ingestion and to reject known high-cardinality label names like user_id and request_id.
+
+---
+
+**Q8: How do you aggregate metrics across multiple instances of a service -- for example, P99 latency across 100 pods?**
+
+You store histogram bucket counts per instance. When you query, PromQL's histogram_quantile function first sums the bucket counts across all instances matching the label selector (e.g., service="api"), then computes the percentile on the merged histogram. This works correctly because you are adding raw counts before computing the quantile. What you cannot do is compute P99 on each pod separately and then average those P99 values -- that is mathematically wrong because a simple average of percentiles ignores the different traffic volumes on each pod. The key insight is: aggregate bucket counts first, compute percentile once.
+
+---
+
+**Q9: What is the difference between sum aggregation and quantile (percentile) aggregation?**
+
+Sum aggregation is purely additive: sum the values from all sources. It is exact and order-independent. Quantile aggregation asks "what value is at the Nth percentile of the distribution?" and cannot be done exactly from pre-aggregated summaries in the general case. For histograms, Prometheus approximates the quantile by interpolating within the bucket that contains the target percentile. This is why histogram bucket boundaries must be defined upfront and why you need raw bucket counts rather than pre-computed percentiles. A common mistake is storing average latency per instance and trying to derive P99 from those -- you cannot; you lose the distribution shape the moment you average it.
+
+---
+
+**Q10: How do you store metrics efficiently -- what is a columnar storage format and why is it used?**
+
+Columnar storage keeps all values for one column (or one time series) together on disk, rather than storing each row (data point) with all its fields interleaved. For metrics this means all timestamps for a series are stored together, and all values are stored together. This is ideal for range queries ("give me all values between T1 and T2") because the read is a single sequential scan of contiguous bytes. It also enables high compression: consecutive timestamps at 15-second intervals compress almost to zero via delta-of-delta encoding, and slowly-changing float values compress well via XOR encoding. This is the gorilla algorithm used by Prometheus's TSDB, giving roughly 10:1 compression versus uncompressed row storage.
+
+---
+
+**Q11: How do you implement alerting on top of metrics? What is an alert evaluation loop?**
+
+The alert evaluator runs a loop -- typically every 60 seconds -- that executes each configured alert rule as a PromQL query and checks whether the result crosses the threshold. Alerts have a state machine: inactive, pending, and firing. When a condition first becomes true the alert enters pending state. It only transitions to firing after the condition has been continuously true for a configured duration, called the "for" duration (for example, 5 minutes). This prevents flapping alerts from a single bad data point. Once firing, the evaluator sends the alert to a notification routing system (like Alertmanager) which handles deduplication, grouping, and fan-out to PagerDuty or Slack. When the condition clears, the evaluator sends a resolution notification.
+
+---
+
+**Q12: What is the difference between metrics, logs, and traces -- the three pillars of observability?**
+
+Metrics are pre-aggregated numerical measurements over time, cheap to query, and purpose-built for dashboards and alerting. They answer "is anything wrong right now?" Logs are text events emitted per request or per action, high cardinality, expensive to search at scale, and good for debugging a specific incident once you know where to look. They answer "what exactly happened at this timestamp?" Traces track a single request as it moves through multiple services, recording timing and context at each hop. They answer "where did this specific slow request spend its time?" In practice you use metrics to detect a problem, logs to diagnose it, and traces to pinpoint the exact code path. All three are complementary; collapsing them into one system makes each worse.
+
+---
+
+**Q13: How do you handle out-of-order metric data points -- timestamps from the past?**
+
+Prometheus's TSDB accepts out-of-order samples within a configurable window, typically 5 minutes. Within that window, samples are buffered and merged into the correct position. This covers the common causes: collector buffering during a brief storage outage, clock skew between services, or network delay. Samples older than the out-of-order window are rejected and counted in an out_of_order_samples_total counter. The window is kept short because accepting arbitrarily old data would require the head block to be much larger, increasing RAM requirements. In practice 5 minutes covers virtually all real-world latency; anything older is a sign of a deeper problem (clock misconfiguration or a job that ran much later than expected).
+
+---
+
+**Q14: What is a recording rule in Prometheus? Why is it useful?**
+
+A recording rule is a pre-computation: you write a PromQL expression, and Prometheus evaluates it on a schedule (typically every 1-5 minutes) and stores the result as a new time series. For example, a recording rule might compute service:http_error_rate:5m = rate(http_errors_total[5m]) by (service) and write that result to storage. Alert rules and dashboards then query the pre-computed series instead of re-running the expensive aggregation each time. Recording rules are useful for two reasons: they reduce query latency (a single-series lookup instead of a cross-shard fan-out), and they reduce the risk of alert evaluation timing out under load, because the expensive work already happened in the background on a predictable schedule.
+
+---
+
+**Q15: How do you scale a metrics system from 1,000 to 100,000 services?**
+
+At 1,000 services you can run a single Prometheus. At 10,000 you need horizontal sharding of storage, more collectors, and a query engine that fans out to shards. At 100,000 you have roughly 100 million active time series, which requires a fundamentally different architecture: Kafka as the ingestion buffer to decouple write bursts from storage, a distributed TSDB like Thanos or Cortex that uses object storage (S3/GCS) as the durable backing store, and a query frontend with result caching and query splitting. You also need strict cardinality governance (hard per-team limits, cost allocation so teams feel the impact of their series count) and recording rules to pre-compute common aggregations so that alert evaluation does not fan out to hundreds of shards.
+
+---
+
+**Q16: What is the write amplification problem in time-series databases?**
+
+Write amplification is when a single logical write produces multiple physical writes, increasing I/O beyond what the data volume alone would suggest. In a TSDB it happens in three places. First, the WAL: every incoming sample is written to the write-ahead log before the head block, doubling the write I/O. Second, compaction: small 2-hour blocks are merged into larger 24-hour blocks, which are then merged into 7-day blocks. Each merge reads and re-writes the same data multiple times. Third, replication: with a replication factor of 2, every write is physically written twice across two nodes. The mitigations are batching WAL writes (fsync once per second rather than per sample), scheduling compaction during off-peak hours, and choosing a replication factor of 2 rather than 3 for metrics, since best-effort durability is acceptable.
+
+---
+
+**Q17: How do you retain metrics for different durations -- raw data 7 days, 1-minute aggregates 30 days, 1-hour aggregates 1 year?**
+
+This is a tiered retention policy implemented through background compaction. Raw 15-second data lives in the standard block rotation: when a block ages past 7 days, the compaction job deletes it rather than merging it further. At the same time, a downsampling job reads each 2-hour block before deletion and writes a 1-minute averaged summary into a separate tier with its own longer retention, kept for 30 days. A second downsampling pass on the 1-minute tier produces 1-hour aggregates stored for one year. The query engine is tier-aware: for a 6-hour time range it uses raw blocks; for a 2-week range it uses the 1-minute tier; for a 6-month range it uses the 1-hour tier. You store min, max, sum, and count at each tier -- not just the average -- so any aggregate query remains mathematically correct.
+
+---
+
+**Q18: What is a dead man's switch alert? How do you implement it?**
+
+A dead man's switch (also called an absence alert or heartbeat alert) fires when a signal stops arriving rather than when a value exceeds a threshold. It solves the problem where the metrics system itself goes down and all your normal alerts silently stop evaluating. Implementation: a monitored system continuously emits a heartbeat metric, for example monitoring_heartbeat{job="metrics-system"} = 1, on every evaluation cycle. An external watchdog -- outside the primary metrics system -- checks for this heartbeat. If the heartbeat metric is absent for more than two minutes (the absence condition), the watchdog fires an alert through a separate channel (email, a secondary PagerDuty integration, or SMS). This is the "who watches the watchmen" solution: the primary system cannot alert on its own failure, so you need an independent external check.
+
+---

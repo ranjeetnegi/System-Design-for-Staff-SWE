@@ -3090,3 +3090,117 @@ Brainstorming (Part 18):
 ✓ Deployment: Rollout stages, bake time, canary criteria; bad config/code scenario; rollback
 ✓ Interview: Clarifying questions, explicit non-goals, scope creep pushback
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is at-least-once delivery? What is the implication for job handlers?**
+
+At-least-once delivery means the system guarantees every successfully enqueued job will be executed at least once, but it may be executed more than once. This happens because the mechanism for recovery -- lease expiry and re-dispatch -- can cause two workers to run the same job if the first worker is slow or crashes after completing work but before sending its ACK. The direct implication is that every job handler must be idempotent: running it twice on the same input must produce the same outcome as running it once. You cannot assume single execution. This is not a design flaw -- it is the correct trade-off for durability without distributed transactions.
+
+---
+
+**Q2: What is at-most-once delivery? When would you prefer it over at-least-once?**
+
+At-most-once delivery means a job is delivered to a worker zero or one time -- never more. This is typically achieved by deleting the job from the queue before the worker executes it, so if the worker crashes mid-execution, the job is simply lost. You prefer at-most-once when the cost of duplicate execution is higher than the cost of lost work -- for example, charging a credit card, sending a one-time security code, or triggering an irreversible external action. In practice, at-most-once is rare in background job systems because most engineers prefer at-least-once paired with idempotent handlers, which achieves safe re-execution without data loss.
+
+---
+
+**Q3: How do you make a job handler idempotent?**
+
+There are three main approaches. First, natural idempotency: if the operation overwrites the same resource with the same content (resizing an image to the same output path), it is inherently safe to repeat. Second, idempotency key check: before performing the side effect, check a deduplication table keyed on a business identifier -- for example, "welcome_email:user_789" -- and skip if already executed. Record the key after the action using an INSERT with ON CONFLICT DO NOTHING to handle concurrent re-execution safely. Third, external system deduplication: pass an idempotency key to downstream APIs (many payment and email APIs support this natively). The handler owns its own idempotency -- never rely on the queue to guarantee single execution.
+
+---
+
+**Q4: What is a dead-letter queue (DLQ)? What goes in it and why?**
+
+A dead-letter queue is a holding area for jobs that have failed every allowed retry attempt. When a job's attempt count reaches max_retries and still fails, it is moved to the DLQ with its full payload, error history, and attempt count preserved. The DLQ exists for three reasons: visibility (failures are explicit and inspectable, not silently dropped), recoverability (after fixing the bug, jobs can be replayed without losing the original work), and debugging (the exact payload and error sequence is preserved). A DLQ depth greater than zero is an immediate signal that something is wrong -- it should alert on-call engineers. Without a DLQ, failed jobs simply disappear and you have no way to know what work was lost.
+
+---
+
+**Q5: How do you implement job retries with exponential backoff?**
+
+When a job fails, instead of retrying immediately, you schedule the next attempt after a delay that grows with each failure: delay = base_delay multiplied by 2 raised to the power of (attempt minus 1). A typical schedule starting at 30 seconds doubles each time -- 30s, 60s, 120s, 240s -- up to a configured maximum like 1 hour. You also add jitter: a small random offset (0 to 15 seconds) on top of each delay. Without jitter, if 1,000 jobs fail at the same time, they all retry at the same moment and overwhelm the dependency again. With jitter they spread out. The implementation stores the next_retry_at timestamp on the job and the dispatch query filters WHERE visible_after <= NOW(), so retrying jobs are simply invisible until their retry window opens.
+
+---
+
+**Q6: What happens when a worker crashes mid-job -- how is the job recovered?**
+
+When a worker claims a job, it also sets a lease_expiry timestamp -- say, now plus 5 minutes. If the worker crashes, it never sends an ACK. A background reaper process (or the dispatch query itself) checks for jobs in "processing" status whose lease_expiry is in the past and resets them to "pending," making them visible for re-dispatch. No manual intervention is needed. The lease duration must be longer than the expected job execution time to avoid false expiry on legitimately slow jobs. For very long-running jobs, the handler sends periodic heartbeats to extend the lease. The worker_id column in the ACK query prevents a stale late-arriving ACK from corrupting a job that has already been re-dispatched to another worker.
+
+---
+
+**Q7: How do you implement job priority -- urgent jobs should run before bulk jobs?**
+
+Add a priority column (integer 0-9, higher means more urgent) to the jobs table and update the dispatch query to ORDER BY priority DESC, created_at ASC. Workers naturally pick up higher-priority jobs first because the query sorts them to the front. The partial index on pending jobs must include priority in its sort order to make this efficient. The trade-off is potential starvation: if high-priority jobs never stop arriving, low-priority jobs may wait indefinitely. In V1 this is usually acceptable. If starvation becomes a real problem, add a minimum throughput guarantee per priority tier -- for example, at least 10% of worker capacity always goes to low-priority jobs regardless of the high-priority queue depth.
+
+---
+
+**Q8: How do you prevent a single slow job from blocking all workers?**
+
+Three complementary mechanisms. First, separate worker pools by job category: image resize workers (slow, memory-heavy) do not share threads with email workers (fast, lightweight), so a backlog of image jobs cannot delay email delivery. Second, per-job-type concurrency limits: cap the number of in-flight jobs of a given type to, say, 3 out of 10 thread slots, so one slow type cannot consume the entire pool. Third, per-job-type timeouts: email gets a 30-second timeout while report generation gets 10 minutes -- if a job runs longer than its type's timeout, the worker kills it and schedules a retry. This is head-of-line blocking prevention: one slow job or job type should never stall unrelated work.
+
+---
+
+**Q9: What is a job timeout? How do you detect and handle a stuck job?**
+
+A job timeout is a maximum execution duration enforced per job type. If a handler runs longer than its timeout, the worker kills the handler thread and NACKs the job, triggering a retry. Detection happens in two ways: the worker tracks wall-clock time since the handler started and kills it at the limit, and separately, the lease reaper detects jobs whose lease_expiry is past and resets them to pending -- the lease acts as a distributed timeout visible to the whole system. A stuck job with no heartbeat and an expired lease is automatically recovered this way. The operational signal for stuck jobs is oldest_pending_job_age growing continuously for a specific job type, or a job that has been in "processing" status longer than its expected maximum runtime.
+
+---
+
+**Q10: How do you schedule a job to run at a specific time in the future (delayed jobs)?**
+
+Add a visible_after timestamp column to the job record. The dispatch query filters WHERE visible_after <= NOW(), so a job with visible_after set to 10 minutes from now simply stays invisible until that time passes. To delay a job, the producer passes delay_seconds at enqueue time and the Enqueue API sets visible_after = NOW() + delay_seconds. The exact same mechanism handles retry backoff: after a failure, the retry logic sets visible_after = NOW() + backoff_delay. This unifies deferred scheduling and retry scheduling into one field, keeping the schema simple. The worker poll query automatically picks up ready jobs without any separate scheduling process.
+
+---
+
+**Q11: How do you implement recurring / cron-like jobs?**
+
+A job queue executes work but does not own scheduling. The recommended architecture is a separate, lightweight scheduler process (a cron daemon or a dedicated scheduling service) that reads a schedule configuration and enqueues the appropriate job at the right time. The scheduler itself can be a simple process that wakes up every minute, checks which schedules are due, and calls the Enqueue API. To prevent duplicate scheduling when the scheduler restarts or runs multiple instances, use idempotency keys scoped to the schedule slot -- for example, "daily_report:2024-01-15" -- so that the second scheduler instance trying to enqueue the same run is a no-op. This keeps the job queue simple and the scheduling logic independent.
+
+---
+
+**Q12: How do you handle fan-out -- one job spawning hundreds of child jobs?**
+
+Use the batch enqueue API. The parent job handler executes, and before completing, it calls the batch enqueue endpoint with all child job payloads in a single atomic write. For example, "new product added" spawns one job per subscriber using a single batch INSERT of 1,000 rows. The parent job then marks itself complete. The children are independent jobs and are processed by workers in parallel. If the parent fails before enqueuing children, it retries from the start -- so the child enqueue must be idempotent using per-child idempotency keys. For very large fan-outs (millions of children), do it in batches of 100 to avoid a single enormous database transaction. Monitor fan-out jobs separately because one parent can dominate queue depth.
+
+---
+
+**Q13: How do you implement job dependencies (job B should only run after job A succeeds)?**
+
+The simplest approach is handler-level chaining: when job A completes successfully, its handler enqueues job B. Job B is not created until job A is confirmed done. This keeps the job queue itself dependency-free and simple. If job A fails and goes to the DLQ, job B is never enqueued -- the chain stops. For more complex graphs (B and C both depend on A, and D depends on both B and C), this handler-chaining approach becomes unwieldy. At that point you have crossed into workflow orchestration territory (Temporal, Airflow, Step Functions), which is a different class of system. For V1, explicitly call this out as a non-goal and use handler-level chaining for the simple linear cases.
+
+---
+
+**Q14: How do you monitor queue depth and worker backlog?**
+
+Export four key metrics from the job store. First, queue_depth by job type and priority: number of pending jobs waiting for a worker. Second, oldest_pending_job_age_seconds: how long the oldest pending job has been waiting -- this is the most sensitive indicator of processing stall. Third, jobs_completed_total minus jobs_enqueued_total rate: if completed rate falls below enqueue rate, backlog is growing. Fourth, active_workers and active_workers / max_workers saturation. Alert thresholds: queue_depth above 10,000 for 5 minutes, oldest_pending_job_age above 10 minutes, or DLQ depth above zero. The oldest_pending_job_age metric per priority tier also catches starvation: high-priority fine, low-priority stuck.
+
+---
+
+**Q15: What is the difference between a message queue (Kafka, SQS) and a job queue (Celery, Sidekiq)?**
+
+A message queue delivers messages from producers to consumers -- it is optimized for throughput and at-least-once delivery, but it does not inherently track whether the work was actually done. Kafka does not have per-message status, per-message retry history, a DLQ per message, or the ability to selectively retry message number 42 without replaying the whole partition. A job queue adds a layer of task management on top: each job has a unique ID, tracked status (pending, processing, completed, dead), attempt count, last error, and retry schedule. You can inspect individual jobs, replay specific failures, and query "what happened to job X?" A job queue is typically built using a message queue or a database as its backing store, but it exposes a higher-level abstraction designed for managing discrete units of work.
+
+---
+
+**Q16: How do you handle a poison pill -- a job that always fails and retries forever?**
+
+The retry limit and DLQ combination handles this by design. max_retries caps the number of attempts -- typically 5 -- and after the last failure the job is moved to the DLQ and stops being dispatched. The DLQ alert fires, on-call investigates, and the engineer either fixes the bug and replays, or discards the job. The tricky case is a job that crashes the worker process (OOM, segfault) before it can update the retry count. The lease reaper reclaims it, another worker picks it up, crashes again, and the cycle repeats -- but each cycle does increment attempt_count, so it still reaches max_retries and lands in the DLQ. The key is that the retry counter is updated atomically in the database, not in the worker process memory, so a crash cannot prevent the counter from advancing.
+
+---
+
+**Q17: How do you scale workers horizontally when the queue is growing?**
+
+Workers are stateless: they poll the queue, execute, and report results. Adding more workers is purely a matter of starting more instances -- no coordination, no configuration change to the queue itself. Scale horizontally by monitoring queue_depth and oldest_pending_job_age: if queue_depth exceeds a threshold for more than N minutes, autoscaling (Kubernetes HPA, AWS Auto Scaling) launches additional worker instances. Each new worker begins polling immediately. The database's FOR UPDATE SKIP LOCKED mechanism ensures new workers do not interfere with existing ones -- they naturally spread the load. The bottleneck at high scale is not worker coordination but database write throughput and polling contention, which you address through table partitioning and per-type worker pools before moving to a purpose-built queue backend.
+
+---
+
+**Q18: What is exactly-once execution and why is it nearly impossible to guarantee?**
+
+Exactly-once execution means every job runs precisely one time -- not zero, not two. Achieving it requires atomicity between two independent systems: the job queue (marking the job done) and the handler's side effect (sending the email, writing to the database). If you mark the job done first and then the handler crashes, the side effect never happens -- that is at-most-once, not exactly-once. If the handler executes first and then the ACK fails, the job gets re-dispatched and executes again -- that is at-least-once. Making both atomic requires a distributed transaction spanning the queue store and every external system the handler touches, which is impractical and not supported by most dependencies. The industry-standard solution is at-least-once delivery paired with idempotent handlers, which achieves the same user-visible outcome as exactly-once -- the business effect happens exactly once -- without the distributed transaction complexity.

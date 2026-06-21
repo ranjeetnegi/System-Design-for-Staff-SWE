@@ -3232,3 +3232,119 @@ CHAPTER COMPLETENESS:
 REMAINING GAPS:
 None - chapter is complete for Senior SWE (L5) scope.
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between token bucket and leaky bucket? Which do you use and why?**
+
+Token bucket holds tokens up to a capacity and refills at a fixed rate. Requests consume one token each; if the bucket is empty, the request is rejected. Leaky bucket processes requests at a constant outflow rate and queues incoming requests; excess requests overflow and are dropped. The key difference is that token bucket allows short bursts up to the bucket capacity, while leaky bucket enforces a strictly smooth output rate. I use token bucket when I want to allow controlled bursts -- for example, a user can burst 100 requests instantly but then refills at 10 per second. I avoid leaky bucket because the queue it introduces adds memory pressure and latency with little accuracy benefit over sliding window counter.
+
+---
+
+**Q2: What is the difference between token bucket and sliding window counter?**
+
+Token bucket stores continuous state: the current token count and the last refill timestamp. It allows bursting up to the bucket capacity. Sliding window counter stores two integer counters -- one for the current fixed window and one for the previous -- and computes a weighted estimate of requests in the rolling window. Sliding window counter uses O(1) memory and requires no float math beyond the weight calculation. Token bucket is better when you specifically need burst tolerance tied to a token metaphor. Sliding window counter is better as a default because it maps cleanly to "N requests per minute" semantics, needs no float state in Redis, and has slightly simpler failure modes.
+
+---
+
+**Q3: Walk me through token bucket: what state is stored, how is a request checked, and how are tokens refilled?**
+
+The state stored in Redis per user is two fields: the current token count (a float) and the last refill timestamp. On each request, you first compute how much time has passed since the last refill, multiply by the refill rate to get tokens to add, cap the result at bucket capacity, and save the new count and timestamp. Then you check whether tokens >= 1. If yes, decrement by 1 and allow the request. If no, reject it. The entire read-compute-write sequence must be atomic, which is why we use a Lua script in Redis. Without atomicity, two concurrent requests can both read the same token count, both pass the check, and both decrement, resulting in one extra allowed request.
+
+---
+
+**Q4: How do you implement rate limiting in a distributed system -- why is a single Redis node not enough?**
+
+A single Redis node has a throughput ceiling around 100K-200K simple operations per second and is a single point of failure. At high scale -- say 500K req/sec with two Redis ops per request -- one node cannot keep up. The standard answer is Redis Cluster: shard the keyspace by user ID hash across multiple primary nodes, each with its own replica. Each shard handles a fraction of the load. For failure tolerance, each primary has a replica and Redis Sentinel or Cluster handles automatic failover. The trade-off is that cross-shard queries become impossible, but rate limiting keys are always scoped to a single entity (user, IP), so sharding by key prefix works cleanly.
+
+---
+
+**Q5: What Redis command makes token bucket atomic? Walk through why a plain GET + SET is not sufficient.**
+
+A plain GET followed by SET is not atomic: two concurrent threads can both GET the same token count, both decide they have tokens, both decrement, and one request gets through even when the bucket was at exactly 1 token. The fix is a Lua script executed via Redis EVAL. Redis guarantees that a Lua script runs atomically -- no other command executes between the first and last line of the script. Inside the script, you GET the current state, compute the new token count, check the limit, conditionally INCR or reject, and SET the updated state, all in one serialized execution. You cannot use Redis transactions (MULTI/EXEC) as a direct substitute because they do not allow conditional logic based on values read inside the transaction.
+
+---
+
+**Q6: What is a race condition in a naive (non-atomic) rate limiter? Walk through the exact scenario.**
+
+Suppose the limit is 100 requests per minute and the current count is 99. Thread A reads count = 99, evaluates 99 < 100, decides to allow. Before Thread A can increment, Thread B reads count = 99, also evaluates 99 < 100, also decides to allow. Now both threads increment: count goes to 101. Both requests are allowed even though the 100th slot was the only one available. The result is that N concurrent threads reading the same boundary value can each allow a request, letting N requests through when only 1 slot remained. At 50K req/sec with bursty traffic, this race fires frequently. The fix is to make the check-and-increment a single atomic operation via a Lua script in Redis.
+
+---
+
+**Q7: How do you rate limit by user_id AND by IP simultaneously (multi-dimensional rate limiting)?**
+
+You run two independent rate limit checks per request: one against the key `user:{user_id}` with its configured limit, and one against `ip:{client_ip}` with its configured limit. If either check fails, the request is rejected with 429. To minimize latency, pipeline both Redis operations into a single round-trip and evaluate the results together. The user-level check prevents a single account from abusing the API; the IP-level check provides a backstop against unauthenticated or spoofed traffic. For multi-dimensional checks, the most restrictive limit wins. If you want to add endpoint-level limits, add a third key like `user:{user_id}:endpoint:{path}` with its own counter and rule.
+
+---
+
+**Q8: What happens when Redis is down -- do you fail open or fail closed? What are the implications of each?**
+
+Fail open means: when Redis is unreachable or times out, allow the request and skip rate limiting. Fail closed means: deny the request when you cannot check the rate limit. I always recommend fail open for rate limiting. The purpose of a rate limiter is protection, not gatekeeping. A rate limiter that denies all traffic when it breaks has caused a worse outage than the abuse it was meant to prevent. With fail open, you have a brief window of unprotected traffic, which is manageable. With fail closed, legitimate users are completely blocked. The correct companion to fail open is a circuit breaker that stops hammering a dead Redis and an alert so on-call can respond quickly.
+
+---
+
+**Q9: What is the difference between "hard" and "soft" rate limiting?**
+
+Hard rate limiting strictly rejects any request that exceeds the configured limit -- the response is always 429 with no exceptions. Soft rate limiting allows you to exceed the limit temporarily but signals degraded status, throttles response speed, or queues the excess. A common soft approach is to let a user go 20% over their limit for a short burst window before enforcing hard rejection, or to return a 200 with a warning header like `X-RateLimit-Warning: approaching-limit` before hitting 429. Soft limits are useful for premium users who need burst headroom or for graceful degradation. Hard limits are simpler to reason about and are the default for protection-oriented rate limiting. For billing or security-critical limits, hard limits are mandatory.
+
+---
+
+**Q10: How do you handle rate limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After)?**
+
+On every response -- allowed or rejected -- you include `X-RateLimit-Limit` (the configured maximum), `X-RateLimit-Remaining` (how many requests are left in the current window), and `X-RateLimit-Reset` (the Unix timestamp when the window resets). On a 429 response you additionally include `Retry-After` (seconds until the client should retry). These values come directly from the result struct returned by the rate limit check. For sliding window counter, `Remaining` is `limit - weighted_count`. For token bucket, `Remaining` is `floor(current_tokens)`. A practical concern: only expose full headers to authenticated users. For unauthenticated endpoints, only return `Retry-After` on rejection to avoid giving attackers a precise map of your window state.
+
+---
+
+**Q11: A customer (enterprise) needs a higher rate limit than standard users. How do you implement tiered limits?**
+
+During the auth/middleware step, look up the user's tier from the request context (which was set at authentication time). Store the tier in a fast-access location -- either the JWT claim or a short-lived cache keyed on user ID. Then use the tier to select the appropriate rule from your rate limit config: free gets 100/min, pro gets 1000/min, enterprise gets 10000/min. Include the tier in the Redis key so that a tier upgrade takes effect for new windows without requiring a cache flush: `user:{user_id}:tier:{tier}:{window_id}`. The tier lookup should add at most a cache read (sub-millisecond). Downgrades need a grace period decision -- most systems let the current window finish at the old limit and apply the new limit on the next window.
+
+---
+
+**Q12: What is the sliding window log algorithm? What is its memory cost vs sliding window counter?**
+
+Sliding window log stores the exact timestamp of every individual request in a sorted set per user. To check the rate, you remove all entries older than `now - window`, count the remaining entries, and compare to the limit. If under, you add the current timestamp. It is perfectly accurate with no estimation. The memory cost is O(n) per user where n is the number of requests in the window -- for a user making 1000 requests per minute, you store 1000 timestamps, each about 16 bytes, so 16KB per active user. At 100K active users that is 1.6GB just for rate limit state. Sliding window counter uses O(1) -- just two integers per user -- at the cost of approximately 5% estimation error at window boundaries. For any production system at scale, sliding window counter is the correct default.
+
+---
+
+**Q13: How do you rate limit at the API gateway layer vs the application layer -- what are the trade-offs?**
+
+API gateway rate limiting happens before requests reach your application servers: the gateway (Nginx, AWS API Gateway, Envoy) enforces limits and rejects 429s early. This saves application compute and is easier to configure declaratively. The downsides are that gateway rules are often coarser, you have less access to application context (e.g., user tier from a database), and it adds another system to operate. Application layer rate limiting happens inside your service code and has access to full request context, user tier, and business rules. It is more flexible but adds library overhead to every service. The pragmatic answer is: use gateway-level limits for broad IP-based protection against DDoS and use application-level limits for per-user, tiered, or endpoint-specific limits where business context is needed.
+
+---
+
+**Q14: What is the thundering herd problem when rate limits reset? How do you mitigate it?**
+
+When a fixed window resets (e.g., at the top of every minute), all rate-limited clients simultaneously become eligible to retry. If 10,000 clients were blocked and all retry at second 0 of the new window, they generate a synchronized spike that can overwhelm the backend even within the new window's allowance. Mitigations: first, prefer sliding window counter over fixed window, since it has no hard reset point. Second, include a jitter in the `Retry-After` header: instead of telling everyone "retry in 30 seconds," randomize it -- `Retry-After: 28` for some clients and `Retry-After: 35` for others -- which spreads the retry wave. Third, educate API clients to add exponential backoff with jitter rather than retrying immediately on seeing `Retry-After`.
+
+---
+
+**Q15: How would you implement a "per-second" limit vs a "per-minute" limit -- what changes in the implementation?**
+
+The window size parameter changes: for per-second you set `window_seconds = 1`; for per-minute you set `window_seconds = 60`. In sliding window counter, the current window ID becomes `floor(now / 1)` instead of `floor(now / 60)`, which is just the Unix timestamp in seconds. Per-second limits create and expire Redis keys far more frequently -- one key per user per second versus one per minute -- but since TTL is set to `2 * window_seconds`, per-second keys expire in 2 seconds instead of 120 seconds, so memory stays bounded. The practical challenge with per-second limits is that Redis round-trip time (~0.5ms) can be a significant fraction of the 1-second window, and any Redis slowness shows up immediately. Per-second limits require tighter timeout budgets and are better suited to local in-memory counters with periodic Redis sync.
+
+---
+
+**Q16: What is the difference between rate limiting and throttling?**
+
+Rate limiting enforces a hard ceiling on requests per time window and rejects anything over the limit with a 429. The client gets an error and must wait. Throttling typically means slowing down request processing rather than rejecting it -- for example, introducing artificial delays, reducing response quality (serving cached or degraded data), or queuing requests and processing them at a lower rate. Rate limiting is binary: allow or reject. Throttling is graduated: the system continues to respond but at reduced capacity or quality. In practice, rate limiting is easier to implement and reason about. Throttling is more user-friendly but harder to implement correctly and can cause queue buildup. For API protection, rate limiting is the standard; throttling is used more for internal traffic shaping between services.
+
+---
+
+**Q17: If you have 10 API gateway nodes, each with a local counter, how do you coordinate rate limiting? What is the error margin?**
+
+With 10 nodes and purely local counters, each node enforces the full limit independently. If the limit is 100 req/min and traffic is evenly distributed across 10 nodes, each node sees 10 req/min and never triggers the limit even if the user sends 1000 req/min in aggregate -- a 10x over-admission. The fix is shared state in Redis: all nodes write to and read from the same Redis counter for each user key. The coordination overhead is the Redis round-trip (~0.5ms), which is acceptable. A middle ground is local counters with periodic sync to Redis every few hundred milliseconds -- this reduces Redis load but accepts an error margin proportional to the sync interval and request rate. For example, at 100 req/sec and 500ms sync intervals, each node can over-admit by up to 50 requests before the next sync catches it.
+
+---
+
+**Q18: How do you make rate limiting globally consistent across multiple data centers?**
+
+Truly global consistency requires cross-region coordination, which means at minimum one cross-region round-trip per rate limit check -- typically 50-200ms. That latency is unacceptable for a system that must add under 2ms. The practical answer is: you cannot have both global consistency and low latency for rate limiting. The standard production approach is per-region rate limiting with independent Redis clusters per region. Each region enforces limits locally. If a user routes requests to multiple regions, they could exceed the global limit by the number of regions. For most protection use cases this is acceptable -- you might allow 1.5x the limit globally but you protect each region fully. For billing-accurate global limits, you need eventual consistency: periodically sync regional counters to a global store and apply corrections, accepting that accuracy lags by the sync interval (typically 10-30 seconds).
+
+---

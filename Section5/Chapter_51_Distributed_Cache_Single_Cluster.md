@@ -3760,5 +3760,119 @@ WHY SAY THIS:
 
 ---
 
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between LRU and LFU eviction? When would LFU outperform LRU?**
+
+LRU (Least Recently Used) evicts the entry that was accessed longest ago. LFU (Least Frequently Used) evicts the entry with the lowest access count. LRU favors recency; LFU favors long-term popularity. LFU outperforms LRU when your working set has stable hot items -- for example, a product catalog where the top 100 SKUs are always popular. If a hot item was not accessed for a brief window (say, overnight), LRU might evict it; LFU would not because its count is high. However, LFU struggles when popularity shifts quickly because old high-count items resist eviction even after they become unpopular. Redis implements LFU with a logarithmic counter and decay to address this.
+
+---
+
+**Q2: What is cache stampede (thundering herd)? What are the three ways to prevent it?**
+
+Cache stampede happens when a popular cache key expires and many concurrent requests simultaneously miss the cache, all going to the database at once. The database gets hit with N queries for the same data instead of one. The three standard mitigations are: (1) Mutex locking -- only one request fetches from the database while others wait, using a distributed lock (SET with NX and TTL); (2) Probabilistic early expiration -- before the key expires, recompute it with some probability proportional to how close expiry is, spreading the refresh load; (3) TTL jitter -- add random variance to TTL at write time so entries expire at different times instead of simultaneously. In practice, jitter is the easiest to implement and prevents the majority of stampedes.
+
+---
+
+**Q3: What is the difference between write-through, write-back, and write-around caching?**
+
+Write-through: write to both the database and the cache on every update, so the cache is always current. Latency increases slightly but reads are always fresh. Write-back (write-behind): write to cache immediately and return success; persist to the database asynchronously. Writes are fast but data can be lost if the cache crashes before flushing. Write-around: write directly to the database, bypassing the cache. The cache is only populated on subsequent reads (cache-aside). Write-around is preferred when data is written once and rarely read, or when you want to avoid polluting the cache with data that may never be requested again.
+
+---
+
+**Q4: How do you handle cache invalidation when the underlying database changes?**
+
+The most common approach is cache-aside with explicit invalidation: when the application writes to the database, it also deletes the corresponding cache key. The next read repopulates the cache with fresh data. You delete rather than update to avoid race conditions between concurrent writes. A second layer of safety is a TTL on every entry so that even if you miss an invalidation, staleness is bounded. For higher correctness guarantees, you can run a periodic validation job that samples cache entries and compares them to the database, alerting if the mismatch rate exceeds a threshold. For event-driven systems, Change Data Capture (CDC) from the database can trigger invalidation, but this adds infrastructure complexity.
+
+---
+
+**Q5: What is consistent hashing and why is it used for distributed cache node assignment?**
+
+Consistent hashing places both nodes and keys on a virtual ring. Each key is assigned to the first node clockwise from its hash position. When you add or remove a node, only the keys nearest to that node are remapped -- roughly 1/N of all keys, where N is the node count. Regular modular hashing (key mod N) would remap almost all keys when N changes, causing a mass cache miss event. For a cache cluster that's resharded during scaling, consistent hashing means the vast majority of keys remain on their original nodes, preserving the hit rate through the topology change.
+
+---
+
+**Q6: What happens when a cache node goes down -- hot key data is lost, what is the fallback?**
+
+The application should be designed to fail open: treat any cache error or timeout as a cache miss and fall back to the database. The database is always the source of truth. When the node goes down, requests for keys on that shard hit the database until a replica is promoted (usually under 30 seconds with Redis Cluster). The risk is a mini stampede during failover because the promoted replica may have cold or slightly lagged state. The mitigation is stampede prevention (locking pattern) and sizing the database for the worst-case cold-cache load. A circuit breaker prevents hammering a node that is in a failing state.
+
+---
+
+**Q7: What is a hot key? How do you detect and mitigate it?**
+
+A hot key is a single cache key that receives a disproportionate share of traffic -- for example, a trending product page or a viral post. It creates a bottleneck on the single shard that owns it. Detection: track per-key request rates; Redis has the HOTKEYS command (with LFU policy enabled) that surfaces the top accessed keys. Mitigation options: (1) Read replicas -- route reads for the hot key to replicas, not just the primary; (2) Key sharding -- duplicate the key across N copies (hot_key:0, hot_key:1, ...) and randomly pick one per request, distributing load across shards; (3) Local L1 cache -- cache the hot key in-process for 5-30 seconds so most requests never reach Redis at all.
+
+---
+
+**Q8: How does Redis handle eviction when it hits the maxmemory limit?**
+
+When Redis reaches its configured maxmemory limit, it applies the eviction policy set via maxmemory-policy. The options include: noeviction (return errors on writes), allkeys-lru (evict the least recently used key across all keys), volatile-lru (LRU only among keys with TTL set), allkeys-lfu (least frequently used across all keys), allkeys-random (random eviction), and volatile-ttl (evict the key closest to expiry). For a cache workload, allkeys-lru is the standard choice because all keys are candidates and recency is a good proxy for value. Redis uses an approximate LRU algorithm -- it samples a small pool of keys and evicts the oldest from that sample -- which is fast enough for production and good enough in practice.
+
+---
+
+**Q9: What is the difference between TTL-based expiry and explicit cache invalidation? When to use each?**
+
+TTL-based expiry automatically removes a key after a fixed duration regardless of whether the underlying data changed. It bounds maximum staleness but allows stale reads within the TTL window. Explicit invalidation immediately removes a key from cache when the application knows the data has changed, providing near-instant freshness. Use TTL as a safety net for all cache entries -- it cleans up missed invalidations and prevents stale data from living forever. Use explicit invalidation for data that changes via known application writes (user profile update, price change) where you can hook into the write path. The two approaches are complementary, not mutually exclusive. Relying on TTL alone risks stale reads for the full TTL window after a write.
+
+---
+
+**Q10: Why is Redis single-threaded and why is that actually OK for most workloads?**
+
+Redis processes commands on a single thread to avoid locking overhead on its in-memory data structures. Because all operations are in-memory and the critical path is nanoseconds of CPU time, a single thread can handle roughly 100,000-200,000 operations per second -- far more than most applications need from a single node. The real bottleneck is almost always network I/O, not CPU. Redis uses I/O multiplexing (epoll/kqueue) to manage many concurrent connections on the single thread without blocking. For CPU-intensive workloads or very high throughput, you add more Redis nodes (sharding) rather than trying to parallelize within one node. Since Redis 6.0, I/O threads can handle network reads and writes in parallel while command execution stays single-threaded, further improving throughput.
+
+---
+
+**Q11: What is probabilistic early expiration (jitter on TTL)? How does it prevent stampede?**
+
+Probabilistic early expiration is a technique where, before a key officially expires, a request has an increasing probability of triggering a background recompute of the value. The probability is a function of how close the key is to its TTL. As the key ages, more and more requests will decide to refresh it, so the refresh happens gradually before the hard expiry instead of all at once after it. This spreads the database load across time rather than concentrating it at the exact expiry moment. TTL jitter is the simpler cousin: at write time, randomize the TTL by plus or minus 10-20%. If 1000 clients cache the same key at the same time with a base TTL of 1800 seconds and a 10% jitter, they expire between 1620 and 1980 seconds -- a 6-minute spread that prevents a synchronized stampede.
+
+---
+
+**Q12: How do you maintain cache consistency in an eventually consistent system?**
+
+Accept that the cache will be eventually consistent and design around it explicitly. Every cache entry must have a TTL to bound maximum staleness. For data that is written through known application code paths, add explicit cache invalidation (delete the key) on every write. Document the acceptable staleness window per data type -- for example, user profile: 5 minutes; product price: 1 minute; inventory: do not cache. Run a periodic validation job that samples cache entries and compares them to the database, alerting if mismatches exceed 1%. For writes requiring read-after-write consistency (a user updates their profile and immediately sees the change), use write-through for that entity or bypass the cache for that specific read immediately after the write.
+
+---
+
+**Q13: What is a cache miss storm on cold start? How do you warm up a cache before traffic hits?**
+
+A cold start miss storm occurs when the cache is empty -- after a deployment that flushed it, a failover with an empty replica, or a fresh cluster -- and all incoming traffic hits the database simultaneously. The database, sized for a 95% cache hit rate, may be overwhelmed by 100% miss traffic. Cache warming is the practice of pre-populating the cache before opening traffic. Strategies include: (1) Replay recent access logs to identify hot keys and pre-fetch them; (2) Run a warming script that reads the top N entities from the database and writes them to cache before the deployment completes; (3) Use a blue-green deployment where the new cluster warms by shadowing live traffic before receiving it; (4) Rate-limit or gradually ramp traffic to the new cluster so the cache warms incrementally. The database must also be sized to handle the cold-cache scenario as a failsafe.
+
+---
+
+**Q14: What is the difference between a cache cluster and a cache proxy (like Twemproxy)?**
+
+A cache cluster (like Redis Cluster) is a collection of Redis nodes that natively communicate with each other, manage key slot assignments, and handle failover automatically. The cluster itself knows the topology. A cache proxy (like Twemproxy or Envoy) sits between the application and a set of independent cache nodes. The application talks to the proxy, which handles key routing (usually via consistent hashing) and multiplexes connections, but the underlying cache nodes are not cluster-aware. The proxy adds a hop but can reduce connection count to the cache nodes -- useful when you have thousands of app servers that would otherwise open many direct connections. The tradeoff: a proxy is a single point of failure unless it is itself replicated, and it adds latency. Redis Cluster is generally preferred today because it eliminates the proxy bottleneck and handles failover natively.
+
+---
+
+**Q15: How do you size the cache -- what fraction of the working set should fit in memory?**
+
+Start by identifying the working set: the set of keys that are actually accessed with meaningful frequency. In many systems, 20% of the data accounts for 80% of the reads (Pareto distribution). If you can fit the hot 20% in cache, you can achieve an 80% hit rate. For a 95% hit rate target, you typically need to fit 50-70% of the active working set. Calculate: number of hot keys times (key size plus value size plus Redis overhead of ~100 bytes per key). Add 20-30% headroom for memory fragmentation and growth. Size for peak load, not average. Also consider replication: primary plus replica doubles your memory cost. A practical heuristic is: start with enough memory to achieve your target hit rate, then monitor eviction rate -- if evictions are high, the cache is undersized for the working set.
+
+---
+
+**Q16: What is the write-around pattern? When is it preferable to write-through?**
+
+Write-around means writes go directly to the database and bypass the cache entirely. The cache is only populated when the data is subsequently read (cache-aside). This is preferable to write-through in situations where data is written but rarely or never read back -- for example, logging data, bulk imports, or one-time event records. Writing through the cache in these cases wastes cache memory on data that will never be requested. Write-around is also safer for large writes: writing a 10 MB object to cache on every update would waste memory and slow down writes. The tradeoff is that the first read after a write is always a cache miss; write-through would have avoided that miss. Choose write-around when the read-after-write pattern is infrequent relative to the write rate.
+
+---
+
+**Q17: A single Redis node handles 100K ops/sec. You need 1M ops/sec. How do you scale?**
+
+The direct path is horizontal sharding: add more Redis nodes and distribute keys across them via consistent hashing. A 10-node cluster with even distribution gives each node 100K ops/sec, matching the target. Redis Cluster handles this natively with 16,384 hash slots distributed across nodes. The key steps are: (1) add nodes to the cluster, (2) Redis Cluster automatically rebalances slots using consistent hashing so most keys stay put, and (3) the client library routes each request to the correct shard. Additionally, consider adding an L1 local in-memory cache in each application process for the hottest keys -- this offloads Redis entirely for those keys. If the bottleneck is reads specifically, add read replicas per shard and route read traffic to them. At 1M ops/sec, also watch connection count: 1000 app servers times 100 connections each is 100,000 connections; you may need connection pooling or a proxy to avoid exhausting per-node connection limits.
+
+---
+
+**Q18: How do you handle partial failures -- some cache nodes down, some up?**
+
+The application must treat any per-node failure as a cache miss for keys on that node, not as a system-wide failure. The cache client should use per-node timeouts (fail fast, typically 5-10ms) and treat timeout or connection errors as misses rather than propagating exceptions. This is the fail-open pattern: the system degrades gracefully -- those keys fall through to the database -- while the rest of the cluster continues serving cache hits normally. A circuit breaker on a per-node basis prevents the application from repeatedly hammering a failing node. Redis Cluster automatically promotes replicas for failed primaries within seconds, restoring service for that shard. The critical design requirement is that the database must have enough capacity to absorb the miss load from the affected fraction of keys -- roughly 1/N of total traffic if one of N shards fails.
+
+---
+
 **This chapter now meets Google Staff Engineer (L6) expectations.**
 

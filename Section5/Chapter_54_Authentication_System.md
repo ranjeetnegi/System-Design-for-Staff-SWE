@@ -3440,3 +3440,117 @@ CHAPTER COMPLETENESS:
 REMAINING GAPS:
 None. Chapter is complete for Staff Engineer (L6) scope.
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between authentication and authorization?**
+
+Authentication answers "who are you?" -- it verifies identity and issues a token. Authorization answers "what are you allowed to do?" -- it checks whether an authenticated identity has permission to perform an action. This chapter covers authentication only. The auth system gives you a signed token with your identity; downstream services use that identity to make authorization decisions. They are separate concerns owned by separate systems.
+
+---
+
+**Q2: How does JWT work? What are the three parts and what does each contain?**
+
+A JWT has three Base64-encoded parts separated by dots: header, payload, and signature. The header specifies the algorithm (e.g., RS256) and key ID. The payload contains claims: subject (user ID), issuer, expiry, issued-at, and any custom fields like email or roles. The signature is created by signing the header and payload with a private key, so any service with the public key can verify it has not been tampered with. Because the payload is only encoded (not encrypted), never put secrets in a JWT.
+
+---
+
+**Q3: Why is JWT stateless? What is the trade-off vs session tokens?**
+
+JWT is stateless because all the information needed to validate it -- the user's identity, the expiry time, and the signature -- is embedded in the token itself. No database call is needed. The trade-off is revocation: you cannot instantly invalidate a JWT because the server holds no state. With opaque session tokens, you just delete the record and the token is dead immediately. With JWT, you must wait for expiry or maintain a blocklist. We accept that window (15 minutes) in exchange for near-zero validation cost.
+
+---
+
+**Q4: How do you invalidate a JWT before it expires?**
+
+Three approaches, used together. First, a blocklist: store the token's unique ID (jti claim) in Redis with a TTL matching the token's remaining lifetime; every validation checks the blocklist. Second, a token generation counter: store a generation number per user; include it in the JWT claim; on logout-all or password change, increment the counter; any token with a lower generation is rejected. Third, short expiry itself: a 15-minute window limits damage without any blocklist. The blocklist covers single-device logout; token_generation covers "log out everywhere."
+
+---
+
+**Q5: What is the difference between an access token and a refresh token? What are their typical TTLs?**
+
+An access token is a short-lived JWT (15 minutes) used on every API request. It is validated locally with no server call. A refresh token is a long-lived, opaque random string (30 days) stored server-side; it is only sent to the auth service to get a new access token when the old one expires. Short access token TTL limits blast radius from theft. The refresh token is the durable credential; it is revocable instantly because it is stored in the database.
+
+---
+
+**Q6: How does OAuth2 work at a high level? What is the authorization code flow?**
+
+OAuth2 is a delegation protocol: a user grants a third-party app permission to access their data on a resource server without sharing their password. In the authorization code flow: (1) the app redirects the user to the authorization server; (2) the user logs in and approves; (3) the authorization server redirects back with a short-lived code; (4) the app exchanges that code (plus a client secret) for an access token, server-to-server. The code is single-use and short-lived so it cannot be stolen from the redirect URL.
+
+---
+
+**Q7: What is the difference between OAuth2 and OpenID Connect?**
+
+OAuth2 is an authorization framework -- it tells you what a user has granted access to, but says nothing about who the user is. OpenID Connect (OIDC) is an identity layer on top of OAuth2. It adds a standard ID token (a JWT) containing the user's identity claims -- name, email, subject ID -- and defines a UserInfo endpoint. If you want to use Google to log users into your app and know who they are, you use OIDC, not raw OAuth2.
+
+---
+
+**Q8: How do you store passwords securely? What is bcrypt and why is it better than SHA256?**
+
+Never store plaintext passwords. Store a bcrypt hash. bcrypt is a password hashing function designed to be slow: at cost factor 12, it takes roughly 250ms on a modern CPU. This is the defense. If an attacker steals your database and tries to brute-force the hashes, they can only attempt around 100 hashes per second on a GPU -- compared to billions per second with SHA256. bcrypt also generates a random salt automatically, so two users with the same password have different hashes.
+
+---
+
+**Q9: What is a rainbow table attack? How does salting prevent it?**
+
+A rainbow table is a precomputed lookup table mapping common passwords to their hashes. An attacker who steals a database can instantly look up any hash that appears in the table. Salting prevents this by adding a unique random value (the salt) to each password before hashing. Now "password123" hashed with salt "abc" produces a completely different result than "password123" hashed with salt "xyz". A rainbow table built for one hash is useless against the other. bcrypt does this automatically.
+
+---
+
+**Q10: How do you implement MFA (multi-factor authentication)?**
+
+The most common method is TOTP (Time-based One-Time Password), used by Google Authenticator. On setup: generate a random secret, store it encrypted in the database, and show the user a QR code to scan into their authenticator app. On login: after password verification passes, challenge the user for a six-digit code. Verify it with TOTP: both sides compute HMAC-SHA1 of the secret and the current 30-second time window -- the codes match. Also generate backup codes (hashed, single-use) for device loss recovery.
+
+---
+
+**Q11: What is a session fixation attack? How do you prevent it?**
+
+In a session fixation attack, the attacker tricks the victim into using a session ID the attacker already knows -- for example, by injecting a session cookie before the user logs in. After login, if the server keeps the same session ID, the attacker now has a valid authenticated session. The prevention is simple: always generate a brand-new session ID (or token) on successful login, regardless of any pre-existing session. Never reuse pre-login session state. In our design, login always issues fresh tokens, so fixation is not possible.
+
+---
+
+**Q12: What is CSRF? How do you prevent it?**
+
+CSRF (Cross-Site Request Forgery) tricks a user's browser into making an authenticated request to your server from a malicious page. The browser automatically sends cookies, so if your auth is cookie-based, the request arrives with valid credentials. Preventions: (1) Use the SameSite cookie attribute (set to Strict or Lax) so cookies are not sent on cross-site requests. (2) Use a CSRF token: a secret per-session value embedded in forms; the server checks it on state-changing requests. (3) Switch to Authorization header (Bearer token) instead of cookies for APIs -- browsers do not auto-send headers cross-site.
+
+---
+
+**Q13: How do you implement "remember me" / persistent login?**
+
+"Remember me" extends the refresh token TTL. Without it: refresh token expires in 24 hours or on browser close. With it: issue a refresh token valid for 30-90 days, stored in an HttpOnly, Secure, SameSite cookie. On each refresh, rotate the token. Bind the token to device info so a refresh from an unexpected device triggers an extra verification. You are trading security (longer window if stolen) for convenience (no re-login for weeks). The refresh rotation ensures stolen tokens are detected on the next legitimate use.
+
+---
+
+**Q14: What happens when a user changes their password -- how do you invalidate all existing sessions?**
+
+Do it atomically in one database transaction: update the password hash, delete all session records for that user, and increment the token_generation counter. The deleted sessions mean all refresh tokens are immediately invalid -- no further refreshes will succeed. The incremented token_generation means any outstanding access tokens whose gen claim is lower than the current value are rejected on validation. This covers both the long-lived refresh path and the short-lived access path. Without atomicity, a crash mid-operation could leave the user in a half-logged-out state.
+
+---
+
+**Q15: How do you handle account lockout after N failed login attempts without blocking legitimate users?**
+
+Lock per email, not per IP: after 5 failed attempts within 15 minutes, lock the account for 15 minutes. This limits brute force on any single account. To handle shared IPs (like an office NAT): use per-IP limits at a higher threshold (e.g., 50 attempts per minute per IP) so one bad actor on the network does not lock out everyone. Return a uniform 401 for both "bad password" and "account locked" -- do not reveal whether the account exists. Notify the user by email on lockout so a legitimate user can identify if they are being targeted.
+
+---
+
+**Q16: What is the difference between symmetric and asymmetric JWT signing (HS256 vs RS256)?**
+
+HS256 (symmetric) uses a shared secret: both the auth service and every downstream service need the same key to verify tokens. If any one service is compromised, the attacker can forge tokens for any user. RS256 (asymmetric) uses a key pair: the auth service signs with the private key, and downstream services verify with the public key. A compromised downstream service cannot forge tokens -- it only has the public key. The trade-off is operational complexity: you must distribute and rotate the public key. For any system with multiple services, RS256 is the right choice.
+
+---
+
+**Q17: How do you implement single sign-on (SSO) across multiple services?**
+
+The auth service acts as the identity provider. It issues a JWT that all services trust -- they share the same public key and accept tokens from the same issuer. A user logs in once to the auth service; the resulting access token is valid across every service that trusts that issuer. For browser-based SSO (across domains), the auth service can also set a session cookie on its own domain; when a user visits a new service and has no token, it redirects to auth, which silently issues a new token using the existing session -- no re-login. For enterprise SSO (across organizations), you layer SAML or OIDC federation on top.
+
+---
+
+**Q18: How do you rotate signing keys without logging everyone out?**
+
+The key insight is overlap. Phase 1: generate the new key pair and publish the new public key to the JWKS endpoint alongside the old one. Downstream services fetch updated keys (they cache by key ID, so old tokens still validate). Phase 2: wait one day to ensure all services have the new public key. Phase 3: start signing new tokens with the new private key. Phase 4: wait for all old tokens to expire (at most 15 minutes for access tokens, but 24 hours for safety). Phase 5: remove the old public key from JWKS. At no point is any user logged out -- old tokens validate with the old key until expiry, new tokens validate with the new key.

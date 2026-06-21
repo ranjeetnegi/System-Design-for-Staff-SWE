@@ -3146,3 +3146,117 @@ Brainstorming (Part 18):
 ✓ Interview: Clarifying questions, explicit non-goals, scope creep pushback
 ✓ Staff exercise: Cross-team handoff (Exercise I)
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: How do you prevent a user from being charged twice (double charge)? Walk through the idempotency key mechanism.**
+
+You prevent double charges with two layers of idempotency. First, the client sends a deterministic idempotency key derived from the order ID (for example, "order-1234-pay"). Your payment service stores this key with a unique index -- if the same key arrives again, you return the existing payment record instead of creating a new one. Second, when your service calls the payment processor (Stripe), it sends a separate deterministic processor-level key (for example, "order-1234-auth"). If your service retries after a timeout, Stripe sees the same key and returns the cached result instead of authorizing a second time. The critical rule: these keys must be deterministic -- derived from business identifiers, never from timestamps or random values.
+
+---
+
+**Q2: A payment request times out. The client retries. How do you ensure the card is charged exactly once?**
+
+Timeout means UNKNOWN, not FAILED. The processor may have already completed the authorization -- the response was simply lost in transit. When your service retries, it must use the same idempotency key it used on the first attempt. Stripe and other processors cache the result by key and return the same response to the retry -- no new charge is created. Before retrying, your service should also query the processor directly: "Did you process transaction with key X?" If the processor says yes, update your local record and skip the retry. Never treat a timeout as a definitive failure and retry with a new key -- that is the root cause of most double-charge incidents.
+
+---
+
+**Q3: What is the difference between a payment authorization and a capture?**
+
+Authorization reserves funds on the customer's card without actually moving money. The bank confirms the card is valid and the funds exist, and places a hold. Capture is the second step that actually transfers those reserved funds to the merchant. The two-step model exists because you should only charge a customer when value is delivered -- for example, when a physical order ships. If the order is cancelled before capture, you void the authorization (releasing the hold immediately) instead of issuing a refund. Authorization holds typically expire after 7 days if not captured. Digital goods often skip this and do a single "charge" (authorize and capture in one call) since delivery is instant.
+
+---
+
+**Q4: What is a webhook? How does the payment provider notify your system of payment success or failure?**
+
+A webhook is an HTTP callback -- the payment processor sends a POST request to your endpoint when a payment event occurs. For example, when Stripe processes a capture, it sends a POST to your /webhooks/stripe endpoint with a JSON payload containing the event type and payment details. Your server must respond with a 200 OK within a few seconds, or Stripe will retry. Before processing, you verify the webhook signature -- Stripe signs every payload with a shared secret so you can confirm it is authentic and not spoofed. Webhooks are how processors notify you of asynchronous events: captures, refunds completing, disputes being opened, and authorization expirations.
+
+---
+
+**Q5: What happens if your webhook handler crashes after receiving but before processing the event?**
+
+The processor does not receive a 200 OK, so it retries the webhook -- typically with exponential backoff for up to 72 hours. This means your handler must be idempotent: processing the same event twice must produce the same result. You enforce this by storing the processor's event ID in your payment_events table and checking it on arrival. If the event ID already exists, return 200 immediately without processing again. This prevents a crash-and-retry cycle from double-applying a state transition. The pattern is: verify signature, check for duplicate event ID, process, persist, return 200 -- in that order.
+
+---
+
+**Q6: How do you handle a payment that is "pending" -- not yet confirmed by the bank?**
+
+Pending payments remain in the "authorized" state in your system -- authorization was requested but not yet confirmed, or the bank requires additional time (common with bank transfers and some card types). Your system must not capture a payment that has not been authorized. You treat pending as an intermediate state that resolves to either "authorized" or "declined" asynchronously. The processor typically notifies you of the resolution via webhook. In the meantime, the customer should see "Payment processing" rather than "Payment confirmed." You set a time limit -- if a payment stays pending beyond a threshold (say, 30 minutes for cards), you mark it as failed and prompt the user to retry.
+
+---
+
+**Q7: What is a chargeback? How does it affect your system design?**
+
+A chargeback is when a customer disputes a charge with their bank, and the bank forcibly reverses the transaction. The processor deducts the money from your account and sends you a dispute notification. In your system, you receive this as an inbound webhook (for example, "charge.dispute.created"). Your payment transitions from "captured" to "disputed," and you write a reverse ledger entry to reflect that the funds are now held by the processor pending resolution. You have a window (typically 7-21 days) to submit evidence. If you win, the payment returns to "captured." If you lose, it becomes "chargebacked" -- a terminal state representing permanent revenue loss. Each chargeback also incurs a dispute fee ($15-25 from the processor), regardless of outcome.
+
+---
+
+**Q8: How do you implement payment reconciliation -- ensuring your records match Stripe's records?**
+
+Once per day (or more frequently), you download Stripe's settlement report -- a list of every transaction Stripe processed, with amounts and timestamps. You then compare this against your internal ledger, matching by processor transaction ID. Discrepancies fall into three categories: a payment in Stripe but not in your ledger (orphaned charge, possibly from a DB write failure), a payment in your ledger but not in Stripe (you recorded a charge that never happened), and amount mismatches. Any discrepancy above $0.01 triggers an alert. The reconciliation report is sent to the finance team. This is your safety net -- even if idempotency or ledger writes have a bug, reconciliation catches it within 24 hours.
+
+---
+
+**Q9: What is PCI-DSS compliance? What does it mean for storing card data?**
+
+PCI-DSS (Payment Card Industry Data Security Standard) is a set of security requirements for any system that stores, processes, or transmits raw card data. Compliance requires encryption at rest and in transit, access controls, audit logs, vulnerability scanning, and annual audits. The key design implication: your system should never be in PCI scope in the first place. You achieve this by never handling raw card numbers. The card details are entered directly into a processor-hosted form (like Stripe Elements or Stripe.js), which tokenizes them on the processor's servers before your backend sees anything. Your backend only receives a token. This means your servers are out of PCI scope, which dramatically reduces compliance burden and audit costs.
+
+---
+
+**Q10: Why should your system never store raw card numbers? What do you store instead?**
+
+Raw card numbers (PANs) are the most sensitive piece of cardholder data. Storing them makes your entire system subject to the full PCI-DSS compliance scope, requires extensive security controls, and creates catastrophic liability if breached. Instead, you store a token -- a non-sensitive string (for example, "card_tok_abc123") that the processor issues when the user enters their card via a processor-hosted form. The token is meaningless to an attacker because it cannot be used to make charges without your API key, and it is specific to your merchant account. When you need to charge the user again, you pass the token to the processor. Your system stores only the token, the last four digits (for display), and the card brand.
+
+---
+
+**Q11: How do you handle currency conversion and multi-currency payments?**
+
+For multi-currency, each payment record stores both an amount and a currency field (for example, 4999 EUR). You never mix currencies in the same ledger aggregation -- revenue in EUR and revenue in USD are tracked separately. The processor handles the actual currency conversion if the merchant's settlement currency differs from the customer's charge currency. In your system, you validate that the payment currency matches the order currency at creation time, refund in the same currency as the original charge, and run reconciliation grouped by currency. Exchange rate risk (the rate between authorization and settlement changing) is typically absorbed by the processor or passed through as FX fees -- this is a business decision, not a system design decision for V1.
+
+---
+
+**Q12: What is the difference between synchronous and asynchronous payment processing?**
+
+Synchronous processing means the user waits for the result: you send an authorization to the processor, wait for the response (2-5 seconds), and return "payment confirmed" or "payment declined" in the same HTTP request. This is standard for card payments where the user is at the checkout. Asynchronous processing means you accept the payment intent immediately and confirm later: you queue the authorization job, return "payment processing," and notify the user via email or webhook when it completes. Async is used for bank transfers (ACH, SEPA) which take 1-3 days to settle, and for batch processing. The design implication: async requires a notification system and a "pending" state that resolves later. For card payments at checkout, synchronous is always preferred -- users do not want to wait for an email to know if their payment went through.
+
+---
+
+**Q13: How do you implement refunds? Is a refund a separate transaction or a reversal?**
+
+A refund is a separate transaction, not a reversal of the original charge. You create a refund record (with its own refund_id and idempotency key), call the processor with the original capture ID and the refund amount, and write a reverse ledger entry: debit revenue, credit refund_payable. The original payment record is not deleted or modified -- instead, you track total_refunded_cents on the payment and update the status to "partially_refunded" or "fully_refunded." Partial refunds are supported as long as the total refunded does not exceed the captured amount. The processor returns the money to the customer in 5-10 business days. Refunds have their own state machine (created, processing, refunded, refund_failed) and their own retry logic.
+
+---
+
+**Q14: What happens if the payment provider (Stripe) is down? Do you queue the charge or fail immediately?**
+
+For new payment creation, you fail immediately with a clear error message -- the user can retry when the processor recovers. Queuing authorizations while the user waits is a bad experience (they do not know how long to wait). However, your circuit breaker prevents a thundering herd: when the processor error rate exceeds a threshold, you stop sending requests and fail fast instead of letting every request time out. For payments already in an intermediate state (authorized but not yet captured), you queue the capture with retries -- the customer has already been authorized and should not need to re-enter payment details just because Stripe had a brief outage. The circuit breaker monitors processor health and re-enables traffic gradually as it recovers, using exponential backoff with jitter.
+
+---
+
+**Q15: How do you detect fraudulent payments?**
+
+Fraud detection is typically a separate system that runs before the payment flow. A fraud scoring service evaluates the order based on velocity signals (too many orders from one IP or card in a short window), device fingerprint, address verification mismatch, and transaction amount versus historical average. If the fraud score exceeds a threshold, the order is rejected before a payment is even created. Within the payment flow itself, you enforce rate limits (maximum N payment attempts per user per hour), alert on high decline rates from a single user or IP (a sign of card testing), and monitor chargeback rates by customer. If chargebacks from a specific user exceed a threshold, you can block their account. The payment system is the last line of defense, not the first -- fraud detection is upstream.
+
+---
+
+**Q16: What is a payment gateway vs a payment processor vs an acquirer?**
+
+These three terms describe different layers of the payment infrastructure. A payment gateway is the API layer your system talks to -- it accepts your charge request, validates it, and forwards it to the processor (Stripe's API is a gateway). A payment processor handles the actual transaction network communication -- it routes the charge request through card networks (Visa/Mastercard) to the cardholder's bank for authorization. An acquirer (acquiring bank) is the bank that holds the merchant's account and settles the funds after a successful transaction. In practice, companies like Stripe bundle all three roles: they are the gateway, the processor, and they partner with an acquiring bank. When you use Stripe, you interact only with their API and they handle the rest invisibly.
+
+---
+
+**Q17: How do you handle partial payments -- a user pays half now, half later?**
+
+Partial payments require treating the original order as having multiple payment intents, each with its own lifecycle. You create a separate payment record for each installment, linked to the order by order_id. The order service tracks the total amount due, the total collected so far, and the outstanding balance. Each payment goes through the full authorize-capture-ledger flow independently. The order is not fulfilled until the total_captured equals the order total. Refunds must be handled carefully -- you need to decide whether to refund from the most recent payment first or split the refund proportionally. This adds significant complexity to the order state machine, which is why partial payments are usually V2 or V3 scope. For V1, enforce: one payment per order.
+
+---
+
+**Q18: How do you audit payment transactions for compliance -- what records must you keep and for how long?**
+
+For financial compliance, you must retain an immutable record of every state transition for every payment. Your payment_events table serves this purpose: every status change (created, authorized, captured, refunded, disputed) is appended as an immutable row with a timestamp and the actor who triggered it (user ID, system, support agent). Ledger entries are also immutable and append-only -- corrections are made via new entries, never by modifying existing ones. Retention periods depend on jurisdiction: in the US, financial records must be kept for a minimum of 7 years. In the EU (PSD2, GDPR), similar requirements apply. Your system should archive records to cold storage (for example, S3 Glacier) after 2 years while keeping them queryable for audit. For PCI audits, you must be able to produce a complete history of any payment on demand.

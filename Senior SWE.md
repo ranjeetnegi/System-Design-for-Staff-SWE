@@ -1,166 +1,243 @@
-# System Design Interview Preparation — Senior SWE Roadmap
-
-A condensed study path through the [main repo](README.md) for **Senior SWE** (Google L5 / Senior Engineer) system design interview prep.
-
----
-
-## Target & Goal
-
-**Target:** Google L5 / Senior Engineer system design interviews.
-
-**Goal:** Ship a clear, scalable design in 45 minutes — requirements, capacity estimate, main components, and key trade-offs.
+# Google Senior SWE (L5) — Interview Prep
+> Target: Google India (Bangalore / Hyderabad) | Pace: deep reader, ~2× time estimates
 
 ---
 
-## Section 1 — Fundamentals (Basics)
+## What Google Tests at L5
 
-Systems, servers, clients, APIs, frontend/backend/DB, OS (process/memory/CPU/disk), networking, back-of-envelope numbers, and core building blocks (hash, cache, state, idempotency, queue, sync/async). **Do this first if fundamentals are rusty** — it underpins the framework and design problems.
-
-| Ch | Link |
-|----|------|
-| 9  | [Ch 9: Systems, Servers, Clients](Section1/Chapter_9_Systems_Servers_Clients.md) |
-| 10 | [Ch 10: APIs, Frontend, Backend, DB](Section1/Chapter_10_APIs_Frontend_Backend_DB.md) |
-| 11 | [Ch 11: OS Fundamentals](Section1/Chapter_11_OS_Fundamentals.md) |
-| 12 | [Ch 12: Networking Foundations](Section1/Chapter_12_Networking_Foundations.md) |
-| 13 | [Ch 13: Numbers & Estimation](Section1/Chapter_13_Numbers_Estimation.md) |
-| 14 | [Ch 14: Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) |
-
-*When to use:* Before or alongside Section 2. Use for quick reference on request paths, capacity math, API/DB trade-offs, and building-block choices during design.
+| Round | Goal |
+|-------|------|
+| Coding × 2 | Done ✅ |
+| System Design × 1–2 | Design one system clearly, explain trade-offs, drive 45 min |
+| Behavioral / Googleyness × 1 | Team-level impact, good judgment, collaboration |
 
 ---
 
-## Section 0 — Mindset (skim)
+## Chapters — Basic to Advanced
 
-Skim for interview presence: designing under ambiguity, leading the conversation, and trade-off reasoning.
+### 1. Foundations (read first, non-negotiable)
 
-| Ch | Link |
-|----|------|
-| 4  | [Ch 4: Staff Engineer Mindset / Designing Under Ambiguity](Section0/Chapter_4_Staff_Engineer_Mindset_Designing_Under_Ambiguity.md) |
-| 6  | [Ch 6: Communication and Interview Leadership](Section0/Chapter_6_Communication_and_Interview_Leadership.md) |
-| 8  | [Ch 8: Interview Execution Strategy](Section0/Chapter_8_Interview_Execution_Strategy.md) |
+| Chapter | What it covers |
+|---------|---------------|
+| [Ch13 — Numbers & Estimation](Section1/Chapter_13_Numbers_and_Estimation.md) ✅ | QPS, storage, bandwidth math — do this fluently |
+| [Ch9 — Systems, Servers, Clients](Section1/Chapter_09_Systems_Servers_Clients.md) ✅ | HTTP, TCP, DNS, load balancers — fill any gaps |
+| [Ch14 — Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) ✅ | Cache, queue, CDN, blob storage — know when to use each |
 
-*Optional:* Ch 1–3, 5, 7 for full mindset context. Ch 8 is especially valuable — covers the 45-minute time map, clarification art, reading interviewer signals, and two full annotated mock interviews.
+### 2. The Interview Framework (how to structure 45 minutes)
+
+| Chapter | What it covers |
+|---------|---------------|
+| [Ch15 — System Design Framework](Section2/Chapter_15_System_Design_Framework.md) ✅ | The 5-phase structure — memorise this |
+| [Ch16 — Phase 1: Users & Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) ✅ | How to clarify requirements in the first 5 min |
+| [Ch17 — Phase 2: Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) ✅ | Scoping without going in circles |
+| [Ch18 — Phase 3: Scale & Capacity Planning](Section2/Chapter_18_Phase_3_Scale_and_Capacity_Planning.md) ✅ | Back-of-envelope math, live in the interview |
+| [Ch20 — Phase 4&5: Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) ✅ | Availability, consistency, latency targets |
+
+### 3. Distributed Systems Core (what interviewers probe on follow-ups)
+
+| Chapter | What it covers |
+|---------|---------------|
+| [Ch22 — Consistency Models](Section3/Chapter_22_Consistency_Models.md) ✅ | Strong vs eventual — when each matters and what breaks |
+| [Ch23 — Replication & Sharding](Section3/Chapter_23_Replication_and_Sharding.md) ✅ | Leader-follower, consistent hashing, hot shards |
+| [Ch25 — Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_Idempotency.md) ✅ | Circuit breakers, exponential backoff, exactly-once |
+| [Ch28 — CAP Theorem: Applied](Section3/Chapter_28_CAP_Theorem_Applied.md) ✅ | Apply CAP to a real system — don't just recite it |
+
+### 4. Data Systems Core (building blocks every L5 design assumes)
+
+These chapters are the hidden prerequisite for Section 5. Redis appears in 80% of L5 designs. Kafka appears in async/notification/payment designs. Databases appear in every single design. Read these before attempting case studies.
+
+**Must-read (do in order):**
+
+| Chapter | Why it's critical |
+|---------|-----------------|
+| [Ch30 — Databases](Section4/Chapter_30_Databases.md) ✅ | SQL vs NoSQL choice, indexing, sharding basics — every design has a DB |
+| [Ch31 — Database Internals](Section4/Chapter_31_Database_Internals.md) ✅ | B-tree, WAL, MVCC — interviewers probe this in follow-ups |
+| [Ch33 — Caching at Scale](Section4/Chapter_33_Caching_at_Scale.md) ✅ | Redis, eviction policies, cache stampede — appears in 80% of L5 designs |
+| [Ch34 — Redis Internals](Section4/Chapter_34_Redis_Internals.md) ✅ | Single-thread model, persistence, why INCR is atomic |
+| [Ch35 — Event-Driven / Kafka](Section4/Chapter_35_Event_Driven_Architecture_Kafka.md) ✅ | Topics, partitions, consumer groups — async designs require this |
+
+**Read if time allows:**
+
+| Chapter | What it adds |
+|---------|------------|
+| [Ch32 — Data Encoding](Section4/Chapter_32_Data_Encoding_and_Evolution.md) ✅ | Protobuf, schema evolution — relevant for API versioning questions |
+| [Ch36 — Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) ✅ | Deeper Kafka: ISR, log compaction, consumer lag |
+| [Ch42 — Deployment Strategies](Section4/Chapter_42_Deployment_Strategies.md) ✅ | Blue/green, canary — interviewers ask "how would you roll this out" |
+
+**Skip for L5 (with note why):**
+
+| Chapter | Why skip |
+|---------|---------|
+| Ch37 — Batch Processing | Only relevant for data engineering roles |
+| Ch38 — Multi-Region Architecture | L6 territory — adds complexity L5 interviews don't test |
+| Ch39-41 — Advanced Infra | L6 scope |
+| Ch43 — Service Mesh | Rarely tested at L5; skip unless infra/platform role |
+| Ch44 — ML System Design | Only for ML engineer roles |
+| Ch46 — Data Warehouse | Only for data engineering / analytics roles |
+
+### 5. Section 5 Case Studies — L5 Level (core practice problems)
+
+Do each as a 45-minute mock before reading the chapter.
+
+| Chapter | Core concept tested |
+|---------|-------------------|
+| [Ch49 — URL Shortener](Section5/Chapter_49_URL_Shortener.md) ✅ | Warmup — hashing, redirect, analytics |
+| [Ch50 — Rate Limiter](Section5/Chapter_50_Single_Region_Rate_Limiter.md) ✅ | Token bucket, sliding window, Redis |
+| [Ch51 — Distributed Cache](Section5/Chapter_51_Distributed_Cache_Single_Cluster.md) ✅ | Eviction, cache stampede, TTL |
+| [Ch53 — Notification System](Section5/Chapter_53_Notification_System.md) ✅ | Push/pull, fan-out, delivery guarantees |
+| [Ch57 — Background Job Queue](Section5/Chapter_57_Background_Job_Queue.md) ✅ | Async processing, retry, dead-letter queue |
+| [Ch58 — Payment Flow](Section5/Chapter_58_Payment_Flow.md) ✅ | Idempotency, double-charge prevention |
+| [Ch60 — Real-Time Chat](Section5/Chapter_60_Real_Time_Chat.md) ✅ | WebSocket, presence, message ordering |
+| [Ch55 — Search System](Section5/Chapter_55_Search_System.md) 🟡 | Inverted index, ranking basics |
+| [Ch56 — Metrics Collection](Section5/Chapter_56_Metrics_Collection_System.md) 🟡 | Time-series, aggregation, push vs pull |
+| [Ch52 — Object Storage](Section5/Chapter_52_Object_and_File_Storage_System.md) ✅ | S3-like storage, multipart upload |
+
+### 6. Section 5 New Additions — L5 Level (stubs, expand later)
+
+| Chapter | Core concept tested |
+|---------|-------------------|
+| [Ch61b — Web Crawler](Section5/Chapter_61b_Web_Crawler.md) 📄 | URL frontier, Bloom filter dedup, politeness |
+| [Ch61c — Proximity Service](Section5/Chapter_61c_Proximity_Service.md) 📄 | GeoHash, QuadTree, radius search |
+| [Ch61d — Hotel Reservation](Section5/Chapter_61d_Hotel_Reservation_System.md) 📄 | Optimistic locking, seat hold, idempotency |
+| [Ch61e — Key-Value Store](Section5/Chapter_61e_Key_Value_Store.md) 📄 | LSM tree, WAL, consistent hashing, quorum |
+| [Ch61f — Leaderboard](Section5/Chapter_61f_Leaderboard_System.md) 📄 | Redis ZSET, top-K, time-windowed ranking |
+| [Ch61g — File Sync (Dropbox)](Section5/Chapter_61g_File_Sync_Service.md) 📄 | Chunking, delta sync, conflict resolution |
+| [Ch61h — Ride Sharing](Section5/Chapter_61h_Ride_Sharing.md) 📄 | Redis GEOADD, driver matching, state machine |
+| [Ch61i — Live Streaming](Section5/Chapter_61i_Live_Streaming.md) 📄 | RTMP ingest, real-time transcode, CDN push |
+| [Ch61j — Ticketing System](Section5/Chapter_61j_Ticketing_System.md) 📄 | Flash sale, atomic seat hold, virtual queue |
+| [Ch61k — Stock / Trading Feed](Section5/Chapter_61k_Stock_Trading_Feed.md) 📄 | Order book, market data fan-out, low latency |
+
+### 7. Google's Own Systems (unique to Google loops)
+
+| Chapter | What to know at L5 |
+|---------|-------------------|
+| [Ch45 — Google Systems Overview](Section4/Chapter_45_Googles_Foundational_Systems.md) ✅ | Read first — how GFS/Bigtable/Spanner/Borg fit together |
+| [Ch80 — GFS](Section6/Chapter_80_GFS.md) ✅ | Chunk servers, master, append-only, fault tolerance |
+| [Ch81 — Bigtable](Section6/Chapter_81_Bigtable.md) ✅ | Wide-column, SSTable, memtable, row key design |
+| [Ch82 — MapReduce](Section6/Chapter_82_MapReduce.md) ✅ | Map/reduce phases, compare to Spark |
+| [Ch83 — Chubby](Section6/Chapter_83_Chubby.md) ✅ | Distributed locking, how it differs from ZooKeeper |
+| [Ch84 — Spanner](Section6/Chapter_84_Spanner.md) 🟡 | TrueTime, global SQL — most cited at Google |
+| [Ch47 — Kubernetes](Section4/Chapter_47_Kubernetes_Internals.md) ✅ | Control plane, scheduler — for infra/platform roles |
+
+### 8. Advanced — L6 Territory (skip if time is short)
+
+| Chapter | Skip unless... |
+|---------|---------------|
+| [Ch24 — Leader Election & Locks](Section3/Chapter_24_Leader_Election_Coordination.md) ✅ | You're asked about ZooKeeper/Chubby internals |
+| [Ch48 — Consensus Deep Dive](Section4/Chapter_48_Consensus_Deep_Dive.md) 🟡 | You're asked to explain Raft or Paxos in detail |
+| [Ch29 — Advanced Distributed Systems](Section3/Chapter_29_Advanced_Distributed_Systems.md) ✅ | You're applying for a distributed systems specialist role |
+
+### 9. Behavioral + Offer (do in final 2 weeks)
+
+| Chapter | What it covers |
+|---------|---------------|
+| [Ch108 — Behavioral Interview](Section8/Chapter_108_Behavioral_Leadership_Interview.md) ✅ | STAR stories, Googleyness, L5+L6 scope, all FAANG companies |
+| [Ch109 — Offer Negotiation](Section8/Chapter_109_Offer_Negotiation.md) 📄 | RSU, joining bonus, notice period buyout |
 
 ---
 
-## Section 2 — System Design Framework
+## Behavioral — 5 Stories to Prepare
 
-| Ch | Link |
-|----|------|
-| 15 | [Ch 15: System Design Framework](Section2/Chapter_15_System_Design_Framework.md) |
-| 16 | [Ch 16: Phase 1 — Users and Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) |
-| 17 | [Ch 17: Phase 2 — Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) |
-| 18 | [Ch 18: Phase 3 — Scale, Capacity, Growth](Section2/Chapter_18_Phase_3_Scale_Capacity_Planning.md) |
-| 19 | [Ch 19: Cost Efficiency](Section2/Chapter_19_Cost_Efficiency_and_Sustainable_System_Design.md) |
-| 20 | [Ch 20: Phase 4 & 5 — Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) |
-| 21 | [Ch 21: End-to-End 5-Phase Framework](Section2/Chapter_21_End_to_End_5_Phase_Framework.md) |
+Build one story for each type. 2–3 minutes each, said out loud.
 
----
-
-## Section 3 — Distributed Systems (core)
-
-| Ch | Link |
-|----|------|
-| 22 | [Ch 22: Consistency Models](Section3/Chapter_22_Consistency_Models.md) |
-| 23 | [Ch 23: Replication and Sharding](Section3/Chapter_23_Replication_and_Sharding.md) |
-| 24 | [Ch 24: Leader Election, Coordination, Locks](Section3/Chapter_24_Leader_Election_Coordination_and_Distributed_Locks.md) *(optional)* |
-| 25 | [Ch 25: Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_and_Idempotency.md) |
-| 26 | [Ch 26: Queues, Logs, Streams](Section3/Chapter_26_Queues_Logs_and_Streams.md) |
-| 27 | [Ch 27: Failure Models and Partial Failures](Section3/Chapter_27_Failure_Models_and_Partial_Failures.md) |
-| 28 | [Ch 28: CAP — Case Studies](Section3/Chapter_28_CAP_Theorem_Applied_Case_Studies.md) *(optional)* |
-| 29 | [Ch 29: Advanced Distributed Systems](Section3/Chapter_29_Advanced_Distributed_Systems.md) *(optional)* |
+| Story type | What Google wants to see |
+|-----------|--------------------------|
+| Challenging project you led | You drove it, made decisions, unblocked people |
+| Disagreement with teammate / manager | Data-driven, respectful, committed either way |
+| Project that failed or went wrong | Self-awareness, no blaming, what changed |
+| Helped someone on your team grow | Genuine, specific — mentoring, pairing, reviews |
+| Went beyond what was asked | Proactive ownership, noticed a gap and fixed it |
 
 ---
 
-## Section 4 — Data Systems (required reference)
+## Which Level to Target — L5 or L6?
 
-Use when practicing problems that need DB, cache, or async flows. Don't skip — L5 interviews expect you to justify storage and caching choices.
+With 11 years total / 8 years backend, you are at the L5/L6 boundary. Use this to decide:
 
-| Ch | Link |
-|----|------|
-| 30 | [Ch 30: Databases](Section4/Chapter_30_Databases_Choosing_Using_and_Evolving_Data_Stores.md) |
-| 33 | [Ch 33: Caching at Scale](Section4/Chapter_33_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) |
-| 35 | [Ch 35: Event-Driven Architectures, Kafka](Section4/Chapter_35_Event_Driven_Architectures_Kafka_and_Streams.md) |
+| Signal | Level |
+|--------|-------|
+| Current title: Senior Engineer, led projects your team executed | **L5** |
+| Current title: Staff / Principal / Architect, or designed systems adopted across teams | **L6** |
+| Mentored senior engineers, influenced technical direction beyond your team | **L6** |
+| Strong backend depth but scope mostly within one team | **L5** |
 
-### Supplements (use as needed)
-
-| Supplement | Senior (L5) | Staff (L6) | When to use |
-|------------|-------------|------------|-------------|
-| [Ch 31: DB Internals](Section4/Chapter_31_Database_Internals_Deep_Dive.md) | Optional | Recommended | Deep DB questions (B-tree, WAL, MVCC) |
-| [Ch 32: Data Encoding & Schema Evolution](Section4/Chapter_32_Data_Encoding_and_Schema_Evolution.md) | Skim | Full | API contracts, Kafka schema, Protobuf vs JSON |
-| [Ch 34: Redis Internals](Section4/Chapter_34_Redis_and_Cache_Internals.md) | Optional | Recommended | Cache design, Redis Cluster, eviction |
-| [Ch 36: Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) | Optional | Recommended | Kafka partitions, consumer lag, ISR |
-| [Ch 37: Batch Processing](Section4/Chapter_37_Batch_Processing_and_Data_Pipelines.md) | Reference | Full | Background Jobs, ETL, batch vs stream |
-| [Ch 42: Deployment & Ops](Section4/Chapter_42_Deployment_Strategies_and_Operations.md) | **Recommended** | **Required** | SLO/error budget, runbooks, observability, rollback |
-| [Ch 43: Service Mesh](Section4/Chapter_43_Service_Mesh_When_Why_and_Trade_offs.md) | Skip | **Recommended** | 50+ services, mTLS, retry consistency |
-
-*Full section also includes:* Ch 38 (Multi-Region), Ch 39 (Data Locality), Ch 40 (Cost Efficiency), Ch 41 (System Evolution).
+**Practical approach:** Interview targeting L5, but perform at L6 depth in system design and behavioral rounds. Google's Hiring Committee can bump you up one level — a strong L5 loop regularly becomes an L6 offer. The reverse doesn't work: a missed L6 loop is a No Hire, not a fallback L5.
 
 ---
 
-## Section 5 — Senior-Level Design Problems
+## Salary — Google India (with 11 years experience)
 
-Practice end-to-end with these 13 problems. Each has a full walkthrough: requirements, scale, architecture, failure handling.
+Your experience puts you at the upper end of the band. These are realistic 2025 numbers:
 
-**Priority:** Do **6–8 problems in depth** (timed, out loud, with diagrams). Quality beats covering all 13. Start with the must-practice set.
+### L5 (Senior SWE) — upper band for experienced hire
 
-### Must practice (high frequency at L5)
+| Component | Range | Notes |
+|-----------|-------|-------|
+| Fixed (base) | ₹55–75 LPA | Paid monthly in INR |
+| RSU / year | ₹25–42 LPA equiv. | $120–200K 4-yr grant in USD; vests 25%/year |
+| Variable pay | ₹8–14 LPA | ~15–20% of base, paid annually |
+| **Total CTC** | **₹90–131 LPA** | Year 1; grows if stock appreciates |
 
-| Ch | Link |
-|----|------|
-| 49 | [Ch 49: URL Shortener](Section5/Chapter_49_URL_Shortener.md) |
-| 50 | [Ch 50: Single-Region Rate Limiter](Section5/Chapter_50_Single_Region_Rate_Limiter.md) |
-| 51 | [Ch 51: Distributed Cache](Section5/Chapter_51_Distributed_Cache_Single_Cluster.md) |
-| 52 | [Ch 52: Object and File Storage](Section5/Chapter_52_Object_and_File_Storage_System.md) |
-| 53 | [Ch 53: Notification System](Section5/Chapter_53_Notification_System.md) |
-| 60 | [Ch 60: Real-Time Chat](Section5/Chapter_60_Real_Time_Chat.md) |
+### L6 (Staff SWE) — if you land at this level
 
-### Second tier
+| Component | Range | Notes |
+|-----------|-------|-------|
+| Fixed (base) | ₹70–100 LPA | |
+| RSU / year | ₹42–84 LPA equiv. | $200–400K 4-yr grant in USD |
+| Variable pay | ₹12–20 LPA | |
+| **Total CTC** | **₹124–204 LPA** | |
 
-| Ch | Link |
-|----|------|
-| 54 | [Ch 54: Authentication System](Section5/Chapter_54_Authentication_System.md) |
-| 55 | [Ch 55: Search System](Section5/Chapter_55_Search_System.md) |
-| 56 | [Ch 56: Metrics Collection](Section5/Chapter_56_Metrics_Collection_System.md) |
-| 57 | [Ch 57: Background Job Queue](Section5/Chapter_57_Background_Job_Queue.md) |
-| 58 | [Ch 58: Payment Flow](Section5/Chapter_58_Payment_Flow.md) |
-| 59 | [Ch 59: API Gateway](Section5/Chapter_59_API_Gateway.md) |
-| 61 | [Ch 61: Configuration Management](Section5/Chapter_61_Configuration_Management.md) |
+> Verify on [levels.fyi](https://www.levels.fyi) → India → Google → filter by your YOE before negotiating. Numbers shift with USD/INR rate and stock price.
+
+**Why earlier numbers looked low:** RSU at Google is denominated in USD. At current USD/INR (~₹84), a $150K grant = ₹1.26 Cr total = ₹31.5 LPA/year — that alone beats most Paytm senior engineering packages.
 
 ---
 
-## Practice strategy
+## Negotiation — 4 Levers (India)
 
-- **Timebox:** 45 minutes end-to-end. Roughly: clarify & requirements (5–8 min), scale/capacity (5 min), high-level design (15–20 min), deep dive 1–2 components (10–15 min), trade-offs & wrap-up (5 min).
-- **Practice out loud:** Talk through reasoning, state assumptions, draw the diagram as you go.
-- **Use the framework:** Follow the 5-phase flow (Section 2) every time.
-- **Reference as needed:** When a problem needs DB choice, caching, or events, open the relevant Section 4 chapter and Section 3 (e.g. sharding, consistency).
+1. **RSU grant** — biggest lever. Negotiate the total 4-year grant, not the per-year number. Every $10K extra grant = ₹2.1 LPA more per year.
+2. **Joining bonus** — your 90-day notice period costs you ~3 months salary + variable payout. Google should cover this. Always ask.
+3. **Notice period buyout** — Google sometimes pays your current employer so you can join in 30 days instead of 90.
+4. **Base salary** — tighter band, but worth one ask.
+
+**Scripts:**
+
+```
+After offer — never accept on the call:
+"Thank you — can I have 2–3 days to review with my family?"
+
+On RSU — lead with this:
+"The fixed pay looks fair. I was hoping the total RSU grant
+could be closer to $X (4-year). Is there flexibility there?"
+
+On joining bonus:
+"I have a 90-day notice period and will forfeit my variable
+payout in [month]. A joining bonus of ₹Y would cover that gap."
+
+With a competing offer:
+"I have an offer from [company] at ₹X LPA total.
+I prefer Google — can we close the gap on RSU or joining bonus?"
+```
 
 ---
 
-## Roadmap Summary
+## Google India Process
 
-| Section | Chapters | Notes |
-|---------|----------|-------|
-| 1 | Ch 9–14 (fundamentals; do first if rusty) | — |
-| 0 | Skim Ch 4, 6, 8 | Ch 8 especially valuable for interview execution |
-| 2 | Ch 15–21 (full) | Core design framework |
-| 3 | Ch 22–27 (Ch 28–29 optional) | Distributed systems essentials |
-| 4 | Ch 30, 33, 35 (core); supplements as needed | Ch 42 (Deployment & Ops) **recommended** |
-| 5 | Ch 49–61; prioritize 6–8 in depth | Must-practice first |
-| 6 | Skip for Senior | Staff-level case studies |
+```
+Loop (5 rounds, often virtual)
+    ↓
+Hiring Committee review (1–3 weeks)
+    ↓
+Team matching — Bangalore / Hyderabad
+    ↓
+Background verification (BGV) — 2–4 weeks, prepare documents
+    ↓
+Offer call → negotiate → sign
+```
+
+**Bangalore teams:** Google Pay, Maps, Search infra, Cloud, YouTube, Ads
+**Tell recruiter your notice period upfront** — they plan joining date around it.
 
 ---
 
-## Staff Path Additions (L6)
-
-If preparing for **Staff Engineer (L6)** interviews, add:
-
-| Section | Additional material |
-|---------|---------------------|
-| **0** | All of Section 0 (Ch 1–8) — Staff mindset, scope/impact, trade-off reasoning |
-| **4** | All supplements; especially Ch 43 (Service Mesh), Ch 32 (Data Encoding), Ch 37 (Batch Processing) |
-| **6** | Full Section 6 (Ch 62–93) — Staff-level design problems + Google foundational systems (GFS, Bigtable, MapReduce, Chubby, Spanner, Borg) |
-| **7** | Section 7 (Ch 94–106) — Engineering craft (debugging, on-call, migrations, code review) |
-
-See [README](README.md) and [TODO_MASTER_PLAN.md](TODO_MASTER_PLAN.md) for the full Staff path and chapter status.
+*Google L5 | India (Bangalore / Hyderabad) | Deep reader — 2× pace | Updated 2026-06-21*

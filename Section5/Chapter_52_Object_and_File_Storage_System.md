@@ -3858,4 +3858,118 @@ WHY SAY THIS:
 
 ---
 
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: How does multipart upload work? Why is it needed for large files?**
+
+Multipart upload splits a large file into smaller parts (minimum 5 MB each), uploads each part independently, then calls a "complete" API to assemble them. The system returns an upload_id on initiate, a per-part etag after each upload, and finalizes only when you provide the full parts manifest. It is needed because a single HTTP connection cannot reliably transfer a multi-GB file: network interruptions force a full restart. With multipart, you only retry the failed part. It also enables parallel uploads: a 10 GB file split into 100 parts can saturate available bandwidth simultaneously.
+
+---
+
+**Q2: What is erasure coding? How is it different from replication?**
+
+Erasure coding (for example 6+3) splits the data into 6 data chunks and computes 3 parity chunks; any 6 of the 9 chunks are sufficient to reconstruct the original. Storage overhead is 1.5x instead of 3x replication's 3x, so you save 50% storage cost. The trade-off is read latency: you must read at least 6 chunks from different nodes and run a decode computation, which is slower than a single-replica read copy. Repair is also more expensive: you reconstruct from remaining fragments rather than simply copying a full replica. Erasure coding is ideal for cold or archive data; replication is better for hot data where latency matters.
+
+---
+
+**Q3: How do you generate a globally unique object ID? What prevents two users uploading to the same path?**
+
+Object identity is determined by the bucket + key pair chosen by the caller, not by the system. The caller owns namespace uniqueness within their bucket. If two callers PUT to the exact same key simultaneously, both succeed and the last write wins -- there is no coordination. To prevent collision, callers use UUIDs or user-scoped path prefixes (for example "users/123/photos/uuid.jpg"). For cases where a key must be created only once, the system supports a conditional PUT (If-None-Match: *) that fails atomically if the key already exists, using the metadata store's atomic compare-and-set.
+
+---
+
+**Q4: How does a pre-signed URL work? What security properties does it have?**
+
+A pre-signed URL embeds the bucket, key, expiry timestamp, and an HMAC-SHA256 signature computed using the account's secret key. Anyone who has the URL can perform the permitted operation (GET or PUT) without any API key header, until the URL expires. The security properties are: (1) authenticity -- only the key holder can generate a valid signature; (2) time-bounded -- the embedded expiry prevents indefinite reuse; (3) scope-limited -- the URL encodes a specific operation and object, so it cannot be repurposed for other keys. The server re-derives the expected signature on each request and rejects mismatches or expired timestamps.
+
+---
+
+**Q5: How do you implement versioning? What changes when a file is overwritten?**
+
+With versioning enabled on a bucket, a PUT to an existing key does not replace the object -- it creates a new version with a unique version_id (typically a timestamp plus random suffix). The metadata schema gains a version_id column and an is_delete_marker flag. A GET without a version_id returns the latest non-deleted version. DELETE adds a delete marker rather than physically removing data. Old versions remain stored and count toward billing. A separate ListObjectVersions API lets callers enumerate all versions. Lifecycle rules can auto-expire old versions after N days to control storage growth.
+
+---
+
+**Q6: What is the metadata service responsible for? What happens if it goes down?**
+
+The metadata service is the index: it maps every (bucket, key) pair to the physical location of the data chunks on storage nodes, plus the object's size, checksum (etag), ACL, and storage class. Without it, no operation can proceed -- GET cannot find which nodes hold the data, PUT cannot record where it wrote, and LIST has nothing to scan. If the metadata store is completely unavailable, the system returns errors for all operations even though the actual bytes on storage nodes are safe. The data is not lost; it simply cannot be located until metadata is restored. This is why the metadata store runs with 5 replicas and is the most carefully monitored component.
+
+---
+
+**Q7: How do you replicate objects across data centers for disaster recovery?**
+
+Async cross-region replication is the standard approach: the primary region acknowledges the write immediately, then a replication worker streams the object to a secondary region in the background, typically within seconds to a few minutes. The secondary region stores an independent copy. In sync replication, the primary waits for the secondary to acknowledge before returning success -- this gives zero data loss but adds 50-200 ms of cross-region round-trip to every write. Most object storage uses async replication because the latency cost of sync is prohibitive for general-purpose writes. For disaster recovery, async with a recovery point objective (RPO) of a few minutes is typically acceptable.
+
+---
+
+**Q8: What is the difference between strong consistency and eventual consistency for object storage? What does S3 guarantee?**
+
+Strong consistency means that after a successful PUT, any subsequent GET from any node immediately returns the new data. Eventual consistency means different nodes may temporarily return stale data, converging to the latest value over time. S3 provides strong read-after-write consistency for all operations as of December 2020: a GET after a successful PUT always returns the new object, and LIST immediately reflects the PUT. Our single-cluster design also provides read-after-write consistency for individual objects by making the metadata write the commit point -- once metadata is written, all subsequent GETs follow that pointer. LIST in our design is eventually consistent because the index is updated asynchronously.
+
+---
+
+**Q9: How do you handle a very large object -- for example a 100 GB video upload?**
+
+Use multipart upload. Split the 100 GB file into parts of 512 MB each -- about 200 parts. Upload parts in parallel (for example 8 concurrent streams), saturating available upload bandwidth. Each part is stored as a temporary chunk and returns an etag. On completion, the system records all part locations and stitches them logically in metadata without physically concatenating bytes; reads use range requests to fetch contiguous chunks across the part boundaries. If the upload is interrupted, only the failed parts need to be re-uploaded. The final assembled object is stored with 3x replication across different racks, same as any other object.
+
+---
+
+**Q10: What is content-addressable storage? What is its advantage?**
+
+Content-addressable storage (CAS) identifies objects by the cryptographic hash of their content (such as SHA-256) rather than by a caller-supplied name. Two uploads of identical bytes produce the same hash and therefore point to the same stored data. The main advantage is automatic deduplication: if 10 users upload the same 1 GB file, only one copy is stored on disk. CAS also provides free integrity verification -- any corruption changes the hash. The disadvantage is that metadata must be tracked separately to map user-visible names to content hashes, and mutable files (where content changes) require handling multiple versions.
+
+---
+
+**Q11: How do you handle deduplication -- detecting that two users uploaded the same file?**
+
+Compute the SHA-256 hash of the file content before or during upload. Before writing to disk, check whether a chunk with that hash already exists in the storage layer. If it does, the new metadata record simply points to the existing chunk; no new bytes are written. This is called content-based deduplication. The key challenge is reference counting: you cannot delete a chunk until all metadata records pointing to it are deleted. This requires a separate reference-count table that is updated atomically with metadata changes. Deduplication is most effective for backup systems or situations where many users upload common files (OS images, popular media).
+
+---
+
+**Q12: How does your system know which data node stores a given object chunk?**
+
+The metadata record for every object contains a replicas field: a list of (node_id, chunk_id, rack) tuples, one per replica. When a GET arrives, the frontend reads the metadata record to get this list, selects a healthy node (preferring the same rack as the frontend for lower latency), and issues a read request to that node using the chunk_id as the local file identifier. The chunk_id is a UUID generated at write time. The storage node maintains a local index mapping chunk_id to the file path on disk. There is no hashing or consistent-ring lookup -- the mapping is explicit and stored in the metadata service.
+
+---
+
+**Q13: What is a checksum and how do you use it to detect data corruption?**
+
+A checksum is a fixed-length hash (we use SHA-256, producing 32 bytes) computed over the object's content. It is stored in the chunk file header at write time and also in the metadata record as the etag. On every GET, the storage node reads the data, recomputes SHA-256, and compares against the stored checksum. A mismatch means the bits on disk have changed since the write -- this is called bit rot or silent corruption. The system then tries another replica and triggers background repair. The integrity scrubber re-reads and verifies every chunk on a 30-day cycle to catch corruption before a read ever surfaces it.
+
+---
+
+**Q14: How do you implement access control -- bucket policies and object ACLs?**
+
+Access control has two layers. Bucket-level ACLs grant READ, WRITE, DELETE, or ADMIN to specific account IDs or to the public. Object-level ACLs can override the bucket default for individual objects (for example, making one file publicly readable in an otherwise private bucket). On every request, the frontend checks: (1) Is the caller the bucket owner? If so, allow. (2) Does the bucket ACL grant the required action to this account? (3) For public-read buckets, allow GET without authentication. Object ACLs are checked if present and override the bucket default. Bucket policies can add conditions (IP allow-list, required MFA) for more advanced control. All ACLs are stored in the metadata service alongside the object or bucket record.
+
+---
+
+**Q15: What is the difference between object storage, block storage, and file storage?**
+
+Object storage (like S3) uses a flat namespace of key-value pairs, accessed via HTTP PUT/GET/DELETE. Objects are immutable: to update a file you replace the whole object. It scales to exabytes and is optimized for sequential access to large files. Block storage (like EBS) exposes raw disk blocks to an operating system, which can format it as any file system. It supports random reads and writes at low latency, making it suitable for databases. File storage (like NFS or EFS) presents a POSIX hierarchical directory tree with file locking and append semantics, allowing multiple clients to share the same files. Object storage sacrifices POSIX semantics to achieve massive horizontal scalability; block storage sacrifices scalability for low-latency random access.
+
+---
+
+**Q16: How do you handle a disk failure on a data node -- how is data recovered?**
+
+The storage node monitors I/O errors per disk and marks a disk as failed when errors exceed a threshold. Chunks on the failed disk are no longer readable from that node. The health checker reports the disk failure to the cluster management plane. The repair worker then scans metadata for objects that have a replica on the failed disk and creates replacement replicas on other healthy nodes by reading from the surviving replicas. The failed disk is replaced by an operator during a maintenance window; the new disk is auto-discovered and becomes available for new writes. Data recovery time depends on the amount of data on the failed disk and available repair bandwidth -- typically a few hours for a single disk.
+
+---
+
+**Q17: What is the trade-off between replication factor 2 vs 3 vs erasure coding?**
+
+Replication factor 2 stores two copies: survives one node or disk failure but not two simultaneous failures. Durability is roughly (1 - p)^2 where p is the annual failure rate of a node -- far less than 11 nines. It saves 33% storage compared to 3x. Replication factor 3 survives two simultaneous independent failures and, with rack-aware placement, survives a full rack failure. This is the standard for 11 nines durability. Erasure coding at 6+3 also survives any three chunk losses with only 1.5x storage overhead, but read latency increases because six chunks must be fetched and decoded. The rule of thumb: 3x replication for hot data (latency matters), erasure coding for cold or archive data (cost matters).
+
+---
+
+**Q18: How would you implement lifecycle policies -- for example auto-deleting objects older than 30 days?**
+
+Lifecycle rules are stored per bucket in the metadata store (a JSON field on the bucket record). A background lifecycle worker runs periodically -- typically every few hours -- and scans the objects table for objects matching each rule's criteria: prefix filter and age threshold (created_at < now() - 30 days). Matching objects are enqueued for deletion exactly as if the caller had issued a DELETE API call: metadata is removed and the chunks are queued for garbage collection. For transition rules (move to cheaper storage class after 90 days), the worker updates the storage_class field in metadata and triggers a background copy to the appropriate storage tier. The lifecycle worker must be idempotent: running it twice must not delete objects twice.
+
+---
+
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.

@@ -5833,3 +5833,119 @@ How a Google L6 interview probes these areas, and what separates L5 from L6:
 | "We're expanding to EU. What do you change?" | "Add a region, replicate the DB." | "Write path stays in US-EAST (single write region). EU gets a read replica. EU users creating URLs pay +100ms—acceptable at < 1% of traffic. Document this in the API contract. Real-time analytics needs per-region aggregation, then merge. Plan cache invalidation across regions." |
 | "Marketing wants per-second click counts on their dashboard." | "Switch to synchronous click recording." | "Per-second requires streaming, not batch. Add Kafka, a real-time aggregator writing to Redis, and serve from there. Don't touch the redirect path. Cost: ~$500/month. Accuracy: within 5 seconds. Agree on 'near-real-time' framing with marketing before building exact real-time." |
 | "Can we put Cloudflare in front?" | "Yes, that would help with latency." | "Yes for redirects; no for creates without careful routing. Cache key must strip query params or tracked links have 0% hit rate. Use 302 not 301—can't purge 301s from browsers. Analytics gap: CDN-served clicks don't reach origin, need edge workers or accept CDN log-based counting. Purge strategy on URL updates needed before launch." |
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: How do you generate the short code -- MD5/SHA256 truncation vs random base62 vs counter-based? What is your preferred approach?**
+
+MD5 or SHA256 truncation is deterministic and can deduplicate URLs, but truncating a long hash to 7 characters creates collision risk that grows as your database fills -- you still need a collision-check loop. Pure random base62 is simple and unpredictable, but also needs a DB lookup on every generation to confirm uniqueness. Counter-based (Redis INCR) is my preferred approach because it is O(1), guaranteed unique, and requires no DB check. The downside is sequential codes are predictable, so I XOR the counter with a secret key before base62-encoding it. That scrambles the output while preserving uniqueness.
+
+---
+
+**Q2: Why base62 (a-z A-Z 0-9) instead of base64? What characters does base64 add that cause URL problems?**
+
+Base64 adds the plus sign (+) and forward slash (/), and often uses equals (=) as padding. The plus sign means "space" in URL query strings, the slash is interpreted as a path separator, and the equals sign confuses form encoders. All three require percent-encoding when embedded in a URL, which defeats the point of a short link. Base62 sticks to alphanumeric characters only, all of which are URL-safe without escaping. The two extra characters of base64 are not worth the encoding headaches.
+
+---
+
+**Q3: 301 redirect vs 302 redirect -- which do you use and why? What are the SEO and analytics implications?**
+
+A 301 is "Moved Permanently," so browsers cache it and stop asking our server on repeat visits. That cuts server load dramatically for popular links, and search engines pass link equity through to the destination. A 302 is "Found" (temporary), so browsers always re-request our server, which means we count every click accurately and can change the destination without the old redirect being stuck in browser caches. I default to 302 when analytics accuracy is a product requirement, and 301 when reducing server load matters more. The safe default for a first-pass design is 302 -- you can always switch to 301 later, but you cannot invalidate a 301 already cached in millions of browsers.
+
+---
+
+**Q4: How do you handle hash collisions? Walk me through the retry-and-check loop.**
+
+If I use random generation, after generating a candidate code I attempt an INSERT with the short_code as primary key. If the database throws a duplicate key error, the collision is caught and I regenerate a new random code and retry. I cap retries at 5; after 5 consecutive collisions I return 503, which is astronomically unlikely at normal fill rates. With counter-based generation, this loop is unnecessary because the Redis INCR is atomic -- two requests can never receive the same counter value. The primary key constraint in the DB is still there as a last-resort guard, but it should never fire.
+
+---
+
+**Q5: How do you prevent a race condition where two users simultaneously create different URLs and end up with the same short code?**
+
+The database primary key constraint is the serialization point. Both requests may generate the same random code and check the DB simultaneously and both find it empty, but only one INSERT succeeds. The second gets a duplicate key error, catches it, regenerates a code, and retries. This pattern -- optimistic generation, pessimistic insert -- is the correct approach. Do not use a SELECT-then-INSERT pattern, because that creates a TOCTOU gap. The constraint-violation catch-and-retry loop is the standard production implementation.
+
+---
+
+**Q6: How do you store custom aliases alongside auto-generated codes?**
+
+They go in the same url_mappings table. The short_code column is the primary key regardless of whether the code was auto-generated or user-specified. Before inserting a custom alias I validate it against a reserved-words list (api, admin, health, etc.) and attempt an INSERT. If the code is taken I return 409 Conflict immediately -- no retry, because the user chose that specific string. There is no separate table for custom aliases; the distinction is purely at write time. Optionally I add a boolean column is_custom to distinguish them in analytics.
+
+---
+
+**Q7: How would you implement analytics (click count, geographic breakdown) without slowing down redirects?**
+
+The redirect handler fires an async event to a queue (Kafka or SQS) and returns the 302 immediately -- the user is not waiting for analytics. A separate consumer service reads batches from the queue, resolves IP to country via a GeoIP library, and writes to a click_events table partitioned by month. For the dashboard I pre-aggregate hourly rollups into a summary table so the query is fast. The redirect p50 latency stays under 10ms; the analytics pipeline has seconds of lag, which is fine for reporting. The queue also acts as a buffer so a spike in clicks does not overload the analytics DB.
+
+---
+
+**Q8: Your DB has 100 billion rows after 10 years. How do you shard the URL table?**
+
+I shard by the hash of short_code modulo N shards. Each redirect lookup knows the short code, so it can deterministically route to the correct shard with no scatter-gather. I pick a power-of-2 shard count (16 or 32) so I can double capacity by splitting shards without rehashing everything -- consistent hashing handles the transitions. The URL table is write-once-read-many, so rebalancing is safe: copy data, verify, cut over, delete old. I keep the number of shards smaller than needed initially to avoid operational overhead, and expand only when p99 DB latency or storage per shard crosses a threshold.
+
+---
+
+**Q9: What is the read/write ratio and how does it affect your caching strategy?**
+
+The ratio is roughly 100:1 reads to writes, and at peak traffic it can hit 1000:1. That ratio says: optimize the read path above everything else. A high cache hit rate (80-95%) means most redirects never touch the database. I size the Redis cluster to hold the working set of hot URLs -- in practice the top 20% of URLs account for 80% of traffic (Pareto distribution), so I only need to cache a fraction of the total dataset. The cache TTL is 1 hour as a reasonable balance between freshness and hit rate. Writes (URL creation) are infrequent enough that I do not need write-path caching at all.
+
+---
+
+**Q10: How do you handle expired URLs (TTL)? What does the redirect return after expiry?**
+
+The url_mappings row has an expires_at timestamp column, nullable. On every redirect the lookup checks if expires_at is non-null and less than current time. If expired, I return HTTP 410 Gone (not 404), because 410 tells the client and any crawlers that the resource is deliberately gone rather than accidentally missing -- this prevents retry storms. For cleanup I run a background job during off-peak hours that hard-deletes or soft-deletes expired rows older than 30 days, freeing storage. I also set the cache TTL to min(1 hour, time_until_expiry) so the cache does not serve stale "active" entries past the expiration moment.
+
+---
+
+**Q11: Why use a separate ID-generation service like Snowflake over database auto-increment?**
+
+Database auto-increment has two problems at scale: it is a single point of failure (if the primary DB is down, writes stall), and it leaks business information (counter values reveal how many URLs have been created). Snowflake-style IDs are 64-bit integers composed of timestamp, datacenter ID, and sequence number. Each application server can generate IDs without coordination because the datacenter and machine bits ensure global uniqueness. This also enables multi-region writes -- two regions can generate IDs simultaneously with zero conflict. For a single-region system at moderate scale, Redis INCR is a simpler stand-in for the same idea.
+
+---
+
+**Q12: How do you prevent malicious URLs (phishing, malware) from being shortened?**
+
+At creation time I check the submitted domain against a blocklist from Google Safe Browsing or a similar threat-intelligence feed. I also reject non-HTTP/HTTPS schemes to prevent javascript: or data: attacks. For deeper protection I integrate a background scanner: after the URL is created, a worker fetches the page and checks it against malware classifiers, then flips is_active to false if flagged. For the redirect path I check a cached blocklist in memory so there is no extra latency on the hot path. Repeat offenders (same API key submitting many flagged URLs) get rate-limited or banned.
+
+---
+
+**Q13: What happens if the cache (Redis) is down -- does the redirect still work?**
+
+Yes. The redirect handler catches Redis connection errors, logs a warning, increments a cache_error metric, and falls through to the database. Latency increases from ~5ms (cache hit) to ~15ms (DB lookup), but functionality is unaffected. I also use a circuit breaker around the Redis call so that if it is clearly down I skip the attempt entirely rather than waiting for a timeout on every request. The cache is a performance optimization, not a correctness requirement. When Redis recovers, the cache warms naturally as requests trickle in.
+
+---
+
+**Q14: How would you design the analytics pipeline so it does not block the redirect hot path?**
+
+The redirect handler publishes a lightweight ClickEvent (short_code, timestamp, IP, user-agent, referrer) to a Kafka topic and returns the redirect immediately. A separate consumer service reads the topic in batches, enriches each event with GeoIP data, and bulk-inserts into a columnar analytics store (ClickHouse or Redshift). This decouples the two concerns entirely: the redirect path has no I/O dependency on the analytics system. If the Kafka consumer falls behind, clicks still redirect normally -- the queue absorbs the backlog. If Kafka itself is down, I can drop events (fire-and-forget is acceptable for analytics) or buffer in the application until Kafka recovers.
+
+---
+
+**Q15: What is the consistency requirement -- can two requests for the same long URL get different short codes?**
+
+Yes, by default they can and do. Every POST to /shorten creates a new code, even for an identical destination URL. This is the correct default because it keeps analytics per code independent -- two marketing campaigns pointing at the same page should have separate click counters. If a user-level deduplication policy is needed (same user, same URL gets same code), I add a url_hash column, index on (user_id, url_hash), and check for an existing row before generating a new code. I do not implement system-wide deduplication because it would merge analytics across unrelated campaigns, which is almost always wrong.
+
+---
+
+**Q16: How do you make short code generation globally unique in a multi-region setup?**
+
+Each region gets a fixed machine/datacenter prefix embedded in the code. Using a Snowflake-style ID the top bits encode region (e.g., 0 for us-east, 1 for eu-west), the middle bits encode a per-region timestamp, and the bottom bits are a per-machine sequence. This means two regions can generate codes simultaneously with mathematical certainty of no collision. Alternatively, I assign non-overlapping counter ranges to each region (range-lease model): us-east owns 0--1T, eu-west owns 1T--2T. When a region exhausts its range it requests a new lease from a global coordinator. Both approaches avoid cross-region coordination on every write.
+
+---
+
+**Q17: If the URL table is sharded by short_code hash, how do you handle "find all URLs created by user X"?**
+
+This is the classic cross-shard query problem. A user_id-based query would fan out to all N shards, collect results, and merge -- expensive and slow. The better approach is to maintain a separate user_urls table sharded by user_id, containing just (user_id, short_code, created_at). When a URL is created, I write to both the url_mappings shard (keyed by short_code) and the user_urls shard (keyed by user_id) in a two-phase write. User dashboard queries hit only the correct user_urls shard; redirect lookups hit only the correct url_mappings shard. The trade-off is a dual write that must be handled for partial failures (write to user_urls is best-effort or backed by a queue).
+
+---
+
+**Q18: What is the difference between a permanent redirect (301) and a temporary redirect (302) in terms of browser caching?**
+
+A 301 tells the browser "this resource has permanently moved; cache this redirect forever." The browser stores the mapping locally and on subsequent visits goes directly to the destination without contacting our server at all. This is great for load reduction but fatal for analytics accuracy, and you cannot undo it -- once cached in a browser, that 301 is stuck until the browser cache is cleared. A 302 tells the browser "this is a temporary redirect; always ask the server." Every click hits our server, which means we count every redirect and can change the destination URL anytime. For a URL shortener where destinations may change and click counting is a core feature, 302 is the safer default; 301 is an optimization you apply deliberately to specific stable URLs.
+
+---

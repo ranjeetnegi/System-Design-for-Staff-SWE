@@ -2800,3 +2800,117 @@ Brainstorming (Part 18):
 ✓ Failure scenarios: Slow shard, full rebuild, Kafka down, cache stampede, database failover (B5), retry storm (B6)
 ✓ Ownership Under Pressure: 30-minute mitigation scenario
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is an inverted index? Walk me through how it is built from a corpus of documents.**
+
+An inverted index is a map from term to the list of documents that contain that term. To build it, you take every document, run it through a text analysis pipeline -- tokenize, lowercase, remove stop words, stem -- and for each resulting token you record the document ID, how many times the term appeared, and where. You store these per-term lists sorted by document ID so intersections can be done cheaply with a two-pointer merge. The index is pre-built at indexing time so that query time never scans documents -- it only walks pre-sorted lists.
+
+---
+
+**Q2: How does a search query "distributed systems" find relevant documents?**
+
+The query string is tokenized and analyzed the same way documents were: "distributed systems" becomes ["distribut", "system"] after stemming. The engine looks up each token's posting list in the inverted index. For AND semantics it intersects the two lists using a merge-join on sorted document IDs. That gives you the set of documents containing both terms. Those candidates are then scored with BM25, ranked by score, and the top results are returned. The whole thing is proportional to the size of the matching set, not the size of the corpus.
+
+---
+
+**Q3: What is TF-IDF? How does it rank documents for a query?**
+
+TF-IDF stands for term frequency times inverse document frequency. TF measures how often a query term appears in a particular document -- more occurrences suggest higher relevance. IDF measures how rare the term is across all documents -- rare terms like "inverted" carry more signal than common terms like "the." You multiply them together to get a score per term per document, then sum across all query terms to get the document score. The idea is that a document with a rare term mentioned many times is very likely to be about that topic.
+
+---
+
+**Q4: What is BM25 and how is it different from TF-IDF?**
+
+BM25 improves TF-IDF in two important ways. First, it adds term frequency saturation: a document mentioning a term 50 times is not 50 times more relevant than one mentioning it once -- BM25 applies diminishing returns through a saturation parameter k1. Second, it normalizes by document length: a short document that mentions "bluetooth" twice is more focused on the topic than a long document that mentions it twice. TF-IDF has no length normalization, so long documents get an unfair boost. BM25 is the industry default for text ranking because of these two corrections.
+
+---
+
+**Q5: How do you handle stemming and stop words in the indexing pipeline?**
+
+Both are applied as token filters during the analysis step, which runs both at index time and at query time -- they must match or queries won't hit the right postings. Stop words like "the," "in," and "a" are removed because they appear in almost every document and carry no relevance signal; including them bloats posting lists and hurts precision. Stemming reduces words to their root form -- "running" becomes "run," "shoes" becomes "shoe" -- so that a query for "shoes" matches documents that say "shoe." The critical rule is: use the same analyzer at index time and query time. A mismatch means indexed tokens and query tokens don't line up, and you get zero results.
+
+---
+
+**Q6: How do you handle a query with multiple words -- AND vs OR semantics?**
+
+The default for most production search systems is AND semantics: every query term must appear in the result document. This gives high precision but can cause zero results if any term is missing. When AND returns zero or very few results, you fall back to OR semantics: documents matching any term are included, then ranked by how many terms they match. In practice, Elasticsearch and Lucene allow you to tune this with a minimum_should_match parameter. You can also use phrase queries to require terms to appear adjacent. The tradeoff: AND is precise but has lower recall; OR has higher recall but lower precision.
+
+---
+
+**Q7: How do you make search results relevant and not just keyword matches?**
+
+Relevance has multiple layers. First, BM25 scores text match quality. Second, you add boost factors on top: title matches score higher than description matches, popular items get a popularity boost, recently updated documents get a freshness boost, and out-of-stock items get penalized. Third, you configure synonyms so "sneakers" matches "shoes" and "laptop" matches "notebook." Fourth, you measure relevance operationally: click-through rate on first-page results and zero-result rate. A search system where QPS is normal but CTR is tanking is broken -- you need metrics to catch that. Relevance is not a one-time algorithm decision; it is an ongoing operational concern.
+
+---
+
+**Q8: How do you index 1 billion documents? How do you shard the inverted index?**
+
+You partition the index into shards using a hash of the document ID: shard_id = hash(doc_id) % num_shards. Each shard holds a complete inverted index for its subset of documents. At 1 billion documents, if each document averages 2 KB of indexed data, the index is roughly 2 TB. With a target shard size of 20 GB, you need about 100 primary shards. Each query fans out to all shards in parallel (scatter), each shard returns its local top results, and the coordinator merges and re-ranks (gather). The main cost of more shards is higher tail latency: P99 is dominated by the slowest shard.
+
+---
+
+**Q9: How do you update the index when a document changes? Real-time vs batch re-indexing?**
+
+The standard approach is near-real-time (NRT) indexing. When a document changes, a CDC event goes to Kafka, the indexing consumer reads it, and the new version is written to an in-memory segment buffer on the shard. Every 1-5 seconds, the shard flushes and refreshes its segment reader, making the new version visible to queries. The old version is marked deleted in the segment's deletion bitmap and cleaned up during the next background segment merge. This is eventual consistency with a 1-5 second window. Batch re-indexing is used for breaking changes like a new analyzer -- you build a parallel index and swap an alias atomically for zero-downtime cutover.
+
+---
+
+**Q10: What is the difference between recall and precision? How do you measure search quality?**
+
+Precision is the fraction of returned results that are relevant -- high precision means low junk. Recall is the fraction of all relevant documents that were returned -- high recall means you are not missing things. You can tune for one at the cost of the other: AND semantics gives high precision, low recall; OR semantics gives high recall, lower precision. In production you measure quality indirectly: click-through rate (are users clicking results?), zero-result rate (how often does search return nothing?), and position of first click (are users clicking result #1 or scrolling to #5?). You run offline relevance regression tests with known query-to-expected-result pairs before deploying config changes.
+
+---
+
+**Q11: How does Elasticsearch's primary/replica shard model work?**
+
+Every index is divided into N primary shards. Each primary has R replicas, which are complete copies of that shard. Writes go only to the primary, which then replicates to its replicas. Reads (searches) can go to any copy -- primary or replica -- which lets you scale read throughput by adding replicas. If a primary fails, Elasticsearch promotes one of its replicas to become the new primary within seconds. For a 5-shard index with 2 replicas each, you have 15 shard instances. Queries fan out to one copy of each primary shard (5 shards in parallel), and the coordinator merges results. Node sizing: you want each node to hold 1-3 shards in RAM to keep queries fast.
+
+---
+
+**Q12: How do you implement autocomplete / typeahead suggestions?**
+
+Autocomplete uses a separate index optimized for prefix matching, not relevance ranking. The most common approach is edge n-gram tokenization: the token "bluetooth" is indexed as "b", "bl", "blu", "blue", "bluet", ... up to the full word. A query for "blue" then hits a standard inverted index lookup. Suggestions are ranked by popularity -- query frequency from your search logs. The suggestion index is small, fits in memory, and should respond in under 10 ms. Alternatively, you can use a trie structure in memory for pure prefix lookups. The key is that the suggestion index is independent from the main search index so it does not affect core search latency.
+
+---
+
+**Q13: What is fuzzy search? How do you find documents even when the query has a typo?**
+
+Fuzzy search uses edit distance (Levenshtein distance) -- the minimum number of single-character edits (insert, delete, substitute, transpose) to transform one string into another. "runnning" has edit distance 1 from "running." At query time, you expand the query term to include all terms in the index dictionary within edit distance 1 or 2, then union their posting lists. Lucene implements this efficiently using a Levenshtein automaton. Edit distance 2 catches most user typos but can produce false matches on short words, so you typically cap fuzzy matching for terms longer than 3-4 characters. The expansion adds some query latency, which is why fuzzy is not applied to every field.
+
+---
+
+**Q14: How do you implement faceted search (filter by category, price range, date)?**
+
+Facets require two things: filtering (only show results in a price range) and counting (show "Electronics: 42 results"). Filtering uses doc values -- a column-oriented store alongside the inverted index that holds numeric and keyword field values for every document. Filtering a range like price < $100 scans the doc values column and returns matching document IDs. Counting is done as an aggregation over the matching set. Doc values are stored compressed on disk and cached in memory, so range filters and facet counts are fast without touching the inverted index. The important design point is that TEXT fields (analyzed) go into the inverted index, while KEYWORD and numeric fields go into doc values for filtering and faceting.
+
+---
+
+**Q15: How do you handle a hot query that 10,000 users issue simultaneously?**
+
+You cache results. The query result cache stores the full result set for a given query string plus filters, keyed by a hash of the query. A TTL of 30-60 seconds is typical -- search results do not need to be perfectly fresh. With a 60-second TTL, 10,000 simultaneous requests for "bluetooth headphones" hit the cache and bypass the shards entirely. The cache sits at the coordinator or API layer. For the cache to be effective, you need the query key to be normalized -- same query with different capitalization or whitespace should hash to the same key. For truly viral queries, you can also pre-warm the cache by periodically re-running the top 1,000 queries before the cache expires.
+
+---
+
+**Q16: What is a posting list? How is it stored and compressed?**
+
+A posting list is the list of documents that contain a specific term, stored in sorted order by document ID. Each entry typically stores the document ID, the term frequency in that document, and optionally the positions of the term within the document (needed for phrase queries). Sorted order allows two posting lists to be intersected in O(min(|A|, |B|)) time using a two-pointer merge. Compression is critical because posting lists for common terms can have millions of entries. The most common compression schemes are variable-byte encoding (VBE) -- which encodes small numbers in fewer bytes -- and PForDelta, which stores gaps between consecutive document IDs (gap-encoded deltas are small and compress well). Lucene uses a variant of PForDelta called FOR/PFOR.
+
+---
+
+**Q17: How do you personalize search results for a specific user?**
+
+Personalization means using signals specific to the user to re-rank results. The typical approach is a two-stage pipeline: stage one runs the standard BM25 retrieval to get the top 100 or 1,000 candidates; stage two applies a personalized re-ranking model using the user's past clicks, purchase history, and browsing behavior. You represent the user as a feature vector and score each candidate against it. This keeps the expensive personalization model out of the hot path -- it only runs on a small candidate set, not the full index. For V1, you can implement a simpler version: boost categories the user frequently browses, without a full ML model. Personalization requires click data; do not build it before you have that signal.
+
+---
+
+**Q18: What is the difference between full-text search and a relational database LIKE query?**
+
+A SQL LIKE query such as `WHERE description LIKE '%running shoes%'` does a full table scan -- it reads every row and checks if the string appears anywhere in the text. This is O(N x L) where N is the number of rows and L is the average text length. There is no index, no ranking, no typo tolerance, and latency degrades linearly with table size. Full-text search uses an inverted index: query time is O(result set size), not O(corpus size). It also provides relevance ranking via BM25, synonym expansion, stemming, typo tolerance via fuzzy matching, and faceted aggregations. The tradeoff is that the inverted index is a derived, eventually consistent data store that requires a separate infrastructure. Use LIKE queries only for small tables or when you need ACID consistency on the search result; use a dedicated search system for anything at scale or requiring relevance.

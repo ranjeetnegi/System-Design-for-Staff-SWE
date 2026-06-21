@@ -3705,3 +3705,119 @@ Brainstorming (Part 18):
 UNAVOIDABLE GAPS:
 - None. All Senior-level signals covered after enrichment.
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: Why WebSocket over HTTP long polling? What is the key difference?**
+
+WebSocket is a bidirectional, persistent TCP connection -- the server can push data to the client at any time without the client asking. HTTP long polling is still request-response: the client sends a request, the server holds it open until a message arrives, then closes it and the client immediately sends another. Long polling generates constant HTTP overhead: new handshakes, headers, and connections on every cycle. At 1 million users, that is 1 million HTTP requests per second just to check for messages. WebSocket eliminates that overhead with a single persistent connection per client. The key difference is who initiates: in WebSocket, the server initiates delivery; in long polling, the client always initiates. Chat is a server-push problem -- WebSocket is the right abstraction.
+
+---
+
+**Q2: How do you route a message from User A to User B when they are connected to different chat servers?**
+
+Every WebSocket connection is registered in a connection registry stored in Redis. When a user connects, the connection server writes: `HSET connections:{user_id} {device_id} {server_id:conn_id}`. When User A sends a message, the Chat Service (stateless) looks up User B's connections in Redis, finds which connection server B is on, and sends a gRPC call to that specific connection server to push the message over B's WebSocket. The Chat Service does not need to know B's server at message-write time -- it discovers it from Redis at delivery time. If B is on multiple devices across multiple servers, the Chat Service fans out to each. This is why the connection registry is the heart of the routing layer and must be sub-millisecond -- Redis at 0.1ms lookup time, not a database at 5ms.
+
+---
+
+**Q3: What is a presence service? How do you detect when a user goes offline?**
+
+A presence service tracks whether each user is currently connected and when they were last seen. Online detection is trivial: when a WebSocket connection is established, we increment a connection count in Redis for that user and mark them online. Offline detection is harder because networks drop silently. We use a heartbeat: the connection server sends a `ping` every 30 seconds, and the client must respond with a `pong` within 10 seconds. If no `pong` is received, the connection is considered dead, the connection count is decremented, and if it reaches zero, the user is marked offline after a 30-second debounce. The debounce prevents flickering for users who briefly lose signal in an elevator. Presence is eventually consistent by design: contacts may see "Online" for up to 60 seconds after a user actually disconnects, which is an acceptable trade-off to avoid constant churn.
+
+---
+
+**Q4: How do you guarantee message ordering in a group chat?**
+
+We assign a per-conversation sequence number atomically at the server using Redis INCR. Every message sent to conversation X gets the next integer in that conversation's counter -- Redis INCR is atomic, so two concurrent messages always get different sequence numbers with no ties. The message is persisted with that sequence number before any delivery happens. On the client side, messages are displayed in sequence number order regardless of arrival order. If a client receives sequence 49 before sequence 48, it buffers 49 and requests 48 from the server before rendering either. Kafka fan-out is also partitioned by conversation ID, so all messages for one conversation flow through the same Kafka partition in FIFO order. This guarantees delivery order matches send order within every conversation, without needing a global ordering system.
+
+---
+
+**Q5: How do you implement message delivery receipts (sent / delivered / read)?**
+
+There are three states. "Sent" (single check) means the server acknowledged the message -- the sender gets an ACK with a message ID immediately after we persist to the database. "Delivered" (double check) means the recipient's device received it over WebSocket and sent back a device ACK; the server records a delivery timestamp for that message. "Read" (blue double check) means the recipient actually opened the conversation and viewed the message; the client sends a `{type: "read", conversation_id, last_read_seq: N}` event, and the server updates `last_read_sequence_num` in the conversation_members table. We store a single read pointer per user per conversation (not a row per message) because that would generate 200 million additional DB rows per day at our scale. The sender is notified of the read event via WebSocket fan-out.
+
+---
+
+**Q6: How do you handle a message sent while the recipient is offline?**
+
+The message is persisted to the database first -- always, regardless of whether the recipient is online. That is the invariant: persist before deliver. After persistence, the fan-out worker checks the connection registry for the recipient. If no connections are found, it publishes a push notification event to a Kafka topic. The notification service consumes that event and sends a push via APNs (iOS) or FCM (Android). When the recipient opens the app, the client knows its last seen sequence number per conversation and sends a sync request for all messages since then. The server returns the missed messages in order. The push notification is just a knock on the door -- the actual message body is fetched on sync, not embedded in the push payload, to avoid payload size limits and to ensure the client always has the authoritative ordered copy.
+
+---
+
+**Q7: What is the fan-out problem in a group chat with 10,000 members?**
+
+Fan-out is the delivery multiplication effect: one message sent equals N deliveries, where N is the group size. At 10,000 members, one message triggers 10,000 WebSocket pushes (or push notifications for offline members). If the group sends 100 messages per minute, that is 1 million deliveries per minute from a single group alone. The three main costs are: CPU on fan-out workers iterating 10,000 connections per message, Redis lookups for each member's connection state, and internal gRPC calls to connection servers. The mitigations are: cap group size (we cap at 200 for V1), dedicate separate fan-out worker pools for large groups, batch deliveries per connection server (all members on server-7 get one batch call instead of N individual calls), and rate-limit push notifications for highly active groups (send "45 new messages" instead of 45 separate notifications). The fan-out multiplier is the dominant throughput driver -- always calculate deliveries-per-second, not messages-per-second.
+
+---
+
+**Q8: How do you store chat message history -- what is the schema?**
+
+The core table is `messages` with columns: `msg_id` (UUID primary key), `conversation_id` (UUID, foreign key), `sender_id` (UUID), `content` (TEXT), `sequence_num` (BIGINT), `created_at` (TIMESTAMP), `client_msg_id` (VARCHAR for idempotency), and `message_type`. The critical index is a composite on `(conversation_id, sequence_num DESC)` because the primary query pattern is "get the last N messages for conversation X ordered by sequence." We also have a `conversations` table and a `conversation_members` table with `last_read_sequence_num` per user per conversation -- this is the read receipt pointer stored as a single integer, not a row per message. Sequence number uniqueness within a conversation is enforced via `UNIQUE (conversation_id, sequence_num)`. We shard by `conversation_id` when write volume exceeds single-primary capacity, because all queries for a conversation land on one shard.
+
+---
+
+**Q9: How do you implement message pagination (loading older messages)?**
+
+We use cursor-based pagination, not offset-based. The client requests: `GET /conversations/{id}/messages?before_seq={N}&limit=50`. The server returns 50 messages with `sequence_num < N` ordered by sequence descending. The client's next page request uses the lowest sequence number from the returned batch as the new cursor. The reason we avoid offset-based pagination is that new messages arrive constantly: if a new message is inserted, an offset-based page 2 would return a message the user already saw on page 1 (the entire set shifts). A cursor anchored to sequence number is stable -- "give me 50 messages before sequence 47" always returns the same set regardless of new messages arriving. Recent messages (last 100 per conversation) are served from a Redis list cache with ~85% hit rate. Older messages are read directly from the database, which is acceptable because scrolling back to old messages is rare.
+
+---
+
+**Q10: What is the heartbeat mechanism in WebSocket connections?**
+
+WebSocket connections are persistent TCP connections, but the underlying network can silently drop them -- a phone enters a dead zone, a NAT table entry expires, a firewall closes idle connections -- without either side receiving a TCP RST. Without heartbeats, the server would hold a connection in its registry indefinitely thinking the client is online, while the client is actually unreachable. The heartbeat mechanism works like this: the connection server sends a `{type: "ping"}` frame to every client every 30 seconds. The client must respond with a `{type: "pong"}` within 10 seconds. If no pong is received, the server closes the connection, removes it from the Redis registry, and decrements the user's connection count. This cleans up dead connections promptly. The 30-second interval is a balance: shorter intervals waste bandwidth on millions of connections; longer intervals mean dead connections stay in the registry longer, causing failed delivery attempts before cleanup.
+
+---
+
+**Q11: How does a client reconnect after a network drop and catch up on missed messages?**
+
+The client stores the last seen sequence number per conversation locally. On reconnection -- which uses exponential backoff with jitter to prevent a thundering herd -- the client sends a sync request: `{type: "sync", conversations: {"conv_123": {"last_seq": 45}, ...}}`. The server queries each conversation for messages with sequence number greater than the client's last known value and returns them in order. If more than 100 messages were missed in a conversation, the server returns the latest 100 with a `has_more: true` flag, and the client fetches the rest via paginated history requests. The client_msg_id deduplication layer handles the case where the client sent a message just before disconnecting: it retries on reconnection with the same client_msg_id, and the server's idempotency check returns the cached ACK without creating a duplicate. The sync approach means no message is ever truly "missed" -- it is just delayed until the next connection.
+
+---
+
+**Q12: How does end-to-end encryption affect your server architecture?**
+
+End-to-end encryption (E2E) means messages are encrypted on the sender's device and can only be decrypted by the recipient's device -- the server never sees plaintext. This has major architectural consequences. First, the server cannot do content moderation, spam filtering, or full-text search on message content -- those capabilities are eliminated. Second, the server stores ciphertext blobs instead of text, so content-based features (search, reactions, link previews) require client-side implementations. Third, key management becomes a first-class problem: each device has a key pair, and when a user adds a new device, existing messages cannot be decrypted on it without a re-encryption protocol (which is expensive). Fourth, the Signal Protocol (used by WhatsApp and Signal) adds forward secrecy with ratcheting keys, requiring stateful key state on both client and server. We defer E2E to V2 because it blocks server-side trust and safety features required for launch.
+
+---
+
+**Q13: How do you scale WebSocket connections -- a single server has a max connection limit?**
+
+A single server is limited by file descriptors (Linux default: 65,536), memory (~10 KB per connection), and CPU for heartbeat processing. A well-tuned server can hold 50,000 to 100,000 WebSocket connections. To scale beyond one server, we run a fleet of connection servers behind a load balancer. The load balancer routes new WebSocket upgrade requests to the least-loaded connection server, and the connection stays on that server for its lifetime (WebSockets are stateful -- no mid-session migration). The connection registry in Redis maps every user to their specific server, so other services always know where to deliver. At 500,000 peak concurrent connections with 50,000 per server, we need 10 servers plus 2 for redundancy. Adding more servers is horizontal scaling -- each new connection server registers itself and starts accepting new connections. The key insight is that connection servers are stateful (they hold the socket) but their routing metadata is stateless (in Redis), so routing decisions can be made by any service in the fleet.
+
+---
+
+**Q14: What is the difference between 1:1 chat and group chat in terms of fan-out architecture?**
+
+In 1:1 chat, one message produces exactly two delivery attempts: one to each of the recipient's connected devices (usually one or two). The fan-out factor is effectively 1 to 2. The Chat Service can look up the recipient's connections inline and deliver directly without significant overhead. In group chat, one message produces N delivery attempts where N is the number of group members, each of whom may have multiple devices. This fan-out must be asynchronous -- the Chat Service cannot block on 200 deliveries synchronously or its thread pool would exhaust. So group chat routes through Kafka: the Chat Service publishes one delivery event with the full recipient list, and a dedicated fan-out worker pool processes it asynchronously. The fan-out workers batch deliveries by connection server (all members on server-3 in one gRPC call) to reduce internal RPC count. This is why group size is capped and why very large groups (channels with 10,000+ members) require a completely different write-fanout architecture such as pull-based delivery where members poll on open.
+
+---
+
+**Q15: How do you implement typing indicators?**
+
+Typing indicators are ephemeral signals -- they are never persisted. When a user starts typing, the client sends a `{type: "typing_start", conversation_id}` event over the WebSocket. The Chat Service fans it out in real time to all other online members of the conversation via their WebSocket connections. There is no database write. If a member is offline, they never see the typing indicator -- that is intentional and correct (there is no value in "Alice was typing 2 hours ago"). The client automatically sends a `{type: "typing_stop"}` event when the user stops typing or after 5 seconds of no keystroke activity. A server-side timer also clears the indicator after 10 seconds as a safety net in case the client drops without sending a stop event. Typing indicators are best-effort: if the WebSocket delivery fails, we do not retry. Losing a typing indicator is completely invisible to users, and retrying would add unnecessary complexity to an ephemeral signal.
+
+---
+
+**Q16: How do you handle message deduplication when a client sends the same message twice due to retry?**
+
+The client generates a unique `client_msg_id` for every message before sending -- typically a UUID or timestamp-plus-random string generated locally. If the connection drops after sending but before receiving the ACK, the client does not know if the server processed the message. On reconnection, it retries with the exact same `client_msg_id`. The server checks Redis for this key first -- `GET idemp:{client_msg_id}`. If found, the server returns the cached ACK (with the original `msg_id` and `sequence_num`) without processing the message again. This is a two-layer system: Redis is the fast primary check (sub-millisecond), and the database has a secondary check via a `WHERE client_msg_id = ?` query as a fallback if Redis has restarted. The idempotency key TTL is 24 hours -- after that, the client should treat an unacknowledged message as failed. From the user's perspective, the message appears exactly once in the conversation regardless of how many retries occurred.
+
+---
+
+**Q17: How do you implement push notifications for users who are not connected via WebSocket?**
+
+When the fan-out worker looks up a recipient's connections in Redis and finds none, it publishes a push notification event to a Kafka topic. A dedicated Notification Service consumes these events and sends the actual push through platform-specific gateways: Apple Push Notification Service (APNs) for iOS and Firebase Cloud Messaging (FCM) for Android. The notification payload contains the conversation ID, sender name, and a truncated message preview (not the full message, to avoid exposing content in lock-screen notifications and to stay within platform payload limits). When the user taps the notification and opens the app, the client performs a sync request to fetch the full message from the server in order. Push notifications are best-effort -- if APNs or FCM is down, the message is still in the database and will be fetched on the next app open. For high-activity groups, we batch notifications: rather than sending 45 individual pushes in one minute, we send one "45 new messages in Engineering" notification.
+
+---
+
+**Q18: What is the Snowflake ID and why is it used for message IDs in a chat system?**
+
+A Snowflake ID is a 64-bit integer ID format invented by Twitter that encodes three things: a timestamp in milliseconds (41 bits), a machine or datacenter ID (10 bits), and a per-machine sequence counter (12 bits). This makes Snowflake IDs globally unique without coordination, roughly time-sortable, and generatable locally by any server without a database round-trip. In a chat system, Snowflake IDs are used for `msg_id` because they are compact (8 bytes vs 16 bytes for UUID), index efficiently in databases (monotonically increasing within a millisecond window means inserts are sequential, reducing B-tree fragmentation), and embed a rough timestamp that can be used for debugging and time-range queries. The alternative -- UUID v4 -- is random, which causes index fragmentation on high-write tables and offers no time information. We use per-conversation `sequence_num` (from Redis INCR) for display ordering because Snowflake IDs only provide millisecond granularity and two messages within the same millisecond have no guaranteed relative order without the sequence counter.
+
+---

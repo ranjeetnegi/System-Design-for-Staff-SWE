@@ -3782,3 +3782,117 @@ STAFF-LEVEL ENRICHMENTS APPLIED:
 
 This chapter meets Google Staff Engineer (L6) expectations. All 18 parts addressed, with Staff vs Senior contrast, structured incident table, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.
 ```
+
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between configuration management and feature flags?**
+
+Configuration management is the broad system for storing, versioning, and distributing runtime parameters -- timeouts, rate limits, connection pool sizes, any operational knob. Feature flags are one specific type of config value: a boolean or percentage-based switch that controls which code path a user sees. The config system is the infrastructure; feature flags are one use case running on top of it. A feature flag lives in the config store just like any other key-value pair, but it also carries extra metadata like rollout percentage, user bucketing salt, and targeting rules. You can have config management without feature flags, but you cannot safely run feature flags without a config management system underneath.
+
+---
+
+**Q2: How do services receive config updates -- push (server notifies) vs pull (service polls)?**
+
+My design uses push as the primary channel and pull as the safety net. When a config change is persisted, the Config Service publishes a change event to a message bus (Kafka or Pub/Sub). Each service instance subscribes to its namespace topic and receives the event within 1-3 seconds, then fetches the updated values. On top of that, a background poll runs every 60 seconds -- if a push event was dropped (message bus blip, instance was restarting), the poll catches the drift and self-heals. Pure polling at 2,000 instances every 5 seconds is 400 requests/second of near-zero signal; push drops that to essentially zero steady-state load on the Config API.
+
+---
+
+**Q3: What is a watch/subscription mechanism in etcd or ZooKeeper? How does it work?**
+
+In etcd, a client calls Watch on a key or key prefix. The etcd server holds the connection open (long-poll or gRPC stream) and sends an event to the client the moment that key changes -- no polling needed. In ZooKeeper, a client registers a one-shot Watcher on a znode; ZooKeeper fires the watcher once when that znode changes, and the client must re-register if it wants future notifications. The key operational difference is that etcd watches are persistent streams (the client stays subscribed automatically), while ZooKeeper watches are one-time callbacks that require re-registration after each event -- which creates a gap window where a second rapid change can be missed if the client has not re-registered yet. Both are CP systems, so watch delivery is guaranteed as long as the cluster is reachable.
+
+---
+
+**Q4: How do you make configuration changes without restarting services (hot reload)?**
+
+The Config Client library in each service instance holds an in-memory ConcurrentHashMap. When a config change event arrives, the client fetches the updated values and atomically swaps the entries in the map. Service code never holds a direct reference to the config value -- it always calls configClient.getInt("key", default) on every use. That means the next call after the swap automatically reads the new value. There is no service restart, no thread lock contention on the hot path (ConcurrentHashMap handles concurrent reads), and no partial-state window because the put() call for each key is atomic. For configs where the service needs to react (e.g., reconnect a connection pool at a new size), the client library fires a registered change listener callback after the cache is updated.
+
+---
+
+**Q5: How do you ensure strong consistency -- all services see the same config at the same time?**
+
+The short answer is: you cannot, and you should not try, because the cost is prohibitive. Strong consistency would require the Config Service to hold the write until every one of the 2,000 service instances has acknowledged the new value -- that could take seconds to minutes depending on network conditions. Instead, I design for bounded eventual consistency: all instances converge to the same config within 15 seconds. For 95% of config use cases (feature flags, thresholds, timeouts), 15 seconds of mixed-version fleet is harmless. For the rare cases where you need cross-service atomicity -- like changing a rate limit that two services must enforce simultaneously -- the right tool is to put both values into a single JSON config key and update them as one atomic write, so they arrive as a single change event.
+
+---
+
+**Q6: What happens if the config service is down -- do services continue with stale config or fail?**
+
+Services continue with stale config, and that is by design. The Config Client library maintains a local in-memory cache and also persists a copy to local disk on each update. If the Config Service is unreachable, runtime reads hit the in-memory cache with zero network cost -- services never notice. On restart during an outage, the client loads the disk cache as last-known-good config. The only thing that fails when the Config Service is down is the ability to push new config changes -- engineers cannot update values until the service recovers. Config system failure must not cascade into service failure; that is the first law of the design.
+
+---
+
+**Q7: How do you implement config versioning and rollback?**
+
+Every config change creates a new row in the config_versions table with a monotonically increasing version number, the new value, the previous value, author, and change reason. The config_current table always holds the active version. Rollback is an API call: POST /rollback with a target version number. The system fetches the previous value from config_versions, writes it as a new version (not a revert -- the audit trail stays intact), and propagates it through the normal change pipeline. Instances receive the rollback as if it were any other config update and apply it within 15 seconds. The version history is retained for one year, so you can roll back to any point in time within that window.
+
+---
+
+**Q8: How do you validate a config before it goes live -- schema validation, dry run?**
+
+Validation happens in two layers. First, the Config Service validates against a JSON Schema stored per key: type checking (integer vs string), range bounds (minimum, maximum), enum values, required fields, and format patterns. This runs synchronously before the change is persisted -- invalid values are rejected with a 400 and never touch production. Second, the Config Client does a local defensive re-validation on receipt before swapping the cache, so even if a bug in the service somehow allowed a bad value through, the client rejects it. A dry-run mode is available via a query parameter on the write API: the service runs all validations and returns what the change would do without persisting it. For high-risk changes (security-sensitive keys, large magnitude shifts), an approval workflow gates the change behind a second engineer's sign-off.
+
+---
+
+**Q9: How do you implement environment-specific configs (dev, staging, prod)?**
+
+Each config key is scoped to a namespace (service name) and an environment (dev, staging, production). They are separate rows in the database -- "enable_new_checkout" in production and "enable_new_checkout" in staging are two distinct entries with independent values and version histories. Service instances are started with an ENVIRONMENT variable; the Config Client uses that environment tag when fetching its namespace snapshot, so a staging instance never receives production config and vice versa. Permission policies are environment-aware: any engineer can write to dev and staging without approval; production writes for sensitive keys require a review. This prevents the common accident of accidentally pushing a staging test value to production.
+
+---
+
+**Q10: How do you store secrets (database passwords, API keys) differently from regular config?**
+
+Secrets are not stored in the config system at all. The config system is designed for non-sensitive runtime parameters, and any engineer with read access to the config namespace can see all values. Secrets -- database passwords, API keys, TLS certificates -- live in a dedicated secrets manager (HashiCorp Vault, AWS Secrets Manager, or GCP KMS). Services retrieve secrets at startup through a sidecar or init container that authenticates to Vault using a service identity, not through the config client library. The config system may store a reference (a path or an ARN pointing to the secret location), but never the secret value itself. The config system should also run content scanning on incoming values to detect patterns that look like secrets (e.g., regex for private key headers, AWS key formats) and reject them with an error.
+
+---
+
+**Q11: What is the CAP theorem implication for a config service -- do you choose CP or AP?**
+
+I choose CP for the storage layer and AP for the read path, and those are separate decisions. The Config Service writes to a single PostgreSQL primary -- writes are consistent and partition-tolerant; if the primary is unreachable, writes fail (CP behavior). But reads are served from local in-memory caches in every service instance -- those caches are always available even during a network partition (AP behavior), though they may serve stale data. This split is intentional: config writes are rare and human-initiated, so blocking writes during a partition is acceptable. Config reads are on every request path and must never fail, so local cache availability is non-negotiable. The 15-second convergence window is the price we pay for choosing AP on reads.
+
+---
+
+**Q12: How do you implement a canary config rollout -- sending new config to 1% of services first?**
+
+There are two levels of canary here: user-level and instance-level. User-level is built into feature flags: set rollout_percent to 1 and 1% of users see the new behavior. Instance-level canary is for operational configs (timeouts, connection pool sizes) where you want to test the change on a subset of service instances before fleet-wide rollout. The Config Client supports a staged propagation mode: when a config change has canary_percent set, the client checks its instance ID against a consistent hash -- only instances whose hash falls in the canary bucket apply the new value immediately. After a bake time (e.g., 15 minutes), if error rate and latency on canary instances are within bounds, the system automatically expands to the full fleet. If metrics exceed thresholds, it auto-reverts.
+
+---
+
+**Q13: How do you handle a bad config that crashes all services simultaneously -- a config-induced outage?**
+
+This is the worst failure mode in config management. Prevention is the first line: schema validation, range checks, dry-run mode, approval workflow for high-risk keys, and staged rollout (canary before fleet-wide). Detection is the second line: a monitoring job tracks error rate and latency across the fleet in a rolling 2-minute window and correlates spikes with recent config changes. If error rate crosses a threshold (e.g., 3x baseline) within 5 minutes of a config change, the system pages on-call and optionally auto-reverts to the previous version. Recovery is the third line: rollback is a single API call or UI button click, and propagation takes 15 seconds. The key design is that rollback must be faster than the outage is spreading -- 15 seconds is fast enough to contain most config-induced incidents before they become P0s.
+
+---
+
+**Q14: What is the difference between etcd, ZooKeeper, and Consul for config management?**
+
+All three are distributed key-value stores with watch semantics, but they differ in operational complexity, feature set, and typical use case. etcd is purpose-built for Kubernetes and distributed systems configuration: it uses the Raft consensus algorithm, has a clean gRPC API, persistent watches, and is straightforward to operate. ZooKeeper is older (originally from Yahoo/Hadoop), uses ZAB consensus, and has a hierarchical znode model; it is operationally heavier and its one-shot watch semantics create notification gaps. Consul adds service discovery, health checking, and a DNS interface on top of a KV store, making it more opinionated as a complete service mesh component. For a custom config management system like the one I described, I would choose PostgreSQL over all three -- it has richer querying, ACID transactions, and full-text search on history that none of the three provide. etcd or Consul make sense when your primary use case is service discovery or small, frequently-changing runtime state.
+
+---
+
+**Q15: How do you audit who changed what config and when?**
+
+Every write to the config system creates an immutable row in the config_versions table capturing: who made the change (authenticated user or service account identity), what changed (the key, old value, new value), when it happened (created_at timestamp), and why (a mandatory change_reason field). The Config API requires authentication (OAuth2 or service account tokens) for all write operations, so there is no anonymous write path. The audit log is queryable: engineers can filter by author, namespace, time range, or specific key to reconstruct the full history of any config value. For compliance purposes, the history is retained for one year online and up to five years in cold storage. Emergency config changes (kill switch activations) additionally trigger a real-time alert to the on-call channel with the author and change summary.
+
+---
+
+**Q16: How do you handle a config change that affects 10,000 services -- how do you avoid thundering herd?**
+
+With 10,000 instances all receiving a change event simultaneously and each making an HTTP request to fetch updated values, you can generate 10,000 concurrent requests to the Config API in under a second. Three mitigations work together. First, the Config Client adds a random jitter delay (0 to 2 seconds, uniform) before making the fetch request after receiving a push event -- this spreads 10,000 requests over 2 seconds instead of one instant. Second, the Config API serves config snapshots from an in-memory cache (not a database query per request), so it can handle several thousand QPS without database pressure. Third, the event payload for small config values (under 1 KB) includes the new value inline, so instances do not need to make a separate fetch at all -- they apply directly from the event. For very large fleets, hierarchical propagation (regional relay nodes that fan out to instances in their zone) distributes the fan-out across multiple Config API nodes.
+
+---
+
+**Q17: How do you implement feature flags with percentage rollout -- 10% of users see the new feature?**
+
+The mechanism is deterministic hashing with sticky bucketing. Each feature flag has a salt string (e.g., "new_checkout_v1") set at flag creation and never changed during the rollout. At evaluation time, the client computes: bucket = hash(salt + user_id) modulo 100. If bucket is less than the rollout_percent (10 in this case), the flag evaluates to true. The hash function (typically MurmurHash or SHA256 truncated) ensures the same user always lands in the same bucket regardless of which instance handles the request -- sticky bucketing guarantees a consistent experience. Increasing rollout from 10% to 25% adds users with buckets 10-24 to the treatment group without removing anyone already in treatment. The salt must never change during an active rollout; changing it re-randomizes all assignments and can flip users unexpectedly.
+
+---
+
+**Q18: What is a circuit breaker in config management -- auto-revert if error rate spikes?**
+
+There are two circuit breaker concepts here. The first is in the Config Client: if the Config API is slow or returning errors, after 3 consecutive fetch failures the client opens its circuit and stops making fetch requests for 30 seconds, preventing 2,000 instances from piling up retries that amplify a Config API degradation into a total failure. The background poll (60-second interval) still runs to self-heal once the API recovers. The second concept is at the system level: an automatic rollback trigger. After a config change propagates, a monitoring job watches the error rate and latency of the affected service in a 2-minute rolling window. If error rate rises above a configurable threshold (e.g., 3x the 24-hour baseline), the system automatically reverts to the previous config version and pages on-call. This converts a config-induced outage from "detected and rolled back in 15 minutes by a human" to "detected and rolled back in 2 minutes automatically." The on-call engineer still investigates why the config caused the spike, but the blast radius is contained automatically.

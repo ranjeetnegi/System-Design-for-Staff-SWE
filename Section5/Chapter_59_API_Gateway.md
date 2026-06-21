@@ -3646,4 +3646,120 @@ UNAVOIDABLE GAPS:
 
 ---
 
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between an API gateway and a load balancer?**
+
+A load balancer operates at L4 (TCP) or L7 (HTTP) and distributes traffic across identical instances of the same service. It knows nothing about authentication, rate limiting, or routing to different backends. An API gateway sits in front of multiple different backend services and applies cross-cutting concerns: it authenticates the caller, enforces rate limits, routes each request to the correct backend based on path and method, and transforms headers. Think of it this way: the load balancer is in front of the API gateway (distributing traffic across gateway instances), and the API gateway is in front of all your backend services (handling auth, routing, and policy).
+
+---
+
+**Q2: What is the difference between an API gateway and a reverse proxy like Nginx?**
+
+Nginx is a general-purpose reverse proxy and web server -- it can route requests based on URL patterns and perform basic load balancing. An API gateway is an application-layer concept built on top of a reverse proxy that adds: JWT or API key authentication, per-user rate limiting backed by shared state (Redis), circuit breaking per backend, structured access logging, service registry integration, and config-driven routing that can change without restarts. You can build an API gateway using Nginx (with Lua scripting or a plugin like OpenResty), but out of the box Nginx is just a reverse proxy. The gateway is the policy and logic layer; the reverse proxy is the transport mechanism beneath it.
+
+---
+
+**Q3: How does the API gateway perform authentication -- does it validate JWTs itself or delegate?**
+
+The gateway validates JWTs locally without making a network call to the auth service on every request. It fetches the JWKS (JSON Web Key Set) -- the public keys -- from the identity service once and caches them locally for one hour, refreshing in the background every 30 minutes. For each incoming request it extracts the Bearer token, verifies the RS256 signature against the cached public key, checks the expiry claim, and extracts user_id and scopes. This keeps JWT validation at roughly 0.5ms and avoids creating a hard dependency on the auth service at request time. For API keys (third-party partners), it does one Redis lookup and caches the result for 5 minutes since API key lookups require a DB round-trip.
+
+---
+
+**Q4: What is a circuit breaker? How does it work and why is it in the API gateway?**
+
+A circuit breaker prevents a slow or failing backend from consuming all gateway threads and taking down the entire gateway. It has three states. CLOSED is normal: requests flow through. If more than 50% of requests to a backend fail within a 30-second window (with at least 20 samples for statistical significance), the circuit opens. OPEN means the gateway immediately returns 503 without attempting to contact the backend -- fail fast, free up threads. After 30 seconds, the circuit moves to HALF-OPEN and allows one probe request through. If the probe succeeds it closes; if it fails it reopens. Without a circuit breaker, one failing backend occupies gateway threads until timeout (10 seconds each), which exhausts the thread pool and makes all other backends unreachable too.
+
+---
+
+**Q5: How does the API gateway handle rate limiting -- per-user, per-IP, per-endpoint?**
+
+The gateway uses a sliding window counter backed by Redis so limits are global across all gateway instances. The key is chosen based on what is available: for authenticated requests it uses the user_id extracted from the JWT; for unauthenticated endpoints it falls back to client IP. Rate limit tiers are defined per route in config: a standard authenticated user gets 100 requests per minute, a premium user gets 500, a third-party API key gets 50, and an unauthenticated IP gets 30. There is also a global safety limit of 50,000 per minute as a last resort against floods. On rejection the gateway returns 429 with a Retry-After header telling the client exactly how many seconds to wait. If Redis is unreachable, rate limiting fails open by default -- I would rather allow extra traffic temporarily than block all users because the rate limiter is down.
+
+---
+
+**Q6: What is request routing -- how does the gateway know which backend service to forward to?**
+
+The gateway maintains an in-memory route table built from configuration stored in etcd. Each route has a path pattern (like /api/v2/users/*), an allowed method list, a target backend service, a path strip prefix, and per-route settings like timeout and rate limit tier. The table is implemented as a prefix trie so route matching is O(k) where k is the number of path segments, not O(n) routes. When a request arrives, the gateway parses the path, walks the trie, finds the matching route, strips the prefix, then selects a backend instance from the service registry using weighted round-robin with health awareness. Config reloads happen atomically -- a new trie is built from the updated config and the old pointer is swapped out; in-flight requests complete against the old trie safely.
+
+---
+
+**Q7: What is the difference between L4 and L7 load balancing? Which does the API gateway do?**
+
+L4 load balancing operates at the TCP/transport layer -- it sees source IP, destination IP, and port, but not the HTTP content. It makes routing decisions based purely on connection-level information. L7 load balancing operates at the application layer -- it can read HTTP headers, the URL path, and the request body. The API gateway operates at L7 because it needs to inspect the URL path (to route /users/* to user-service and /orders/* to order-service), read the Authorization header (to authenticate the caller), and read other HTTP headers. There is typically an L4 or L7 load balancer (like AWS ALB) in front of the gateway instances to distribute traffic across them, and the gateway itself does L7 routing to the backend services.
+
+---
+
+**Q8: How do you handle SSL termination at the gateway?**
+
+SSL termination means the gateway decrypts the incoming HTTPS connection from the client and communicates with backend services over plain HTTP internally. This is the right approach for two reasons. First, it avoids every backend service needing its own TLS certificate and cipher management. Second, it lets the gateway inspect the plaintext request to perform authentication and routing. The gateway holds the TLS certificate (managed by ACM in AWS or Let's Encrypt), handles the TLS handshake with the client, and then proxies the decrypted request to the backend over an internal network that is assumed to be trusted. If internal service-to-service encryption is required (compliance requirements), that is handled separately by a service mesh with mTLS -- not by re-encrypting at the gateway.
+
+---
+
+**Q9: What is canary routing? How does the gateway implement it?**
+
+Canary routing sends a small percentage of traffic to a new version of a backend service while the rest goes to the stable version. The gateway implements it by having two route targets for the same path pattern: the stable backend (say 95% weight) and the canary backend (5% weight). The router selects between them using weighted round-robin. Traffic can be split by percentage, or by a specific header (like X-Canary: true) for deterministic routing of test traffic. The gateway logs which backend instance handled each request, so you can compare error rates and latency between the canary and stable versions on the same dashboard. Once the canary looks healthy, you shift weight to 50/50, then 100% to the new version, then remove the old route entry.
+
+---
+
+**Q10: How does the API gateway handle request transformation -- for example, REST to gRPC?**
+
+For simple transformations -- header manipulation, path stripping, adding X-User-ID -- the gateway does this inline as part of the proxy step, at negligible cost. For protocol translation like REST to gRPC, the gateway needs to serialize a JSON body into a protobuf binary and translate HTTP/1.1 semantics to HTTP/2 framing. This is doable but adds complexity: the gateway must understand the proto schema for each backend, which makes it service-aware rather than service-agnostic. My V1 design avoids this and keeps the gateway as a pure passthrough proxy. If REST-to-gRPC translation is needed, I would rather put a thin adapter sidecar next to each gRPC service that accepts REST and translates locally, so the gateway stays ignorant of the protocol details.
+
+---
+
+**Q11: What is the API gateway's role in service discovery? How does it know the current healthy backends?**
+
+The gateway integrates with a service registry (Consul, Kubernetes service discovery, or a custom registry) to get the list of healthy backend instances for each service. It polls or watches the registry on a regular interval (every 30 seconds) and caches the instance list locally. On top of the registry data, the gateway runs its own health checks -- a GET /healthz to each backend instance every 10 seconds. If an instance fails three consecutive health checks it is removed from the local routing pool. If the service registry itself becomes unavailable, the gateway continues using its cached instance list and relies on direct health checks to detect and remove unhealthy instances. New instances added to the registry are not discovered until the registry recovers, which reduces capacity but does not cause an outage.
+
+---
+
+**Q12: How do you handle API versioning at the gateway layer?**
+
+The gateway handles versioning through route configuration. Each version is a separate route: /api/v1/users/* maps to legacy-user-service and /api/v2/users/* maps to user-service. Both routes coexist simultaneously, so old clients on v1 keep working while new clients use v2. When a version is deprecated, the route config includes a sunset_date and the gateway can add a Sunset or Deprecation response header to inform clients. When the sunset date passes and traffic to that route drops to zero, the route entry is removed from config. This approach keeps versioning entirely at the routing layer -- the backend services do not need to understand versioning, and client migration can happen gradually without any coordinated cutover.
+
+---
+
+**Q13: What is the difference between a gateway and a service mesh like Istio?**
+
+An API gateway handles external traffic: requests from mobile apps, web browsers, and third-party partners arriving at the public API surface. It is the entry point into the system. A service mesh handles internal traffic: service-to-service communication inside the cluster. Istio deploys an Envoy sidecar proxy next to every service pod; the sidecars handle mTLS between services, retries, circuit breaking, and observability for internal calls. The gateway and the service mesh are complementary, not alternatives -- you typically need both. The gateway owns: external auth, rate limiting per external client, API versioning, and the public routing table. The mesh owns: internal mTLS, service-to-service retries, internal circuit breaking, and internal observability. Trying to handle internal traffic with just the gateway or external traffic with just the mesh creates gaps.
+
+---
+
+**Q14: How do you log and trace requests across services through the gateway -- what is a correlation ID?**
+
+Every request gets a unique X-Request-ID header. If the client sends one, the gateway uses it; if not, the gateway generates a UUID. This ID is attached to the access log entry at the gateway and propagated to the backend via request headers. When the backend logs its own entries it includes the same X-Request-ID, so you can query both logs and join them by that ID to reconstruct the full request path. For deeper distributed tracing, the gateway creates a root span following W3C Trace Context (the traceparent header), propagates it downstream, and exports completed spans to a tracing backend like Jaeger. Each backend creates a child span under the gateway's root span, so the trace shows the full timing breakdown: gateway overhead, network latency, and time spent inside each service.
+
+---
+
+**Q15: What happens if the API gateway itself is the bottleneck -- how do you scale it?**
+
+The gateway is designed to be stateless -- no request state is stored on the gateway instance itself. All shared state (rate limit counters, circuit breaker state, API key cache) lives in Redis and etcd. Because it is stateless, scaling is purely horizontal: add more instances behind the load balancer. Auto-scaling is configured to trigger when average CPU across the fleet exceeds 60% for two minutes. During the roughly three-minute ramp-up window before new instances join, existing instances handle elevated load. To protect during this window, load shedding kicks in: low-priority routes (like recommendations or analytics) are shed first, while payment and auth routes are always served. If a single instance is degraded but not crashed -- say a memory leak causes high latency -- the health check is designed to catch this by testing internal response time, not just liveness.
+
+---
+
+**Q16: How do you implement request deduplication at the gateway?**
+
+The gateway does not deduplicate requests, and intentionally so. The gateway cannot determine whether two identical POST requests are a retry (duplicate, should be ignored) or two separate intentional actions (both valid). A POST /orders with the same body might be a retry of a failed order or a customer placing the same item twice. Only the backend, using an Idempotency-Key header provided by the client, can make that distinction. The gateway's role is to propagate the Idempotency-Key header downstream without interpreting it. The backend stores seen idempotency keys (typically for 24 hours) and returns the cached response for duplicates. If the interviewer is asking about preventing duplicate requests at the network layer for things like retried GET requests, the answer is that GET requests are idempotent by definition, so duplication is not a concern.
+
+---
+
+**Q17: What is an API gateway's role in handling WebSocket connections?**
+
+WebSocket support is a meaningful departure from the stateless HTTP model. The initial WebSocket upgrade is a standard HTTP request, so the gateway handles authentication and rate limiting on the handshake normally. Once the connection upgrades, it becomes a long-lived bidirectional stream that must be pinned to one backend instance -- sticky routing. The gateway can no longer use round-robin for the lifetime of that connection. This introduces state at the gateway layer (which connections are pinned to which backend) and changes the failure model: if the backend instance dies, the WebSocket connection drops and the client must reconnect. For V1 I scope WebSockets out and handle them in V2 with a separate WebSocket gateway cluster that has a different scaling profile -- many long-lived connections instead of many short requests -- to avoid mixing the two traffic shapes on the same instances.
+
+---
+
+**Q18: How do you handle CORS at the API gateway layer?**
+
+CORS (Cross-Origin Resource Sharing) is enforced at the gateway because it is a cross-cutting concern identical to auth and rate limiting -- without a gateway, every backend would implement it separately and inconsistently. For each route, the gateway config specifies the allowed origins (for example, https://app.example.com). On preflight OPTIONS requests, the gateway responds directly without forwarding to the backend: it returns the appropriate Access-Control-Allow-Origin, Access-Control-Allow-Methods, and Access-Control-Allow-Headers headers. For actual requests, the gateway adds the CORS response headers to the backend's response before returning it to the client. Handling CORS at the gateway means backends never need CORS logic, the policy is auditable in one place, and a security review only needs to check one config rather than fifteen service codebases.
+
+---
+
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident table, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.

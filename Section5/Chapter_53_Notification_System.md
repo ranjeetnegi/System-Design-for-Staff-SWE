@@ -3896,4 +3896,120 @@ WHY SAY THIS:
 
 ---
 
+---
+
+## Interview Q&A -- Most Common Cross-Questions
+
+These are the follow-up questions interviewers ask immediately after your design. Each answer is meant to be said out loud in under 60 seconds.
+
+---
+
+**Q1: What is the difference between push and pull notification delivery? When do you use each?**
+
+Push means the server initiates delivery to the client -- the server sends a message to APNs or FCM, which wakes up the device. Pull means the client periodically polls the server asking "do I have anything new?" Push is lower latency and battery-efficient because the device sleeps between messages. Pull is simpler to build (no external provider dependency) and works even when push providers are down. In practice, most systems use push for real-time alerts and pull for the notification center (loading history when the user opens the inbox). A hybrid pattern is common: push sends a lightweight ping that tells the client to pull the full content from the server.
+
+---
+
+**Q2: How do APNs (Apple) and FCM (Google) work? What does your system send to them?**
+
+Your delivery worker opens a persistent HTTP/2 connection to APNs or FCM. You send a JSON payload containing the device token, a notification title and body, and optional data fields -- all within a 4 KB limit. APNs and FCM act as a relay: they hold the message and push it to the device when it has connectivity. You receive a synchronous HTTP response telling you whether the token was accepted or invalid. You do not get a confirmed-delivered receipt from APNs -- you only know it was handed off. FCM optionally supports delivery receipts for Android. The key responsibility on your side is maintaining valid device tokens and handling error codes like "not registered" (token expired) by removing the stale token immediately.
+
+---
+
+**Q3: What is fan-out? How do you fan-out a notification to 10 million followers?**
+
+Fan-out is the act of taking one event and producing N delivery tasks, one per recipient. For 10 million followers, you cannot do this synchronously -- the API would block for minutes. Instead, the event producer enqueues a single "fan-out job" to Kafka. A fan-out worker picks it up, reads follower IDs from the social graph in batches of 10,000, and enqueues individual notification tasks back into Kafka -- one per user. Downstream delivery workers then process those tasks at the channel level. The key design decisions are batch size (too small = too many round trips; too large = slow fan-out start), and whether to fan-out eagerly (write to every follower's queue immediately) or lazily (compute recipients at read time). For 10M followers you need the fan-out job to run in parallel across multiple workers to finish in seconds rather than minutes.
+
+---
+
+**Q4: What is the difference between fan-out on write vs fan-out on read for notifications?**
+
+Fan-out on write means when an event happens, you immediately compute all recipients and write a notification record for each one. When a follower opens their inbox, it is already there waiting. The advantage is fast reads; the disadvantage is massive write amplification -- a celebrity post triggers 100 million writes. Fan-out on read means you store only the event, and when a user opens their inbox, you compute their feed on the fly by reading the events from accounts they follow. Reads are slower and more expensive, but writes are cheap. Most notification systems use a hybrid: fan-out on write for users with fewer than ~10,000 followers (the common case), and fan-out on read (or a delayed fan-out) for celebrity accounts to avoid thundering-herd write spikes.
+
+---
+
+**Q5: How do you guarantee at-least-once delivery? What is the risk of duplicate notifications?**
+
+At-least-once delivery is guaranteed by the combination of a durable queue (Kafka with replication) and a consumer that only acknowledges a message after the provider confirms receipt. If the worker crashes after sending but before acking, Kafka redelivers the message to another worker, which sends again. The risk is exactly that: the user receives two push notifications for the same event. Mitigation happens at multiple layers. First, idempotency keys at the API layer deduplicate before enqueuing. Second, a "sending" status written to the delivery table before the provider call lets the next worker skip if it sees the message is already in-flight. Third, FCM and APNs accept a deterministic message ID derived from the notification ID, so the provider itself deduplicates. No layer is perfect, but in combination they reduce visible duplicates to near zero.
+
+---
+
+**Q6: How do you deduplicate notifications on the receiver side?**
+
+Client-side deduplication uses the notification ID as the primary key. When the app receives a push, it checks its local store for an existing notification with that ID before displaying it. If the ID is already present, the push is silently dropped. For the notification center (in-app inbox), the server stores notifications keyed by notification ID with a unique index, so database-level upsert prevents duplicate rows even if the worker inserts twice. The critical requirement is that the notification ID be stable -- derived from the logical event (e.g., a hash of "payment:txn_123"), not randomly generated on each delivery attempt. Randomly-generated IDs make client deduplication impossible.
+
+---
+
+**Q7: What happens if APNs or FCM is temporarily down -- how do you retry?**
+
+The delivery worker catches the provider error (timeout or 5xx). Rather than acking the Kafka message, it nacks with a delay -- the message becomes visible again after a backoff interval (1 second, then 5 seconds, then 30 seconds). A circuit breaker tracks consecutive failures; if more than 10 consecutive pushes fail, the breaker opens and the worker stops attempting FCM deliveries for 30 seconds, letting the queue drain without hammering a down provider. Messages stay safe in Kafka -- which we configure with at least 24-hour retention -- so no notifications are lost during a short outage. If the outage extends beyond the notification's relevance window (e.g., a time-sensitive alert), we write a "permanent failure" record and page on-call. We also alert if the circuit breaker stays open longer than 15 minutes.
+
+---
+
+**Q8: How do you handle a user who has 5 devices -- phone, tablet, watch, desktop, and web?**
+
+Each device registers its own device token when the app starts, stored in the device_tokens table keyed by (user_id, token, platform). When you send a push notification to a user, you query all active tokens for that user and send to each one independently. APNs and FCM handle delivering to the correct physical device. You set a notification collapseKey (FCM) or apns-collapse-id (APNs) so that if multiple pushes arrive while the device is offline, the provider delivers only the most recent one rather than all queued copies. The watch and desktop usually receive the same payload; the client app decides which UI surface to render it on. Token cleanup matters: tokens last seen more than 90 days ago are purged in a nightly job, and tokens that fail with "not registered" are removed immediately.
+
+---
+
+**Q9: What is the role of Kafka in your notification pipeline?**
+
+Kafka serves as the durable buffer between the stateless API (which accepts sends) and the delivery workers (which talk to external providers). Its three jobs are: durability (once the API produces a message, it survives worker crashes, restarts, and brief outages without loss); throughput decoupling (the API can accept 50,000 sends per second even if the email provider can only process 1,500 per second -- the queue absorbs the difference); and priority separation (we run separate topics for critical, high, and low-priority notifications, so an email marketing campaign cannot starve an OTP delivery). We partition by user_id hash so all messages for the same user land on the same partition, which allows ordering guarantees within a user's notification stream. Consumer groups let us scale delivery workers independently per channel.
+
+---
+
+**Q10: How do you implement notification preferences -- for example, a user opts out of marketing emails?**
+
+Preferences are stored as JSONB in a user_preferences table, with a top-level "by_type" map where each notification type can be enabled/disabled and can specify allowed channels. When a user opts out of marketing emails, we write {"by_type": {"marketing": {"enabled": false}}} to the database and immediately invalidate their Redis cache entry. The next notification send for that user fetches fresh preferences and the check "is_notification_allowed(user_id, 'marketing', 'email')" returns false -- the notification is silently dropped and logged. For regulatory compliance (CAN-SPAM, GDPR), unsubscribe must take effect within 24 hours; our 60-second cache TTL plus immediate invalidation guarantees this. The preference check happens before enqueuing, so a blocked notification never enters Kafka.
+
+---
+
+**Q11: How do you rate limit notifications to prevent spamming a user with too many alerts?**
+
+Rate limiting runs at the API layer using Redis counters. For each send request, we increment a per-user per-minute key using INCR with a 60-second TTL. If the count exceeds 10, we reject the request (or for low-priority types, silently drop it). We also enforce a per-type daily limit -- marketing is capped at 3 per user per day. These are separate counters: "ratelimit:{user_id}:{date}:marketing". Critical-priority notifications bypass all rate limits because security alerts and OTPs must always get through. Global rate limits per notification type (e.g., 1,000 marketing sends per second) protect the email provider's reputation and prevent a runaway campaign from consuming all workers. Rate limit decisions are logged and metered so we can diagnose false positives -- a common complaint being "my order confirmation was rate limited because I bought 5 items."
+
+---
+
+**Q12: What is the difference between transactional and marketing notifications? How do you prioritize them?**
+
+Transactional notifications are triggered by a user action -- OTP, payment confirmation, order shipped, password reset. The user expects them, they are time-sensitive, and missing them has immediate user impact (the user cannot log in, does not know their order shipped). Marketing notifications are unsolicited -- promotions, newsletters, re-engagement campaigns. They are batched, lower urgency, and the user may not have explicitly requested them. Prioritization is enforced at multiple levels. First, Kafka topics: transactional notifications go on the "high" topic, marketing on the "low" topic; workers drain high before low. Second, rate limits: marketing is capped at 3 per user per day, transactional has much higher limits. Third, quiet hours: transactional notifications may bypass quiet hours if marked high priority; marketing never does. In an incident (e.g., email provider rate-limited), we shed marketing load first and protect transactional throughput.
+
+---
+
+**Q13: How do you handle silent push notifications vs visible push notifications?**
+
+A visible push notification displays a banner, plays a sound, and increments the badge count -- the user sees it. A silent push (APNs content-available: 1; FCM data-only message) wakes the app in the background without showing anything to the user. Silent pushes are used to trigger a background sync -- for example, "new messages available, fetch them now" -- without interrupting the user. On the system design side, the key differences are: silent pushes have stricter OS rate limits (iOS throttles background wakes), they do not increment badge counts or make noise, and they require the app to handle the payload in a background fetch handler. In your notification payload, you control this via the apns-push-type header (alert vs background) and whether you include the "alert" key. For silent pushes, you must not include an alert body; for visible ones, you must include title and body.
+
+---
+
+**Q14: What is a device token? What happens when a device token becomes invalid?**
+
+A device token is an opaque string issued by APNs or FCM that identifies a specific app installation on a specific device. It is not a permanent identifier -- it changes when the user reinstalls the app, resets the device, or (on iOS) after certain OS updates. When you send to an invalid token, APNs returns HTTP 410 with error "Unregistered" (or 400 "BadDeviceToken"); FCM returns error code "UNREGISTERED". Your delivery worker must handle these codes immediately: call device_token_store.remove(token) to delete the record. If you do not clean up invalid tokens, your database fills with dead tokens, you waste provider API calls on guaranteed failures, and APNs may throttle your sending rate for excessive invalid token usage. Token cleanup also runs as a nightly job removing tokens not seen in 90 days and tokens that have failed 5 or more consecutive deliveries.
+
+---
+
+**Q15: How do you track notification open rate and click-through rate?**
+
+Open rate is tracked by embedding a 1x1 tracking pixel in email notifications -- when the email client loads the image, your server logs the open event tied to the notification ID. For push notifications, "opened" means the user tapped the notification; the app SDK fires an event to your analytics endpoint when the user taps, passing the notification ID. Click-through rate is tracked by replacing all links in the notification with redirect URLs through your tracking service (e.g., yourapp.com/track?n=notif_123&target=...). When the user clicks, your server logs the click event and redirects to the original URL. These events are written to an analytics pipeline (Kafka → data warehouse) rather than the notification database, since they are append-only and high volume. Open rates are directionally useful but unreliable for email (many email clients block tracking pixels, and Apple's Mail Privacy Protection pre-fetches pixels regardless of whether the user reads the email).
+
+---
+
+**Q16: What is the difference between SMS, email, and push in terms of delivery latency and reliability?**
+
+Push is fastest (sub-second to a few seconds when the device is online) and free, but requires the app to be installed and the user to have granted notification permission -- roughly 60% of users have push enabled. Email is slower (seconds to minutes) and nearly universal -- almost every user has an email address -- but spam filters can silently discard messages, and open rates are low (15-25%). Email is also the most expensive channel to get right: deliverability reputation management, bounce handling, and unsubscribe compliance add significant operational overhead. SMS is the most reliable for reaching the user (it works on any phone, even without internet, and has a ~98% open rate) but is expensive ($0.01-$0.05 per message) and regulated (TCPA in the US, GDPR in Europe). SMS latency is typically 5-30 seconds but can be minutes on congested carrier networks. The practical consequence: use push as the default, email for rich content and as fallback, and SMS only for critical alerts where the cost is justified.
+
+---
+
+**Q17: A celebrity posts something -- 100 million users need to be notified. How does your system handle this spike?**
+
+This is a fan-out problem and a capacity problem. The event producer enqueues a single fan-out job rather than 100 million individual messages. A pool of fan-out workers reads the follower list from the social graph service in batches (e.g., 10,000 IDs per batch) and enqueues individual notification tasks into Kafka, running multiple workers in parallel. At 10,000 followers per batch and 10 parallel workers, we can generate 100,000 notification tasks per second, completing the fan-out in about 1,000 seconds -- too slow. For celebrities we use a pre-computed follower shard index (followers split into N shards) so multiple fan-out workers each process one shard simultaneously, reducing fan-out time to minutes. On the delivery side, we rely on Kafka to absorb the spike: the queue fills, workers drain it at their maximum rate, and delivery latency increases gracefully rather than causing failures. We may also use fan-out on read for users with very large follower counts to avoid write amplification entirely.
+
+---
+
+**Q18: How do you implement "Do Not Disturb" hours for notifications?**
+
+Quiet hours are stored in the user's preference record: {"global": {"quiet_hours": {"enabled": true, "start": "22:00", "end": "08:00", "timezone": "America/New_York"}}}. At send time, the API checks is_quiet_hours(user_id): it converts the current UTC time to the user's local timezone and checks whether it falls in the quiet window. If yes and the notification priority is not critical, we do not drop the notification -- we delay it. We update scheduled_at to the end of the quiet window (8:00 AM in the user's timezone) and leave the notification in the queue. A scheduler job runs every minute querying for notifications where scheduled_at <= NOW() AND status = 'scheduled', then enqueues them for delivery. Critical notifications (security alerts, OTPs) set bypass_quiet_hours: true and skip this check entirely. Edge cases to handle: users who cross midnight in their timezone, users who travel and change timezones, and the case where quiet hours span midnight (22:00 to 08:00 wraps across days).
+
+---
+
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.
