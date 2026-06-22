@@ -19,8 +19,8 @@
 
 | Chapter | What it covers |
 |---------|---------------|
-| [Ch13 — Numbers & Estimation](Section1/Chapter_13_Numbers_and_Estimation.md) ✅ | QPS, storage, bandwidth math — do this fluently |
-| [Ch9 — Systems, Servers, Clients](Section1/Chapter_09_Systems_Servers_Clients.md) ✅ | HTTP, TCP, DNS, load balancers — fill any gaps |
+| [Ch13 — Numbers & Estimation](Section1/Chapter_13_Numbers_Estimation.md) ✅ | QPS, storage, bandwidth math — do this fluently |
+| [Ch9 — Systems, Servers, Clients](Section1/Chapter_9_Systems_Servers_Clients.md) ✅ | HTTP, TCP, DNS, load balancers — fill any gaps |
 | [Ch14 — Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) ✅ | Cache, queue, CDN, blob storage — know when to use each |
 
 ### 2. The Interview Framework (how to structure 45 minutes)
@@ -30,7 +30,7 @@
 | [Ch15 — System Design Framework](Section2/Chapter_15_System_Design_Framework.md) ✅ | The 5-phase structure — memorise this |
 | [Ch16 — Phase 1: Users & Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) ✅ | How to clarify requirements in the first 5 min |
 | [Ch17 — Phase 2: Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) ✅ | Scoping without going in circles |
-| [Ch18 — Phase 3: Scale & Capacity Planning](Section2/Chapter_18_Phase_3_Scale_and_Capacity_Planning.md) ✅ | Back-of-envelope math, live in the interview |
+| [Ch18 — Phase 3: Scale & Capacity Planning](Section2/Chapter_18_Phase_3_Scale_Capacity_Planning.md) ✅ | Back-of-envelope math, live in the interview |
 | [Ch20 — Phase 4&5: Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) ✅ | Availability, consistency, latency targets |
 
 ### 3. Distributed Systems Core (what interviewers probe on follow-ups)
@@ -39,8 +39,8 @@
 |---------|---------------|
 | [Ch22 — Consistency Models](Section3/Chapter_22_Consistency_Models.md) ✅ | Strong vs eventual — when each matters and what breaks |
 | [Ch23 — Replication & Sharding](Section3/Chapter_23_Replication_and_Sharding.md) ✅ | Leader-follower, consistent hashing, hot shards |
-| [Ch25 — Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_Idempotency.md) ✅ | Circuit breakers, exponential backoff, exactly-once |
-| [Ch28 — CAP Theorem: Applied](Section3/Chapter_28_CAP_Theorem_Applied.md) ✅ | Apply CAP to a real system — don't just recite it |
+| [Ch25 — Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_and_Idempotency.md) ✅ | Circuit breakers, exponential backoff, exactly-once |
+| [Ch28 — CAP Theorem: Applied](Section3/Chapter_28_CAP_Theorem_Applied_Case_Studies.md) ✅ | Apply CAP to a real system — don't just recite it |
 
 ### 4. Data Systems Core (building blocks every L5 design assumes)
 
@@ -50,19 +50,19 @@ These chapters are the hidden prerequisite for Section 5. Redis appears in 80% o
 
 | Chapter | Why it's critical |
 |---------|-----------------|
-| [Ch30 — Databases](Section4/Chapter_30_Databases.md) ✅ | SQL vs NoSQL choice, indexing, sharding basics — every design has a DB |
-| [Ch31 — Database Internals](Section4/Chapter_31_Database_Internals.md) ✅ | B-tree, WAL, MVCC — interviewers probe this in follow-ups |
-| [Ch33 — Caching at Scale](Section4/Chapter_33_Caching_at_Scale.md) ✅ | Redis, eviction policies, cache stampede — appears in 80% of L5 designs |
-| [Ch34 — Redis Internals](Section4/Chapter_34_Redis_Internals.md) ✅ | Single-thread model, persistence, why INCR is atomic |
-| [Ch35 — Event-Driven / Kafka](Section4/Chapter_35_Event_Driven_Architecture_Kafka.md) ✅ | Topics, partitions, consumer groups — async designs require this |
+| [Ch30 — Databases](Section4/Chapter_30_Databases_Choosing_Using_and_Evolving_Data_Stores.md) ✅ | SQL vs NoSQL choice, indexing, sharding basics — every design has a DB |
+| [Ch31 — Database Internals](Section4/Chapter_31_Database_Internals_Deep_Dive.md) ✅ | B-tree, WAL, MVCC — interviewers probe this in follow-ups |
+| [Ch33 — Caching at Scale](Section4/Chapter_33_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) ✅ | Redis, eviction policies, cache stampede — appears in 80% of L5 designs |
+| [Ch34 — Redis Internals](Section4/Chapter_34_Redis_and_Cache_Internals.md) ✅ | Single-thread model, persistence, why INCR is atomic |
+| [Ch35 — Event-Driven / Kafka](Section4/Chapter_35_Event_Driven_Architectures_Kafka_and_Streams.md) ✅ | Topics, partitions, consumer groups — async designs require this |
 
 **Read if time allows:**
 
 | Chapter | What it adds |
 |---------|------------|
-| [Ch32 — Data Encoding](Section4/Chapter_32_Data_Encoding_and_Evolution.md) ✅ | Protobuf, schema evolution — relevant for API versioning questions |
+| [Ch32 — Data Encoding](Section4/Chapter_32_Data_Encoding_and_Schema_Evolution.md) ✅ | Protobuf, schema evolution — relevant for API versioning questions |
 | [Ch36 — Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) ✅ | Deeper Kafka: ISR, log compaction, consumer lag |
-| [Ch42 — Deployment Strategies](Section4/Chapter_42_Deployment_Strategies.md) ✅ | Blue/green, canary — interviewers ask "how would you roll this out" |
+| [Ch42 — Deployment Strategies](Section4/Chapter_42_Deployment_Strategies_and_Operations.md) ✅ | Blue/green, canary — interviewers ask "how would you roll this out" |
 
 **Skip for L5 (with note why):**
 
@@ -92,38 +92,38 @@ Do each as a 45-minute mock before reading the chapter.
 | [Ch56 — Metrics Collection](Section5/Chapter_56_Metrics_Collection_System.md) 🟡 | Time-series, aggregation, push vs pull |
 | [Ch52 — Object Storage](Section5/Chapter_52_Object_and_File_Storage_System.md) ✅ | S3-like storage, multipart upload |
 
-### 6. Section 5 New Additions — L5 Level (stubs, expand later)
+### 6. Section 5 New Additions — L5 Level
 
 | Chapter | Core concept tested |
 |---------|-------------------|
-| [Ch61b — Web Crawler](Section5/Chapter_61b_Web_Crawler.md) 📄 | URL frontier, Bloom filter dedup, politeness |
-| [Ch61c — Proximity Service](Section5/Chapter_61c_Proximity_Service.md) 📄 | GeoHash, QuadTree, radius search |
-| [Ch61d — Hotel Reservation](Section5/Chapter_61d_Hotel_Reservation_System.md) 📄 | Optimistic locking, seat hold, idempotency |
-| [Ch61e — Key-Value Store](Section5/Chapter_61e_Key_Value_Store.md) 📄 | LSM tree, WAL, consistent hashing, quorum |
-| [Ch61f — Leaderboard](Section5/Chapter_61f_Leaderboard_System.md) 📄 | Redis ZSET, top-K, time-windowed ranking |
-| [Ch61g — File Sync (Dropbox)](Section5/Chapter_61g_File_Sync_Service.md) 📄 | Chunking, delta sync, conflict resolution |
-| [Ch61h — Ride Sharing](Section5/Chapter_61h_Ride_Sharing.md) 📄 | Redis GEOADD, driver matching, state machine |
-| [Ch61i — Live Streaming](Section5/Chapter_61i_Live_Streaming.md) 📄 | RTMP ingest, real-time transcode, CDN push |
-| [Ch61j — Ticketing System](Section5/Chapter_61j_Ticketing_System.md) 📄 | Flash sale, atomic seat hold, virtual queue |
-| [Ch61k — Stock / Trading Feed](Section5/Chapter_61k_Stock_Trading_Feed.md) 📄 | Order book, market data fan-out, low latency |
+| [Ch62 — Web Crawler](Section5/Chapter_62_Web_Crawler.md) ✅ | URL frontier, Bloom filter dedup, politeness |
+| [Ch63 — Proximity Service](Section5/Chapter_63_Proximity_Service.md) ✅ | GeoHash, QuadTree, radius search |
+| [Ch64 — Hotel Reservation](Section5/Chapter_64_Hotel_Reservation_System.md) ✅ | Optimistic locking, seat hold, idempotency |
+| [Ch65 — Key-Value Store](Section5/Chapter_65_Key_Value_Store.md) ✅ | LSM tree, WAL, consistent hashing, quorum |
+| [Ch66 — Leaderboard](Section5/Chapter_66_Leaderboard_System.md) ✅ | Redis ZSET, top-K, time-windowed ranking |
+| [Ch67 — File Sync (Dropbox)](Section5/Chapter_67_File_Sync_Service.md) ✅ | Chunking, delta sync, conflict resolution |
+| [Ch68 — Ride Sharing](Section5/Chapter_68_Ride_Sharing.md) ✅ | Redis GEOADD, driver matching, state machine |
+| [Ch69 — Live Streaming](Section5/Chapter_69_Live_Streaming.md) ✅ | RTMP ingest, real-time transcode, CDN push |
+| [Ch70 — Ticketing System](Section5/Chapter_70_Ticketing_System.md) ✅ | Flash sale, atomic seat hold, virtual queue |
+| [Ch71 — Stock / Trading Feed](Section5/Chapter_71_Stock_Trading_Feed.md) ✅ | Order book, market data fan-out, low latency |
 
 ### 7. Google's Own Systems (unique to Google loops)
 
 | Chapter | What to know at L5 |
 |---------|-------------------|
-| [Ch45 — Google Systems Overview](Section4/Chapter_45_Googles_Foundational_Systems.md) ✅ | Read first — how GFS/Bigtable/Spanner/Borg fit together |
-| [Ch80 — GFS](Section6/Chapter_80_GFS.md) ✅ | Chunk servers, master, append-only, fault tolerance |
-| [Ch81 — Bigtable](Section6/Chapter_81_Bigtable.md) ✅ | Wide-column, SSTable, memtable, row key design |
-| [Ch82 — MapReduce](Section6/Chapter_82_MapReduce.md) ✅ | Map/reduce phases, compare to Spark |
-| [Ch83 — Chubby](Section6/Chapter_83_Chubby.md) ✅ | Distributed locking, how it differs from ZooKeeper |
-| [Ch84 — Spanner](Section6/Chapter_84_Spanner.md) 🟡 | TrueTime, global SQL — most cited at Google |
+| [Ch45 — Google Systems Overview](Section4/Chapter_45_Google_Foundational_Systems.md) ✅ | Read first — how GFS/Bigtable/Spanner/Borg fit together |
+| [Ch94 — GFS](Section6/Chapter_94_GFS_Google_File_System.md) ✅ | Chunk servers, master, append-only, fault tolerance |
+| [Ch95 — Bigtable](Section6/Chapter_95_Bigtable.md) ✅ | Wide-column, SSTable, memtable, row key design |
+| [Ch96 — MapReduce](Section6/Chapter_96_MapReduce.md) ✅ | Map/reduce phases, compare to Spark |
+| [Ch97 — Chubby](Section6/Chapter_97_Chubby.md) ✅ | Distributed locking, how it differs from ZooKeeper |
+| [Ch98 — Spanner](Section6/Chapter_98_Spanner.md) 🟡 | TrueTime, global SQL — most cited at Google |
 | [Ch47 — Kubernetes](Section4/Chapter_47_Kubernetes_Internals.md) ✅ | Control plane, scheduler — for infra/platform roles |
 
 ### 8. Advanced — L6 Territory (skip if time is short)
 
 | Chapter | Skip unless... |
 |---------|---------------|
-| [Ch24 — Leader Election & Locks](Section3/Chapter_24_Leader_Election_Coordination.md) ✅ | You're asked about ZooKeeper/Chubby internals |
+| [Ch24 — Leader Election & Locks](Section3/Chapter_24_Leader_Election_Coordination_and_Distributed_Locks.md) ✅ | You're asked about ZooKeeper/Chubby internals |
 | [Ch48 — Consensus Deep Dive](Section4/Chapter_48_Consensus_Deep_Dive.md) 🟡 | You're asked to explain Raft or Paxos in detail |
 | [Ch29 — Advanced Distributed Systems](Section3/Chapter_29_Advanced_Distributed_Systems.md) ✅ | You're applying for a distributed systems specialist role |
 
@@ -131,8 +131,8 @@ Do each as a 45-minute mock before reading the chapter.
 
 | Chapter | What it covers |
 |---------|---------------|
-| [Ch108 — Behavioral Interview](Section8/Chapter_108_Behavioral_Leadership_Interview.md) ✅ | STAR stories, Googleyness, L5+L6 scope, all FAANG companies |
-| [Ch109 — Offer Negotiation](Section8/Chapter_109_Offer_Negotiation.md) 📄 | RSU, joining bonus, notice period buyout |
+| [Ch122 — Behavioral Interview](Section8/Chapter_122_Behavioral_Leadership_Interview.md) ✅ | STAR stories, Googleyness, L5+L6 scope, all FAANG companies |
+| [Ch123 — Offer Negotiation](Section8/Chapter_123_Offer_Negotiation.md) 📄 | RSU, joining bonus, notice period buyout |
 
 ---
 
