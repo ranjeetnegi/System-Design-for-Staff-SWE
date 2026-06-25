@@ -2092,3 +2092,170 @@ https://cdn.example.com/live/S123/segment_1445_1080p.ts
 **Audio-only playlist for low-bandwidth fallback:** add a fifth quality tier to the ABR ladder that serves audio-only (no video): `#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2"`. When a viewer's bandwidth drops below ~200 Kbps (throttled mobile, deep subway), the ABR algorithm switches to the audio-only tier. The viewer continues to follow the stream via audio (important for music streams, podcast-style streams, sports commentary) rather than buffering on the lowest video quality. This adds one audio-only transcode track — trivial CPU cost — but dramatically improves retention for mobile viewers on poor connections. Configure the ABR player to switch to audio-only only when bandwidth estimate drops below 180 Kbps (not 200 Kbps) to add a 20 Kbps hysteresis buffer — preventing oscillation between the lowest video tier (360p at ~200 Kbps) and audio-only when bandwidth is right at the threshold.
 
 **I-frame only playlist for fast seeking in VOD replay:** HLS supports an `EXT-X-I-FRAMES-ONLY` playlist variant that contains only the I-frames (keyframes) from each segment. When a viewer scrubs rapidly through a recorded stream's timeline, the player downloads only I-frames — one every 2 seconds of content (one per segment) — rather than full segments. This reduces bandwidth during scrubbing from ~6 Mbps (full 1080p) to ~200 Kbps (I-frames only at ~5 KB each × 30 frames/sec of scrub speed). The I-frame playlist is generated as a post-processing step after the stream ends (during VOD creation) — it's not needed for live streaming, only for VOD replay of recorded streams.
+
+---
+
+## Interview Simulation — Live Streaming (Twitch/YouTube Live)
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a live streaming platform like Twitch.
+
+**Candidate:** A few clarifications. First: what is the target end-to-end latency? Standard HLS gives 5-10 seconds, Low-Latency HLS gets to 2-3 seconds, WebRTC can go below 500ms. These three choices produce completely different architectures — especially on the CDN and transcoding side.
+
+> **Interviewer:** Standard latency, around 5-10 seconds is fine.
+
+**Candidate:** Second: is the chat system in scope, or just the video pipeline?
+
+> **Interviewer:** Video pipeline only. Assume chat is handled elsewhere.
+
+**Candidate:** Third: do we need stream recording and replay after the stream ends?
+
+> **Interviewer:** Yes, VOD replay should be available within 5 minutes of the stream ending.
+
+**Candidate:** Scope: RTMP ingest, GPU transcoding to HLS, CDN distribution, up to 500K concurrent viewers per stream, up to 100K active streams globally, recording to S3 with VOD available 5 minutes after stream end, standard ~5-10 second end-to-end latency.
+
+Core use cases — P0: streamer goes live and viewers can watch within 10 seconds of stream start; adaptive bitrate so viewers on different connections get the best quality they can handle; streamer disconnects and viewers see "stream offline" within 5 seconds. P1: replay available within 5 minutes of stream end; follower notification "streamer went live"; thumbnail updated every 30 seconds.
+
+*(Cross-question: "What is the difference between CDN pull and CDN push?" — this should come up organically, and getting it right before being asked is an L5 signal.)*
+
+**Candidate:** The key architectural constraint I want to flag upfront: live streaming cannot use the standard CDN pull model. VOD works with pull — the first viewer in Tokyo triggers a CDN cache miss, the CDN fetches from S3, and subsequent viewers get a cache hit. For live streaming, the first viewer in Tokyo requests a segment that doesn't exist yet in S3 or at the CDN edge — the transcoder is creating it right now. Pull causes a race between viewer request and segment creation. Live streaming requires CDN push: the transcoder pushes each completed segment to all CDN edge nodes before any viewer requests it.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 100,000 active streams. Average ingest: 6 Mbps per stream (1080p60 from OBS) = 100K × 6 Mbps = 600 Gbps total ingest. Transcoding output: 4 quality levels per stream summing to ~11.3 Mbps → 100K × 11.3 Mbps = 1.13 Tbps transcoded.
+
+CDN delivery: 10M concurrent viewers globally, average quality 3 Mbps = 30 Tbps delivery bandwidth. That is the cost-dominant number. At $0.004/GB negotiated CDN pricing: 30 Tbps × 3600s × $0.000000004/bit = ~$430K/hour at peak.
+
+Transcoding compute: 1 GPU (NVIDIA A100) encodes 3-4 streams at 1080p. 100K streams / 3 = ~33,000 GPUs. At $2/hour: $66K/hour. GPU cost and CDN bandwidth together are why Twitch charges subscription fees.
+
+Segment math: 2-second segments at 6 Mbps = 1.5 MB per segment. At 1,800 segments/hour per stream and 4 quality levels: ~15 GB per stream per 3-hour session. 100K streams × 15 GB = 1.5 PB written to S3 per day. Storage is the third major cost center.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Five endpoints.
+
+`POST /v1/streams` — streamer starts a stream. Returns stream_id, rtmp_url, and a per-stream stream_key (HMAC-signed, expires on stream end). Per-stream keys prevent the permanent credential leak risk of static keys stored in OBS settings.
+
+`GET /v1/streams/{stream_id}/playback` — viewer fetches the CDN URL for the HLS master playlist. Returns hls_url pointing to the CDN edge, qualities array, and viewer_count (HyperLogLog estimate, ±0.81% error). The master playlist is the entry point — the player reads it once to discover all quality-level URLs.
+
+`DELETE /v1/streams/{stream_id}` — streamer ends the stream. Triggers VOD processing pipeline (segment stitching + `#EXT-X-ENDLIST` appended to m3u8). Returns duration_seconds and peak_viewers.
+
+`GET /v1/channels/live?category=gaming&limit=50&cursor=token` — browse live streams, sorted by viewer_count DESC. Cursor-based pagination (not offset) because the list is sorted by a constantly-changing metric — offset-based pagination would skip or repeat channels as viewer counts shift. 30-second CDN cache TTL on this response.
+
+`POST /v1/ingest/{stream_id}/heartbeat` — internal endpoint called by the transcoder after each segment. Payload: segment_seq, segment_url. The Ingest Coordinator uses this to detect dropped segments (sequence gaps) and trigger failover.
+
+> **Interviewer:** Why is viewer_count a HyperLogLog estimate rather than an exact count?
+
+**Candidate:** Exact concurrent viewer counting would require an entry in a data store for every viewer, updated on every connection event and heartbeat. At 10M concurrent viewers that is a write-heavy table under continuous churn. HyperLogLog uses a probabilistic sketch of ~12 KB to estimate cardinality with at most 0.81% error. At 2M viewers the error is at most ~16,000 — the UI rounds to "2.1M" anyway. The tradeoff is negligible display error in exchange for constant-space O(1) updates instead of a growing table requiring range scans.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Four tables.
+
+`streams`: stream_id UUID PK, channel_id, title, status (STARTING/LIVE/ENDED/ERROR), rtmp_ingest_url, hls_base_url (CDN path, set once encoding starts), started_at, ended_at, peak_viewers. Partial index `WHERE status = 'LIVE'` for the discovery query — keeps the index small (100K live rows vs millions of historical rows).
+
+`channels`: channel_id UUID PK, owner_user_id, name, stream_key_hash (bcrypt hash, raw key never stored), subscriber_count.
+
+`vods`: vod_id UUID PK, stream_id FK, channel_id, duration_seconds, hls_url (points to VOD CDN path), status (PROCESSING/READY/DELETED). Separate from streams because VOD has different lifecycle properties and write patterns — the streams table would accumulate 5+ nullable columns if VOD fields lived there.
+
+`stream_viewer_snapshots`: (stream_id, sampled_at) PK, viewer_count. Written by a background job every 30 seconds that reads the HyperLogLog from Redis. This is the analytics audit log for "how did viewer count evolve over this stream" — not used for real-time display.
+
+`stream_key_hash` stores bcrypt hash only. On ingest authentication, the server receives the raw key over RTMP, hashes it, compares against stored hash. Same pattern as password authentication — raw credential never persisted.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+[Streamer / OBS]
+  RTMP (TCP, port 1935)
+        |
+        v
++--------------------+
+| INGEST SERVER      |
+| (nearest PoP via   |
+|  geo-DNS routing)  |
+| - auth stream key  |
+| - relay to GPU     |
++--------------------+
+        |
+        | (private backbone: 20-50ms London -> EU-West GPU cluster)
+        v
++--------------------+       +----------+
+| TRANSCODING        |       | S3       |
+| CLUSTER (GPU)      |------>| segment  |
+|                    |       | recording|
+| 1080p -> seg_N.ts  |       +----------+
+| 720p  -> seg_N.ts  |
+| 480p  -> seg_N.ts  |
+| 360p  -> seg_N.ts  |
+| + m3u8 playlist    |
++--------------------+
+        |
+        | HTTP PUT (async, decoupled)
+        v
++--------------------+
+| CDN ORIGIN         |
+| distributes to     |
+| all 100+ edge PoPs |
++--------------------+
+        |
+        | HTTP GET (segments + m3u8)
+        v
+[Viewer App / Browser / Smart TV]
+  HLS Player (polls m3u8 every 2s, downloads segments from nearest CDN edge)
+
++------------------+   +------------------+
+| METADATA SVC     |   | NOTIFICATION SVC |
+| title, status    |   | "went live" push |
+| viewer count     |   | to followers     |
+| thumbnail URL    |   +------------------+
++------------------+
+```
+
+Ingest path: OBS connects to nearest RTMP ingest PoP (geo-DNS routes to lowest-latency PoP). PoP authenticates stream key (bcrypt comparison against stored hash), then relays raw RTMP via private backbone to a GPU transcoding worker assigned by the load balancer. The transcoder decodes the H.264 stream, GPU-encodes 4 quality levels simultaneously (NVIDIA NVENC, one A100 handles 3-4 streams), packages into 2-second MPEG-TS segments, and pushes each completed segment to CDN origin asynchronously — the CDN push is decoupled from the transcoding pipeline so CDN slowness does not stall encoding.
+
+> **Interviewer:** Why must CDN push be asynchronous and decoupled from the transcoder?
+
+**Candidate:** In the Twitch 2015 cascade failure, synchronous CDN push stalled the transcoding pipeline. The transcoder waited for an HTTP PUT acknowledgment before starting the next segment. When a major tournament created a CDN origin spike (latency went from 50ms to 8 seconds), the transcoder was blocked — stream latency grew to 60+ seconds for 800K viewers. The fix: transcoder writes segments to S3 and immediately starts encoding the next segment. A separate CDN push agent reads from S3 and pushes to CDN independently, with its own retry queue. Backpressure in the CDN tier cannot propagate backward into the encoding pipeline.
+
+> **Interviewer:** Walk me through the viewer latency budget.
+
+**Candidate:** From real-world event to viewer eyes, the stages are: camera capture + OBS keyframe buffering (~2 seconds — OBS does not send video until it has a complete keyframe interval); RTMP upload to nearest ingest PoP (~50ms on a good connection); relay to transcoder cluster (~50ms via private backbone); transcoding 2 seconds of video into a segment (~100-200ms on GPU, but the transcoder buffers 2 seconds of content first — so this stage adds the 2-second segment duration); CDN push from origin to edge nodes (~200-500ms); player pre-buffering 2-3 segments before playback starts (~4-6 seconds). Total: ~9-10 seconds for standard HLS.
+
+Reducing latency: cut keyframe interval to 1 second (saves 1s, higher CPU); cut segment duration to 1 second (CDN requests 2× more often); cut player buffer to 2 segments (slightly higher buffering risk on poor connections). Optimized: ~4.7 seconds, within the 5-second target. LL-HLS uses 200ms partial segments and HTTP/2 server push to get to 2-3 seconds; WebRTC via SFU topology gets below 500ms for interactive events.
+
+> **Interviewer:** What happens when a streamer disconnects unexpectedly?
+
+**Candidate:** RTMP keepalive: server sends a ping every 30 seconds; if no pong within 5 seconds, connection is declared dead. TCP: if no data for 60 seconds, TCP layer detects disconnect. Transcoder detects no frames for 3 seconds → marks stream disconnected → stops producing segments. Critically, the transcoder does NOT add `#EXT-X-ENDLIST` immediately — it waits 60 seconds to allow fast reconnects. During those 60 seconds, the m3u8 playlist stops updating. The viewer's player polls every 2 seconds, sees no new segments, and its buffer drains. After ~4-6 seconds of no new segments, playback stalls. The platform shows "Stream is experiencing issues." If reconnect occurs within 60 seconds: transcoder resumes from the next segment number, segments have a sequence gap (e.g., seg_1452 then seg_1465), the player skips the gap. If no reconnect after 60 seconds: `#EXT-X-ENDLIST` is added, viewer sees "Stream ended," VOD processing begins.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: How does the ABR (Adaptive Bitrate) player decide which quality to download?**
+
+The player maintains a download speed estimate based on how fast recent segments arrived. If it downloaded a 720p segment (750 KB) in 200ms, the estimated bandwidth is 3 Mbps. If the segment took 500ms, bandwidth is 1.2 Mbps. The ABR algorithm (BOLA, MPC, or Throughput-Based) compares the estimated bandwidth against the bitrate ladder and picks the highest quality whose bitrate is below, say, 80% of the estimated bandwidth (leaving a safety margin). Hysteresis prevents thrashing: switching up requires bandwidth to exceed the target quality's bitrate for 3 consecutive segments; switching down happens immediately on a miss. The player uses the master playlist to discover the quality ladder and polls each quality's media playlist independently once selected.
+
+**Q: Why use RTMP for ingest if it is an old protocol (originally from 2002)?**
+
+RTMP has two durable advantages: it is TCP-based (reliable, ordered delivery — important for video where a dropped frame destroys every subsequent frame in a GOP), and it is the native output protocol of every major streaming tool including OBS (500M+ installs), Streamlabs, Wirecast, and all hardware encoders. Replacing RTMP with SRT or WebRTC would require all streamers to update their tools. SRT (Secure Reliable Transport) is UDP-based with application-layer loss recovery — better for high-packet-loss networks (remote locations, satellite). Twitch, YouTube, and Facebook all support both RTMP and SRT on the ingest side, with RTMP as the default and SRT as the professional option.
+
+**Q: How do you handle a viral event where viewer count spikes from 50K to 1M in 5 minutes?**
+
+Three mechanisms work together. CDN load balancing distributes viewers across multiple PoPs in the affected region — no single PoP is the single point of failure. CDN caching means the spike is felt primarily as more cache hits (all viewers in a region download the same segment from the same CDN edge, which cached it on the first request). For truly massive events (1M+ in one region), contact the CDN in advance: "this event starts at 9 PM, expect 1M viewers in US-East" — the CDN can pre-position segments at additional edge nodes and reserve capacity. For L6 depth: P2P mesh overlay (WebTorrent-style), where each viewer serves segments to 2-3 nearby viewers, can reduce CDN origin bandwidth by 30-50% for very large events.
+
+**Q: What is the I-frame only playlist and when would you generate it?**
+
+An I-frame only playlist (`#EXT-X-I-FRAMES-ONLY` in HLS) contains only the I-frames (keyframes) extracted from each segment — one I-frame per 2-second segment, or one per keyframe interval. When a VOD viewer scrubs the timeline (dragging the playhead rapidly), the player downloads this playlist and fetches I-frames only, reducing scrubbing bandwidth from ~6 Mbps (full segments) to ~200 Kbps (I-frames at ~5 KB each). The I-frame only playlist is generated as a post-processing step during VOD creation, after the stream ends — it requires the complete segment files and is not useful during live streaming (you cannot scrub a live stream). Generating it during live would be wasted work.

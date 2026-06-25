@@ -2499,3 +2499,117 @@ This card contains every number you should know cold for a GFS interview. If som
 - **Chapter 28 (Databases and Data Stores):** The decision between a distributed filesystem (GFS), an object store (S3), and a distributed database (Spanner) depends on access pattern, consistency requirements, and operational constraints — exactly the decision framework in Ch28.
 
 *Chapter 83 complete. Next in the Google Foundational Systems series: Chapter 84 — Bigtable. Pairs with Ch41b (overview of all Google systems) and Ch28 (databases, choosing and evolving data stores).*
+
+---
+
+## Interview Simulation — GFS (Google File System)
+
+*45-minute deep-dive interview on Google's GFS paper (Ghemawat et al., SOSP 2003). Interviewers expect you to have read the paper and understand why Google made non-standard choices — especially the single master, relaxed consistency, and 64MB chunk size.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** Why did Google build GFS instead of using an existing distributed filesystem like NFS or AFS?
+
+**Candidate:** Google's workload in 2003 violated every assumption those systems were built on. NFS and AFS were designed for workloads dominated by small random reads and writes — the typical file server pattern. Google had three fundamentally different properties. First, file sizes: GFS files were tens to hundreds of gigabytes, not kilobytes. The overhead of tracking millions of small blocks didn't make sense. Second, access pattern: Google's jobs were almost entirely large sequential reads and appends, not random writes. The correctness guarantees NFS provides for random writes are expensive and unnecessary for append-only workloads. Third, failure model: Google ran on commodity machines in warehouse-scale deployments where hardware failures were expected daily, not exceptional events.
+
+The most important design insight: "optimize for what your workload actually does, not for what a general-purpose system does." GFS chose 64MB chunks to minimize master metadata overhead, appended-optimized consistency to simplify the common case, and a single master because distributed coordination is expensive and a single master with good monitoring is good enough for their failure rates.
+
+> **Interviewer:** What does "relaxed consistency" mean in GFS specifically?
+
+**Candidate:** GFS defines three states for file regions after a mutation: consistent (all clients see the same data), defined (consistent AND clients see the complete mutation), and undefined (consistent but may reflect interleaved mutations from concurrent writers). Defined is the strongest — what you get after a successful serial write. Undefined-but-consistent is what you get after concurrent writes complete successfully — all replicas agree on the bytes, but the bytes may be an interleaving of the concurrent writes. Inconsistent is what you get after a failed mutation — different replicas may show different data.
+
+The key practical implication: GFS makes record append (atomic append-at-least-once) the primary write primitive rather than arbitrary overwrites. Append gives you defined regions at the boundaries where GFS picks the offset. An append may succeed on some chunkservers and fail on others; GFS retries, potentially writing the same record twice. Applications must handle duplicates — typically via checksums or sequence numbers embedded in records.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Why is the master a single node? How does that not become a bottleneck?
+
+**Candidate:** The master stores only metadata: namespace (directory tree), file-to-chunk mapping, and chunk locations. It does NOT store file data. The key insight is that GFS keeps the master out of the data path entirely.
+
+```
+GFS Architecture
+================
+
+Client
+  |
+  |--[1. filename + offset]-->  Master
+  |<--[2. chunk handle + CS list]--
+  |
+  |--[3. data + chunk handle]-->  Primary ChunkServer
+                                    |--[4. forward data]--> Secondary CS1
+                                    |--[4. forward data]--> Secondary CS2
+                                    |--[5. ACK chain back to Primary]
+  |<--[6. write complete]--
+
+Master stores: namespace tree, file→chunk map, chunk→CS locations
+Master does NOT touch data flow: steps 3-6 bypass master entirely
+Chunk size = 64MB → 1TB file = ~16K chunks → master metadata fits in RAM
+```
+
+Master handles: open/create/delete/rename (namespace operations), chunk lease management, garbage collection, rebalancing. These are control-plane operations — they happen once per file open, not once per block read. With 64MB chunks, a client handles hundreds of MB of I/O per master interaction. The master's metadata fits entirely in RAM (~50 bytes per chunk → 1PB of data = ~1GB of metadata), so every operation is an in-memory lookup.
+
+Shadow masters provide read-only replication of master state for read availability during master failure — they're slightly stale (lag the master by seconds) but sufficient for reads.
+
+*(Cross-question: what happens during master failure?)* Shadow masters continue serving reads. Writes stall until the master recovers or a new master is promoted. GFS accepted this: master failover takes minutes, which is tolerable for batch jobs but unacceptable for interactive workloads — which is why Colossus (GFS2) moved to a distributed master.
+
+> **Interviewer:** Explain how the lease mechanism works for writes.
+
+**Candidate:** GFS uses leases to designate a primary chunkserver for each chunk. The master grants a 60-second lease to one chunkserver; that chunkserver is the primary and serializes all mutations to that chunk during the lease period. This gives you a single serialization point without the master being in the data path.
+
+The write flow: client asks master for primary chunkserver → master returns primary and secondary locations → client pushes data to all chunkservers (they buffer it) → client sends write request to primary → primary serializes, writes locally, sends to secondaries → secondaries apply in same order → primary responds to client.
+
+The lease renewal is the clever part: the primary can extend its lease from the master before it expires without any coordination overhead for ongoing writes. If the master can't reach the primary (network partition), it simply waits for the lease to expire (60 seconds) before granting a new lease to another chunkserver. This prevents split-brain without requiring explicit revocation.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** GFS's relaxed consistency causes applications to see duplicate records. Is that acceptable? What would you have to give up to get exactly-once semantics?
+
+**Candidate:** For Google's 2003 use cases — MapReduce inputs, web crawl logs, index build pipelines — duplicate records were acceptable because every pipeline could be made idempotent. A MapReduce job processes the same record twice and produces the same output; the reducer sees the duplicate and handles it. The engineering cost of idempotent application logic is much lower than the engineering cost of exactly-once storage semantics.
+
+To get exactly-once semantics you need either: (a) a distributed transaction protocol (2PC) coordinated by the master on every write, which puts the master in the data path and kills throughput at scale, or (b) a per-record unique ID system with deduplication at read time, which requires persistent state tracking unique IDs. Option (b) is what Kafka does for exactly-once producer semantics — it's achievable but adds significant complexity. GFS made the right call for 2003 batch workloads. For streaming or transactional workloads, you'd need stronger guarantees.
+
+> **Interviewer:** Why 64MB chunks specifically?
+
+**Candidate:** 64MB balances three competing forces. Larger chunks mean fewer chunks, which means less master metadata and fewer master round trips for large sequential reads. Smaller chunks would have required more entries in the master's chunk location table, eventually overflowing RAM. But 64MB is large enough that a small file (say, 10MB) wastes 54MB of reserved space and creates a "hot spot" problem: if many clients access a small file simultaneously, they all go to the same few chunkservers (since the file fits in one chunk). GFS mitigated this for small executables by increasing their replication factor, but it's a known limitation.
+
+The other constraint: network bandwidth. In 2003, GFS was designed for 100Mbps networks. Streaming 64MB in one RPC takes about 5 seconds — long enough that connection overhead is negligible. At 1Gbps (modern networks), you might go larger. At 10Gbps, smaller chunks with parallel streaming might be better.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** How would you design a GFS successor for today's infrastructure — assume 10Gbps networks, NVMe SSDs, and a need for sub-second latency?
+
+**Candidate:** Colossus (Google's actual GFS successor) and HDFS 3.x moved in exactly this direction. The key changes I'd make: replace the single master with a distributed metadata service (like etcd or a purpose-built Paxos cluster) to eliminate the single point of failure and scale metadata operations. Reduce chunk size from 64MB to 1-4MB to enable finer-grained placement and reduce write amplification on NVMe SSDs. Add a small-file optimization layer — the GFS assumption of large files breaks for billions of small objects (think Cloud Storage / S3 patterns); you need a separate codepath for objects < 1MB. Finally, stronger consistency: at 10Gbps, 2PC adds ~1ms per write, which is acceptable for transactional workloads — modern systems (Spanner, CockroachDB) prove this.
+
+*(Cross-question: how does Amazon S3 differ from GFS architecturally?)* S3 is an object store (flat namespace, key→blob), GFS is a POSIX-like filesystem (hierarchical namespace, files with append/seek semantics). S3's consistency model was eventually consistent until 2020 when AWS announced strong consistency for all operations. GFS's single-master metadata scales to petabytes; S3's metadata is distributed across multiple storage nodes using a proprietary B-tree-like system. S3 supports objects from bytes to 5TB with multipart upload; GFS assumes sequentially-appended large files.
+
+> **Interviewer:** Your team is migrating a large batch analytics pipeline from HDFS to cloud object storage. What GFS concepts transfer, and what breaks?
+
+**Candidate:** What transfers: the large-sequential-read optimization — both HDFS and S3 perform well for 128MB+ sequential reads. The failure tolerance model — assume hardware fails, design for retry. The data locality insight — in HDFS, MapReduce schedulers placed tasks near data. In cloud, you've lost data locality (compute and storage are separate), which adds 1-5ms per read vs local disk. For most analytics jobs that's fine; for latency-sensitive jobs you may want a caching tier (Alluxio, S3 Select).
+
+What breaks: HDFS supports append (like GFS); S3 does not — S3 objects are immutable, overwritten atomically. This breaks any pipeline that relied on appending to a file. Solution: use staging (write a temp file, rename/copy to final destination). HDFS has file-level locking semantics; S3 has eventually-consistent list operations (list after put may not immediately reflect the new object). Pipelines that relied on directory listing as a completion signal need to switch to explicit marker files or job completion APIs.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: What is the role of checksums in GFS?**
+
+A: Each 64KB block within a chunk has a 32-bit checksum stored separately in memory (and persisted by chunkservers). On every read, the chunkserver verifies the checksum before returning data. On mismatch, it returns an error; the client retries from another replica; the master re-replicates the chunk from a healthy replica and schedules deletion of the corrupted one. Checksums detect silent data corruption — bit rot, bad RAID controllers, cosmic rays. The GFS paper reported that disk corruption was rare but not rare enough to ignore at Google's scale (thousands of disks). Without checksums you'd silently return corrupt data to applications.
+
+**Q: How does GFS handle concurrent appends from multiple writers?**
+
+A: GFS's "record append" operation picks the offset on your behalf: it appends your record to the chunk and returns the actual offset. If the append would exceed 64MB, GFS pads the current chunk and starts a new one. Concurrent appenders each get distinct offsets if their appends are serialized by the primary. If an append fails partway through (some replicas succeed, some fail), GFS retries — so replicas may contain the record at different offsets. Readers may see duplicate records across replicas at different offsets, but within a single replica's region, each record appears exactly once after the last successful append. Applications must handle cross-replica duplicates.
+
+**Q: GFS was designed in 2003. What has changed that makes its design choices outdated?**
+
+A: Three things. First, the single-master bottleneck: at 2003's scale (tens of PB), master metadata fit in RAM. At modern Google scale (exabytes), it doesn't. Colossus replaced the single master with a distributed metadata system. Second, the assumption of large sequential files: Google's workload shifted to include billions of small objects (YouTube videos, photos, user data). GFS's 64MB chunk size is wasteful for small files. Third, network speed: 100Mbps networks made data-local processing (MapReduce reading local chunks) essential. At 10-100Gbps, remote reads are cheap enough that compute-storage separation (Borg/Kubernetes + Colossus/S3) is often better than colocation.
+
+---
+
+*Chapter 83 complete. Next in the Google Foundational Systems series: Chapter 84 — Bigtable. Pairs with Ch41b (overview of all Google systems) and Ch28 (databases, choosing and evolving data stores).*

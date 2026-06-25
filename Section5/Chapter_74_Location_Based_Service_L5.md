@@ -1962,6 +1962,254 @@ OUT OF SCOPE:
 *Hot cell handling: Times Square with 500 drivers → 125 writes/sec to one zone, < 0.1% of node capacity.*
 *Last updated: 2026-06-25. Written by Claude for Ranjeet Singh Negi's L5 interview prep.*
 
+## Interview Simulation — Location-Based Service L5
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a location-based service — think the driver tracking and nearby search backend for a ride-sharing app. Where do you start?
+
+**Candidate:** Two subsystems with very different access patterns. Let me confirm scope. First: driver tracking — real-time location updates from active drivers, maybe 250,000 drivers on the road at peak. Second: place/driver search — given a user's coordinates, find nearby drivers or points of interest within a radius.
+
+> **Interviewer:** Yes, both. Drivers update their location continuously. Riders need to see nearby drivers within ~3 km.
+
+**Candidate:** A few questions. How frequently do drivers send location updates?
+
+> **Interviewer:** Every 4 seconds per driver.
+
+**Candidate:** What's the search radius for nearby drivers?
+
+> **Interviewer:** 3 km radius, return top 10 nearest available drivers.
+
+**Candidate:** Do we need location history — like, can a rider replay the trip route after the ride ends?
+
+> **Interviewer:** Yes, save location history for post-trip replay and audit.
+
+**Candidate:** Is this single-region?
+
+> **Interviewer:** Yes. Single region.
+
+**Candidate:** Scope: real-time driver location in Redis GEO structures (write-heavy, current location only), location history to Kafka → PostgreSQL (write-once, never queried live), and GeoHash-based search for nearby drivers. I'll skip routing, ETA, and multi-region. That good?
+
+> **Interviewer:** Perfect.
+
+*(Cross-question: two-subsystem framing)* Calling out current location vs history storage immediately shows senior design thinking. They're different SLOs, different tier choices.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Run the numbers.
+
+**Candidate:** Driver update write rate: 250,000 active drivers × 1 update per 4 seconds = 62,500 writes/sec. That's the peak write throughput our location store must handle.
+
+Each location record: driver_id (8 bytes) + lat/lng (16 bytes) + timestamp (8 bytes) = 32 bytes. Location history: 62,500 writes/sec × 32 bytes = 2 MB/sec raw, or 172 GB/day. Via Kafka to PostgreSQL, partitioned by driver_id.
+
+Redis GEO storage for current locations: 250,000 drivers × 72 bytes per GEO entry (internal ZSET encoding) ≈ 18 MB. Trivially fits in Redis memory. Single-node could handle it, but we use a 3-shard cluster for write throughput (each shard handles ~21K writes/sec, well under Redis's ~100K/sec limit per node).
+
+Rider search rate: 1M DAU riders, each requests nearby drivers every 10 seconds when in-app = 100,000 GEORADIUSBYMEMBER calls/sec at peak. These are read-heavy, served from Redis with sub-millisecond latency.
+
+> **Interviewer:** Why is 62,500 writes/sec scary for a relational database?
+
+**Candidate:** PostgreSQL handles ~10,000 simple writes/sec comfortably, ~30,000 with connection pooling and optimized schemas. At 62,500 writes/sec you'd need heavy sharding, and each write updates a row for the driver — causing hot row lock contention. Redis GEO is purpose-built for this: `GEOADD` is O(log N), no locking, and each node handles 100K ops/sec. Wrong tool = outage at peak.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What are the key APIs?
+
+**Candidate:** Three endpoints: driver location update, nearby driver search, and place search.
+
+**Driver location update (driver-side, called every 4 seconds):**
+```
+POST /drivers/{driver_id}/location
+Authorization: Bearer {driver_token}
+Body: { latitude: 37.7749, longitude: -122.4194, timestamp: 1719360000 }
+Response: 204 No Content
+```
+
+**Nearby drivers search (rider-side):**
+```
+GET /drivers/nearby?lat=37.7749&lng=-122.4194&radius_km=3&limit=10
+Authorization: Bearer {rider_token}
+Response: {
+  drivers: [
+    { driver_id, latitude, longitude, distance_km, vehicle_type, rating }
+  ]
+}
+```
+
+**Place search:**
+```
+GET /places/nearby?lat=37.7749&lng=-122.4194&radius_km=5&category=restaurant&limit=20
+Response: {
+  places: [ { place_id, name, lat, lng, distance_km, category } ]
+}
+```
+
+> **Interviewer:** Should the driver update be POST or PUT?
+
+**Candidate:** Semantically, PUT is more correct — you're replacing the current known location for this driver. But POST works fine since the body is interpreted as "add a new location sample." In practice, the HTTP verb doesn't matter much here; what matters is idempotency. A driver sending the same location twice should not create duplicates. Using driver_id as the key in GEOADD means re-sending the same coordinates just overwrites the existing entry — naturally idempotent regardless of verb.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Walk me through storage design.
+
+**Candidate:** Three tiers: Redis GEO for current driver positions, PostgreSQL for places and location history, Kafka as the durable buffer between write path and PostgreSQL.
+
+**Redis GEO Cluster — current driver locations:**
+```
+Key:    drivers:active
+Type:   Sorted Set (GEO index, Redis stores as ZSET with geohash scores)
+GEOADD drivers:active {lng} {lat} {driver_id}
+TTL:    30 seconds per member — set via per-driver expiry with EXPIRE trick
+```
+
+Individual driver TTL: `SET driver_ttl:{driver_id} 1 EX 30`. A keyspace notification on expiry triggers marking the driver offline.
+
+**Kafka — location event stream:**
+```
+Topic:    driver.location.events
+Key:      driver_id  (ensures ordered delivery per driver)
+Value:    { driver_id, lat, lng, timestamp, status }
+Retention: 7 days
+```
+
+**PostgreSQL — location_history (append-only):**
+```
+driver_id    UUID NOT NULL
+latitude     DOUBLE PRECISION
+longitude    DOUBLE PRECISION
+timestamp    TIMESTAMPTZ NOT NULL
+trip_id      UUID  -- nullable, set when driver is on a trip
+```
+Partitioned by `DATE(timestamp)` — daily partitions. Indexed on `(driver_id, timestamp DESC)` for trip replay queries.
+
+**PostgreSQL — places (static, GeoHash-indexed):**
+```
+place_id     UUID PRIMARY KEY
+name         TEXT
+latitude     DOUBLE PRECISION
+longitude    DOUBLE PRECISION
+geohash      CHAR(9)   -- precision 9 ≈ 5m accuracy
+category     TEXT
+INDEX (geohash text_pattern_ops)  ← prefix search: WHERE geohash LIKE 'u4pruyd%'
+```
+
+> **Interviewer:** Why store geohash as a column in PostgreSQL instead of using PostGIS?
+
+**Candidate:** PostGIS ST_DWithin is powerful but requires a PostGIS extension and has higher query planning overhead. For simple radius search at L5 scope, GeoHash prefix matching is simpler: a 6-character geohash covers ~1.2 km × 0.6 km. For a 3 km radius, query the center cell plus its 8 neighbors — 9 prefix queries or one `IN (...)` clause with 9 prefixes. No extension needed, no spatial index setup. PostGIS is better for complex polygon intersections; for circle-radius search, GeoHash is sufficient and deployable on vanilla PostgreSQL.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Show me the full design.
+
+**Candidate:**
+
+```
+  Driver App
+    │  POST /drivers/{id}/location (every 4 seconds)
+    ▼
+  Location Update Service (stateless, 10 instances)
+    │
+    ├──► GEOADD drivers:active {lng} {lat} {driver_id}   [Redis GEO Cluster]
+    │    SET driver_ttl:{driver_id} 1 EX 30
+    │
+    └──► Kafka producer: driver.location.events
+              │
+              ▼
+        Kafka Consumer (Location History Writer)
+              │
+              ▼
+        PostgreSQL: location_history (daily partitions)
+
+  Redis GEO Cluster (3 shards)
+    ├── Shard 1: drivers A–H
+    ├── Shard 2: drivers I–P
+    └── Shard 3: drivers Q–Z
+    │
+    │  Keyspace notification on driver_ttl:{driver_id} expiry
+    ▼
+  Presence Service
+    │  Mark driver offline in PostgreSQL driver_status table
+    ▼
+  Dispatch Service (notified)
+
+  Rider App
+    │  GET /drivers/nearby?lat=X&lng=Y&radius_km=3
+    ▼
+  Search Service
+    │
+    ├──► GEORADIUSBYMEMBER drivers:active {lat} {lng} 3 km ASC COUNT 10  [Redis]
+    │
+    ├──► Enrich with driver metadata from PostgreSQL (batch by driver_ids)
+    │
+    └──► Response: top 10 drivers with distance
+```
+
+**Candidate:** Let me explain the two hard parts: driver TTL and GeoHash boundary bug.
+
+**Driver TTL / offline detection.** Each driver update sets `SET driver_ttl:{driver_id} 1 EX 30`. This is a separate key (not the GEO member itself — Redis GEO ZSETs don't support per-member TTL). Redis keyspace notifications trigger when the key expires after 30 seconds without a refresh. The Presence Service subscribes to `__keyevent@0__:expired` events, extracts the driver_id suffix, and removes the GEO member: `ZREM drivers:active {driver_id}`. This ensures stale ghost drivers don't appear in search results.
+
+**GeoHash boundary bug.** A GeoHash encodes coordinates into a cell. If a driver is at the edge of cell `u4pruyd`, querying only that cell misses drivers 10 meters away in adjacent cell `u4pruyf`. Fix: always query the center cell plus all 8 surrounding cells. Redis `GEORADIUSBYMEMBER` does this automatically — it's the whole point of the Redis GEO API. For PostgreSQL place search, explicitly compute the 9 neighboring GeoHash prefixes and pass them as `WHERE geohash IN (prefix1, prefix2, ..., prefix9)`.
+
+> **Interviewer:** How do you handle a hot GeoHash cell — like Times Square with 500 drivers in a single cell?
+
+**Candidate:** Redis GEORADIUSBYMEMBER doesn't care about density — it returns all members within the radius regardless of how many are packed into one geographic area. The response for Times Square returns 500 drivers, but the query is still O(N + log M) where N is the result count and M is total members in the ZSET. We cap the result with `COUNT 10` to avoid sending 500 driver records to the rider app. The application-level concern is that 500 `GEOADD` calls per second hit the same ZSET — but since Redis processes these serially on one core, and each is O(log M), at M=250,000 that's log2(250,000) ≈ 18 operations. At 500 writes/sec to Times Square + 62K writes/sec total, the node is still well under capacity. No sharding needed within a city.
+
+> **Interviewer:** Walk me through a full ride request — from rider opens app to dispatch.
+
+**Candidate:** 
+1. Rider opens app → `GET /drivers/nearby` → Search Service → `GEORADIUSBYMEMBER` → returns 10 nearest driver IDs with distance.
+2. Rider selects ride type → `POST /rides` → Dispatch Service creates ride record in PostgreSQL with `status=searching`.
+3. Dispatch Service runs the assignment algorithm: re-queries `GEORADIUSBYMEMBER` for freshest data, filters by vehicle_type and availability, picks closest available driver.
+4. Dispatch Service sends push notification to driver via FCM/APNs through the Notification Service.
+5. Driver accepts → Dispatch Service updates `rides.status=en_route`, marks driver as unavailable in PostgreSQL `driver_status`.
+6. Driver's `GEOADD` updates continue flowing into Redis — rider's app polls `GET /rides/{ride_id}/driver-location` every 3 seconds, which queries Redis GEO for that specific driver_id's current position.
+
+> **Interviewer:** How do you rate-limit driver location updates?
+
+**Candidate:** Two layers. Server side: the Location Update Service checks `INCR rate:{driver_id} EX 3`. If the counter exceeds 1 within 3 seconds, return 429. This enforces max 1 update per 3 seconds. Client side: the driver app throttles at 4-second intervals using a local timer. The server-side rate limit is the safety net for misbehaving or buggy app versions.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+*(Cross-question: Redis GEO vs PostGIS)*
+> **Interviewer:** When would you switch from Redis GEO to PostGIS for driver search?
+
+**Candidate:** When you need queries beyond simple radius circles: polygon geofences (is this driver in a restricted zone?), complex routing corridors, or multi-attribute spatial joins. PostGIS ST_Within, ST_Intersects, and ST_DWithin handle arbitrary geometries. Redis GEO is purely circle-radius with optional sorting. At 62K writes/sec and 100K reads/sec, Redis is the only realistic choice for the hot path. PostGIS could be a secondary system for geofence enforcement running on the historical track data, which is write-once and not latency-sensitive.
+
+*(Cross-question: location precision)*
+> **Interviewer:** DOUBLE PRECISION for lat/lng — is that overkill?
+
+**Candidate:** No. DOUBLE PRECISION is 8 bytes with 15-16 significant digits. At the equator, 1 degree latitude = 111 km. With 15 significant digits you can represent positions to sub-nanometer accuracy. FLOAT (4 bytes, 7 digits) gives ~1 meter precision at equator — sufficient for routing but borderline for dense urban dispatch. DOUBLE is the safe choice and the storage cost difference (8 bytes vs 4 bytes per coordinate) is negligible. Redis GEO uses 52-bit geohash internally, giving ~0.6 meter precision — consistent with DOUBLE in PostgreSQL.
+
+*(Cross-question: location history partitioning)*
+> **Interviewer:** Why partition `location_history` by date instead of by driver_id?
+
+**Candidate:** Access patterns drive partitioning. The primary query on `location_history` is trip replay: `WHERE driver_id = ? AND timestamp BETWEEN trip_start AND trip_end`. Trips last 20-40 minutes, always within one or two calendar days. Date partitioning means trip replay queries scan at most 2 partitions — each day's partition is ~170 GB, and PostgreSQL partition pruning skips all other partitions. Driver-ID hash partitioning would distribute writes evenly but force a full partition scan for any time-bounded query. Date partitioning also makes retention easy: `DROP PARTITION location_history_2026_01_01` to purge a day's data without table bloat.
+
+*(Cross-question: driver clustering)*
+> **Interviewer:** What if two drivers are at exactly the same GPS coordinates (at a taxi stand)?
+
+**Candidate:** Redis GEO stores members by name (driver_id), not position. Two drivers at identical coordinates each have their own GEO entry — `GEOADD` with the same lat/lng but different member names creates two distinct entries. `GEORADIUSBYMEMBER` returns both. No collision, no overwrite. In PostgreSQL, the composite key is `(driver_id, timestamp)` so same-coordinate concurrent inserts are also safe.
+
+*(Cross-question: multi-city sharding)*
+> **Interviewer:** If we expand to 50 cities, how do you shard the Redis GEO structure?
+
+**Candidate:** Shard by city: `drivers:active:{city_code}` — one ZSET per city. Search queries are always within a city boundary, so you never need cross-shard GEORADIUSBYMEMBER. Driver updates route to the correct shard by city_code in the driver profile. This is application-level sharding, not Redis Cluster hash sharding — you explicitly route to the right key. Redis Cluster can still be used for HA/replication within each city shard. For cities with 1M+ drivers (Mumbai, Jakarta), further shard by geohash prefix: `drivers:active:BOM:u4` etc.
+
+---
+
 <!-- END OF CHAPTER 74 -->
 <!--
   Scope: L5 single-region. GeoHash-indexed PostgreSQL for places; Redis GEO Cluster for drivers.

@@ -5412,3 +5412,217 @@ All code examples in this chapter use language-agnostic pseudo-code:
 8. Practice the brainstorming questions and full design exercises to anticipate follow-ups
 
 ---
+
+## Interview Simulation — Config, Feature Flags, and Secrets (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a configuration, feature flag, and secrets management platform. Where do you start?
+
+**Candidate:** These are three related but distinct problems. Let me quickly characterize each and confirm scope.
+
+Configuration: runtime parameters (timeouts, pool sizes, feature behavior). Read very frequently—every request in some cases—so reads must be local with zero network hops. Writes are rare (a few per day per service). Consistency model: eventual is usually fine, but some configs (e.g., rate limit thresholds) need faster propagation.
+
+Feature flags: targeting rules (% rollout, user segment, canary). More complex than config because targeting logic runs per-request. Must also be local reads. The write side has audit requirements—who changed this flag and when can matter for incident attribution.
+
+Secrets: credentials, API keys, certificates. Never log. Encrypted at rest and in transit. Short-lived where possible. The hard problem is rotation without downtime—rotating a database password while 500 services are connected to that DB.
+
+Are we building an internal platform or evaluating build vs. buy? And what's the org scale—number of services, number of flags?
+
+> **Interviewer:** Internal platform, 500 services, 10,000 active flags, secrets rotation is the hard requirement, three regions.
+
+**Candidate:** The secrets rotation problem is the one I'll spend the most design time on—it's where most implementations fail. The read path for config and flags is architecturally similar: local cache with a push/pull invalidation channel. Let me size it.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk through the numbers.
+
+**Candidate:** Flag evaluation: 500 services, average 100 requests/second each = 50,000 requests/second. Each request evaluates 5-10 flags on average. All flag evaluations must be local—zero network hops. So we're talking about an in-process SDK with a local copy of flag rules, not 50,000 × 10 = 500,000 remote calls/second (which would be 500K network calls/second—clearly impossible at single-digit microsecond SLOs).
+
+Flag rule size: 10,000 flags × 500 bytes per rule (targeting rules, segment definitions) = 5 MB. Trivially fits in memory for every service instance.
+
+Flag change frequency: maybe 50 flag changes/day across the org. The push channel needs to deliver 50 events/day to 500 services × average 10 instances each = 5,000 service instances. Trivial—50 × 5,000 = 250,000 push events/day.
+
+Secrets: 500 services × 10 secrets each average = 5,000 active secrets. Rotation frequency: database passwords every 90 days (regulated), API keys every 30 days. Peak rotation events: ~170/day.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the platform API look like?
+
+**Candidate:** Three sub-APIs with different security requirements:
+
+```
+// Feature flag API (read path is always in-process SDK)
+POST /v1/flags                        → create flag
+PATCH /v1/flags/{flag_id}            → update targeting rules
+GET  /v1/flags/{flag_id}/history     → audit log
+POST /v1/flags/{flag_id}/evaluate    → server-side evaluation (debugging only)
+
+// SDK internal (service SDK → platform, for initial sync)
+GET  /internal/v1/flags/snapshot     → full flag ruleset, compressed
+GET  /internal/v1/flags/delta?since= → changes since a given version
+SSE  /internal/v1/flags/stream       → push channel for real-time updates
+
+// Secrets API (highly restricted, mTLS required)
+POST /v1/secrets                     → store secret (encrypted by KMS before storage)
+GET  /v1/secrets/{secret_id}         → retrieve plaintext (logged, audited)
+POST /v1/secrets/{secret_id}/rotate  → trigger rotation workflow
+GET  /v1/secrets/{secret_id}/versions → list versions (for dual-read during rotation)
+
+// Config API (similar to flags but simpler targeting)
+GET  /v1/config/{namespace}/{key}    → get config value
+PUT  /v1/config/{namespace}/{key}    → set config value (triggers push notification)
+```
+
+The secrets API requires mTLS—only services with a valid service identity certificate can call it. Service identity comes from the platform's PKI (SPIFFE/SPIRE or similar). This eliminates the "I need a secret to get a secret" bootstrap problem.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model flags, config, and secrets?
+
+**Candidate:** Three stores with very different security requirements:
+
+**Feature flags (PostgreSQL + Redis):**
+```
+flags {
+  flag_id:          uuid
+  name:             string
+  targeting_rules:  jsonb     // [{condition: ..., variant: ..., percentage: float}]
+  default_variant:  string
+  status:           enum(ACTIVE, ARCHIVED, KILLED)
+  owner_team:       string
+  created_at:       timestamp
+  updated_at:       timestamp
+  version:          int64     // monotonic, for delta sync
+}
+
+flag_audit_log {
+  flag_id, changed_by, change_type, old_value, new_value, timestamp
+  // append-only, never deleted
+}
+```
+
+**Secrets (encrypted, PostgreSQL backed by HSM/KMS):**
+```
+secrets {
+  secret_id:        uuid
+  service_id:       string
+  secret_type:      enum(DB_PASSWORD, API_KEY, TLS_CERT, OAUTH_TOKEN)
+  encrypted_value:  bytes     // AES-256-GCM, envelope encrypted with KMS
+  kms_key_id:       string    // which KMS key encrypted the DEK
+  version:          int
+  valid_from:       timestamp
+  valid_until:      timestamp
+  rotation_state:   enum(STABLE, DUAL_ACTIVE, DEPRECATED)
+  next_rotation_at: timestamp
+}
+```
+
+The `rotation_state` field is the key to zero-downtime rotation. `DUAL_ACTIVE` means both the old and new version are valid—services can authenticate with either during the rotation window.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Walk me through the full architecture.
+
+**Candidate:**
+
+```
+SERVICES (500 services, 5,000 instances)
+  │  In-process SDK (Go/Java/Python)
+  │  Local flag cache (5 MB in memory)
+  │  Local config cache
+  │  mTLS client cert (from SPIRE agent)
+  ▼
+[Flag SDK sync (initial + delta)]          [Secrets Client (mTLS only)]
+  │  fetch snapshot on startup              │  fetches secrets at startup
+  │  subscribe to SSE stream                │  refreshes before expiry
+  ▼                                         ▼
+[Config/Flag Service]                   [Secrets Service]
+  │  PostgreSQL for flag rules              │  PostgreSQL + KMS
+  │  Redis for change notification          │  Vault-compatible API
+  │  SSE push to all SDK instances          │  rotation orchestrator
+  ▼                                         ▼
+[Flag Audit DB]                         [KMS (AWS KMS / Cloud HSM)]
+                                            │  envelope encryption
+                                            ▼
+                                        [Rotation Workflow Engine]
+                                            │  (Step Functions or Temporal)
+                                            ▼
+                                        [Secret Consumer Notification]
+                                        (push to affected service instances)
+```
+
+**Flag local cache and push model:** On startup, each service SDK fetches the full flag snapshot (compressed JSON, ~5 MB). It subscribes to a Server-Sent Events stream for real-time updates. When a flag changes, the platform publishes the delta to all connected streams within 1 second. The SDK applies the delta to its in-memory cache. P99 propagation latency: under 2 seconds. All flag evaluations are in-process—zero network hops on the hot path.
+
+**Emergency kill switch:** Any flag can be marked as a kill switch. When a kill switch flag is set to "disabled," the platform broadcasts it with priority: it bypasses the normal SSE queue and sends directly via a dedicated high-priority channel. Kill switches propagate in under 200ms to all service instances. This is the most critical feature for incident response—it lets an on-call engineer disable a feature that's causing a production incident without a deployment.
+
+**Progressive delivery:** Feature flags integrate with the deployment system. A canary deployment automatically creates a flag variant that targets the canary instance's service version. The deployment controller monitors error rates per variant; if the canary variant's error rate exceeds the stable variant's by >0.5%, the deployment controller automatically sets the canary flag to 0% rollout. This is the "automatic rollback via flag" pattern.
+
+**Secret rotation without downtime:** This is the core hard problem. I'll use database password rotation as the example.
+
+Phase 1 (Preparation): The rotation workflow generates a new password and sets it on the database without revoking the old one. The database now accepts both passwords.
+
+Phase 2 (Dual-active): The secrets service transitions the secret to `DUAL_ACTIVE` state. Both old and new versions are served to requesting services. Services that fetch the secret get the new version. Services already running with the cached old version continue to work (database still accepts it).
+
+Phase 3 (Propagation): The rotation orchestrator notifies all registered consumers of this secret to re-fetch. It waits until >99% of instances have confirmed they're using the new version (confirmed via a heartbeat that includes the secret version in use).
+
+Phase 4 (Revocation): After a 5-minute confirmation window, the old password is revoked from the database. The secret transitions to `STABLE` with only the new version.
+
+Phase 5 (Cleanup): The old version is marked deprecated and flagged for deletion after 24 hours (giving humans time to notice anomalies).
+
+Total rotation time: 10-15 minutes end-to-end. Zero downtime. Zero connection drops.
+
+> **Interviewer:** Flag targeting at org scale—10,000 flags, complex segment definitions. How do you prevent the targeting rules from becoming unmaintainable?
+
+**Candidate:** *(Cross-question: org governance)*
+
+Three mechanisms. First, flag lifecycle management: every flag has a mandatory `owner_team` and an `auto_archive_after` date set at creation. The platform sends weekly digests to teams showing flags that haven't been modified in 90 days. After 180 days, flags auto-archive (disabled, not deleted) with a notification. After 1 year, archived flags are candidates for deletion. This prevents the "10,000 zombie flags" problem.
+
+Second, segment reuse: instead of each flag defining its own targeting rules, teams define named segments ("beta_users", "internal_employees", "canary_20_percent") in a segment library. Flags reference segments by name. When the segment definition changes, all flags using it update automatically. This reduces the duplicate targeting logic problem.
+
+Third, flag dependencies: some flags should only be evaluated if another flag is enabled. We support a `depends_on` relationship. The SDK evaluates the dependency chain in topological order. This prevents the case where a flag is "on" but its parent feature is "off"—a common source of confusing behavior.
+
+> **Interviewer:** How do you handle secrets in a multi-region setup? Region failover can't depend on the secrets service being available.
+
+**Candidate:** *(Cross-question: multi-region availability)*
+
+Secrets are cached locally at two levels. Each service instance caches its secrets in memory (encrypted with a per-process key) with a TTL of 1 hour. Each Kubernetes node runs a secrets agent (like Vault Agent) that caches secrets on the node's local disk (encrypted with the node's hardware TPM), with a 24-hour TTL.
+
+If the secrets service is unavailable (e.g., regional failover), services continue to function using the cached secrets for up to 24 hours. The secrets service itself is deployed in all three regions with leader-follower replication—writes go to the primary region, reads can serve from any region's follower.
+
+For secrets nearing expiry during a regional outage: the rotation workflow is paused during outages and runs immediately when connectivity is restored. Services are designed to handle `secret_about_to_expire` events gracefully by extending their cache TTL by 25% rather than failing when they can't refresh. This buys additional buffer.
+
+The one thing that cannot be cached: emergency secret revocations (e.g., a leaked API key). For these, we use a revocation list distributed via the same SSE push channel as feature flags—it's fast, and revoked secret IDs are checked in-process before using any cached secret.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you solve the bootstrap problem—a service needs a secret to start, but how does it authenticate to get the secret?**
+
+SPIFFE/SPIRE solves this cleanly. Every service instance gets a short-lived X.509 SVID (SPIFFE Verifiable Identity Document) from a SPIRE agent running on the host, attested via the platform's node attestation (TPM attestation, cloud instance identity document, or Kubernetes service account token). The SVID is the identity credential used for mTLS with the secrets service. There's no static secret involved—the identity is derived from the workload's deployment context. This eliminates the "secret zero" problem that plagues static API key-based auth.
+
+**Q: A developer accidentally commits a secret to git. What's the automated response?**
+
+Three-layer response. First, git pre-commit hook (client-side, optional but encouraged): scans for patterns matching known secret formats (AWS access keys, PEM headers, connection strings with passwords). Second, CI/CD pipeline secret scanner (mandatory): every push to the main branch runs a scanner (TruffleHog or Gitleaks). If a secret pattern is found, the pipeline fails and sends an alert to the secrets platform team.
+
+Third, when a secret is confirmed leaked, the rotation workflow triggers immediately (not on schedule). The affected service gets a `secret_revoked` event via the push channel and must immediately re-fetch the new secret. The rotation completes in under 15 minutes. The git history is audited to determine how long the secret was exposed; if more than 1 hour, a security incident is opened to assess blast radius.
+
+**Q: 10,000 flags across 500 teams. How do you prevent flag conflicts—two teams' flags interfering with each other?**
+
+Namespacing by team: every flag is prefixed with the team's namespace. Cross-team flag dependencies are explicit (declared in the flag schema). The platform detects implicit conflicts: if Flag A from Team X and Flag B from Team Y both target the same experiment segment with mutually exclusive variants, the platform flags this in the audit log and requires explicit resolution (one flag defers to the other, or they're made mutually exclusive segments).
+
+For shared flags (e.g., a global "maintenance mode" flag that all teams need to respect), those are declared as platform flags with governance oversight—changes require approval from the platform team and at least one impacted team lead. There are typically fewer than 50 platform flags. The other 9,950 are team-owned and fully autonomous.
+

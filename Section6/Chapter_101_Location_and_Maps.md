@@ -2500,3 +2500,155 @@ Streaming) for CDN architecture as applied to map tile serving.*
 
 *Next chapter: Chapter 88 — Search Typeahead / Autocomplete (Trie vs. Inverted Index,
 real-time prefix search at Google/Twitter scale)*
+
+---
+
+## Interview Simulation — Location and Maps Staff (Uber / Google Maps) (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design the location and mapping backend for a ride-sharing platform at Uber scale. Where do you start?
+
+**Candidate:** A few clarifying questions. First — are we building the map tile serving infrastructure (like Google Maps does), the driver location tracking system, or both? They're very different problems. Second — what are the peak load characteristics: I'd estimate Uber has roughly 5 million active drivers globally during peak. Third — do we need ETA prediction, or just routing? Fourth — is geo-fencing a requirement (e.g., airport zones, surge areas)?
+
+> **Interviewer:** Design the full system: driver location ingestion, map tile serving, routing with ETA, and geo-fencing. Focus on the components that are different from a standard web service.
+
+**Candidate:** Functional requirements: (1) Ingest driver GPS location updates — every 4 seconds per driver. (2) Serve map tiles to rider app — 256×256 px PNG/WebP tiles at zoom levels 1–20. (3) Compute route and ETA from driver to pickup to destination. (4) Evaluate geo-fence membership for dynamic zones (surge areas, airports). Non-functional: location ingestion latency under 100 ms p99, tile serve under 50 ms p99 globally (CDN-backed), ETA recompute under 500 ms on route deviation, geo-fence eval under 10 ms.
+
+> **Interviewer:** Good. Do the estimation.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Location ingestion: 5 million active drivers × 1 update per 4 s = 1.25 million location writes per second. Each update is roughly 60 bytes (driver_id, lat, lng, heading, speed, timestamp). That's 75 MB/s sustained write throughput — manageable with a Kafka cluster of ~15 partitions at 5 MB/s each. Map tiles: assume 10 million active users, each panning the map generates ~20 tile requests per pan event, 1 pan per 10 s → 20 million tile requests per second peak. Each tile is 10–50 KB. At 50% CDN hit rate (cold start), origin would see 10 million req/s — impossible without CDN. Target CDN hit rate > 99% for popular zoom levels. Geo-fence evaluations: every driver location update triggers geo-fence check — same 1.25 million/s, each check against ~10,000 active zones.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Four endpoints. Location update (driver SDK): `POST /v1/driver/location` body `{driver_id, lat, lng, heading, speed, ts}` — fire-and-forget, returns 202. Rider map tiles: `GET /v1/tiles/{z}/{x}/{y}.png` — standard slippy map URL, fully CDN-cacheable. Route + ETA: `POST /v1/route` body `{origin: {lat,lng}, destination: {lat,lng}, departure_time}` returns polyline + ETA + confidence interval. Geo-fence query: `POST /v1/geofence/evaluate` body `{lat, lng}` returns list of matching zone IDs and their metadata (surge multiplier, zone type). The geo-fence endpoint is also called internally — it's not just a public API.
+
+> **Interviewer:** Why POST for geo-fence evaluate rather than GET?
+
+**Candidate:** Coordinates in a GET query string leak to CDN access logs and potentially to third-party analytics on the client side. Location is PII — we treat it as a request body to avoid accidental logging. Additionally, POST is not cached by default, which is correct here since geo-fence membership is dynamic (zones change in real time).
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three data stores for distinct access patterns. Driver location: Redis Geo (GEOADD, GEORADIUS) keyed by `driver_id`, TTL of 30 s per key. This gives O(log N) radius queries for dispatch. We do NOT store location history in Redis — that goes to a time-series store (InfluxDB or BigQuery) for analytics. Map graph: a road network is a weighted directed graph — ~1 billion nodes globally for OpenStreetMap. We store it in a custom binary format (Contraction Hierarchies precomputed graph) on SSDs attached to routing servers. Updates to road network are batch (nightly rebuild from OSM diffs). Geo-fences: PostGIS with `ST_Contains` index for polygon zones. At 10,000 active zones, a spatial index (R-tree via GiST) makes zone lookup O(log N). Zone data is also cached in memory in the Geo-fence Service — the PostGIS is the source of truth, not the hot path.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Here's the system layout:
+
+```
+DRIVER LOCATION INGESTION
+==========================
+Driver App (GPS @ 4s intervals)
+  │
+  ▼
+Location Ingest Service (stateless, 50 pods)
+  │ validates, normalizes coordinates
+  ├─► Kafka Topic: driver-locations (1M msg/s, 30 partitions)
+  │
+  ├─► Location Consumer → Redis Geo (live state, 30s TTL)
+  │       GEOADD fleet:<city_grid> <lng> <lat> <driver_id>
+  │
+  ├─► Geo-fence Consumer → Geo-fence Service → Event Bus
+  │       (zone enter/exit events → surge engine, airport queues)
+  │
+  └─► Analytics Consumer → BigQuery (historical, batch)
+
+RIDER MAP TILES
+===============
+Rider App
+  │
+  ▼
+CDN Edge (Cloudflare / Akamai, 200+ PoPs)
+  │ MISS (< 1% for popular zoom/area)
+  ▼
+Tile Origin Service (stateless)
+  │ generates tile from pre-rendered tile cache
+  ▼
+Tile Cache (S3 + CloudFront, pre-rendered at z0–z14)
+  │ dynamic render for z15–z20 (street level, more data)
+  ▼
+PostGIS + Vector tile pipeline (Mapbox GL)
+
+ROUTING + ETA
+=============
+Rider App → Route Service
+  │
+  ├─► Map Graph Server (Contraction Hierarchies, in-memory)
+  │       bidirectional Dijkstra on contracted graph
+  │       raw route polyline in ~50ms
+  │
+  ├─► ETA Model (ML, XGBoost)
+  │       features: route distance, time-of-day, historical
+  │       speed, real-time traffic (from Kafka stream),
+  │       weather signal
+  │       ETA + confidence interval in ~100ms
+  │
+  └─► Response: polyline + ETA + turn-by-turn instructions
+
+GEO-FENCE
+==========
+Geo-fence Consumer (from Kafka)
+  │
+  ▼
+Geo-fence Service
+  │ in-memory R-tree of active zones (10K zones, ~50MB RAM)
+  │ O(log N) point-in-polygon per location update
+  │
+  ├─► Zone Enter event → Surge Engine (Kafka)
+  └─► Zone Exit event → Airport Queue Service (Kafka)
+```
+
+**Candidate:** Three deep dives.
+
+**Routing Algorithm: A\* vs Dijkstra vs Contraction Hierarchies.** Plain Dijkstra on a global road graph (1B nodes) takes 30+ seconds per query — unusable. A* with a geographic heuristic gets to ~5 s — still too slow. Contraction Hierarchies (CH) is the production answer: during preprocessing, we iteratively remove ("contract") low-importance nodes and add shortcut edges. The result is a graph that can be queried with bidirectional Dijkstra in under 50 ms even for cross-country routes. The trade-off: CH requires a full graph rebuild when road network changes — we rebuild nightly from OSM diffs. For real-time traffic, we apply a multiplicative edge weight adjustment without rerunning CH preprocessing: we maintain a separate "speed profile" overlay and adjust weights at query time.
+
+> **Interviewer:** How does real-time traffic feed into the routing?
+
+**Candidate:** *(Cross-question: real-time traffic integration)* Two data sources. First, our own driver GPS traces: drivers moving at 10 mph on a road that the CH graph thinks is 40 mph → we detect this as congestion. We aggregate speed observations per road segment using a sliding window (5-minute EWMA) and store the result as a weight multiplier in Redis. The routing server fetches these multipliers at query time and applies them before running CH. Second, for areas with low driver density, we subscribe to a commercial traffic feed (HERE, TomTom). The combination gives better accuracy than either alone. The ETA model then applies a learned correction on top of the routing engine output — the routing engine handles topology, the ML model handles everything it can't (accidents, weather, traffic light timing).
+
+**Driver Location at 1 Million Updates/Second.** The hot path is: ingest → Kafka → Redis Geo. Redis Geo uses a sorted set with geohash encoding internally — each GEOADD is O(log N). At 1 million driver updates/s, a single Redis node cannot keep up (~100K ops/s is typical). We shard Redis Geo by city or geographic grid cell: `fleet:us-nyc`, `fleet:us-la`, etc. Each shard handles the drivers in that cell. The dispatch service (finding nearby drivers for a rider) queries only the relevant shard — a GEORADIUS call within 5 km only touches one or two shards. We also run read replicas: dispatch queries hit replicas, writes go to primary. This gives us 10× read headroom.
+
+> **Interviewer:** What happens if a Redis shard goes down during peak?
+
+**Candidate:** *(Cross-question: Redis shard failure)* We run Redis Sentinel with automatic failover — primary failure triggers promotion of a replica within ~5 s. During that window, dispatch queries return stale data from other replicas. This is acceptable: 5 s of stale driver positions means we might show a driver as 200 m off their actual position — the app refreshes every 4 s anyway. The ingest path buffers in Kafka during failover and replays once the new primary is up. We do NOT use Redis Cluster for this (it adds cross-slot latency for multi-key ops like GEORADIUS), preferring application-level sharding with Sentinel failover per shard.
+
+**Geo-fencing at 1 Million Evaluations/Second.** PostGIS with ST_Contains is too slow for the hot path (each query is a database round-trip). The Geo-fence Service loads all active zones into an in-memory R-tree on startup (10,000 zones × ~100 bytes per bounding box = ~1 MB). When a new zone is created or modified, a Kafka event triggers an in-memory reload. Each location update is evaluated against the in-memory R-tree first (fast bounding box check), then exact polygon test only for candidate zones — typically 0–2 candidates per point. Total eval: ~0.1 ms per location update. The 1 million/s rate is spread across 20 Geo-fence Service pods → 50K/s per pod, well within capacity.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle GPS drift — a driver appears to jump 500 m in 4 s?**
+A: Kalman filter on the driver app side: fuse GPS with accelerometer and gyroscope data to smooth position. Server-side validation: if the implied speed between two consecutive points exceeds 200 km/h, discard the update and use the last known position with dead reckoning (extrapolate based on last known heading and speed). We also emit an alert for driver_id to the trust & safety pipeline — repeated GPS anomalies indicate GPS spoofing (a fraud vector in gig economy apps).
+
+**Q: Map tiles: how do you handle the 99th zoom level (street level) with dynamic POI data that changes hourly?**
+A: Tiles at z15–z20 are vector tiles (Mapbox Vector Tile format, .mvt), not rasterized PNGs. Vector tiles contain raw geometry and attributes, and rendering happens on the client side. This means we can update POI data in the backend without invalidating the entire tile cache — only the data layer changes, not the tile geometry. CDN TTL for vector tiles: 15 minutes for POI-heavy tiles, 24 hours for geometry-only tiles. Dynamic overlays (surge zones, closures) are served as a separate GeoJSON overlay endpoint with 30-second TTL — they never go through the tile pipeline.
+
+**Q: How do you build ETA confidence intervals, and why do they matter?**
+A: The XGBoost ETA model outputs a point estimate. We wrap it with quantile regression (or a calibrated uncertainty model) to produce p10/p50/p90 ETAs. The rider app shows "5–8 minutes" instead of "6 minutes" — which is more accurate and reduces frustration when the p50 estimate is wrong. Confidence widens during unusual conditions (sports events, rain) where historical data is sparse. We monitor ETA calibration in production: if our stated p90 is actually reached only 70% of the time, the model is overconfident and needs recalibration. This feedback loop is the most important ongoing ML ops task for the routing team.
+
+**Q: How would you detect if a driver is going significantly off-route (to run up the fare)?**
+A: Real-time route deviation detection. When a trip starts, we store the expected polyline. Every 4-second location update computes the driver's distance from the nearest point on the polyline. If deviation > 500 m for > 60 s, we flag the trip for review and notify the rider in-app. We also compare actual route to the optimal route in post-trip processing: if the driver traveled > 20% more distance than the optimal, it triggers a fare adjustment review. This is both a fraud signal and a customer experience signal.
+
+---
+
+*Chapter 87 pairs with: Ch46 (Data Warehouse / OLAP) for ETA training data pipelines,
+Ch83 (Chubby) for distributed coordination in the location service, Ch86 (Video
+Streaming) for CDN architecture as applied to map tile serving.*
+
+*Next chapter: Chapter 88 — Search Typeahead / Autocomplete (Trie vs. Inverted Index,
+real-time prefix search at Google/Twitter scale)*

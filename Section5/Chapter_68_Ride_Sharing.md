@@ -2033,3 +2033,173 @@ In practice, Uber uses far fewer Kafka partitions (typically 64-256 per topic) b
 **Consumer group isolation:** the Notification Service, Pricing Service, and Analytics Service each have their own Kafka consumer group for the `trip_state_transitions` topic. Each consumer group maintains its own offset — when the Notification Service restarts, it resumes from where it left off without affecting the Pricing Service's consumption. Consumer groups are the Kafka mechanism that enables one-to-many fan-out: one topic, N independent consumers, each seeing every message at their own pace. This is why Kafka (not Redis Pub/Sub) is used for trip events: Redis Pub/Sub has no persistence (messages lost if a consumer is offline), while Kafka's consumer group offset enables reliable at-least-once delivery to all consumers even through consumer restarts.
 
 **Consumer lag as a health signal:** monitor consumer group lag (latest produced offset minus committed offset) per consumer group. Lag > 10,000 messages sustained for 60 seconds on the Notification consumer group means drivers are not receiving MATCHED events promptly, directly increasing cancellation rates. Scaling response: add consumer instances up to the partition count (one consumer per partition maximum); beyond that, add partitions first.
+
+---
+
+## Interview Simulation — Ride Sharing (Uber/Lyft)
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a ride-sharing service like Uber.
+
+**Candidate:** A few clarifications before diving in. Are we building the full product — mapping, payments, driver earnings, surge pricing — or the core dispatch system: driver location tracking, rider-to-driver matching, and trip management?
+
+> **Interviewer:** Core dispatch. Location tracking, matching, trip lifecycle.
+
+**Candidate:** Do we need ride pooling (multiple riders sharing one car), or single-passenger rides only?
+
+> **Interviewer:** Single passenger for now.
+
+**Candidate:** Single ride type (UberX-equivalent), global multi-region, real-time ETA using an external routing API, no pooling. Scope: dispatch system for 1 million drivers globally, 10 million rides per day.
+
+Core use cases — P0: driver goes online and broadcasts location every 4 seconds; rider requests a ride and is matched with the nearest available driver within 12 seconds; driver accepts, rider tracks driver location live until pickup; trip completes and fare is calculated. P1: surge pricing displayed before rider confirms; driver rejects and offer moves to the next driver; trip cancelled with appropriate state transitions.
+
+Out of scope: turn-by-turn navigation, payment processing, driver background checks, pooling.
+
+*(Cross-question: "Why 12 seconds?" Because driver human response time is up to 10 seconds, plus ~2 seconds of system latency for matching and notification delivery.)*
+
+**Candidate:** The single hardest number in this system is 250,000 location writes per second. 1 million drivers × 1 ping every 4 seconds = 250K writes/sec. Everything else — matching, trip management, notifications — is orders of magnitude smaller. The architecture revolves around handling that write rate.
+
+> **Interviewer:** Why can't you just store driver location in Postgres?
+
+**Candidate:** PostgreSQL handles 10,000-30,000 writes per second on a modern instance. At 250K/sec you'd need 8-25 Postgres instances just for location updates — and the geospatial query (find drivers within 5 km) on a PostGIS index at 350 queries per second is feasible but expensive at tail latency. Redis GEOADD is O(log N) in-memory: a single instance handles hundreds of thousands of ops per second, and GEOSEARCH for a 5 km radius completes in under 5 ms. For a system where matching must finish in under 500 ms, in-memory geospatial indexing is a requirement, not a luxury.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Drivers: 1 million online simultaneously. Location writes: 1M / 4 = 250,000 per second — this is the dominant write path. Ride requests: 10M per day / 86,400 × 3 peak factor = ~350 requests per second. Trip events to Kafka: 10M trips × 10 state transitions = 100M events per day, ~1,160 per second.
+
+Live tracking reads: at 350 requests/sec with 60% acceptance and 15-minute average trip duration, about 313,000 active trips at peak. Riders polling driver location every 4 seconds = 78,000 Redis reads per second — solved by WebSocket push instead of client polling.
+
+Redis memory for driver locations: 1M drivers × 70 bytes per GEOADD entry = 70 MB. Trivially fits in one Redis instance. The bottleneck is write throughput, not memory, so we partition by city: NYC handles 80K drivers → 20K GEOADD/sec (well within one Redis instance's capacity).
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Five endpoints.
+
+`POST /v1/rides` — rider requests a ride. Body: pickup and dropoff coords, ride_type. Returns trip_id, status REQUESTED, surge_multiplier (locked at this moment), eta_seconds. Surge is locked at confirmation time to prevent bait-and-switch. Returns in under 200ms; matching is asynchronous via Kafka.
+
+`POST /v1/rides/{trip_id}/accept` — driver accepts. Returns rider pickup location. 409 Conflict if another driver already accepted (race condition — Lua script returned 0, driver retries from offer queue). 404 if the 10-second offer window expired.
+
+`PUT /v1/drivers/{driver_id}/location` — driver location ping. Body: lat, lng, heading, speed. Returns 204 immediately — fire-and-forget. Validation: 400 if speed > 300 km/h or coordinates out of range (anti-spoofing sanity check).
+
+`POST /v1/rides/{trip_id}/complete` — driver ends trip. Returns fare calculation. Publishes COMPLETED event to Kafka; Pricing Service computes final fare, Driver Earnings Service credits driver.
+
+`GET /v1/rides/{trip_id}/eta` — returns current driver location from Redis and ETA from routing API. p99 < 100ms.
+
+> **Interviewer:** Why does the location endpoint return 204 and not the processed result?
+
+**Candidate:** Drivers do not need a response — they are broadcasting state, not requesting a result. Waiting for a 200 response with processed data (e.g., "your location was stored at T=X") would add unnecessary latency to every 4-second ping and waste driver-side battery. 204 lets the client fire-and-forget and move on. The validation response (400) is the only case where we communicate back, and that's a severe anomaly (spoofed GPS) where we want the driver's app to know immediately.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Four critical tables in Postgres, plus Redis for all real-time state.
+
+`trips`: trip_id UUID PK, rider_id, driver_id (nullable until MATCHED), status (REQUESTED/MATCHED/EN_ROUTE/PICKED_UP/COMPLETED/CANCELLED), pickup_lat/lng, dropoff_lat/lng, surge_multiplier (locked at confirmation), fare_cents (null until COMPLETED). Partial index `WHERE status NOT IN ('COMPLETED','CANCELLED')` keeps the active-trip lookup fast as millions of historical trips accumulate.
+
+`drivers`: driver_id, name, vehicle_type, rating, is_active. No current_lat/current_lng columns — location lives in Redis only. Adding location to Postgres would require 250K UPDATE/sec globally.
+
+`driver_earnings`: driver_id, trip_id UNIQUE (idempotency key), gross_fare_cents, commission_cents, net_earnings_cents. `UNIQUE on trip_id` ensures `ON CONFLICT DO NOTHING` makes re-processing the COMPLETED Kafka event a no-op.
+
+`surge_zones`: h3_index PK (H3 hex cell ID), multiplier, demand_count, supply_count, updated_at. This is the audit trail — live multiplier is in Redis (`SET surge:{city}:{h3_index} 1.5 EX 300`).
+
+Redis state (not in Postgres): `GEOADD available_drivers:{city}` ZSET, `driver_state:{driver_id}` (AVAILABLE/OFFERED/EN_ROUTE/ON_TRIP) with 30-second TTL refreshed each ping, `driver_rating:{driver_id}` cached for fast matching rank.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+[Rider App]              [Driver App]
+     |                        |
+     | request ride           | location ping (every 4s)
+     v                        v
++-----------------------------------------------+
+|                 API GATEWAY                   |
+|          Auth (JWT), Rate Limiting            |
++-----------------------------------------------+
+          |                      |
+          v                      v
+  +---------------+     +-------------------+
+  | MATCHING SVC  |     | LOCATION SERVICE  |
+  |               |     | GEOADD to Redis   |
+  | GEOSEARCH     |     | async -> Kafka    |
+  | rank+score    |     +-------------------+
+  | Lua CAS offer |              |
+  +---------------+              v
+          |               +----------+
+          |               | REDIS    |
+          |<--------------| GEO      |
+          |               | (per     |
+          v               | city)    |
+  +----------+            +----------+
+  | TRIP SVC |
+  | Postgres |---------> KAFKA (trip-events)
+  | state    |                  |
+  | machine  |         +--------+--------+
+  +----------+         |        |        |
+          |          NOTIF   PRICING  ANALYTICS
+          v          SVC     SVC      SVC
+  +---------------+
+  | CASSANDRA     |
+  | driver loc    |
+  | history       |
+  | (audit/fraud) |
+  +---------------+
+```
+
+Driver location update flow: driver app sends `PUT /v1/drivers/{id}/location`; Location Service validates (speed < 300 km/h), calls `GEOADD available_drivers:{city} lng lat driver_id` (O(log N) in Redis), publishes to Kafka `location-updates` keyed by driver_id (per-driver ordering); returns 204 immediately; Cassandra consumer writes to driver_locations table for audit.
+
+Matching flow: rider confirms request → Trip Service inserts REQUESTED record → Pricing Service reads surge from Redis (`GET surge:{city}:{h3_cell}`) and locks it → Matching Service calls `GEOSEARCH available_drivers:{city} BYRADIUS 5km ASC COUNT 20` → ranks top 5 by distance + ETA (batch Google Maps Distance Matrix API call) + rating → runs Redis Lua script to atomically transition top driver from AVAILABLE to OFFERED.
+
+> **Interviewer:** Walk me through the race condition on driver offer and how you fix it.
+
+**Candidate:** Two Matching Service instances can simultaneously read the same driver as AVAILABLE and both try to offer them. The fix is a Redis Lua script — executed atomically (single-threaded Redis) — that checks the driver's state and only transitions it to OFFERED if it's currently AVAILABLE:
+
+```lua
+local state = redis.call('GET', 'driver_state:' .. KEYS[1])
+if state == 'AVAILABLE' then
+  redis.call('SET', 'driver_state:' .. KEYS[1], 'OFFERED', 'EX', '15')
+  redis.call('ZREM', 'available_drivers:' .. KEYS[2], KEYS[1])
+  return 1  -- we claimed this driver
+else
+  return 0  -- already claimed by another instance
+end
+```
+
+The script returns 1 to exactly one Matching Service instance — that instance sends the offer. The other gets 0 and moves to the next candidate. This is compare-and-swap at the Redis layer: the check and the write are one indivisible operation.
+
+> **Interviewer:** How does surge pricing work?
+
+**Candidate:** Every 5 minutes, the Pricing Service counts ride requests per H3 hexagonal cell (resolution 8, ~0.7 km wide) from Redis counters (`INCR demand_count:{h3_cell}:{window} EX 300`), and counts available drivers per cell from the GEOADD ZSET. Surge ratio = requests / max(drivers, 1). Tiers: ratio < 0.5 → 1.0x; 0.5-1.0 → 1.2x; 1.0-2.0 → 1.5x; 2.0-3.0 → 2.0x; > 3.0 → 2.5x cap. Stored in Redis as `SET surge:{city}:{h3_index} 1.5 EX 330`.
+
+Critical detail: surge multiplier is locked at rider confirmation time — they pay what was shown even if the surge ends during their wait. An exponential moving average smooths the supply and demand counts to prevent the feedback oscillation that caused Uber's 2015 surge loop incident: `smoothed_supply = 0.7 × current + 0.3 × previous`.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why use H3 hexagons for surge zones instead of a rectangular grid?**
+
+Hexagons have equal distance from center to all six neighbors — a circle drawn at any radius from the center intersects all six neighboring cells equally. A rectangular grid has two different neighbor distances (4 cardinal at distance 1, 4 diagonal at distance √2). This makes hexagonal cells better for any calculation involving distance to a boundary, including surge smoothing at cell edges. H3 is also hierarchical — resolution 7 (~5 km) for surge calculation, resolution 9 (~0.5 km) for routing precision — you can aggregate up or down without recomputing geometry.
+
+**Q: How do you handle a driver whose app crashes mid-trip?**
+
+The driver's Redis state key (`driver_state:{driver_id}`) has a 30-second TTL refreshed by each location ping. If the app crashes, pings stop, TTL expires, driver silently leaves the GEOADD available pool. For an active trip: the Trip Service's Kafka consumer detects no location events for this driver for 60 seconds and flags the trip as "driver unresponsive." The rider sees "we've lost contact with your driver." After 2 minutes with no reconnect, the trip is cancelled at no charge to the rider, and the driver is compensated for the distance traveled.
+
+**Q: What is consumer group isolation in Kafka and why does it matter here?**
+
+Each downstream service — Notification Service, Pricing Service, Analytics — has its own Kafka consumer group for the `trip-events` topic. Each group maintains its own offset. When the Notification Service restarts after a crash, it resumes from where it left off without affecting the Pricing Service's consumption position. Without consumer groups (e.g., if we used Redis Pub/Sub instead), an offline consumer permanently loses any messages published while it was down. Kafka's persistent log + consumer group offsets give us reliable at-least-once delivery to every consumer regardless of restarts.
+
+**Q: How do you scale the matching service during a demand spike (rain storm in NYC)?**
+
+Ride requests spike 10× → auto-scaling adds Matching Service instances (30-second spin-up). During those 30 seconds, Kafka buffers requests on the `ride-requests` topic. As new instances spin up they consume from Kafka, spreading the load. Matching latency degrades gracefully (30-120 seconds during the storm) rather than crashing. Simultaneously, the 10× demand spike activates 2.5× surge pricing, which reduces demand by ~30-40% and increases supply by ~20-30% as higher earnings attract more drivers — the market self-regulates within 10-15 minutes of surge activation.

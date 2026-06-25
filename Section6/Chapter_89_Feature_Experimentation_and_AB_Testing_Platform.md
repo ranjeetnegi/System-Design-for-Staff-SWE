@@ -4362,3 +4362,228 @@ FINAL VERIFICATION:
   ✓ Scale analysis summary (2×/10× at-a-glance)
   ✓ Compliance considerations (GDPR, disclosure)
 ```
+
+## Interview Simulation — A/B Testing Platform (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a feature experimentation and A/B testing platform. It will be used by product teams across the entire company. Walk me through your requirements.
+
+**Candidate:** Before I start designing, let me understand the scope.
+
+**Candidate:** Is this for server-side experiments only, or also client-side (mobile apps, browser JS)? And are we designing just the assignment layer, or the full pipeline including metric analysis?
+
+> **Interviewer:** Both server-side and client-side. Full pipeline — assignment, logging, and statistical analysis.
+
+**Candidate:** A few more questions:
+
+- Scale: how many experiments running simultaneously? How many user assignments per second?
+- What's the decision speed requirement — do teams want real-time results or is daily batch analysis acceptable?
+- What happens when experiments overlap — same user in multiple experiments testing the same feature?
+- Are there compliance requirements? GDPR, CCPA — do users have a right to know they're in an experiment?
+
+> **Interviewer:** 1,000 concurrent experiments, 500K assignment decisions per second. Teams want results within hours, not days. Overlapping experiments are allowed but conflicts must be detected. Yes — GDPR applies, user disclosure required for sensitive experiments.
+
+**Candidate:** Last questions: who is the primary consumer — data scientists, PMs, or engineers? And what's the primary statistical method — frequentist (p-values) or Bayesian?
+
+> **Interviewer:** All three personas. Platform should support both methods; teams choose per experiment.
+
+**Candidate:** Summarizing requirements:
+1. Assign users to experiment variants (server + client side), 500K/sec
+2. Log assignment events and metric events; correlate them
+3. Statistical analysis: frequentist and Bayesian, results within hours
+4. Conflict detection for overlapping experiments
+5. Holdout groups for long-term effect measurement
+6. GDPR compliance: disclosure, right to know, data deletion
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Size the system.
+
+**Candidate:**
+
+- **Assignment throughput:** 500K/sec × ~200 bytes per event = 100 MB/sec ingest. Kafka handles this trivially.
+- **Experiment metadata:** 1,000 experiments × ~50 targeting rules each = 50K rules. Fits entirely in memory on each assignment service node — no DB roundtrip per assignment.
+- **Log volume:** 500K assignments/sec + ~1M metric events/sec (clicks, purchases) = ~1.5M events/sec. At 300 bytes each, ~450 MB/sec. Stored in columnar format (Parquet on S3) — 1 day = ~39 TB uncompressed, ~4 TB compressed.
+- **Analysis latency:** streaming aggregation (Flink) gives near-real-time metric rollups. Batch computation (Spark) for statistical significance — runs every hour.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What's the API surface?
+
+**Candidate:**
+
+```
+// Create experiment
+POST /experiments
+{
+  experiment_id: string,
+  name: string,
+  variants: [{ id: "control", weight: 0.5 }, { id: "treatment", weight: 0.5 }],
+  targeting: { user_segments: ["premium"], geo: ["US", "CA"] },
+  primary_metric: "checkout_conversion",
+  guardrail_metrics: ["latency_p99", "error_rate"],
+  analysis_method: "bayesian" | "frequentist",
+  holdout_fraction: 0.01,
+  disclosure_required: bool
+}
+→ 201 Created { experiment_id, conflicts: [] }
+
+// Assign user to variant (called at request time)
+POST /assignments
+{ user_id: string, experiment_ids: [string], context: { page, device } }
+→ { assignments: [{ experiment_id, variant_id, assignment_id }] }
+
+// Log metric event
+POST /events
+{ user_id, event_type: "purchase", value: 49.99, timestamp, metadata: {} }
+
+// Get experiment results
+GET /experiments/{id}/results
+→ { variants: [{ id, users, metric_value, confidence_interval, p_value, probability_best }] }
+
+// Holdout query
+GET /experiments/{id}/holdout-comparison
+→ long-term effect vs holdout group
+```
+
+*(Cross-question: GDPR disclosure)* The `disclosure_required` flag triggers the client SDK to show a banner. Assignment events are tagged with `gdpr_disclosed: true/false`. Users can call `GET /users/{id}/experiments` to see all active enrollments — this is the GDPR subject access request endpoint.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Walk me through the data model.
+
+**Candidate:** Three tiers — experiment config, assignments, and events.
+
+```
+experiments
+  experiment_id PK, name, status ENUM(draft|running|stopped|archived),
+  variants JSON, targeting_rules JSON, primary_metric,
+  guardrail_metrics JSON, analysis_method, holdout_fraction,
+  created_by, started_at, stopped_at, disclosure_required
+
+assignments  (append-only, partitioned by date)
+  assignment_id PK, user_id, experiment_id, variant_id,
+  assigned_at, context JSON, is_holdout BOOL,
+  gdpr_disclosed BOOL
+
+metric_events  (append-only, partitioned by date, stored in columnar on S3)
+  event_id, user_id, event_type, value, timestamp, metadata JSON
+
+experiment_results  (materialized, recomputed hourly)
+  experiment_id, variant_id, as_of, metric_name,
+  sample_size, metric_value, confidence_interval,
+  p_value, bayesian_probability_best, status
+```
+
+*(Cross-question: conflict detection)* When creating an experiment, we compute the targeting rule intersection with all running experiments. Two experiments conflict if they share overlapping user segments AND test the same feature surface. We store the feature surface as a tag on each experiment. Conflict detection is O(N experiments) at creation time — acceptable since N=1,000 and creation is infrequent.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:**
+
+```
+  SDK (client/server)
+        │
+        │ POST /assignments (batched, <5ms p99)
+        ▼
+  ┌─────────────────────────────────────────────────┐
+  │           Assignment Service (stateless)         │
+  │                                                  │
+  │  In-memory experiment config cache               │
+  │  (updated via config stream, 30-sec TTL)         │
+  │                                                  │
+  │  Per-user hash assignment:                       │
+  │    variant = hash(user_id + experiment_id) % 100 │
+  │    sticky: same user always gets same variant    │
+  │                                                  │
+  │  Holdout check: hash(user_id) < holdout_frac     │
+  └───────┬─────────────────────────────────────────┘
+          │ assignment event
+          ▼
+  ┌───────────────────┐     ┌──────────────────────┐
+  │      Kafka        │     │   Config Service      │
+  │  assignments topic│     │  (experiments DB)     │
+  │  events topic     │     │  → pushes to Kafka    │
+  └──────┬────────────┘     └──────────────────────┘
+         │
+   ┌─────┴──────────────────────────────────┐
+   │                                        │
+   ▼                                        ▼
+┌──────────────┐                  ┌──────────────────┐
+│    Flink     │                  │   S3 (Parquet)    │
+│  Streaming   │                  │  raw event store  │
+│  Aggregation │                  └────────┬─────────┘
+│  (real-time  │                           │
+│  rollups)    │                  ┌────────▼─────────┐
+└──────┬───────┘                  │   Spark Batch     │
+       │                          │   (hourly stats)  │
+       ▼                          └────────┬─────────┘
+┌──────────────┐                           │
+│  Results DB  │◀──────────────────────────┘
+│  (materialized│
+│   per-exp)   │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ Experimenter │
+│    UI / API  │
+└──────────────┘
+```
+
+> **Interviewer:** How do you handle the Bayesian vs frequentist choice? Why does it matter at Staff level?
+
+**Candidate:** The choice has real business impact. Frequentist methods require you to fix a sample size before running the experiment — peeking at results mid-run inflates false positive rates (p-hacking). Teams hate this because they want to stop early when results look good.
+
+Bayesian methods give you a live "probability that treatment is better" which is valid to check at any time. You stop when the posterior probability exceeds a threshold (e.g., 95% probability treatment is best) or when the expected uplift is below a minimum detectable effect.
+
+In practice, we run both in parallel. Frequentist gives rigorous p-values for compliance and external reporting. Bayesian gives operational confidence for internal shipping decisions. The platform exposes both — PMs use Bayesian to decide "ship it," legal uses frequentist for audit trails.
+
+*(Cross-question: guardrail metrics)* Even if the primary metric wins, if latency_p99 degrades by more than 5%, the experiment auto-pauses and pages the team. The Flink streaming job checks guardrail metrics continuously. This is the safety net that prevents "wins" that accidentally break reliability.
+
+> **Interviewer:** How do you prevent teams from launching conflicting experiments that pollute each other's results?
+
+**Candidate:** Two layers:
+
+**Conflict detection at creation time** — we check if the new experiment's targeting overlaps with running experiments on the same feature surface (identified by a `namespace` or `feature_flag_key` tag). Overlapping experiments affecting the same user behavior invalidate each other's statistical assumptions (independence of observations). We warn on overlap and require explicit acknowledgment.
+
+**Orthogonal layering** — this is the Google/Meta approach. Experiments are organized in layers. Within a layer, user buckets are exclusive — each user is in at most one experiment per layer. Across layers, experiments are independent (different features). This gives complete statistical isolation within a layer and allows simultaneous experimentation at scale across layers.
+
+The data model adds `layer_id` to experiments. The assignment service enforces exclusivity within a layer using a hash: `bucket = hash(user_id + layer_id) % 1000`.
+
+> **Interviewer:** What about holdout groups?
+
+**Candidate:** A holdout group is a set of users who are permanently excluded from all experiments in a given product area. We measure their behavior over months to capture long-term effects that short experiments miss — for example, feature novelty effects that fade after a week.
+
+Implementation: during assignment, users with `hash(user_id + "holdout") < holdout_fraction` are never assigned to treatment variants — they always see the baseline. They're still logged as holdout users. The `holdout-comparison` endpoint compares the holdout group's metrics over the experiment window to the control group's metrics.
+
+The tricky part is holdout group size — too large and you waste users who could be in experiments; too small and you lack statistical power for long-term analysis. We default to 1% global holdout, configurable per product area.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: novelty effect)* Users behave differently with new features just because they're new — clicks go up, then normalize. Short experiments overestimate the treatment effect. Solutions: (1) run experiments longer (2+ weeks), (2) use the holdout group as the long-term baseline, (3) segment results by "new vs returning" users to detect the novelty decay.
+
+*(Cross-question: GDPR data deletion)* When a user requests deletion, we must remove their `user_id` from the assignments and events tables. These are immutable append-only stores — we can't delete rows without breaking aggregate statistics. Solution: pseudonymization. We replace `user_id` with a hash(user_id + secret_salt). Deletion = delete the salt mapping. The rows remain but are no longer linkable to the individual. Aggregate stats are unaffected.
+
+*(Cross-question: experiment platform as shared infra at Staff level)* The Staff expectation here is ownership thinking. You're not just designing for one team — you're designing a platform that hundreds of teams depend on. The SLA of the assignment service is now a company-level SLA. If it goes down, every experiment stops. This means: assignment must be available even if the config DB is down (serve stale configs from cache), the platform needs separate oncall, and you need a "kill switch" that lets individual teams bypass experiments in emergencies. The SDK falls back to control variant if assignment service is unreachable.
+
+*(Cross-question: sample ratio mismatch)* If the assignment hash is buggy or targeting logic has a bug, you might have 48% users in control and 52% in treatment instead of 50/50. This is called sample ratio mismatch (SRM) and it invalidates the experiment. The analysis pipeline runs an automatic SRM check — chi-squared test on observed vs expected variant sizes — and flags experiments with SRM before showing results. Teams must resolve SRM before shipping.
+
+*(Cross-question: making the call to ship)* At Staff level, the interviewer wants to know how you'd advise leadership. "The p-value is 0.03" is not sufficient. A strong answer: "Primary metric is +2.3% conversion (p=0.03, 95% CI: +0.8% to +3.8%). Guardrails are clean — latency unchanged, error rate stable. Bayesian posterior shows 97% probability treatment is better. Holdout comparison shows no novelty decay over 3 weeks. My recommendation: ship to 100%. The confidence interval lower bound (+0.8%) still exceeds our minimum business threshold. Risk is low."

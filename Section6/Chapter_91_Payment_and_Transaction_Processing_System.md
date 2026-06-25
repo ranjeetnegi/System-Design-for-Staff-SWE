@@ -3740,3 +3740,246 @@ Before considering this chapter complete, verify:
 ✓ Real Incident table (structured) in Part 9  
 ✓ Staff Mental Models & One-Liners table in Part 16  
 ✓ Interview Calibration: leadership explanation, how to teach
+
+## Interview Simulation — Payment and Transaction Processing (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a payment and transaction processing system. This is for a large e-commerce platform — millions of users, global.
+
+**Candidate:** Before I design anything, let me ask questions to bound the scope.
+
+**Candidate:** Are we building the payment orchestration layer (our system calling third-party processors like Stripe, Adyen), or also the ledger and settlement? And are we handling card payments only, or also wallets, ACH, BNPL?
+
+> **Interviewer:** Orchestration layer plus internal ledger. Cards and wallets for now. The orchestration layer calls external processors — we don't own card network rails.
+
+**Candidate:** A few more:
+
+- Scale: how many transactions per second at peak? What's the money amount distribution (average order value, variance)?
+- What's the latency SLA for a user completing checkout — how long before we show "payment confirmed"?
+- What are the consistency requirements — can we ever charge a user twice? Can we ever fail to charge them if the business logic says "charge"?
+- PCI DSS scope: do we store card numbers, or is that fully delegated to the processor via tokenization?
+
+> **Interviewer:** 10,000 TPS peak. Average order $50, range $1 to $10,000. Checkout latency SLA: < 3 seconds. Never charge twice. PCI scope: tokenization via processor — we never store raw PAN.
+
+**Candidate:** Last two: do we need to support chargebacks and disputes? And what's the reconciliation requirement — real-time balance or T+1 daily?
+
+> **Interviewer:** Yes, full chargeback flow. Reconciliation: near-real-time with daily final settlement from processors.
+
+**Candidate:** Summarizing:
+1. Accept payments via external processors (Stripe/Adyen), return confirmation < 3 sec
+2. Maintain internal ledger — double-entry, exactly-once debits
+3. Never double-charge (idempotency at every layer)
+4. No raw card data stored (PCI scope minimization via tokenization)
+5. Chargeback/dispute lifecycle management
+6. Reconciliation against processor statements (near-real-time + daily)
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Size it.
+
+**Candidate:**
+
+- **Transaction throughput:** 10,000 TPS peak. Each transaction touches: payment record write, ledger debit entry, ledger credit entry = 3 DB writes. At 10K TPS, that's 30K writes/sec. Sharded PostgreSQL or CockroachDB handles this.
+- **Transaction record size:** ~2 KB per transaction (metadata, status, processor response). 10K TPS × 86,400 sec/day = 864M transactions/day × 2 KB = ~1.7 TB/day. With 7-year retention (regulatory), ~4.4 PB total — store in columnar format on S3 for old data.
+- **Idempotency key store:** key = `(order_id, payment_attempt)`. At 10K TPS × 24h × TTL 24h = ~864M keys. Redis cluster with 64-byte keys = ~55 GB — trivially fits.
+- **External processor calls:** each payment calls processor's API (Stripe/Adyen) with p99 ~400ms, p999 ~2s. We budget 1.5s for external call + 1s for our processing = 2.5s total, within 3s SLA.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Walk me through the API.
+
+**Candidate:**
+
+```
+// Initiate payment (called by checkout service)
+POST /payments
+{
+  idempotency_key: string,    // order_id + attempt_number — REQUIRED
+  amount: { value: 4999, currency: "USD" },  // in cents
+  payment_method: { token: "tok_xxx", type: "card" },
+  merchant_id: string,
+  metadata: { order_id, user_id, items: [...] }
+}
+→ 201 { payment_id, status: "pending" }
+  or 200 (idempotent replay) { payment_id, status: existing_status }
+
+// Get payment status (polling / webhook alternative)
+GET /payments/{payment_id}
+→ { payment_id, status, amount, processor_ref, created_at, updated_at }
+
+// Refund
+POST /payments/{payment_id}/refunds
+{
+  idempotency_key: string,
+  amount: { value: 4999, currency: "USD" },  // partial or full
+  reason: string
+}
+
+// Dispute / chargeback notification (from processor webhook)
+POST /webhooks/processor/{processor_id}
+{ event_type: "chargeback.created", payment_id, reason_code, amount }
+
+// Reconciliation report
+GET /reconciliation?date=2026-06-26&processor=stripe
+→ { matched: N, unmatched_ours: [...], unmatched_theirs: [...] }
+```
+
+*(Cross-question: idempotency key)* The `idempotency_key` is the single most important field. If the checkout service retries on network timeout, we must not charge the user twice. The idempotency key is stored in Redis with the payment result for 24 hours. On retry, we return the cached result immediately without re-calling the processor.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What's the data model?
+
+**Candidate:** Two core concerns: the payment record (operational) and the ledger (financial).
+
+```
+payments
+  payment_id PK, idempotency_key UNIQUE, merchant_id,
+  amount BIGINT (cents), currency CHAR(3),
+  status ENUM(pending|authorized|captured|failed|refunded|disputed),
+  payment_method_token, processor_id, processor_ref,
+  created_at, updated_at, metadata JSONB
+
+ledger_entries  (double-entry, append-only, NEVER updated)
+  entry_id PK, payment_id FK, entry_type ENUM(debit|credit),
+  account_id, amount BIGINT (cents), currency,
+  created_at, description
+
+refunds
+  refund_id PK, payment_id FK, idempotency_key UNIQUE,
+  amount, status, processor_ref, created_at
+
+disputes
+  dispute_id PK, payment_id FK, reason_code, amount,
+  status ENUM(open|won|lost|accepted),
+  evidence_deadline, processor_case_id, created_at, resolved_at
+
+reconciliation_records
+  date, processor_id, payment_id, processor_ref,
+  our_amount, processor_amount, status ENUM(matched|unmatched_ours|unmatched_theirs|amount_mismatch)
+```
+
+The ledger is append-only — no row is ever updated or deleted. Account balance = SUM(credits) - SUM(debits) for that account_id. This gives a complete audit trail and enables point-in-time balance reconstruction.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the architecture and then we'll go deep.
+
+**Candidate:**
+
+```
+  Checkout Service
+        │ POST /payments (with idempotency_key)
+        ▼
+  ┌─────────────────────────────────────────────────────┐
+  │           Payment Orchestration Service              │
+  │                                                     │
+  │  1. Check idempotency (Redis):                      │
+  │     key exists? → return cached result              │
+  │     key absent? → proceed                           │
+  │                                                     │
+  │  2. Write payment row: status=pending (DB)          │
+  │     (idempotency_key UNIQUE constraint as safety net)│
+  │                                                     │
+  │  3. Call Processor API (Stripe/Adyen)               │
+  │     with OUR idempotency_key in header              │
+  │                                                     │
+  │  4. On success:                                     │
+  │     UPDATE payments SET status=authorized           │
+  │     INSERT ledger_entries (debit buyer, credit us)  │
+  │     (both in single DB transaction)                 │
+  │                                                     │
+  │  5. Cache result in Redis (TTL 24h)                 │
+  │  6. Publish payment.authorized event → Kafka        │
+  └──────────┬──────────────────────────────────────────┘
+             │
+   ┌─────────┼─────────────────────────┐
+   │         │                         │
+   ▼         ▼                         ▼
+┌──────┐  ┌──────────┐         ┌──────────────────┐
+│  DB  │  │  Redis   │         │   Kafka          │
+│(shrd)│  │ (idem    │         │ payment.events   │
+│      │  │  cache)  │         │ → downstream     │
+└──────┘  └──────────┘         │   fulfillment,   │
+                               │   fraud, ledger  │
+                               └──────────────────┘
+                                        │
+             ┌──────────────────────────┘
+             │
+   ┌─────────▼─────────────────────────────────┐
+   │       Reconciliation Service               │
+   │                                           │
+   │  - Pulls processor settlement file daily  │
+   │  - Matches by processor_ref               │
+   │  - Flags mismatches → alerts              │
+   │  - Near-real-time via processor webhooks  │
+   └───────────────────────────────────────────┘
+             │
+   ┌─────────▼─────────────────────────────────┐
+   │       Dispute / Chargeback Service         │
+   │  - Receives processor webhook              │
+   │  - Creates dispute record                 │
+   │  - Notifies merchant, routes to risk team │
+   │  - Manages evidence submission deadline   │
+   └───────────────────────────────────────────┘
+```
+
+> **Interviewer:** Walk me through the saga pattern for a payment that requires multiple steps — authorize, then capture after fulfillment.
+
+**Candidate:** Authorization and capture are two separate external calls. The saga coordinates them:
+
+**Step 1 — Authorize:** call processor to reserve funds on the card. Processor returns `auth_code`. We write `status=authorized` to the payments table.
+
+**Step 2 — Fulfill:** the fulfillment service processes the order (inventory check, warehouse pick). This may take minutes. The payment stays in `authorized` state.
+
+**Step 3 — Capture:** once fulfillment confirms, the payments service calls the processor's capture API with the `auth_code`. Processor moves money. We write `status=captured` and insert ledger entries.
+
+**Compensating transaction (failure at step 3):** if capture fails after fulfill succeeds, we call the processor's `void` or `reverse` API to release the auth hold, write `status=void_after_fulfill`, and trigger a compensating fulfillment reversal event to Kafka.
+
+The key insight: each step is a separate idempotent action with its own idempotency key (`order_id + "capture" + attempt`). The saga coordinator (a state machine in the payments service) tracks which step we're on. On restart, it reads the `payments` table to determine current state and resumes from there — no external saga coordinator needed for this simple two-step flow.
+
+> **Interviewer:** How do you handle the case where the processor's API call times out — did it go through or not?
+
+**Candidate:** This is the hardest failure mode in payments. We have three states after a timeout: (1) the call never reached the processor, (2) the call reached but processor returned an error we didn't receive, (3) the call succeeded but we didn't receive the response.
+
+**Strategy:** We pass our `idempotency_key` in the processor API request header (Stripe and Adyen both support this). On timeout, we retry with the same `idempotency_key`. The processor deduplicates on their side — if they saw the first call, they return the same result; if not, they process it fresh.
+
+We set a retry budget: 3 attempts with exponential backoff (1s, 2s, 4s). After 3 failures, we mark the payment `status=timeout_pending` and trigger a background reconciliation job that queries the processor's status API using our idempotency key to determine the final state. This reconciliation runs within 30 seconds and resolves the ambiguity.
+
+> **Interviewer:** Walk me through the reconciliation flow.
+
+**Candidate:** Two layers:
+
+**Near-real-time via webhooks:** the processor sends us a webhook for every state change (authorized, captured, failed, refunded, disputed). We match these to our `payments` table by `processor_ref`. If a processor says a payment captured but our DB says `pending`, we update our DB. Mismatches page the oncall.
+
+**Daily settlement reconciliation:** processors send a settlement file (CSV/API) covering the previous day. Our reconciliation service loads this, joins on `processor_ref`, and produces three categories:
+- **Matched:** both sides agree on amount and status — no action needed
+- **Unmatched in processor file (missing in ours):** processor charged someone we have no record of — critical alert, possible fraud or data loss
+- **Unmatched in ours (missing in processor file):** we think we charged but processor has no record — possible double-charge risk, investigate immediately
+
+At Staff level, reconciliation is a financial control, not just a technical feature. Mismatches above a threshold trigger automatic payment holds and human review before next settlement.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: PCI DSS scope minimization)* The single biggest risk reduction in payment systems is keeping raw PAN (Primary Account Number) out of your infrastructure. Tokenization means the user enters their card in a hosted fields iframe (served by Stripe/Adyen's domain, not ours) — the card number never touches our servers. We receive a payment token. Our PCI scope drops from SAQ-D (most complex) to SAQ-A (simplest). This is a Staff-level design decision: choosing the architecture that eliminates entire compliance domains rather than just satisfying their requirements.
+
+*(Cross-question: chargeback flow)* When a user disputes a charge with their bank, the bank issues a chargeback to the processor, who debits our account and notifies us via webhook. Our dispute service creates a `disputes` record, notifies the merchant, and starts a 7-day evidence collection timer (the processor deadline). The merchant submits evidence (tracking numbers, signed delivery confirmation) via our API. We forward this to the processor's dispute API. If we win, the funds are returned; if we lose or we miss the deadline, the chargeback stands. The entire flow is deadline-driven — missed deadlines are an ops disaster. We use a scheduled job to check evidence deadlines daily and alert 48 hours before expiry.
+
+*(Cross-question: fraud detection integration)* Each payment event is published to Kafka. A real-time fraud scoring service consumes these events and scores each payment within 50ms using ML features (user history, device fingerprint, velocity, amount anomaly). If fraud score > threshold, the payment is flagged for manual review or auto-declined. This is a read-only consumer of the payments pipeline — it doesn't block the payment path but its output feeds back as a `fraud_signal` field in our payment risk check before we call the processor.
+
+*(Cross-question: distributed transactions across services)* A checkout involves inventory reservation, payment, and order creation across three services. Each must succeed or all must roll back. We use the outbox pattern instead of distributed transactions: each service writes its own DB row + an outbox event atomically (single DB transaction). A background publisher reads the outbox and publishes to Kafka. Downstream services process idempotently. If the inventory service fails after payment succeeds, the Kafka event triggers a payment void. This avoids two-phase commit and keeps each service's DB the source of truth for its own data.

@@ -5084,3 +5084,218 @@ The key insights for Staff Engineers:
 The news feed teaches that Staff Engineering isn't about building the most sophisticated system—it's about building the right system for the context, with awareness of how that context will evolve.
 
 ---
+## Interview Simulation — News Feed (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a news feed system for a social platform. Go ahead.
+
+**Candidate:** Before I draw anything—a few questions that will fundamentally change the architecture.
+
+What's the scale? Monthly active users, and critically, what's the celebrity distribution? If we have users with 100M followers, push-on-write is immediately off the table for them.
+
+What goes in the feed? Just posts, or also likes, comments, reposts, ads? Each content type has different freshness requirements and ranking signals.
+
+What's the ranking model? Reverse chronological is simple but usually not what users want. ML ranking means a separate serving infrastructure. I want to know upfront because it changes the data flow entirely.
+
+What's the read/write ratio and acceptable staleness? Twitter-like feeds can be 5 seconds stale. LinkedIn might need near real-time for job posts.
+
+Multi-region? If we're serving users globally, the fan-out and feed caches have latency implications per region.
+
+> **Interviewer:** 500M MAU, celebrities up to 200M followers, ML ranking required, 5-second acceptable staleness, three regions (US, EU, APAC).
+
+**Candidate:** The 200M-follower celebrity and ML ranking are the two constraints that shape everything. Fan-out-on-write for celebrities is impossible—200M Redis writes per post would take minutes. ML ranking means I can't pre-compute the final feed; I compute ranked candidates at read time. These two facts push me toward a hybrid model. Let me size it first.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk through the numbers.
+
+**Candidate:** 500M MAU. Assume 10% DAU = 50M daily active users. Average user checks feed 5 times/day: 250M feed requests/day, roughly 3,000 QPS baseline, 15,000 QPS peak.
+
+Post volume: assume 50M posts/day = 580 posts/second. For a normal user with 500 followers, fan-out writes 500 Redis entries = 290,000 writes/second. For a celebrity with 200M followers: 200M writes per post is infeasible—this is the core problem.
+
+Feed cache: pre-computed feed per user, top 200 posts, average post ID is 8 bytes. 200 × 8 bytes × 500M users = 800 GB. Spread across Redis cluster, roughly 10 nodes at 128 GB each with replication.
+
+ML ranking: 15,000 feed requests/sec, ranking model processes 200 candidates per request. At 5ms model inference per request: 75 requests/sec per ML server at a 100ms budget. Need ~150 ML ranking servers for peak.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What's the feed API contract?
+
+**Candidate:** Three endpoints:
+
+```
+// Feed retrieval
+GET /v1/feed?user_id={uid}&page_token={cursor}&limit=20
+Response: {
+  posts: [PostSummary],     // hydrated post objects
+  next_page_token: string,
+  feed_session_id: string   // ties ranking session for feedback loop
+}
+
+// Feed ranking signal (for ML feedback)
+POST /v1/feed/signal
+Body: {
+  feed_session_id: string,
+  post_id: string,
+  signal_type: enum(IMPRESSION, CLICK, LIKE, SKIP, DWELL_MS),
+  timestamp_ms: int64
+}
+
+// Internal: fan-out trigger (post service → feed service)
+POST /internal/v1/fanout
+Body: {
+  author_id: string,
+  post_id: string,
+  post_score_hint: float,   // pre-computed engagement prediction
+  follower_count: int
+}
+```
+
+The `feed_session_id` ties a user's scroll session to the ranking model so we can close the feedback loop. Without it, we can't train on what the model showed vs. what the user engaged with.
+
+> **Interviewer:** How does cursor-based pagination work with ML re-ranking?
+
+**Candidate:** The cursor encodes the ranking session state—specifically the last position in the candidate set, not a timestamp. On the next page call, the ranking service retrieves the same candidate pool (cached for 5 minutes) and returns the next 20 from the already-ranked list. This prevents the classic problem where new posts arrive mid-scroll and shift positions, causing duplicates or gaps.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does the data model look like for the feed?
+
+**Candidate:** Three stores with distinct access patterns:
+
+**Social graph store (graph DB or adjacency list in Cassandra):**
+```
+follows { follower_id, followee_id, created_at, is_celebrity_follow }
+Index: followee_id → [follower_ids]   // for fan-out
+Index: follower_id → [followee_ids]   // for pull-on-read
+```
+
+**Post store (Cassandra or DynamoDB):**
+```
+posts { post_id, author_id, content_ref, created_at, engagement_counters, embedding_vector }
+Index: author_id + created_at   // for author timeline
+```
+
+**Feed cache (Redis):**
+```
+Key: feed:{user_id}
+Value: sorted set of (post_id, score)  // score = ML rank
+TTL: 10 minutes
+Max entries: 500 per user
+```
+
+Celebrity posts are NOT written to follower feed caches. They're stored in a separate:
+```
+Key: celebrity_posts:{celebrity_id}
+Value: sorted set of (post_id, timestamp)
+TTL: 24 hours
+```
+
+At read time, the feed service merges the user's pre-computed feed with live celebrity posts from accounts they follow—this is the hybrid model.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Walk me through the complete system.
+
+**Candidate:** The architecture splits cleanly into write path (fan-out) and read path (feed retrieval + ranking):
+
+```
+WRITE PATH
+──────────
+[Post Service] ──publishes──► [Fan-out Queue (Kafka)]
+                                      |
+                        ┌─────────────┴─────────────┐
+                   [Fan-out Worker]           [Celebrity Detector]
+                        |                           |
+              follower_count < 10K?        follower_count >= 10K
+                        |                           |
+             write to feed caches          write to celebrity_posts
+             (push-on-write)               (dedicated key, no fan-out)
+                        |
+                [Redis Feed Cache]
+
+READ PATH
+─────────
+[Client] ──► [Feed API Service]
+                     |
+          ┌──────────┴──────────┐
+    [Redis Cache]        [Celebrity Posts]
+    (pre-ranked feed)    (live pull for followed celebrities)
+          └──────────┬──────────┘
+                [Candidate Merger]   ← merges up to 500 candidates
+                     |
+              [ML Ranking Service]
+              (recall → rank → rerank)
+                     |
+              [Post Hydration Service]  ← fetches full post objects
+                     |
+              [Feed Response]
+```
+
+**Hybrid fan-out threshold:** Users with fewer than 10,000 followers get push-on-write. Above 10,000, posts go to a celebrity_posts key. The feed API pulls celebrity posts at read time and merges them with the user's pre-computed feed. The threshold is configurable via feature flag—we've tuned it between 5K and 50K based on observed write amplification.
+
+**ML ranking pipeline:** Three stages. Recall (retrieval): take 500 candidates from merged feed. Filter by basic rules (block lists, already-seen posts). Rank: pass 500 candidates through the main ranking model (gradient boosted tree or two-tower neural net). Features: author relationship strength, post age decay, predicted engagement per content type. Rerank: apply diversity constraints (no more than 3 consecutive posts from same author), inject sponsored posts at defined positions, apply content policy filters.
+
+**Multi-region:** Each region has its own Redis feed cache and ML ranking cluster. Fan-out writes replicate cross-region via Kafka MirrorMaker with ~200ms replication lag. Feed reads are always served locally. Celebrity posts use a global Cassandra table with LOCAL_QUORUM reads. The 5-second staleness budget easily absorbs this.
+
+> **Interviewer:** The ML team wants to change the ranking model. How do you deploy without degrading feed quality for 500M users?
+
+**Candidate:** *(Cross-question: ML model deployment)*
+
+Shadow scoring first. Run the new model in parallel with the existing model for 72 hours, scoring all requests but serving results from the old model. Compare offline metrics (NDCG, precision@k) and online proxy metrics (would the top-20 have been different?).
+
+Then experiment with a holdback group: 1% of users get the new model, 99% get old. Run for 1 week, measure engagement rate, session length, and crucially, unsubscribe rate (the silent signal that feed quality degraded). The ML team gets statistical significance, the risk is bounded.
+
+Rollout: 1% → 5% → 20% → 50% → 100% with 24-hour holds at each step. The ranking service reads model version from a feature flag, so rollback is instant—flip the flag, no redeployment.
+
+Model serving infrastructure is versioned: two model versions are always live simultaneously. The flag controls traffic split. Old model is decommissioned only after new model has been at 100% for 72 hours with stable metrics.
+
+> **Interviewer:** A celebrity posts something that goes viral. What breaks?
+
+**Candidate:** *(Cross-question: hot spot / viral event)*
+
+The celebrity_posts key for that user becomes a hot key in Redis—potentially millions of reads per second as users refresh their feeds. Redis single-key throughput tops out around 100K ops/sec.
+
+Mitigation: we replicate celebrity_posts keys to a read replica set specifically for hot keys. The fan-out service monitors read rate per celebrity key; when it exceeds 50K ops/sec, it automatically creates 10 replica copies across different Redis nodes (key sharding with a random suffix: `celebrity_posts:{id}:{0-9}`). Readers pick a random replica. This scales linearly with replica count.
+
+Second issue: the ML ranking service gets flooded with re-ranking requests as every follower refreshes. The ranking service has a request coalescing layer: if 1,000 users are requesting the same celebrity's posts in the same 100ms window, we score once and fan out the result to all waiting requests. Saves 999 model inference calls.
+
+> **Interviewer:** How do you handle cross-team API contracts for feed hydration? Post content comes from one team, user profiles from another, ads from a third.
+
+**Candidate:** *(Cross-question: org complexity)*
+
+The feed hydration service is a BFF (Backend for Frontend) owned by the feed team. It calls downstream services—post content, user profiles, ad targeting—via an internal API contract versioned in a schema registry (Protobuf or Avro).
+
+Each contract has an explicit SLA: post content API must respond in under 30ms P99; user profile API under 20ms P99. If a downstream service misses its SLA, the feed API uses a cached or degraded fallback (show post without author avatar, for example) rather than failing the entire request. This is the fan-in timeout pattern with partial results.
+
+Contract changes go through a compatibility review: new optional fields are safe; removing or renaming fields requires a deprecation period where both old and new field names are served simultaneously. The feed team publishes a client SDK to downstream teams so they don't have to parse raw Protobuf—this decouples wire format changes from consumer changes.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: Why not just use reverse chronological? It's simpler and more honest.**
+
+Honest answer: reverse chronological is better for some use cases (Twitter power users who want to see everything). ML ranking optimizes for engagement, which can create filter bubbles and amplify outrage content. Staff Engineers should surface this trade-off explicitly rather than defaulting to "ML is better." I'd recommend offering both as a user setting—a power toggle—which is what LinkedIn and Twitter/X eventually shipped. The architecture supports it: the ranking service is a pluggable stage; a no-op ranker just returns posts by timestamp.
+
+**Q: How do you measure feed quality without A/B testing 500M users?**
+
+Stratified sampling. Randomly assign 1% of users to a measurement cohort that's demographically representative. Run all experiments on this cohort first. The feed team maintains a permanently instrumented 5M-user panel for always-on quality metrics: session length, return rate, days-to-churn prediction, and qualitative content audit. Any regression in the panel triggers an automatic rollback of recent ranking changes.
+
+**Q: Your Redis feed cache cluster loses a node. What's the blast radius?**
+
+With consistent hashing, a single node failure loses roughly 1/N of the keyspace (where N = node count). Users whose feed keys mapped to that node get cache misses for approximately 60 seconds (time to promote replica and SDK to reroute). During that window, the ML ranking service handles the miss by falling back to a lightweight pull-on-read: fetch the user's last 200 posts from their follows via Cassandra and score them with a simplified model. Latency degrades from 50ms to 500ms for those users. Not great, but not a total outage. We size the Cassandra cluster and ranking service for 3x normal load specifically to absorb this failure mode.
+

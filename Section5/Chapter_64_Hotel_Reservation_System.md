@@ -2384,3 +2384,259 @@ Alternatively: check the error type. "0 rows because condition failed" vs "0 row
 
 *Section 5 — L5 / Senior SWE. Very high frequency at Airbnb, Booking.com, Expedia, and any company with inventory management (concerts, flights, rental cars).*  
 *Full chapter. Pairs with Ch61j (Ticketing System) for the same core pattern.*
+
+---
+
+## Interview Simulation — Hotel Reservation System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a hotel reservation system — something like Booking.com or Expedia. What do you want to understand first?
+
+**Candidate:** A few clarifying questions. Are we building the full Booking.com product — search, hotel profiles, payments, reviews — or focusing on the reservation and inventory management core?
+
+> **Interviewer:** Focus on search and reservation. Reviews and hotel management portal are out of scope.
+
+**Candidate:** For search: are we searching across all hotels globally and returning availability, or is this "given a specific hotel and dates, show available rooms"?
+
+> **Interviewer:** Both. Users search by city/dates to see available hotels, then drill down to a specific hotel to book a room type.
+
+**Candidate:** The hardest part of reservation systems is preventing double-booking. What consistency guarantee do you want — is it acceptable to show a room as available, let the user fill in payment details, then fail at the last step because someone else booked it, or must availability be guaranteed at browse time?
+
+> **Interviewer:** Soft lock at browse is fine, but the booking transaction itself must be atomic — you cannot charge two users for the same room on the same night.
+
+**Candidate:** Good. Cancellation policies — are we supporting free cancellation within 24 hours, or is that out of scope?
+
+> **Interviewer:** Support cancellations. Don't model the refund processing, but the room inventory must be restored.
+
+**Candidate:** Scale: how many hotels, rooms, and peak bookings?
+
+> **Interviewer:** 500,000 hotels globally, average 50 rooms each — 25 million rooms total. Peak booking rate at Black Friday travel sales: 1,000 bookings/second. Search is much higher — maybe 100,000 queries/second at peak.
+
+**Candidate:** So search is 100x the write rate. This is a classic read-heavy system with a write path that requires strong consistency for the final booking step. I'll design the search path for scale and availability, and the booking path for correctness.
+
+*(Cross-question: Explicitly naming the two paths and their different consistency requirements shows systems thinking.)*
+
+> **Interviewer:** What's the data retention requirement?
+
+**Candidate:** Reservation records must be kept for at least 7 years for financial compliance. Historical availability data — which rooms were available on which dates — is needed for fraud detection and analytics but can live in cold storage after 1 year.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Rough capacity estimates.
+
+**Candidate:** **Inventory table:** one row per (hotel_id, room_type_id, date). Suppose each hotel has 5 room types and we track 365 days ahead. 500,000 hotels × 5 room types × 365 days = **912 million rows**. Each row: hotel_id (4B) + room_type_id (4B) + date (3B) + total_rooms (2B) + reserved_rooms (2B) = ~15 bytes. That is about **14 GB** for the inventory table — fits in a well-indexed relational database, maybe two shards.
+
+**Reservation table:** 1,000 bookings/second × 86,400 seconds/day = **86 million new reservations/day**. Average stay 3 nights, so 86M rows/day. After 7 years: ~220 billion rows. Hot data (last 90 days) is ~7.7 billion rows — this needs sharding or a purpose-built storage system.
+
+**Search QPS:** 100,000 peak queries/second. Cannot hit the database directly. Need a search cache layer.
+
+*(Cross-question: Candidate correctly identifies that the inventory table is manageable in RDBMS but the reservation history table needs a different strategy.)*
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the key API endpoints.
+
+**Candidate:** Three core endpoints:
+
+**1. Search hotels:**
+```
+GET /v1/hotels/search
+  ?city=Paris
+  &check_in=2025-08-10
+  &check_out=2025-08-13
+  &guests=2
+  &room_type=double      # optional
+  &page=1&limit=20
+```
+Returns a list of hotels with available room counts and price ranges. This is the high-QPS read path — served from cache.
+
+**2. Get room availability for a specific hotel:**
+```
+GET /v1/hotels/{hotel_id}/availability
+  ?check_in=2025-08-10
+  &check_out=2025-08-13
+  &room_type=double
+```
+Returns available room count and price per night. This is the step before booking — user sees "3 rooms left."
+
+**3. Create reservation:**
+```
+POST /v1/reservations
+Body: {
+  "hotel_id": "hotel_123",
+  "room_type_id": "double_standard",
+  "check_in": "2025-08-10",
+  "check_out": "2025-08-13",
+  "guest_count": 2,
+  "payment_token": "tok_visa_abc123"
+}
+```
+Returns reservation_id and confirmation number on success. Returns 409 Conflict if room is no longer available.
+
+**4. Cancel reservation:**
+```
+DELETE /v1/reservations/{reservation_id}
+```
+Restores inventory and processes refund if eligible.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Design the core tables.
+
+**Candidate:** Four tables:
+
+**hotels:** hotel_id, name, city, star_rating, lat, lon, amenities_json
+
+**room_types:** room_type_id, hotel_id, name (single/double/suite), base_price_cents, max_guests, total_rooms_count
+
+**room_inventory:** (the hot table for bookings)
+```sql
+room_inventory (
+  hotel_id       INT,
+  room_type_id   INT,
+  date           DATE,
+  total_rooms    SMALLINT,
+  reserved_rooms SMALLINT,
+  PRIMARY KEY (hotel_id, room_type_id, date)
+)
+```
+Available rooms = total_rooms - reserved_rooms. Atomic decrement using `UPDATE ... SET reserved_rooms = reserved_rooms + 1 WHERE reserved_rooms < total_rooms`.
+
+**reservations:**
+```sql
+reservations (
+  reservation_id  BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT,
+  hotel_id        INT,
+  room_type_id    INT,
+  check_in        DATE,
+  check_out       DATE,
+  status          ENUM('PENDING','CONFIRMED','CANCELLED'),
+  payment_id      BIGINT,
+  created_at      TIMESTAMPTZ
+)
+```
+
+> **Interviewer:** Why reserved_rooms increment instead of a row-per-room-per-night?
+
+**Candidate:** Row-per-room-per-night (e.g., a `room_assignments` table with one row per physical room per night) is more flexible but creates a hot-row contention problem: for a hotel with 200 rooms, a Friday night booking requires scanning 200 rows to find an available one, then locking one row. With the counter approach, I touch exactly one row per (hotel, room_type, date) and the UPDATE is atomic at the row level. The counter approach has one limitation: it cannot track which specific physical room a guest gets — but that assignment is done by the hotel's property management system at check-in, not by us.
+
+*(Cross-question: This is a common follow-up — the candidate should explain why the simpler model is correct for this use case.)*
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the architecture and walk through a booking flow end to end.
+
+**Candidate:**
+
+```
+                    ┌────────────────────────────────────────────────┐
+                    │                   Client                        │
+                    └──────────────────────┬─────────────────────────┘
+                                           │
+                    ┌──────────────────────▼─────────────────────────┐
+                    │             API Gateway / CDN                   │
+                    └──────┬────────────────────────────┬────────────┘
+                           │                            │
+              ┌────────────▼──────────┐   ┌────────────▼──────────┐
+              │    Search Service     │   │  Reservation Service   │
+              │   (100K QPS reads)    │   │  (1K bookings/sec)     │
+              └────────────┬──────────┘   └────────────┬──────────┘
+                           │                            │
+              ┌────────────▼──────────┐   ┌────────────▼──────────┐
+              │  Elasticsearch        │   │  Reservation DB        │
+              │  (hotel + avail idx)  │   │  (PostgreSQL, sharded) │
+              │  + Redis L1 cache     │   │  room_inventory +      │
+              └───────────────────────┘   │  reservations tables   │
+                                          └────────────┬──────────┘
+                                                       │
+                                          ┌────────────▼──────────┐
+                                          │   Payment Service      │
+                                          │  (Stripe/Braintree)    │
+                                          └───────────────────────┘
+                                                       │
+                                          ┌────────────▼──────────┐
+                                          │  Notification Service  │
+                                          │  (email / SMS confirm) │
+                                          └───────────────────────┘
+```
+
+> **Interviewer:** Walk through a booking. User selects a double room at Hotel Paris for Aug 10-13.
+
+**Candidate:** The booking path is the correctness-critical path, so I'll be precise:
+
+**Step 1 — Check availability (GET /hotels/hotel_123/availability):**
+Reservation Service queries `room_inventory` for (hotel_123, double_standard, [Aug 10, Aug 11, Aug 12]). All three dates must have `reserved_rooms < total_rooms`. This is a read — returns "3 available."
+
+**Step 2 — Initiate booking (POST /reservations):**
+The Reservation Service executes a **database transaction** across three steps:
+
+```sql
+BEGIN;
+-- Lock the inventory rows for all nights (pessimistic lock)
+SELECT * FROM room_inventory
+  WHERE hotel_id = 123 AND room_type_id = 42
+  AND date IN ('2025-08-10', '2025-08-11', '2025-08-12')
+  FOR UPDATE;
+
+-- Verify availability for all nights
+-- (fail with 409 if any night has reserved_rooms = total_rooms)
+
+-- Increment reservation counter for each night
+UPDATE room_inventory
+  SET reserved_rooms = reserved_rooms + 1
+  WHERE hotel_id = 123 AND room_type_id = 42
+  AND date IN ('2025-08-10', '2025-08-11', '2025-08-12')
+  AND reserved_rooms < total_rooms;
+
+-- Create the reservation record in PENDING state
+INSERT INTO reservations (...) VALUES (...) RETURNING reservation_id;
+COMMIT;
+```
+
+**Step 3 — Payment:**
+Outside the DB transaction, call Payment Service with the payment_token. If payment succeeds: `UPDATE reservations SET status = 'CONFIRMED'`. If payment fails: `UPDATE reservations SET status = 'CANCELLED'` and `UPDATE room_inventory SET reserved_rooms = reserved_rooms - 1` (rollback the inventory).
+
+**Step 4 — Notification:**
+Publish `reservation.confirmed` event to Kafka. Notification Service sends confirmation email asynchronously.
+
+> **Interviewer:** Why do you use pessimistic locking (`SELECT FOR UPDATE`) here? You mentioned optimistic locking earlier as an option.
+
+**Candidate:** For multi-night bookings, I need to lock multiple rows atomically. With optimistic locking (version counter), I'd read all three inventory rows, compute new counts, then attempt to UPDATE each with a WHERE version = old_version check. The problem: if the first night's UPDATE succeeds but the second night's UPDATE fails (someone else booked the last room on Aug 11), I have a partial update and need compensating transactions to undo the first night. That is complex. `SELECT FOR UPDATE` acquires row-level locks for all three nights in one step before any modification — simpler, and the lock duration is short (the transaction runs in under 50ms). Pessimistic locking has a risk of deadlock if two transactions try to lock the same nights in different orders — I prevent this by always sorting nights in ascending date order before acquiring locks.
+
+*(Cross-question: Naming the specific deadlock risk and the fix — ordered locking — is the differentiating answer.)*
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** What happens if the server crashes between the DB transaction commit and the Payment Service call? The inventory is decremented but no payment was taken.
+
+**Candidate:** This is the classic "write-ahead saga" problem. The reservation record is in `PENDING` state in the DB. I have a background **cleanup job** that runs every 5 minutes and finds reservations stuck in PENDING for more than 10 minutes. For each, it either: (a) retries the payment if the payment_token is still valid, or (b) cancels the reservation and restores inventory with `reserved_rooms = reserved_rooms - 1`. The 10-minute window is the maximum time a PENDING reservation holds inventory. Users see "reserving..." for at most 10 minutes before a definitive result. This is the same pattern Stripe uses for two-phase payment authorization: authorize (hold inventory + reserve funds) then capture (confirm booking + charge card).
+
+*(Cross-question: Naming the "payment hold vs. charge" pattern — authorize then capture — is the expert-level answer here.)*
+
+> **Interviewer:** Your inventory table has 912 million rows. A SELECT with FOR UPDATE on 3 rows across this table — how fast is that?
+
+**Candidate:** With the composite primary key `(hotel_id, room_type_id, date)`, the SELECT FOR UPDATE is a point lookup on the clustered index — O(log N) which at 912M rows is about 30 B-tree levels, roughly 3-5 ms including I/O. The rows for a 3-night stay are physically adjacent in the index (same hotel_id, same room_type_id, consecutive dates), so all 3 rows likely share the same or adjacent index pages — likely a single I/O. Total transaction time including the UPDATE and INSERT is under 20ms. This is well within acceptable SLA for a booking endpoint.
+
+> **Interviewer:** How do you handle the search path — 100,000 QPS looking for hotels in Paris with availability for Aug 10-13?
+
+**Candidate:** The search path and booking path are separated by design. Search goes through Elasticsearch (or a denormalized read replica) with Redis caching. When a user searches "Paris, Aug 10-13, 2 guests," the query is: find hotels in Paris where at least one room type has available rooms on all three nights. Pre-computing a `hotel_availability` summary table that rolls up `room_inventory` nightly (via an ETL pipeline) and indexing it in Elasticsearch gives us sub-50ms search at 100K QPS. The summary is stale by up to 1 hour — acceptable for search. The availability check on the specific hotel page (the GET /hotels/{id}/availability endpoint) hits the live `room_inventory` table and is always fresh. This two-tier model — approximate availability for search, exact availability for booking — is how every real hotel platform works.
+
+> **Interviewer:** A hotel decides to run a flash sale — 50% off all rooms for the next 10 minutes. How does this affect your system?
+
+**Candidate:** Flash sales are a write amplification problem. If Hotel Grand Paris has 1,000 rooms and a flash sale pushes 10,000 users to the booking page simultaneously, the `room_inventory` table for that hotel gets hammered with concurrent `SELECT FOR UPDATE` + `UPDATE` transactions. Mitigation: (1) **Rate limit per hotel_id** — cap concurrent booking transactions for any single hotel at, say, 200/second. Excess requests get queued or receive a "high demand, retry in 5 seconds" response. (2) **Redis-backed inventory counter** — for flash sale hotels, move the available_rooms counter into Redis using `DECR` (atomic, lock-free, ~100K ops/sec). When the Redis counter hits 0, stop accepting bookings. Write the final booked count to PostgreSQL asynchronously. The risk is Redis failing — mitigate with Redis persistence (AOF) and a reconciliation job. (3) Use a **queue-based booking flow** for large hotels: accept bookings into a Kafka queue and process serially, giving users a "position in queue" progress indicator. Airbnb uses this approach for extremely popular listings.

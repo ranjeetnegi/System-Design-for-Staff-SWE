@@ -3260,3 +3260,178 @@ Partial payments require treating the original order as having multiple payment 
 **Q18: How do you audit payment transactions for compliance -- what records must you keep and for how long?**
 
 For financial compliance, you must retain an immutable record of every state transition for every payment. Your payment_events table serves this purpose: every status change (created, authorized, captured, refunded, disputed) is appended as an immutable row with a timestamp and the actor who triggered it (user ID, system, support agent). Ledger entries are also immutable and append-only -- corrections are made via new entries, never by modifying existing ones. Retention periods depend on jurisdiction: in the US, financial records must be kept for a minimum of 7 years. In the EU (PSD2, GDPR), similar requirements apply. Your system should archive records to cold storage (for example, S3 Glacier) after 2 years while keeping them queryable for audit. For PCI audits, you must be able to produce a complete history of any payment on demand.
+
+---
+
+## Interview Simulation — Payment Flow
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a payment processing system for an e-commerce platform. Where would you start?
+
+**Candidate:** I want to nail down scope before drawing anything. A few questions: Are we building the payment gateway ourselves or integrating with a third-party processor like Stripe or Adyen? What payment methods do we need — cards only, or also wallets and bank transfers? Do we need to support refunds and partial refunds in V1, or just captures? And what's the expected order volume — are we talking millions of orders per day or thousands?
+
+> **Interviewer:** Assume you integrate with a third-party processor. Card payments plus PayPal. Refunds yes, partial payments no. A few hundred thousand orders per day, peak around 10,000 orders per hour.
+
+**Candidate:** Good. That keeps V1 tractable. One more constraint: do we need multi-currency support and cross-border settlements, or is this single-currency for now?
+
+> **Interviewer:** Single currency, USD only.
+
+**Candidate:** That removes a lot of FX and settlement complexity. Last question: PCI compliance scope — are we handling raw card numbers at all, or are we using a processor-hosted fields solution like Stripe Elements so we never touch raw PANs?
+
+> **Interviewer:** Processor-hosted fields. You never see the raw card number.
+
+**Candidate:** Perfect. That means PCI scope is dramatically reduced — we're a SAQ A merchant, not SAQ D. We store only the processor's payment method token, never the PAN. I'll design around that assumption.
+
+*(Cross-question: PCI scope reduction)*
+
+> **Interviewer:** You said "processor-hosted fields dramatically reduces PCI scope." If we later needed to accept payments via a mobile SDK that sends the card number directly to our backend for 100ms before forwarding to the processor, what would change?
+
+**Candidate:** That single 100-millisecond window where the raw PAN touches our servers moves us from SAQ A to SAQ D, which requires a full annual audit, quarterly vulnerability scans, and penetration testing. The infrastructure cost alone — isolated network segments, dedicated servers, restricted access — runs hundreds of thousands of dollars per year. The right answer is to reject that design entirely and instead use a tokenization endpoint where the mobile SDK calls the processor directly and only the token comes back to our backend. The 100ms "convenience" is not worth the compliance overhead.
+
+---
+
+### Phase 2: Estimation (8 min)
+
+**Candidate:** Let me work through the numbers. Peak is 10,000 orders/hour, which is about 167 orders/minute or roughly 3 QPS sustained. But payments are bursty — Black Friday peak might be 10x normal, so I'll design for 30 QPS peak. Each payment goes through three external calls: authorize, capture, and optionally refund. So peak external call rate is around 90 QPS to the processor.
+
+For storage: each payment record is ~2 KB including all fields and events. At 300,000 orders/day, that's 600 MB/day of new payment data. Over 7 years of retention (US financial compliance), that's roughly 1.5 TB total. Cold storage on S3 Glacier after 2 years keeps hot database size under 400 GB — manageable on a single Postgres primary with read replicas.
+
+For the payment events (audit log): each payment generates 3-5 events on average. At 300,000 orders/day and 4 events each, that's 1.2 million rows/day, or about 4.4 billion rows over 7 years. That table needs to be partitioned by created_at month with the older partitions archived to cold storage.
+
+> **Interviewer:** You said 30 QPS peak for external processor calls. Stripe's SLA is 99.99% uptime — that's about 52 minutes of downtime per year. What happens to your 30 QPS of payment requests during that window?
+
+**Candidate:** You're right to push on that. 52 minutes of processor downtime at 30 QPS means roughly 90,000 failed payments if we do nothing. My mitigation is two-layered. First, I implement an exponential backoff retry queue: requests that get a 503 from Stripe are enqueued with a delay of 1s, 2s, 4s, up to 30s, with a max of 3 retries. Each retry uses the same idempotency key so we don't double-charge. Second, I maintain a secondary processor integration — if Stripe returns 503 five times consecutively, a circuit breaker opens and I route new payment attempts to the backup processor (e.g., Adyen) for the next 60 seconds. Users see a slightly longer loading spinner but the transaction succeeds. The order state machine stays in PENDING until a processor confirms AUTHORIZED, so there's no risk of fulfilling an unconfirmed payment.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Three core endpoints for V1:
+
+```
+POST /v1/payments
+  Body: { order_id, amount_cents, currency, payment_method_token, idempotency_key }
+  Returns: { payment_id, status: "PENDING" }
+
+POST /v1/payments/{payment_id}/capture
+  Body: { amount_cents }  // can be <= authorized amount for partial capture
+  Returns: { payment_id, status: "CAPTURED", captured_at }
+
+POST /v1/payments/{payment_id}/refund
+  Body: { amount_cents, reason, idempotency_key }
+  Returns: { refund_id, payment_id, status: "REFUNDED" }
+```
+
+The idempotency_key on the create and refund endpoints is mandatory — callers must generate a UUID and retry with the same key on network failure. Our system stores the key with a 24-hour TTL and returns the cached response on duplicate requests.
+
+> **Interviewer:** Why does the capture endpoint not have an idempotency key?
+
+**Candidate:** Good catch — it should. Capture is also a non-idempotent operation that can fail mid-flight. If the caller retries without an idempotency key and our system crashed after sending the capture to the processor but before writing the status, we'd send a duplicate capture. I'd add idempotency_key to the capture body as well, using the same UUID-based approach. The storage cost is trivial — one row per key in a Redis hash with 24-hour TTL.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Core tables:
+
+```sql
+payments(
+  payment_id UUID PK,
+  order_id UUID NOT NULL,
+  amount_cents BIGINT NOT NULL,
+  currency CHAR(3) NOT NULL,
+  status ENUM('PENDING','AUTHORIZED','CAPTURED','REFUNDED','FAILED'),
+  processor_token TEXT,        -- Stripe/Adyen payment intent ID
+  idempotency_key UUID UNIQUE,
+  created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
+)
+
+payment_events(
+  event_id UUID PK,
+  payment_id UUID FK → payments,
+  event_type ENUM('CREATED','AUTHORIZED','CAPTURED','REFUND_INITIATED','REFUNDED','FAILED'),
+  actor_id TEXT,               -- user_id, 'system', or support_agent_id
+  metadata JSONB,
+  created_at TIMESTAMPTZ
+)  -- partitioned by created_at, append-only, no UPDATE/DELETE
+
+ledger_entries(
+  entry_id UUID PK,
+  payment_id UUID FK,
+  type ENUM('DEBIT','CREDIT'),
+  amount_cents BIGINT,
+  created_at TIMESTAMPTZ
+)  -- append-only, corrections via new offsetting entries
+```
+
+> **Interviewer:** Why store both a `status` column on `payments` and an append-only `payment_events` log? Isn't that redundant?
+
+**Candidate:** Deliberately so, and for different access patterns. The `status` column on `payments` is a denormalized cache of current state — it lets us answer "is this payment captured?" with a single index lookup by payment_id, which happens on every order fulfillment check. The `payment_events` table is the ground truth for auditing and dispute resolution — a regulator or fraud investigator needs the full timeline, not just the current state. If they ever diverge due to a bug, the events table wins; we can always recompute status by replaying events. The duplication is intentional: one for query performance, one for auditability.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+                    ┌─────────────┐
+  Client/Mobile ───▶│ API Gateway │
+                    └──────┬──────┘
+                           │ POST /v1/payments
+                    ┌──────▼──────┐        ┌──────────────────┐
+                    │  Payment    │───────▶ │ Idempotency Cache│
+                    │  Service   │◀─────── │   (Redis, 24h TTL)│
+                    └──────┬──────┘        └──────────────────┘
+                           │
+             ┌─────────────┼─────────────┐
+             ▼             ▼             ▼
+      ┌──────────┐  ┌──────────┐  ┌──────────────┐
+      │ Postgres │  │  Stripe  │  │ Event Queue  │
+      │ payments │  │  / Adyen │  │  (Kafka)     │
+      │ + events │  │ Processor│  └──────┬───────┘
+      └──────────┘  └──────────┘         │
+                                  ┌──────▼───────┐
+                                  │ Fulfillment  │
+                                  │ / Ledger     │
+                                  │  Services    │
+                                  └──────────────┘
+```
+
+The Payment Service is stateless — all state lives in Postgres and Redis. The flow is: (1) check idempotency cache; (2) write PENDING payment row; (3) call processor with timeout; (4) update status + append event row in one transaction; (5) publish PAYMENT_CAPTURED event to Kafka for downstream (fulfillment, ledger, notifications).
+
+*(Cross-question: saga vs 2PC)*
+
+> **Interviewer:** You publish to Kafka after the Postgres write. What if the Kafka publish fails — the payment is captured in Postgres but fulfillment never hears about it?
+
+**Candidate:** This is the classic dual-write problem. My solution is the outbox pattern: instead of publishing directly to Kafka, the Payment Service writes a row to a `payment_outbox` table in the same Postgres transaction as the status update. A separate Outbox Relay process polls this table every 500ms, publishes confirmed rows to Kafka, and marks them as published. This guarantees at-least-once delivery from Postgres to Kafka without distributed transactions. Fulfillment consumers are idempotent — they deduplicate by payment_id, so duplicate Kafka messages are safe. The outbox table is small in practice because rows are deleted or marked after successful publish; only a few thousand rows accumulate during relay lag.
+
+*(Cross-question: saga rollback)*
+
+> **Interviewer:** In your saga design, what happens when the order service has already reserved inventory but the payment processor returns a hard decline? Walk me through the compensation.
+
+**Candidate:** A hard decline (card blocked, insufficient funds) means authorization failed — we never captured money. The saga's compensating transaction is: (1) Payment Service writes status FAILED + appends FAILED event; (2) publishes PAYMENT_FAILED to Kafka; (3) Inventory Service consumer receives PAYMENT_FAILED and releases the reservation (increments available_quantity back). The user sees a "payment failed" error and can retry with a different card. The key invariant is that inventory reservation has a TTL of 15 minutes anyway — even if the PAYMENT_FAILED message is lost, the reservation expires automatically, preventing indefinite inventory lockout. The saga is designed so each step's failure path is either self-healing via TTL or compensated via a downstream event.
+
+*(Cross-question: reconciliation)*
+
+> **Interviewer:** How do you detect discrepancies between your internal ledger and what Stripe actually settled?
+
+**Candidate:** Daily reconciliation job. Stripe provides a Settlement Report CSV via their reporting API every morning at 2 AM UTC covering the prior day. My reconciliation service downloads this report, joins it against our `ledger_entries` table on the processor transaction ID, and flags three classes of discrepancy: (1) captured in our ledger but missing from Stripe's settlement — possible if we wrote CAPTURED before Stripe confirmed, meaning we need to re-query the charge status; (2) in Stripe's report but missing from our ledger — means our Kafka consumer or outbox relay dropped an event and fulfillment may not have triggered; (3) amount mismatch — almost always a currency conversion edge case or a Stripe fee we didn't account for. Discrepancies generate alerts to the finance team and create entries in a `reconciliation_exceptions` table. SLA is to resolve within 48 hours per our card network agreements.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why saga over two-phase commit (2PC) for distributed payment transactions?**
+
+2PC requires all participants (payment DB, inventory DB, fulfillment DB) to hold locks and wait for a coordinator decision. If the coordinator crashes mid-way, all participants are stuck in "prepared" state waiting for a commit or abort that never comes — this is called the "blocking" problem of 2PC. At our scale, a coordinator crash blocks thousands of concurrent transactions. Saga avoids this by decomposing the transaction into independent steps with compensating actions. Each step commits locally and publishes an event. If a later step fails, it publishes a failure event and prior steps run compensations. The trade-off is that the system is temporarily inconsistent between steps — a brief window where inventory is reserved but payment is not yet captured. For e-commerce, this is acceptable. For financial transfers where intermediate inconsistency is illegal (e.g., bank account debit without credit completing), you'd use a different pattern like a serializable ledger with a two-phase approach scoped to a single database.
+
+**Q: How do idempotency keys prevent double charges on network retries?**
+
+The client generates a UUID v4 idempotency key before making the payment request and caches it locally. On any network error — including 500s, timeouts, and connection resets — the client retries the identical request with the same key. Our server stores the key in Redis with the response (payment_id, status) when it first processes the request. On a duplicate request, the server finds the key in Redis and returns the cached response without executing any logic — no second processor call, no second database write. The key has a 24-hour TTL; after expiry, the same key would create a new payment, but clients should treat a 24-hour-old payment as a separate intent anyway. The critical design point is that the idempotency check and the processor call must be ordered carefully: check key → call processor → store response and key atomically. If the server crashes between the processor call and storing the key, the next retry will make a second processor call. To handle this, we use the processor's own idempotency key (passed through to Stripe) so even if we call Stripe twice with the same key, Stripe deduplicates and returns the same charge.
+
+**Q: What does the payment state machine look like and what transitions are illegal?**
+
+Valid states: PENDING → AUTHORIZED → CAPTURED → REFUNDED. Also: PENDING → FAILED, AUTHORIZED → FAILED (if capture fails), AUTHORIZED → VOIDED (explicit cancel before capture). Illegal transitions that the state machine must reject: CAPTURED → AUTHORIZED (can't un-capture), REFUNDED → CAPTURED (can't re-capture after refund), FAILED → AUTHORIZED (failed payments must be re-created as new payment intents). The state machine is enforced at the database level with a check constraint on the status column and a transition table that the Payment Service validates against before any status update. This means even if there's a bug in the service logic, the database rejects invalid transitions, preventing corrupted payment state from persisting.

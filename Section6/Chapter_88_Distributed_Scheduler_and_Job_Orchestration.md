@@ -4265,3 +4265,237 @@ UNAVOIDABLE REMAINING GAPS (acknowledged):
     as a remaining challenge but not designed.
   → These gaps are intentional scope boundaries, not oversights.
 ```
+
+## Interview Simulation — Distributed Scheduler (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a distributed job scheduler. Walk me through your requirements gathering.
+
+**Candidate:** Let me start with clarifying questions before touching any design.
+
+**Candidate:** First — what's the primary use case? Cron-style recurring jobs, one-shot delayed jobs, DAG pipelines, or all three?
+
+> **Interviewer:** All three. Think of a system like Airflow or Temporal but at Google-scale — internal infra used by thousands of teams.
+
+**Candidate:** Got it — shared multi-tenant scheduler. A few more questions:
+
+- Scale: how many jobs are we scheduling? Thousands of tenants × how many jobs each?
+- Latency expectation: when a job is *due*, how quickly must a worker start it — 1 second SLA, 10 seconds?
+- Exactly-once: is this a hard requirement, or at-least-once with idempotent jobs acceptable?
+- What's the failure model — can we miss a cron window (e.g., system is down for 2 hours) or must we backfill?
+
+> **Interviewer:** 50 million active jobs total, ~100K jobs trigger per minute at peak. Trigger latency within 5 seconds. Exactly-once is required — jobs may do financial writes. Backfill missed windows.
+
+**Candidate:** Final scoping: who owns retry logic — the scheduler or the job author? And do we need cross-datacenter HA or single-region is fine?
+
+> **Interviewer:** Scheduler owns retry (configurable max retries). Multi-region active-passive.
+
+**Candidate:** Summarizing functional requirements:
+1. Schedule jobs: cron, one-shot, DAG dependency chains
+2. Trigger within 5 seconds of due time at 100K/min peak
+3. Exactly-once execution — no duplicate runs even under failures
+4. Backfill missed cron windows after downtime
+5. Retry with configurable policy; dead-letter after max retries
+
+Non-functional: multi-region HA, multi-tenant isolation, audit trail.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Do rough sizing.
+
+**Candidate:**
+
+- **Job store size:** 50M jobs × ~1 KB metadata = 50 GB — fits in a sharded relational DB or distributed KV store.
+- **Trigger throughput:** 100K jobs/min ≈ 1,700 jobs/sec. Each trigger is a small message enqueue — well within Kafka's range.
+- **Scheduler tick granularity:** 1-second tick across 50M jobs is expensive to scan naively. We need a time-indexed structure, not a full-table scan.
+- **Worker fleet:** at 1,700 jobs/sec, if average job takes 10 seconds, we need ~17K concurrent workers. If jobs are lightweight (1 sec), ~1,700 workers.
+- **Dedup store (idempotency):** key = job_id + scheduled_time. 100K triggers/min × 10-min dedup window = 1M keys in Redis — trivial.
+
+No surprises. The hard part is the scheduler loop, not storage.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Sketch the core API.
+
+**Candidate:**
+
+```
+// Register a job
+POST /jobs
+{
+  job_id: string,          // caller-provided idempotency key
+  schedule: "cron:0 * * * *" | "at:2026-06-26T15:00:00Z" | "dag:<dag_id>",
+  handler_url: string,     // or queue topic
+  payload: bytes,
+  retry_policy: { max_attempts: int, backoff: "exponential" },
+  tenant_id: string,
+  dedup_window_seconds: int
+}
+→ 201 Created { job_id, next_run_at }
+
+// Trigger manually / backfill
+POST /jobs/{job_id}/trigger
+{ scheduled_for: timestamp }   // explicit window for backfill
+
+// Get execution history
+GET /jobs/{job_id}/runs?limit=50
+→ [{ run_id, scheduled_at, started_at, status, attempt }]
+
+// DAG definition
+POST /dags
+{ dag_id, nodes: [{ job_id, depends_on: [job_id] }] }
+```
+
+*(Cross-question: idempotency)* The `job_id + scheduled_for` pair is the dedup key. If a trigger fires twice for the same window, the second one checks Redis/DB for an existing run_id and drops it. The worker also checks before executing.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does your data model look like?
+
+**Candidate:** Three core tables:
+
+```
+jobs
+  job_id PK, tenant_id, schedule_expr, handler_url, payload,
+  retry_policy JSON, status ENUM(active|paused|deleted),
+  next_run_at TIMESTAMP indexed
+
+job_runs
+  run_id PK, job_id FK, scheduled_at, started_at, finished_at,
+  status ENUM(pending|running|success|failed|dead_letter),
+  attempt INT, worker_id, result_payload
+
+dag_edges
+  dag_id, upstream_job_id, downstream_job_id
+  — rows define dependency graph; acyclicity enforced at write time
+```
+
+The `jobs.next_run_at` index is the scheduler's heartbeat query:
+
+```sql
+SELECT job_id FROM jobs
+WHERE next_run_at <= NOW() + INTERVAL 5 SECONDS
+  AND status = 'active'
+ORDER BY next_run_at
+LIMIT 1000;
+```
+
+This runs every second. At 50M rows, this index scan is fast — but we shard by `tenant_id` to avoid hot partitions.
+
+*(Cross-question: DAG)* When an upstream job completes, we query `dag_edges` for downstream jobs, check if all other upstreams are `success`, and only then enqueue the downstream. This is event-driven fan-in — no polling.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the high-level design and then I'll probe.
+
+**Candidate:**
+
+```
+                        ┌─────────────────────────────────────┐
+                        │          SCHEDULER SERVICE           │
+                        │                                      │
+  ┌──────────┐  POST    │  ┌──────────┐   Leader Election     │
+  │  Client  │─────────▶│  │  API GW  │   (ZooKeeper/etcd)    │
+  └──────────┘          │  └────┬─────┘         │             │
+                        │       │          ┌─────▼──────┐     │
+                        │       │          │  Scheduler  │     │
+                        │       ▼          │   Leader   │     │
+                        │  ┌─────────┐     └─────┬──────┘     │
+                        │  │  Jobs   │           │ tick/sec   │
+                        │  │   DB    │◀──────────┘            │
+                        │  │(sharded)│  SELECT due jobs       │
+                        │  └─────────┘           │            │
+                        └────────────────────────┼────────────┘
+                                                 │ enqueue
+                                    ┌────────────▼──────────────┐
+                                    │         Kafka              │
+                                    │  topic: job-triggers       │
+                                    │  partitioned by tenant_id  │
+                                    └────────────┬──────────────┘
+                                                 │ consume
+                              ┌──────────────────▼──────────────────┐
+                              │           Worker Pool                │
+                              │  ┌────────┐ ┌────────┐ ┌────────┐  │
+                              │  │Worker 1│ │Worker 2│ │Worker N│  │
+                              │  └───┬────┘ └────────┘ └────────┘  │
+                              │      │ check dedup (Redis)          │
+                              │      │ mark run=running (DB)        │
+                              │      │ call handler_url             │
+                              │      │ mark run=success/fail        │
+                              └──────┴─────────────────────────────┘
+                                                 │ DAG completion event
+                                    ┌────────────▼──────────────────┐
+                                    │       DAG Orchestrator         │
+                                    │  fan-in checker, enqueues      │
+                                    │  downstream jobs when ready    │
+                                    └───────────────────────────────┘
+```
+
+> **Interviewer:** How do you guarantee exactly-once? Walk me through the failure modes.
+
+**Candidate:** Exactly-once has two attack surfaces: the scheduler firing twice, and the worker executing twice.
+
+**Scheduler dedup:** Before enqueuing a job trigger to Kafka, the scheduler does a conditional insert:
+
+```sql
+INSERT INTO job_runs (run_id, job_id, scheduled_at, status)
+VALUES (new_uuid(), :job_id, :scheduled_at, 'pending')
+ON CONFLICT (job_id, scheduled_at) DO NOTHING
+RETURNING run_id;
+```
+
+If this returns null, the run already exists — skip the enqueue. The unique constraint on `(job_id, scheduled_at)` is the gate.
+
+**Worker dedup:** When a Kafka message is delivered (possibly twice due to re-delivery), the worker does:
+
+```sql
+UPDATE job_runs SET status='running', worker_id=:me, started_at=NOW()
+WHERE run_id=:run_id AND status='pending';
+```
+
+Only one worker gets the row-lock and wins the CAS. Others see 0 rows updated and drop the message.
+
+**Handler idempotency:** The worker passes `run_id` as `Idempotency-Key` to the handler URL. The job author is responsible for idempotent handlers — we document and enforce this contract.
+
+> **Interviewer:** What happens if the scheduler leader crashes mid-tick after reading jobs but before enqueuing?
+
+**Candidate:** Those jobs sit in `jobs` table with `next_run_at` in the past. The new leader, on its first tick, picks them up naturally — they're overdue and immediately eligible. We tolerate up to ~5–10 second trigger latency during leader election, which is within our 5-second SLA on average, though a failover event briefly violates it. To tighten this, we can run two schedulers in hot-standby mode — both read the DB, but only the leader actually enqueues. The standby takes over within 2 seconds via ZooKeeper session timeout.
+
+> **Interviewer:** How do you handle backfill for missed cron windows?
+
+**Candidate:** When a job transitions from `paused` or `inactive` back to `active` (or after a system outage), we compute all missed windows between `last_run_at` and `NOW()` using the cron expression. Then we emit one trigger per missed window, in order. We cap backfill at a configurable `max_backfill_windows` (default: 10) — beyond that, we log a warning and skip older windows. The tenant can override this limit.
+
+The trigger carries `scheduled_at = missed_window_time` so downstream systems can reason about the logical time, not wall clock.
+
+> **Interviewer:** How do you handle DAG cycles at registration time?
+
+**Candidate:** We run a DFS cycle detection on the submitted DAG before accepting the write. Standard topological sort — if we can't complete it, we reject with a 400. At runtime, we never re-check; the acyclicity guarantee from registration is sufficient. The tricky edge case is incremental DAG modification — adding an edge to an existing DAG. We re-run cycle detection on the full graph, holding a write lock on the dag_id.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: multi-tenancy fairness)* If one tenant submits 1M jobs due at the same second, they should not starve others. We solve this with per-tenant Kafka partitions + per-tenant rate limiting at the scheduler tick: the SELECT query caps reads per tenant to N jobs per tick. Overflow jobs are rescheduled in the next tick. Tenants get guaranteed minimum throughput, not best-effort.
+
+*(Cross-question: long-running jobs)* A job that takes hours — the worker holds a heartbeat lease in Redis. If the heartbeat expires (worker crashed), the scheduler marks the run `failed` and retries. The worker sets a `max_execution_time` per job; jobs exceeding it are killed and retried. This requires the handler to be re-entrant.
+
+*(Cross-question: dynamic DAGs — shape determined at runtime)* This is genuinely hard. You can't pre-register edges when a job's fan-out count depends on its output. The pattern is: job A completes, writes its output to a staging table, and the DAG orchestrator reads it to dynamically create child job_run rows. The parent job declares `dynamic_output: true` in its registration. This is a V4 feature — for now, scope it as a future extension and design the schema to not preclude it (keep `dag_edges` flexible, don't hard-code static graphs).
+
+*(Cross-question: observability)* Each `job_run` row is an append-only audit record. We expose a metrics endpoint per tenant: p50/p99 trigger latency, failure rate, dead-letter queue depth. Alerts fire if any job hasn't run within `2 × interval` of its cron schedule.
+
+*(Cross-question: exactly-once vs at-least-once trade-off)* At Staff level, interviewers want you to articulate when exactly-once is NOT worth the cost. For jobs doing read-only analytics or idempotent writes, at-least-once + idempotent handlers is simpler and more scalable. The dedup machinery (DB unique constraints, Redis checks, CAS updates) adds ~10ms latency per trigger and increases DB write load by ~3×. Only mandate exactly-once when the handler side-effect is non-idempotent — financial debits, email sends, external API calls.
+
+*(Cross-question: scaling the scheduler loop)* A single leader scanning 50M jobs is a bottleneck. Solution: shard the job namespace. Each scheduler shard owns a key range of `tenant_id` (or `job_id` hash). Five shards of 10M jobs each, each shard runs an independent tick. Leader election is per-shard — ZooKeeper gives each shard its own lock. This scales horizontally and removes the single-leader bottleneck.

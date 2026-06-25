@@ -2500,3 +2500,116 @@ The deeper lesson from this transition: MapReduce's low-level API caused enginee
 ---
 
 *Chapter 85 complete. Next in the Google Foundational Systems series: Chapter 86 — Chubby (distributed lock service). Pairs with Ch41b (overview of all Google systems) and Ch83 (GFS, which also uses Chubby for master election).*
+
+---
+
+## Interview Simulation — MapReduce
+
+*45-minute deep-dive interview on Google's MapReduce paper (Dean & Ghemawat, OSDI 2004). Interviewers expect you to understand the execution model, fault tolerance mechanism, performance optimizations, and critically — when NOT to use MapReduce.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** Explain MapReduce to me as if I haven't read the paper.
+
+**Candidate:** MapReduce is a programming model that lets you express a computation as two functions — map and reduce — and then automatically runs that computation in parallel across thousands of machines while handling failures transparently. You write the logic; the framework handles distribution.
+
+The map function takes a key-value pair and emits zero or more intermediate key-value pairs. The reduce function takes an intermediate key and all values for that key and emits zero or more output key-value pairs. The framework's job is the "shuffle" phase between them: take all the intermediate pairs from all map workers, group them by key, and feed each group to one reduce worker.
+
+The insight that made this work at Google's scale: most large-scale computations at Google could be expressed this way. Building an inverted index: map emits (word, document_id) pairs; reduce collects all document_ids for each word. Counting URL accesses: map emits (url, 1); reduce sums the 1s per URL. Sorting: map emits (key, value); reduce receives keys in sorted order (because the shuffle sorts by key). The model is constraining but powerful enough to express almost everything Google needed for batch analytics.
+
+> **Interviewer:** What's the role of the master in MapReduce?
+
+**Candidate:** The master tracks the state of every map and reduce task (idle, in-progress, or completed) and which worker machine is running each in-progress task. It propagates the locations of intermediate files from map workers to reduce workers — when a map task completes, the master stores the location of the output files it produced and notifies reduce workers. It handles failure detection by timing out workers and reassigning tasks. It also provides monitoring data — a web UI shows job progress, bytes processed, straggler tasks.
+
+Critically, the master is a single process per job, not a persistent service. It lives for the duration of one MapReduce job and then exits. There's no long-lived master to maintain. If the master fails, the entire job fails and must be restarted from scratch — the paper acknowledges this and treats it as an acceptable corner case given how rare master failures are compared to worker failures.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Explain speculative execution and why it matters.
+
+**Candidate:** Speculative execution addresses the "straggler" problem. In a large cluster, a job is only complete when its last task finishes. If one machine is running 10x slower than others — due to a bad disk, memory pressure, background jobs, or CPU throttling — it holds up the entire job. The master can't tell if the machine is slow or about to fail.
+
+```
+Speculative Execution Timeline
+================================
+
+Map phase (100 tasks, 100 workers):
+  T=0:  All 100 map tasks start
+  T=60: 99 tasks done, task #47 still running on worker W3
+         W3 looks like a straggler (near-completion, running long)
+
+Without speculation:           With speculation:
+  T=60: Wait for W3            T=60: Launch backup task #47 on worker W7
+  T=??  W3 finally finishes    T=65: W7 finishes #47 first
+  Total: unpredictable         T=65: Master uses W7's output, cancels W3
+                                Total: +5 seconds, not +60 seconds
+
+When to speculate:
+  - Task is significantly slower than median for that phase
+  - Near job completion (don't waste resources early)
+  - Only speculate on tasks at the boundary of completion (not new tasks)
+```
+
+The implementation detail: the master keeps track of progress rates (bytes processed per second) and flags tasks that are in the final 5% of the job and running significantly slower than the median. It launches a backup execution of the flagged task on an idle worker. Whichever finishes first "wins" — the master uses that output and tells the other to stop. The paper reports speculative execution reduces job completion time by 44% at Google's scale.
+
+> **Interviewer:** What is a combiner and when should you use one?
+
+**Candidate:** A combiner is a partial reduce that runs on the map worker before the shuffle. It has the same interface as the reduce function — it takes an intermediate key and a list of values and emits a reduced value — but it runs locally on the map output before network transmission.
+
+The canonical example: word count. Without a combiner, if a document contains the word "the" 1000 times, the map emits 1000 ("the", 1) pairs that must all be shuffled to the reduce worker for "the". With a combiner, the map worker runs the combiner locally: 1000 ("the", 1) pairs collapse to one ("the", 1000) pair. The shuffle only transmits one pair instead of 1000.
+
+Combiners are only valid when the reduce function is commutative and associative — when partial aggregation produces the same final result regardless of partitioning. Sum, count, min, max all work. Average does NOT work directly: average(average(1,2), average(3,4)) ≠ average(1,2,3,4) — you'd need to track (sum, count) pairs and divide only in the final reduce. The engineering mistake is using a combiner for operations that aren't algebraically correct partial aggregations.
+
+*(Cross-question: what's the difference between a combiner and a local aggregation in the mapper?)* They're equivalent in effect but different in interface. A combiner is invoked by the framework after the map function completes, on the map worker's output before writing to local disk. You could also aggregate inside the map function itself using a hash map (count words locally, then emit one pair per unique word). The combiner approach is cleaner and lets you reuse the reduce function. The in-mapper aggregation approach gives you more control but requires you to flush state at the right time.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** When is MapReduce the wrong tool?
+
+**Candidate:** Three clear cases. First, iterative algorithms. PageRank, k-means, gradient descent — all require reading the same dataset multiple times, passing results from one iteration to the next. In MapReduce, each iteration is a separate job; the output of one job writes to GFS and the next job reads it back. For 100 iterations of PageRank on a large web graph, that's 100 full GFS write-read cycles. Spark's RDDs (in-memory persistence across iterations) are 10-100x faster for iterative workloads. Second, real-time or low-latency queries. MapReduce jobs take minutes to hours; they're batch systems. For real-time analytics, use Flink, Kafka Streams, or a columnar store (BigQuery). Third, graph algorithms with complex dependencies. MapReduce's shuffle step forces all-to-all communication; algorithms like shortest path or strongly connected components require many rounds of communication between vertices. Pregel (Google's graph processing system) uses a vertex-centric "think like a vertex" model that's more natural and efficient.
+
+> **Interviewer:** MapReduce uses re-execution for fault tolerance. What are the implications of that choice?
+
+**Candidate:** Re-execution requires all tasks to be deterministic and idempotent. If a map task runs twice (once on the original worker and once on a backup), both must produce identical output. This rules out: tasks that use external state (database writes that shouldn't be doubled), tasks with side effects (sending emails, charging credit cards), and non-deterministic operations (random number generation with non-fixed seeds). MapReduce's fault tolerance model is "pure functions" — same input always produces same output. This is a strong constraint but it made the framework extremely simple to implement correctly.
+
+The alternative — exactly-once execution with a distributed transaction protocol — would require 2PC across map and reduce tasks, coordination on every task completion, and a much more complex recovery protocol. Google made the right engineering tradeoff: design applications to be idempotent, get simple fault tolerance for free.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** Your team needs to process 10TB of log files daily to compute product analytics. Would you use MapReduce (or a MapReduce-like system)? What would you use in 2026?
+
+**Candidate:** For pure batch processing of immutable log files with no latency requirement, MapReduce is conceptually right but Spark is the modern implementation. Spark gives you the same programming model (transformations and actions on distributed collections) with in-memory processing and a rich API (DataFrames, SQL). For 10TB/day of logs, I'd use Spark on a managed platform — Databricks, EMR, or Dataproc — with columnar storage (Parquet) on S3 or GCS.
+
+The architectural decision tree: if you need results within seconds, use a streaming system (Flink) or a columnar OLAP database (BigQuery, Snowflake, ClickHouse) that can scan 10TB in seconds using vectorized execution. If you need results within minutes and have complex business logic that's hard to express in SQL, use Spark. If you have simple aggregations (sum, count by dimension), BigQuery or Snowflake will be faster and cheaper than Spark for most cases — they're optimized for exactly this workload. The "MapReduce for everything" era ended around 2015; today the right choice depends on latency requirements, query complexity, and team SQL fluency.
+
+> **Interviewer:** Describe how you'd handle a data skew problem in a MapReduce-style job.
+
+**Candidate:** Data skew means some reduce keys have vastly more values than others — one reducer gets 90% of the data and everything else finishes while waiting for it. Common cause: log processing where one user/customer generates most of the events, or web crawls where one domain has millions of pages.
+
+The fix is two-phase reduction. In phase 1, append a random salt to the key — ("the", 0) through ("the", 9) — and run the combiner. This distributes "the" across 10 reducers. In phase 2, remove the salt and aggregate the 10 partial results. This requires two MapReduce jobs but eliminates the hot reducer. Alternative: custom partitioner that detects heavy keys at job start (using a sample) and allocates them more reduce tasks. Spark's `salted join` and `repartition` APIs implement this pattern. The monitoring signal that indicates skew: reduce phase progress where one task is at 0% while all others are at 100% — the "long tail" reducer.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: How does MapReduce achieve fault tolerance for map tasks vs. reduce tasks differently?**
+
+A: Map task failure: the master simply re-runs the task on another worker. Map output is stored locally on the worker (intermediate files), so if the worker dies, the output is lost and must be regenerated. Even if a map task completed successfully, if the worker dies before reducers read the output, the map task must be re-run. Reduce task failure: re-run the task on another worker. Reduce output goes directly to GFS, so a completed reduce task's output survives worker failure — no need to re-run completed reduce tasks. This asymmetry (map outputs are ephemeral, reduce outputs are durable) means you always need to be able to re-run any map task at any time until all reduce tasks have consumed its output.
+
+**Q: Why does MapReduce sort intermediate keys? Couldn't it skip sorting for non-ordered operations?**
+
+A: Sorting guarantees that all values for the same key arrive at the same reducer together, which is required for the reduce semantic. Without sorting, you'd need a hash join (partition by key hash, then scan all partitions matching a key) — which is what some streaming systems do. Sorting has the advantage of enabling merge-sort-based aggregation, which is memory-efficient: you process one key's values at a time and don't need to hold all values for all keys in memory simultaneously. Hash aggregation is faster but requires enough memory to hold all distinct keys. MapReduce's sort-based approach was right for 2004 hardware where memory was scarce. Modern systems (Spark) use in-memory hash aggregation with spill-to-disk fallback.
+
+**Q: What happens if the number of reduce tasks is wrong?**
+
+A: Too few reduce tasks: each reducer gets too much data, reducing parallelism and creating large output files. If you have fewer reduce tasks than cores across the cluster, you're leaving parallelism on the table. Too many reduce tasks: you create too many small output files (one per reducer), which is expensive for downstream consumers that need to read all of them. Also, task scheduling overhead dominates for tiny tasks. The rule of thumb in the paper: set reducers so each output file is 1-2GB and the total number of reducers is 10-20x the number of worker machines. For 1000 machines with 10 GB output, that means 5-10 reducers. For 1PB output, you want thousands of reducers.
+
+---
+
+*Chapter 85 complete. Next in the Google Foundational Systems series: Chapter 86 — Chubby (distributed lock service). Pairs with Ch41b (overview of all Google systems) and Ch83 (GFS, which also uses Chubby for master election).*

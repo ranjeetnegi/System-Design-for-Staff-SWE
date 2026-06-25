@@ -2640,3 +2640,137 @@ deliberate failover).
 ---
 
 *Chapter 83 complete. Next: Chapter 84 — Spanner: Google's Globally Distributed Database.*
+
+---
+
+## Interview Simulation — Chubby (Distributed Lock Service)
+
+*45-minute deep-dive interview on Google's Chubby paper (Burrows, OSDI 2006). Interviewers expect you to understand why Chubby uses Paxos, why it provides coarse-grained locks, and why it is not a general-purpose database — even though it looks like one.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** What does Chubby do and why does Google need it?
+
+**Candidate:** Chubby is a distributed lock service that also provides small-file storage. Its primary purpose is to let distributed systems elect a master and store configuration data with strong consistency guarantees. Almost every Google distributed system in the original stack depended on Chubby for one or both of these: GFS uses it to elect the master; Bigtable uses it to elect the master and store tablet assignment metadata; MapReduce uses it for job tracking.
+
+Why not use Bigtable or GFS directly for these purposes? Because both systems need Chubby to bootstrap themselves — you can't use Bigtable to store the location of the Bigtable master before the master exists. Chubby sits at the bottom of the dependency stack: it has no dependencies on the systems it supports. Chubby's only dependency is its own replicated state machine (Paxos), which is self-contained.
+
+The design choice that defines Chubby: it was built for coarse-grained locking, not fine-grained. A Chubby lock is held for hours to days (e.g., "I am the master of this Bigtable cluster"), not milliseconds (e.g., "I am writing to this row"). Fine-grained locking is for application-level coordination; Chubby handles the structural coordination layer.
+
+> **Interviewer:** How is Chubby's interface structured?
+
+**Candidate:** Chubby exposes a filesystem-like interface with a single namespace of files and directories. You can create files, read files, write files, and acquire locks on files. There are no append or seek operations — Chubby is not a general-purpose file system. Files are small (typically < 1MB) and reads return the entire file atomically. The filesystem metaphor was chosen for familiarity and because it made permission management (ACLs per file) natural.
+
+Locks are advisory, not mandatory. This means the lock service doesn't prevent a process that doesn't hold the lock from reading or writing the file. Advisory locks work because Chubby clients are cooperative — they're all Google services following the same conventions. Mandatory locks would require the lock service to be in every data path, which would make it a bottleneck.
+
+*(Cross-question: what are sequencers and why do they matter?)* A sequencer is a byte string encoding a lock name, mode, and sequence number. A client that acquires a lock gets a sequencer. When it makes an operation on a resource protected by that lock, it passes the sequencer to the resource. The resource checks with Chubby that the sequencer is still valid. This handles the "lock holder crashes and is replaced while an old RPC is in flight" problem — the old RPC arrives at the resource, but its sequencer is stale, so it's rejected.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Walk me through how Chubby uses Paxos. Why Paxos specifically?
+
+**Candidate:** Chubby runs a Paxos replicated state machine across five replicas. All writes go through Paxos to achieve consensus: a write is only committed after a majority quorum (3 of 5) acknowledges it. This gives you: durability (data survives minority failures), fault tolerance (the cluster stays available as long as a majority is alive), and strong consistency (all replicas apply the same sequence of operations in the same order).
+
+```
+Chubby Paxos Architecture (5 replicas)
+========================================
+
+         [Chubby Master]  ← elected by Paxos, holds Chubby master lease
+              |
+    [PREPARE: ballot=5]
+         /    |    \
+   [R2]  [R3]  [R4]   (need 3/5 for quorum)
+         |
+    [PROMISE received]
+         |
+    [ACCEPT: value=v]
+         /    |    \
+   [R2]  [R3]  [R4]   (3/5 ACCEPTED)
+         |
+    [COMMIT to all]
+
+Master lease: elected master can serve reads from local state
+without Paxos round (no read quorum needed) for lease duration.
+Lease renewal: master renews before expiry with one Paxos round.
+```
+
+Why Paxos over a simpler approach like primary-backup? Primary-backup with synchronous replication requires 2PC on every write (primary + all replicas must acknowledge). If one replica is slow, the primary waits. Paxos only requires a majority, so one slow replica doesn't block progress. Also, primary-backup doesn't handle split-brain cleanly — if the primary loses contact with replicas, it doesn't know if it's isolated or if the replicas are isolated. Paxos's ballot system prevents two nodes from simultaneously believing they're the primary.
+
+> **Interviewer:** Explain the grace period in Chubby lock leases.
+
+**Candidate:** When a Chubby client holds a lock, it maintains a lease — a time-bounded guarantee that the lock is valid. If the client can't communicate with Chubby (network partition), it enters a grace period: it stops making Chubby-protected calls for the duration of the grace period (typically 45 seconds) and waits. Two scenarios: (1) the client reconnects within the grace period, the lock is renewed, and it resumes normally. (2) the grace period expires without reconnection — the client tears down its own session and reports failure to the application.
+
+The grace period prevents a split-brain scenario where the client assumes its lock is still valid while Chubby has already expired it and given the lock to someone else. Without the grace period, the old lock holder and the new lock holder could both believe they hold the lock simultaneously. The 45-second grace period is longer than the Chubby master election time (~30 seconds), ensuring that by the time the grace period expires, Chubby has fully recovered and the lock state is definitive.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** Why is Chubby described as "not a name service" even though it looks exactly like one?
+
+**Candidate:** The paper explicitly warns against using Chubby as a high-QPS name service (like DNS) because Chubby's performance model is wrong for it. DNS handles millions of queries per second at microsecond latency by accepting stale data (TTL-based caching). Chubby provides strong consistency, which means every read that isn't served from cache requires a Paxos round — the cluster handles a few thousand operations per second total, not millions.
+
+Google observed that teams would start by using Chubby for master election (correct usage) and then gradually start using it to store application configuration, then service discovery, then health checks — until Chubby was serving millions of QPS, which it was never designed for. The Chubby paper specifically warns: "Don't use Chubby as a highly-available registry for frequently-changing data." The fix Google eventually deployed: a separate service for high-QPS service discovery (what became Google's Stubby/gRPC name resolution).
+
+> **Interviewer:** How does Chubby compare to ZooKeeper?
+
+**Candidate:** ZooKeeper was explicitly designed as an open-source analog to Chubby, with a few deliberate differences. ZooKeeper added watches — clients can subscribe to file changes and get callbacks, which Chubby didn't support natively (Chubby only had course-grained event notifications). ZooKeeper uses ZAB (ZooKeeper Atomic Broadcast) instead of Paxos — ZAB is roughly equivalent but phrased differently, optimized for ZooKeeper's sequential log model. ZooKeeper's data model is znodes (ephemeral and persistent), where ephemeral znodes disappear when the session that created them expires — this is extremely useful for "is this service alive" checks.
+
+The key practical difference: ZooKeeper became the de facto coordination service in the Hadoop ecosystem, running at much larger scale than Google's internal Chubby deployment. In modern systems, etcd (used by Kubernetes) has largely replaced ZooKeeper for new deployments — etcd uses Raft (simpler to reason about than ZAB), has a simpler API, and is designed specifically for configuration storage and service discovery.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** You're building a distributed database that needs a master election mechanism. How would you implement it using etcd (the modern Chubby)?
+
+**Candidate:** The implementation mirrors Chubby's model exactly but using etcd primitives. Each candidate database node attempts to create a key `/db/master` in etcd with a lease TTL (say, 10 seconds). etcd's `PUT` with `PrevExist=false` is an atomic compare-and-swap — only the first writer wins. The winner becomes master and periodically renews the lease (keepalive every 3 seconds, to provide a safety margin before the 10-second expiry). If the master crashes, the lease expires after 10 seconds and any other candidate can acquire it.
+
+```
+Master Election with etcd
+==========================
+
+  Candidate A: PUT /db/master value=nodeA-addr IF NOT EXISTS  → success (wins)
+  Candidate B: PUT /db/master value=nodeB-addr IF NOT EXISTS  → fails (A already there)
+
+  A renews lease every 3s:
+    /db/master (TTL=10s) ──────3s──────3s──────3s──── CRASH
+                                                       10s expiry → key deleted
+
+  B watches /db/master for DELETE event:
+    DELETE detected → retry PUT → wins → becomes master
+
+  Handoff (graceful):
+    A deletes /db/master key voluntarily
+    Any watcher immediately gets DELETE event and can compete
+```
+
+The critical addition for real systems: sequencers. When A becomes master, store a generation number in the value. All operations A performs carry this generation number. If A is partitioned and thinks it's still master but B has taken over, any service that A tries to command will see A's stale generation number and reject it.
+
+> **Interviewer:** A team proposes using Redis SETNX for distributed locking instead of Chubby or etcd. What are the risks?
+
+**Candidate:** Redis SETNX (set if not exists) is the most common distributed locking anti-pattern. The problems: Redis is typically single-node, so the lock service has no fault tolerance — if Redis crashes, all locks are gone. Even Redis Cluster doesn't help because SETNX doesn't provide linearizability across cluster nodes. The "Redlock" algorithm (using 5 Redis nodes with majority voting) was proposed to fix this, but Martin Kleppmann's 2016 analysis showed Redlock has race conditions under clock drift and network delays — specifically, a lock holder that pauses (GC, virtualization stall) can hold an expired lock while another node acquires the same lock.
+
+The correct recommendation: use etcd or ZooKeeper for distributed locks where correctness matters. If you're using Redis SETNX, make sure your protected resource can handle the race condition via application-level sequencer checks — never rely on the Redis lock itself as a safety guarantee, only a performance optimization.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: What is a Chubby "event" and how does it work?**
+
+A: Chubby events are asynchronous callbacks delivered to clients when specific things happen: a watched file's content changes, a lock changes hands, the master fails over, or a session expires. Clients register for events when they open a handle. Events are delivered once on a best-effort basis — if the client is disconnected when an event occurs, it will see the event on reconnection but may have missed intermediate events. This is why clients should not assume they saw every event; they should re-read file state after any event rather than maintaining a client-side cache that they update incrementally based on events alone.
+
+**Q: Why does Chubby use 5 replicas instead of 3?**
+
+A: Five replicas tolerate 2 simultaneous failures (2f+1=5 for f=2). Three replicas tolerate only 1 simultaneous failure. At Google's scale — hundreds of thousands of machines in one data center — two machines failing simultaneously is not a rare event. Chubby is a critical dependency (Bigtable master election, GFS master election, etc.), so the cost of a few extra machines for an extra fault-tolerance margin was clearly worth it. The other consideration: planned maintenance. If you have 3 replicas and take one offline for maintenance, you're now one failure away from losing the cluster. With 5 replicas, you can have one down for maintenance and still tolerate one simultaneous failure.
+
+**Q: What's the difference between Chubby's advisory locks and OS-level mandatory locks?**
+
+A: OS mandatory locks (available on some Unix filesystems) prevent any process from accessing a locked file even if it doesn't hold the lock — the OS enforces it at the syscall level. Advisory locks are agreements between cooperating processes — nothing prevents a process that ignores the lock from accessing the resource. Chubby chose advisory locks because the alternative (mandatory enforcement) would require Chubby to intercept every data access across the entire distributed system — making Chubby a bottleneck in every data path. Advisory locks work because all Google services follow the convention. The practical implication: if a process holds a Chubby lock on a resource but then crashes, other processes can still access that resource; they just won't see the lock as held anymore once the session expires.
+
+---
+
+*Chapter 83 complete. Next: Chapter 84 — Spanner: Google's Globally Distributed Database.*

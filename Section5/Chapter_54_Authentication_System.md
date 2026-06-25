@@ -3554,3 +3554,217 @@ The auth service acts as the identity provider. It issues a JWT that all service
 **Q18: How do you rotate signing keys without logging everyone out?**
 
 The key insight is overlap. Phase 1: generate the new key pair and publish the new public key to the JWKS endpoint alongside the old one. Downstream services fetch updated keys (they cache by key ID, so old tokens still validate). Phase 2: wait one day to ensure all services have the new public key. Phase 3: start signing new tokens with the new private key. Phase 4: wait for all old tokens to expire (at most 15 minutes for access tokens, but 24 hours for safety). Phase 5: remove the old public key from JWKS. At no point is any user logged out -- old tokens validate with the old key until expiry, new tokens validate with the new key.
+
+---
+
+## Interview Simulation — Authentication System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design an authentication system for a large consumer web and mobile application. How do you want to approach this?
+
+**Candidate:** A few scoping questions first. When you say authentication — are you including authorization (what a user can do) or strictly identity verification (who the user is)? I want to be clear about that boundary upfront. Second, what login methods do we support — password, social login, SSO? Third, roughly what scale: number of registered users, daily logins, API traffic per second?
+
+> **Interviewer:** Strictly identity — AuthN not AuthZ. Password-based login only for V1. 100 million registered users, roughly 20 million daily logins. API traffic is around 100,000 requests per second across all downstream services.
+
+**Candidate:** That's very helpful. A few more: Do we need MFA support? What's the acceptable session duration — how long before a user must re-authenticate? Is there a requirement for immediate session revocation, e.g., if an account is compromised? And are downstream services inside our infrastructure (same network), or are some external?
+
+> **Interviewer:** MFA is required (TOTP). Sessions can last up to 30 days. Immediate revocation is desirable but can tolerate a short lag. Downstream services are internal only. What are your non-goals?
+
+**Candidate:** Non-goals for V1: social login (OAuth provider integration), SSO/SAML, passwordless (WebAuthn), password reset flow (that's user service territory), and AuthZ (permissions, roles — separate system). Also explicitly: we will not implement cross-region replication — this is a single cluster. The most important design constraint I'll state upfront: token validation must not require a network call to the auth service on every API request. 100K RPS means token validation must be local to each downstream service.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 20M daily logins = 230 logins/sec average. Peak is typically 10× = 2,300 logins/sec. Attack traffic (credential stuffing): plan for up to 50,000 attempts/sec during an active attack.
+
+bcrypt cost: each login verification takes ~200ms of CPU. At peak legitimate load: 2,300 logins/sec × 0.2s = 460 CPU-seconds/sec. At 8 cores per server, that's 58 servers just for bcrypt. With attack traffic: 50,000 attempts/sec, but most are rate-limited before bcrypt. Assuming 1% get past rate limiting to bcrypt: 500/sec × 0.2s = 100 CPU-seconds/sec additional. Total: ~560 CPU-seconds/sec → ~70 servers, provision 100 for headroom.
+
+Token refresh: 20M daily active users, each refreshing every 15 minutes during active sessions. If average active session is 2 hours: 20M × 2hr / 15min = 160M refreshes/day = 1,850/sec average, peak ~5,500/sec.
+
+Storage: credentials for 100M users × 500 bytes = 50GB. Active sessions: 50M × 300 bytes = 15GB. Login audit log: 50M events/day × 200 bytes = 10GB/day, 90-day retention = 900GB.
+
+> **Interviewer:** You said 100 servers for bcrypt. That seems expensive. How can you reduce this?
+
+**Candidate:** Two levers. First, adjust bcrypt cost factor. Cost factor 12 → ~200ms. Factor 10 → ~50ms (4× faster, 4× weaker). At cost factor 10: 2,300 logins/sec × 0.05s = 115 CPU-seconds/sec → ~15 servers. The security trade-off: cost factor 10 means an attacker with a leaked DB needs 4× less time to brute-force passwords. Industry consensus is cost factor 10–12 is appropriate; 12 is more conservative. Second lever: dedicated bcrypt worker pool — pull the CPU-intensive verification into a separate pool of workers sized for bcrypt, keeping the API servers lightweight. This separates capacity planning for I/O-bound work (DB lookups, network) from CPU-bound work (bcrypt). For the interview I'd propose cost factor 12 initially and scale compute as needed rather than weakening security.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Five operations:
+
+```
+POST /auth/login
+  Body: { email, password, mfa_code? }
+  Returns: { access_token (JWT), refresh_token (opaque), expires_in: 900 }
+
+POST /auth/refresh
+  Body: { refresh_token }
+  Returns: { access_token, refresh_token, expires_in: 900 }
+
+POST /auth/logout
+  Body: { refresh_token }
+  Headers: Authorization: Bearer {access_token}
+  Returns: 204 No Content
+
+POST /auth/logout-all
+  Headers: Authorization: Bearer {access_token}
+  Returns: 204 No Content (revokes all sessions for this user)
+
+GET /.well-known/jwks.json
+  Returns: { keys: [{ kty, kid, use, alg, n, e }, ...] }
+  (Public keys for downstream JWT validation)
+```
+
+Downstream services never call the auth service to validate tokens. They verify locally using the public key from the JWKS endpoint, cached in memory. The JWKS endpoint is the only auth surface exposed to downstream services.
+
+*(Cross-question: token lifetime)*
+
+> **Interviewer:** Why 15 minutes for access token expiry? Why not 1 minute for more security, or 1 hour for less complexity?
+
+**Candidate:** 15 minutes is a deliberate trade-off between security and UX. One minute: access token expires before most user actions complete on a slow connection; clients must refresh every minute, adding 1 network round-trip per minute to every session; if the refresh endpoint has any latency, users notice. One hour: a stolen access token gives an attacker 60 minutes of access even after the user changes their password or logs out — that's a significant blast radius for token theft via XSS or network interception. Fifteen minutes bounds the damage window to a short window while still being transparent to users (refresh happens silently in the background). The refresh token (30 days) handles the "stay logged in" requirement without making the short-lived access token longer. This is the same trade-off that AWS STS, Google OAuth, and most production systems use.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:**
+
+```sql
+-- Credentials (one record per user)
+credentials (
+  user_id          UUID PRIMARY KEY,
+  email            VARCHAR(256) UNIQUE NOT NULL,
+  password_hash    VARCHAR(256) NOT NULL,    -- bcrypt output
+  mfa_enabled      BOOLEAN DEFAULT false,
+  mfa_secret       VARCHAR(64) NULL,         -- encrypted at rest
+  token_generation INT DEFAULT 0,            -- increment on logout-all
+  locked_until     TIMESTAMP NULL,           -- account lockout
+  updated_at       TIMESTAMP NOT NULL
+  INDEX: (email)
+)
+
+-- Sessions (one record per active refresh token)
+sessions (
+  id                   UUID PRIMARY KEY,
+  user_id              UUID NOT NULL,
+  refresh_token_hash   VARCHAR(64) UNIQUE NOT NULL,  -- SHA-256 of token
+  family_id            UUID NOT NULL,                -- for reuse detection
+  used                 BOOLEAN DEFAULT false,
+  device_info          VARCHAR(512) NULL,
+  ip_address           VARCHAR(45) NOT NULL,
+  created_at           TIMESTAMP NOT NULL,
+  expires_at           TIMESTAMP NOT NULL
+  INDEX: (user_id), (refresh_token_hash), (family_id), (expires_at)
+)
+```
+
+Redis structures: rate limit counters `ratelimit:email:{email}` and `ratelimit:ip:{ip}`, lockout keys, and token blocklist `blocklist:{jti}` with TTL = remaining token lifetime.
+
+JWT payload: `{ iss, sub (user_id), email, roles, jti (unique ID for blocklist), gen (token_generation for logout-all), iat, exp }`.
+
+*(Cross-question: refresh token storage)*
+
+> **Interviewer:** Why do you store a hash of the refresh token rather than the token itself?
+
+**Candidate:** Defense in depth. If the database is compromised — leaked backup, SQL injection, insider threat — an attacker with the raw refresh tokens can immediately impersonate any active user for up to 30 days. A SHA-256 hash is not reversible: the attacker has the hashes but cannot reconstruct the original tokens. This is the same reasoning behind storing password hashes instead of plaintext passwords. The client has the original token; the server stores only the hash. On refresh, the server computes `SHA-256(provided_token)` and looks up the hash. This adds ~microseconds of computation, not meaningful latency. The hash must be at least 256-bit (SHA-256 is fine since refresh tokens are random, not user-chosen — rainbow tables don't apply, but using a strong hash is still correct practice).
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+  ┌──────────────────────────────────────────────────────┐
+  │              CLIENT TIER                             │
+  │   Web Browser    iOS App    Android App              │
+  └──────────────────────────┬───────────────────────────┘
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │      LOAD BALANCER (IP-level rate limiting)          │
+  └──────────────────────────┬───────────────────────────┘
+                             │
+                             ▼
+  ┌──────────────────────────────────────────────────────┐
+  │           AUTH API SERVICE (stateless)               │
+  │  ┌───────────┐  ┌──────────┐  ┌──────────────────┐   │
+  │  │  Login    │  │ Refresh  │  │ Logout / JWKS    │   │
+  │  │  Handler  │  │ Handler  │  │ Handler          │   │
+  │  └─────┬─────┘  └────┬─────┘  └──────────────────┘   │
+  └────────┼─────────────┼────────────────────────────────┘
+           │             │
+   ┌───────┼─────────────┼──────────────┐
+   ▼       ▼             ▼              ▼
+  Redis   Credential  Session Store   bcrypt
+  (rate   Store       (Postgres)      Worker
+  limit,  (Postgres)                  Pool
+  block-
+  list)
+
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+  DOWNSTREAM SERVICES (token validation is LOCAL)
+  ┌──────────┐  ┌──────────┐  ┌──────────┐
+  │Service A │  │Service B │  │Service C │
+  │+JWT      │  │+JWT      │  │+JWT      │
+  │ library  │  │ library  │  │ library  │
+  └──────────┘  └──────────┘  └──────────┘
+  Each caches the public key from /.well-known/jwks.json
+```
+
+Login flow: rate limit check (Redis, 1ms) → credential lookup (DB, 5ms) → bcrypt verify (worker pool, 200ms) → JWT sign (RSA256, 1ms) → session write (DB, 5ms) → return tokens. Total: ~215ms.
+
+Token validation in downstream: base64 decode → RSA256 signature verify → check `exp` → check `iss` → optionally check blocklist (Redis). Total: <1ms for 99% of calls, <1.5ms with blocklist check.
+
+*(Cross-question: session invalidation)*
+
+> **Interviewer:** A user reports their account was compromised. Security needs to immediately invalidate all sessions. How does your system handle this?
+
+**Candidate:** Two actions in a single transaction: delete all sessions for `user_id` from the sessions table, and increment `token_generation` in the credentials table. The session deletion prevents all future refresh token exchanges — any attempt to refresh gets "invalid refresh token." The `token_generation` increment handles outstanding access tokens. Every JWT includes a `gen` claim (the generation counter at time of issuance). Downstream services, when validating tokens, check if `JWT.gen >= current_generation`. They fetch current generation per user from a Redis cache (TTL 60 seconds). If `JWT.gen < current_generation`, the token is rejected as revoked.
+
+The 60-second lag: existing access tokens may work for up to 60 seconds after the incident response starts. This is the known trade-off for JWT. For zero-tolerance revocation, we add the JTI to the blocklist in Redis and all downstream services check the blocklist on every validation. Blocklist TTL = remaining token lifetime (at most 15 minutes). This gives immediate revocation at the cost of one additional Redis lookup per request.
+
+*(Cross-question: brute force under attack)*
+
+> **Interviewer:** During a credential-stuffing attack, the attacker is using 50,000 different IP addresses. Your per-IP rate limiting only blocks 20 attempts per minute per IP. How does this fail and what's your mitigation?
+
+**Candidate:** 50,000 IPs × 20 attempts/minute = 1,000,000 attempts per minute = 16,666/sec. Our bcrypt workers are sized for ~2,300 legitimate logins/sec. If even 10% of attack attempts get past rate limiting to bcrypt: 1,667/sec × 0.2s = 333 CPU-seconds/sec → completely overwhelmed.
+
+The failure mode: bcrypt workers saturate, legitimate login queue grows, P99 login latency degrades to seconds, timeouts cause client retries, amplifying load. Rate limiting was supposed to help but 50K IPs makes per-IP limits ineffective.
+
+Mitigations in layers. First, edge-level blocking: move rate limiting to the load balancer or WAF before the app. Flag IPs with >90% failure rate in a 5-minute window and block at the network layer — no bcrypt at all. Second, challenge-response: for requests from suspicious IPs (low reputation score, new IPs, high failure velocity), require a CAPTCHA or proof-of-work challenge before bcrypt. This adds 50–100ms per challenge but is far less expensive than bcrypt. Third, account-level velocity: detect the same email being tried from many IPs (credential stuffing pattern) and issue a temporary soft lock with a CAPTCHA requirement. Fourth, breached credential detection: check submitted passwords against known breach databases (like HaveIBeenPwned API). Attackers using breach lists often succeed on accounts that reused passwords; detecting the breach list pattern earlier reduces load. The core insight: rate limiting must happen before expensive operations, and at the edge, not just in the application.
+
+*(Cross-question: key rotation)*
+
+> **Interviewer:** You mention RSA key rotation in the chapter. Walk me through rotating the JWT signing key without any user experiencing a broken session.
+
+**Candidate:** The rotation is a 5-phase process. Phase 1 — key generation: generate a new RSA key pair. The new public key is added to the JWKS endpoint alongside the existing key. Downstream services, which refresh their JWKS cache periodically (typically every hour), will start caching both keys. Phase 2 — wait for propagation: wait 24 hours (or at least 2× the JWKS cache TTL) to ensure all downstream services have the new public key. Phase 3 — switch signing: start signing all new access tokens with the new private key. The `kid` (key ID) in the JWT header tells downstream services which public key to use for verification. Old tokens (signed with old key) still validate because services have both public keys. Phase 4 — wait for old tokens to expire: access tokens expire in 15 minutes, so after 15 minutes no valid old-key tokens remain in circulation. The old public key can technically be removed now, but I'd leave a 24-hour buffer for safety. Phase 5 — remove old key: remove the old public key from JWKS. Services that haven't refreshed their cache in 24+ hours (a bug in their caching) would break, which motivates enforcing JWKS cache TTL compliance. No user is logged out at any point — old tokens validate until natural expiry, new tokens validate immediately with the new key.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q1: Why use JWT (self-contained tokens) instead of opaque tokens that require a server lookup on every request?**
+
+**A:** The key requirement is scale: 100,000 API requests per second across potentially dozens of downstream services. With opaque tokens, every single request requires a network call to the auth service to validate the token. That's 100,000 auth lookups/second — a massive bottleneck and single point of failure. If the auth service is slow or down, every API call across every service degrades. JWT moves validation to the edge: each service validates locally using the auth service's public key (cached in memory). Validation takes ~0.1ms with no network hop. The trade-off is that JWTs cannot be instantly revoked — you must wait for expiry (15 minutes). This is acceptable for most revocation scenarios. For immediate revocation (compromise response), we layer on a Redis-based blocklist that downstream services check; this adds one Redis lookup (~0.5ms) per request, but only for the ~0.001% of sessions that are actively revoked.
+
+**Q2: Explain refresh token rotation and what problem it solves.**
+
+**A:** Without rotation, a stolen refresh token gives an attacker indefinite access — the legitimate user keeps using the same refresh token, the attacker also keeps using the same refresh token, and neither knows about the other. Rotation makes every use of a refresh token destructive: when you refresh, the old token is marked `used=true` and a new token is issued. If an attacker steals the old token and tries to use it after the legitimate user already refreshed, the server detects reuse: the token is marked `used` but is being presented again. This triggers a security response: revoke the entire session family (all tokens descended from this login), alert the user, and require re-authentication. The legitimate user loses their session — inconvenient — but the attacker is also locked out immediately, and the security team is alerted. Without rotation, you'd never know the token was stolen until the attacker did something obviously malicious.
+
+**Q3: How does `token_generation` enable "logout all devices" without a session-level blocklist?**
+
+**A:** Every JWT includes a `gen` claim: the value of `credentials.token_generation` at the time the token was issued. When the user logs in from device A, `token_generation = 5` → JWT.gen = 5. When they log in from device B two days later, still `token_generation = 5` → JWT.gen = 5. When "logout all" is called, we do two things: delete all rows in `sessions` (kills all refresh tokens), and run `UPDATE credentials SET token_generation = 6`. Future token validation: downstream services cache the current `token_generation` per user in Redis (TTL 60 seconds). On validation, they check `JWT.gen >= cached_generation`. Device A's JWT has `gen=5`, cached generation is now `6` → rejected. Device B's JWT also has `gen=5` → rejected. All outstanding access tokens become invalid within 60 seconds without a blocklist entry per token. The cost: one Redis read per token validation (cache miss ~5ms, cache hit ~0.5ms). This is much cheaper than per-JTI blocklist entries which would require storing and checking millions of entries.
+
+**Q4: The blocklist Redis cluster goes down. What is the exact security impact, and is your decision to fail open (accept tokens) correct?**
+
+**A:** The security impact is narrow and time-bounded. Redis stores only two categories: rate limit counters and token blocklist entries. If Redis is down, rate limiting is disabled (fail open) and blocklisted tokens are accepted (fail open). The active blocklist at any moment is tiny: it contains only tokens that were explicitly revoked before their natural expiry. In practice, that's tokens from recent logout events and account compromise responses. Tokens expire naturally within 15 minutes regardless. So the worst case: a user who just logged out (or a recently-compromised account whose tokens were blocklisted) can use their access token for up to 15 minutes during the Redis outage. This is the correct trade-off for availability. The alternative — fail closed, reject all tokens when blocklist is unavailable — would take down every downstream service for every user during a Redis outage. That's a complete site outage to protect against a narrow attack surface that has a natural 15-minute self-healing window. We mitigate the residual risk by alerting on-call immediately when Redis goes down and by keeping account-level mitigations (delete sessions, increment token_generation) durable in PostgreSQL rather than Redis.
+

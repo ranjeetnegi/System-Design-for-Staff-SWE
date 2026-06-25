@@ -2189,3 +2189,172 @@ Every interviewer at a company that uses Redis has had a Redis outage. The quest
 **Encoding optimization:** for leaderboards where all member IDs are integers (user_ids), Redis stores them as integers in the skip list node — no string allocation. This is the source of the 70-byte-per-entry figure. If your member IDs are UUIDs or strings, store them as integer mappings (`user_id BIGSERIAL` in the DB, use the integer as the Redis member) and keep a separate mapping table. The memory savings at 10M users scale (700 MB vs 900 MB) justify this optimization for large-scale deployments.
 
 **Ziplist encoding for small ZSETs:** Redis uses a compact "ziplist" encoding (contiguous memory block) when a ZSET has fewer than 128 members AND all members are strings under 64 bytes. At this size, the ziplist is more memory-efficient than a skip list. Once either limit is exceeded, Redis automatically converts to the full skip list + hash map encoding. This encoding detail is relevant when designing per-event ZSETs (e.g., a specific game session leaderboard with 50 players): a ziplist ZSET for 50 players uses ~2 KB vs ~7 KB for the full encoding. Configure `zset-max-ziplist-entries` and `zset-max-ziplist-value` in redis.conf to tune these thresholds.
+
+---
+
+## Interview Simulation — Leaderboard System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a leaderboard system for a mobile gaming platform. Where do you start?
+
+**Candidate:** A few clarifying questions. What types of leaderboards — global top-K, friends leaderboard, or both? How many users total and how many active at peak? What's the score update frequency — are scores updated in real-time during gameplay, or batch-updated at end of match? And what's the read/write ratio: is this read-heavy (users checking rankings constantly) or write-heavy (scores updating every second)?
+
+> **Interviewer:** Both global and friends. 50 million registered users, 500,000 concurrent active during peak. Scores update at end of each game session, roughly every 10-30 minutes per user. Much more read-heavy — users check leaderboards 20x more than they play games.
+
+**Candidate:** Good. That's a read-heavy workload with bursty writes (500K concurrent players finishing games over 10-30 minutes = roughly 500-1,500 score updates/second at peak). Do we need exact rank for every user on the global leaderboard, or is approximate rank acceptable for users outside the top 1,000?
+
+> **Interviewer:** Exact rank for the top 10,000. Approximate rank (±500 positions) is acceptable for everyone else.
+
+**Candidate:** That's a key constraint that opens up approximation techniques for the long tail. One more: is the friends leaderboard based on a social graph we own, or are we pulling friends from an external system like Facebook?
+
+> **Interviewer:** Internal social graph, pre-existing.
+
+*(Cross-question: global vs friends scope)*
+
+> **Interviewer:** Why ask about exact vs approximate rank? Couldn't you just compute exact rank for everyone using Redis ZRANK?
+
+**Candidate:** Redis ZRANK on a 50-million-member ZSET is O(log N) — about 26 operations in the skip list — which is fast, roughly 0.1ms per call. But the real issue is what we display. If a user is ranked 23,847,291st globally, showing them "rank 23,847,291 of 50,000,000" is not useful — they can't reason about percentile or relative standing. Showing "top 47.7%" is more meaningful and can be computed from a coarser approximation. For users outside the top 10,000, I'd use a histogram-based approximation: pre-compute score distribution buckets every 5 minutes, and derive approximate rank from which bucket a user's score falls in. This eliminates ZRANK calls for 99.98% of users, reducing Redis load dramatically at scale.
+
+---
+
+### Phase 2: Estimation (8 min)
+
+**Candidate:** Write load: 500,000 concurrent players, each finishing a game every 10-30 minutes. Worst case: everyone finishes at the same time, which doesn't happen, but for safety I'll model peak at 500,000 / 600 seconds = ~833 score updates/second.
+
+Read load: 20x write ratio = 833 × 20 = ~16,600 reads/second. Each read is either a top-K fetch or a rank lookup.
+
+Global leaderboard storage: Redis ZSET with 50 million members. Each member is an integer user_id (8 bytes) + score (8 bytes) + skip list overhead (~50 bytes) = ~70 bytes/entry. 50M × 70 bytes = 3.5 GB — fits easily on a single Redis instance with headroom. With replication for HA, that's 2-3 Redis replicas at 3.5 GB each.
+
+Friends leaderboard: variable size per user, average 150 friends. Each friends ZSET lookup = 150 ZSCORE calls, pipelined into ~1ms. With 16,600 reads/second split between global (80%) and friends (20%), friends leaderboard handles ~3,300 reads/second, each requiring a 150-ZSCORE pipeline. That's 3,300 × 1ms = effectively 3,300 concurrent pipeline operations — manageable on 2-3 Redis instances.
+
+> **Interviewer:** You assumed 70 bytes per ZSET entry. What changes if user IDs are UUIDs (36-byte strings) instead of 64-bit integers?
+
+**Candidate:** UUID members change the math significantly. Redis can't store UUIDs as integers — it stores them as full strings. Each ZSET node would carry a 36-byte string + pointer overhead = ~90-100 bytes/entry instead of 70 bytes. For 50 million users: 50M × 95 bytes = 4.75 GB — still manageable, about 35% more memory. But more importantly, UUIDs also break the ziplist optimization for small ZSETs (which requires members under 64 bytes — UUIDs are under 64 bytes but longer than integers, so they still use the full skip list encoding for ZSETs above 128 members). My recommendation would be to add an integer surrogate key — `user_rank_id BIGSERIAL` in the user table — and use that as the Redis member. Store the UUID-to-integer mapping in a Redis Hash (`user:uuid-to-int`). The memory savings at 50M users (from ~4.75 GB to ~3.5 GB) are meaningful, and integer member IDs enable faster score comparisons in the skip list.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Core endpoints:
+
+```
+GET /v1/leaderboards/global?limit=100&offset=0
+  Returns: [{ rank, user_id, username, score, delta_from_previous_rank }]
+
+GET /v1/leaderboards/global/users/{user_id}
+  Returns: { user_id, score, exact_rank (if top 10K), approx_rank, percentile }
+
+GET /v1/leaderboards/friends/{user_id}?limit=50
+  Returns: [{ rank, user_id, username, score }]  -- sorted by score desc
+
+POST /v1/scores
+  Body: { user_id, game_id, new_score }  -- or delta_score
+  Returns: { user_id, old_score, new_score, rank_change }
+```
+
+The score update uses `new_score` not `delta_score` to be idempotent — replaying the same game result twice sets the score to the same value rather than double-counting.
+
+> **Interviewer:** Why return `rank_change` in the score update response — doesn't that require a ZRANK call after every score update, adding latency?
+
+**Candidate:** Good challenge. Returning `rank_change` synchronously in the POST response adds ~0.2ms for the ZRANK call after ZADD. At 833 score updates/second, that's 833 extra ZRANK calls/second — acceptable load but adds latency on the write path. An alternative is to return `rank_change: null` synchronously and emit a score-updated event to Kafka; a separate rank-change worker computes the delta asynchronously and pushes it via WebSocket to the user's client. This keeps the write path fast (just ZADD = ~0.05ms) and offloads rank computation to a separate pipeline. I'd implement the async approach — the user doesn't need to see their rank change in the same HTTP response; showing it 1-2 seconds later via WebSocket notification is a better UX pattern anyway (the "your rank jumped to #4,521!" notification after a game).
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Schema:
+
+```sql
+-- Postgres (source of truth for scores)
+user_scores(
+  user_id BIGINT PK,
+  current_score BIGINT NOT NULL DEFAULT 0,
+  games_played INTEGER DEFAULT 0,
+  last_game_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
+)
+
+score_history(
+  id BIGSERIAL PK,
+  user_id BIGINT FK → user_scores,
+  game_id UUID,
+  score_before BIGINT,
+  score_after BIGINT,
+  recorded_at TIMESTAMPTZ
+)  -- append-only, partitioned by recorded_at month
+
+-- Redis (serving layer, rebuilt from Postgres on startup)
+ZSET global_leaderboard  -- member: user_id (integer), score: BIGINT
+HASH user_profiles        -- user_id → {username, avatar_url}  (denormalized for display)
+```
+
+Redis is a derived view of Postgres. On any inconsistency (Redis data loss, Redis restart), the global leaderboard is rebuilt by running `ZADD global_leaderboard score user_id` for all rows in `user_scores`. At 50M rows, this bulk load takes about 5-10 minutes with pipelining.
+
+> **Interviewer:** You keep both Postgres and Redis in sync. What's the ordering guarantee when a score update writes to Postgres first, then Redis? What if Redis write fails?
+
+**Candidate:** This is the dual-write consistency problem. My approach: write Postgres first (the authoritative store), then write Redis. If the Redis write fails, the data is temporarily inconsistent — Postgres has the new score, Redis has the old. Recovery via two paths: (1) a background consistency checker runs every 5 minutes, samples 1% of users, compares Postgres scores to Redis scores, and corrects any drift via ZADD; (2) an outbox/CDC approach — a Debezium change data capture connector reads the Postgres WAL and streams score updates to Kafka; a Redis writer consumes Kafka and applies updates. The CDC approach gives at-least-once delivery from Postgres to Redis with no synchronous coupling. The temporary inconsistency window (typically under 30 seconds with CDC) is acceptable for a leaderboard — seeing a slightly stale rank for 30 seconds doesn't affect gameplay or fairness.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+  Game Server
+      │ POST /v1/scores
+  ┌───▼──────────────┐       ┌──────────────────┐
+  │  Score Service   │──────▶│  Postgres        │
+  │  (stateless,     │       │  user_scores     │
+  │   horizontally   │       │  score_history   │
+  │   scalable)      │       └──────────────────┘
+  └───┬──────────────┘              │ CDC (Debezium)
+      │ publish score-updated        ▼
+      │                       ┌──────────────────┐
+  ┌───▼──────────────┐        │  Kafka           │
+  │  Kafka           │        │  score-updates   │
+  └───┬──────────────┘        └──────┬───────────┘
+      │                              │
+  ┌───▼──────────────┐       ┌──────▼───────────┐
+  │  Leaderboard     │       │  Redis Writer    │
+  │  Read API        │       │  (ZADD global_lb)│
+  │  (Redis reads)   │◀──────│                  │
+  └──────────────────┘       └──────────────────┘
+```
+
+Read path: the Leaderboard Read API is stateless and reads exclusively from Redis replicas. ZRANGE with WITHSCORES for top-K, ZRANK for individual rank, pipelined ZSCORE for friends leaderboard. A CDN layer caches global top-100 responses for 10 seconds — this absorbs the bulk of read traffic since the top 100 is identical for all users.
+
+*(Cross-question: cache stampede)*
+
+> **Interviewer:** The global top-100 is cached at CDN for 10 seconds. When the cache expires, thousands of users' requests simultaneously miss and hit the Redis. How do you prevent the stampede?
+
+**Candidate:** Three techniques layered together. First, probabilistic early expiration: instead of expiring all cache entries at exactly T+10s, each entry has a small random jitter — `expiry = base_ttl + random(0, 2)` seconds. This staggers expirations across a 2-second window, spreading the miss load over time. Second, background refresh: rather than serving a miss to the requesting user, the CDN/cache layer returns the stale value immediately and triggers a background refresh call to the origin. The user sees a 0.05-second-stale response; the cache is warm again before the next real user request arrives. This is the "stale-while-revalidate" pattern. Third, request coalescing: if the cache misses for multiple concurrent requests to the same key, only one request is forwarded to the origin — the others wait on the in-flight request and receive the result when it returns. Redis itself is not the bottleneck at 100 QPS for top-K; the CDN-level stampede protection is there to avoid amplifying load to the read API tier.
+
+*(Cross-question: score tampering)*
+
+> **Interviewer:** How do you prevent a malicious client from sending a fabricated score of 999,999,999 to the score update endpoint?
+
+**Candidate:** The game server — not the client — is the authoritative source of score updates. Clients never call the score update endpoint directly. The flow is: client plays game on game server → game server validates the game session (replaying key events to verify the claimed score is achievable) → game server calls Score Service with a signed payload including game_session_id. The Score Service validates: (1) game_session_id exists in the game sessions table and is in COMPLETED state; (2) the session belongs to the user_id in the request; (3) the score claimed matches the server-computed score stored in the game session. A client forging a score would need to also forge a valid game_session_id, which requires server-side credentials. Additionally, anomaly detection: scores that jump more than 10× a user's historical average in a single session are flagged for manual review and the score is held pending instead of immediately published to the leaderboard.
+
+*(Cross-question: time-bounded leaderboards)*
+
+> **Interviewer:** How would you modify this design to support weekly leaderboards that reset every Monday at midnight UTC?
+
+**Candidate:** Instead of accumulating scores on the permanent global ZSET, a weekly leaderboard uses a weekly-scoped ZSET with a key like `leaderboard:weekly:2026-W26`. Score updates that week also call `ZADD leaderboard:weekly:2026-W26 score user_id`. At Monday midnight UTC, a cron job: (1) snapshots the expiring week's final rankings to a `weekly_results` table in Postgres for historical display; (2) does NOT delete the old key immediately — keeps it readable for 24 hours so users who check early Monday still see last week's final standings; (3) creates the new week's ZSET key. Redis memory: the weekly ZSET is the same 50M-member structure as the global leaderboard (~3.5 GB). With 4 weeks of history retained: 4 × 3.5 GB = 14 GB additional memory. To save memory, you could keep only the top 100K in the weekly ZSET (420 MB) and compute scores for everyone else from Postgres weekly score aggregates on demand — a reasonable trade-off since users outside the top 100K are unlikely to check weekly rankings frequently.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why use Redis ZSET instead of a SQL ORDER BY for the leaderboard?**
+
+SQL ORDER BY on a 50-million-row table without an index is O(N log N) — full table scan + sort, taking seconds. With a B-tree index on `current_score DESC`, a top-100 query is O(log N + 100) — fast for reads. But a write (score update) requires updating one row and the index: O(log N) — fine at 833 writes/second. The real advantage of Redis ZSET is atomic rank computation: `ZRANK` is O(log N) and returns the exact position in the sorted set without a separate count query. In SQL, computing rank requires `SELECT COUNT(*) WHERE score >= user_score` — another O(log N) index scan that requires careful index design to be efficient. Redis ZSET bundles the sorted structure and rank computation into a single atomic data structure. Additionally, Redis ZSET handles concurrent score updates atomically — ZADD is thread-safe. In SQL, a concurrent score update requires SELECT + UPDATE with an optimistic lock or row-level lock. At 833 concurrent updates/second, Redis's lock-free atomic ZADD is meaningfully faster than SQL's lock-based update.
+
+**Q: What is the difference between ziplist and skip list encoding in Redis ZSETs, and when does Redis switch between them?**
+
+Redis uses two internal encodings for ZSETs. Ziplist: a contiguous memory block where entries are stored sequentially as {prev_len, encoding, member, score}. All operations are O(N) — search, insert, and delete all scan linearly. But for small ZSETs (<128 members, all members <64 bytes), the contiguous layout is cache-friendly and the constant factors are tiny — linear scan of 128 entries is faster than a skip list traversal due to CPU cache locality. Skip list + hash map: the full encoding for large ZSETs. Skip list provides O(log N) for ZRANK/ZRANGE; hash map provides O(1) for ZSCORE. When a ZSET exceeds 128 members or any member exceeds 64 bytes, Redis automatically converts from ziplist to skip list — this is a one-way conversion for that ZSET. The thresholds are tunable via `zset-max-ziplist-entries` and `zset-max-ziplist-value` in redis.conf. For leaderboards, all ZSETs with more than 128 players use skip list encoding — the ziplist encoding is only relevant for per-match mini-leaderboards with small player counts.
+
+**Q: How do you serve a "friends leaderboard" without storing a full per-user ZSET for each of 50 million users?**
+
+The friends leaderboard is computed on demand from the global ZSET, not pre-materialized. When user A requests their friends leaderboard: (1) fetch A's friend list from the social graph service (cached in Redis Set `friends:{user_id}`, TTL 5 minutes); (2) pipeline ZSCORE global_leaderboard for each friend_id — a single pipeline of 150 ZSCORE commands takes ~1ms; (3) sort the results in application memory (150 items, O(N log N) is negligible); (4) return sorted list. This avoids storing 50M × 150 friends × 70 bytes = 525 GB of per-user friend ZSETs. The on-demand computation is fast because ZSCORE is O(1) from the skip list's hash map component, and pipelining batches the 150 network round trips into one. The only optimization to add is caching the friends leaderboard result for 30 seconds per user — if the same user refreshes their leaderboard within 30 seconds (common on mobile), serve from cache. This cache is small: 50M users × 30s active window × 150 friends × 100 bytes = only the currently active users hold a cache entry, which at 500K concurrent users is 500K × 15KB = 7.5 GB — manageable in a separate Redis cluster.

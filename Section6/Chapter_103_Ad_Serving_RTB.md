@@ -2529,3 +2529,143 @@ If you checked <10/18: Significant gaps — review the missed sections.
 ---
 
 *Chapter 89 complete. Next: Chapter 90 — Social Graph.*
+
+---
+
+## Interview Simulation — Ad Serving and Real-Time Bidding (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a real-time bidding system for display advertising. Where do you start?
+
+**Candidate:** A few questions to scope this. First — are we building the Supply-Side Platform (SSP, the publisher side that runs auctions) or the Demand-Side Platform (DSP, the advertiser side that places bids)? The SSP orchestrates the auction; the DSP responds to bid requests. Second — what's our latency budget? Industry standard is 100 ms total from bid request to ad selection — is that our target? Third — do we need frequency capping, or is that a future concern? Fourth — are we handling first-price or second-price auction mechanics?
+
+> **Interviewer:** Design the SSP — the auction orchestrator. Assume multiple external DSPs. 100 ms budget, second-price auction, frequency capping required, fraud detection in pre-bid.
+
+**Candidate:** Functional requirements: (1) Receive bid request from a publisher page load. (2) Fan out bid request to N DSPs simultaneously, collect responses within 80 ms timeout. (3) Run second-price auction on valid bids. (4) Enforce frequency cap (max M impressions per user per day per advertiser). (5) Return winning ad creative to the publisher within 100 ms total. Non-functional: p99 latency < 100 ms end-to-end, 99.99% availability (revenue stops if we go down), 1 million auctions per second at peak.
+
+> **Interviewer:** Good. Estimation?
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 1 million auctions/second × 5 DSPs per auction = 5 million outbound bid requests per second. Each bid request is ~5 KB (user targeting segments, page context, ad slot spec) → 25 GB/s outbound to DSPs. Bid responses: average DSP response is ~1 KB, ~70% response rate → 3.5 million responses/s, 3.5 GB/s inbound. Frequency cap lookups: 1 million auctions/s, each requires reading and writing a counter in Redis → 2 million Redis ops/s (one read pre-auction, one write post-win). At 100K ops/s per Redis node, we need ~20 Redis nodes. Storage for frequency caps: 1 billion daily active users × 1,000 advertisers × 8 bytes per counter = 8 TB — too large for RAM. In practice, we cap at top-10,000 advertisers and use probabilistic counting (Count-Min Sketch) for long-tail advertisers, reducing to ~80 GB.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** The external-facing API follows OpenRTB 2.6 standard. `POST /v1/openrtb/auction` receives a BidRequest object (user ID, geo, device, page URL, impression specs, floor price). Returns a BidResponse (seat bids, price, ad markup, win notice URL). Internal APIs: `POST /internal/frequency-cap/check` body `{user_id, advertiser_id}` returns remaining_impressions. `POST /internal/frequency-cap/record` called after win. `POST /internal/fraud/evaluate` body `{bid_request}` returns a fraud_score and allow/block decision. The fraud eval API must return within 5 ms — it sits on the critical path before we fan out to DSPs.
+
+> **Interviewer:** How do you handle the 80ms DSP timeout — what if one DSP is slow?
+
+**Candidate:** Each DSP gets its own async HTTP call with an 80 ms hard timeout. We use hedged requests: if any DSP hasn't responded by 70 ms, we ignore it and proceed to auction with the responses we have. The auction service never waits for the slowest DSP. DSPs that miss the timeout consistently get a lower bid floor in future auctions (penalty mechanism to incentivize compliance). We track per-DSP p99 latency on a 5-minute rolling window.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three key stores. Frequency cap counters: Redis with key `fc:{user_id}:{advertiser_id}:{date}`, value is integer count, TTL = 24 hours. We use INCR which is atomic. For probabilistic counting on long-tail advertisers, we store a Count-Min Sketch per advertiser in a single Redis key. Auction log: every auction result (regardless of win/loss) written to Kafka → Iceberg on S3 for billing reconciliation and ML training. Schema: auction_id, timestamp, user_id (hashed), winning_dsp_id, clearing_price, ad_creative_id, page_url_hash. Targeting segments: user-to-segment mapping in a key-value store (Aerospike) for sub-millisecond lookup. Key: user_id, value: serialized segment list (~100 bytes). Aerospike is preferred over Redis here because it stores data on SSDs, keeping RAM costs manageable at billion-user scale.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Here's the auction flow:
+
+```
+AUCTION FLOW (100ms budget)
+============================
+
+Publisher Page (iframe / tag)
+  │  bid request arrives
+  ▼
+Load Balancer (L4, anycast)
+  │
+  ▼
+Auction Gateway (0-5ms)
+  │ parse OpenRTB, validate schema
+  │ enrich with user segments (Aerospike, ~1ms)
+  │
+  ├─► Fraud Pre-bid Check (parallel, 5ms budget)
+  │       IVT detection: datacenter IP, device fingerprint
+  │       bot pattern matching (User-Agent, click pattern)
+  │       → BLOCK (auction ends, no fill) or ALLOW
+  │
+  ▼
+Fan-out to DSPs (0-80ms)
+  ├─► DSP-1: POST /bid  ──► response or timeout
+  ├─► DSP-2: POST /bid  ──► response or timeout
+  ├─► DSP-3: POST /bid  ──► response or timeout
+  └─► ... up to N DSPs, all in parallel
+  │   wait max 80ms, collect all responses
+  │
+  ▼
+Frequency Cap Filter (80-85ms)
+  │ for each DSP bid response:
+  │   check Redis fc:{user_id}:{advertiser_id}:{date}
+  │   discard bids where cap is reached
+  │
+  ▼
+Second-Price Auction (85-90ms)
+  │ sort valid bids by CPM
+  │ winner = highest bidder
+  │ clearing price = second-highest bid + $0.01 floor
+  │ log to Kafka (async, non-blocking)
+  │
+  ▼
+Win Notice + Ad Delivery (90-100ms)
+  │ return ad markup (HTML/JS creative) to publisher
+  │ async: POST win notice to winning DSP
+  │        INCR Redis frequency cap counter
+  │        write to auction log Kafka
+  └─► Publisher renders ad in iframe
+
+BILLING RECONCILIATION
+======================
+Kafka → Flink (dedup, validate) → Iceberg (S3)
+  → daily billing report per advertiser
+  → DSP invoice reconciliation (compare our logs vs DSP logs)
+```
+
+**Deep Dive 1: Frequency Capping at Scale.**
+
+The naive approach — one Redis key per user per advertiser per day — requires 2 million Redis ops/s. This works with a 20-node Redis cluster, but becomes expensive at billion-user scale with thousands of advertisers. The staff-level insight: most advertisers don't need exact frequency capping — ±5% error is acceptable. Count-Min Sketch reduces memory by 10–100× with bounded error. We allocate a CMS of width 10,000 and depth 5 per advertiser — that's 50,000 counters × 4 bytes = 200 KB per advertiser for 10,000 advertisers → 2 GB total, versus 8 TB for exact counters. The error guarantee: estimated count ≤ true count + ε×N with probability 1 - δ, where ε and δ are tunable. Premium advertisers (top 100 by spend) get exact Redis counters; everyone else gets CMS.
+
+> **Interviewer:** How do you handle cookie deprecation — third-party cookies going away?
+
+**Candidate:** *(Cross-question: cookieless targeting)* Chrome's Privacy Sandbox introduces the Topics API: the browser locally classifies the user into ~350 IAB topics based on browsing history and exposes them via JavaScript without sending user identity to the ad server. On the server side, we shift from user_id-based frequency capping to cohort-based: instead of "user X has seen this ad 3 times," we track "cohort Y has received N impressions" — privacy-preserving but less precise. For authentication-gated inventory (publisher has first-party login), we establish a hashed email match with advertiser CRM via clean room (AWS Clean Rooms, Google Ads Data Hub) — no raw PII shared. Long-term: contextual targeting (targeting the page content, not the user) gains importance. Our system needs to add a content classification layer at the Auction Gateway.
+
+**Deep Dive 2: Fraud Detection in Pre-Bid.**
+
+We run a two-layer filter. Layer 1 (rule-based, 1 ms): datacenter IP ranges (Spamhaus DROP list), known bad User-Agents, anomalous impression velocity (same user_id generating > 1000 impressions/minute). Layer 2 (ML, 4 ms): XGBoost model with 40 features — IP reputation score, device fingerprint consistency, mouse movement entropy (bots don't move the mouse naturally), session length, geographic consistency (IP in New York, GPS in London). Model inference runs on CPU in ~2 ms. If fraud_score > 0.7, we reject the bid request and return a no-fill to the publisher. We do NOT pass the request to DSPs — this protects DSP budgets from fraudulent spend and keeps our platform reputation high.
+
+> **Interviewer:** What if a legitimate user is incorrectly flagged as fraud?
+
+**Candidate:** *(Cross-question: false positive rate)* We track FP rate via a shadow audit: 1% of blocked requests are served anyway (the ad is shown but marked "audit" in the log). If the downstream engagement signals (click, video completion) are similar to non-blocked traffic, we're over-blocking and need to recalibrate the model threshold. The cost asymmetry: a false negative (serving a fraud impression) costs us $0.001-0.01 in fraudulent revenue + reputation damage with DSPs. A false positive (blocking a legitimate impression) costs us the same $0.001-0.01 in lost revenue. At scale, over-aggressive fraud detection can cost more in lost legitimate revenue than the fraud itself — this is the calibration argument for keeping FP rate < 0.5%.
+
+**Deep Dive 3: ECPM Maximization and Floor Price.**
+
+Second-price auction theory says the optimal strategy for the SSP is to set a floor price at the true value of the impression. Too high → no fill, publisher loses revenue. Too low → winner underpays, publisher loses revenue. We use a dynamic floor pricing model: train a regression model on historical clearing prices for similar impressions (same user segment, same time of day, same publisher). Serve a floor = predicted_clearing_price × 0.8. This floor is per-impression, computed in the Auction Gateway in ~2 ms using a lightweight model (no DSP call yet). Floor prices improve publisher revenue by 5–15% in A/B tests.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you reconcile billing between your SSP logs and DSP logs? They often disagree.**
+A: Discrepancy is normal in adtech — industry standard tolerance is ±10%. Causes: clock skew (win notice arrives after DSP's billing window closes), network retries (duplicate win notices), different attribution of view-through vs click-through. We build a reconciliation pipeline in Flink: join our auction log with DSP-reported impression logs on auction_id. Discrepancies > 5% trigger an alert and a dispute resolution workflow. We hold a rolling 24-hour buffer of win notices to enable retroactive reconciliation. Contractually, the DSP's count is used for billing, but we audit it against ours.
+
+**Q: A major DSP is consistently winning 80% of auctions and then not paying. How do you detect and respond?**
+A: Payment risk is a business problem with a technical signal. We track per-DSP win rate, clearing price, and payment status in a daily reconciliation table. If a DSP's payment-to-win ratio drops below 90% for two consecutive billing cycles, we automatically add them to a "reduced trust" tier: they still receive bid requests but their bids are subject to a 5× higher floor and their timeout budget drops from 80 ms to 50 ms. If non-payment continues, we remove them from the auction entirely. This requires a real-time DSP trust score fed into the Fan-out layer.
+
+**Q: How do you prevent bid shading — DSPs submitting bids they know will clear at a lower price?**
+A: Bid shading is rational DSP behavior in second-price auctions (bid your true value, your cost is lower). In first-price auctions (increasingly common), DSPs shade bids to avoid overpaying. From the SSP perspective, we counter bid shading with dynamic floors (described above) and by offering a "deal ID" mechanism: direct deals between publisher and specific advertiser bypass the open auction at a negotiated CPM. This creates a mixed auction: deal bids are evaluated first at guaranteed CPM, then open auction bids compete for remaining inventory. Publishers prefer this because deal CPMs are typically 20–40% higher than open auction.
+
+---
+
+*Chapter 89 complete. Next: Chapter 90 — Social Graph.*

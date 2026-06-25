@@ -5949,3 +5949,181 @@ This is the classic cross-shard query problem. A user_id-based query would fan o
 A 301 tells the browser "this resource has permanently moved; cache this redirect forever." The browser stores the mapping locally and on subsequent visits goes directly to the destination without contacting our server at all. This is great for load reduction but fatal for analytics accuracy, and you cannot undo it -- once cached in a browser, that 301 is stuck until the browser cache is cleared. A 302 tells the browser "this is a temporary redirect; always ask the server." Every click hits our server, which means we count every redirect and can change the destination URL anytime. For a URL shortener where destinations may change and click counting is a core feature, 302 is the safer default; 301 is an optimization you apply deliberately to specific stable URLs.
 
 ---
+
+## Interview Simulation — URL Shortener
+
+*A 45-minute system design interview, simulated with cross-questioning. The 5 phases below map to the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a URL shortener like bit.ly.
+
+**Candidate:** Before I start designing — a few clarifying questions. Are we building this for public use (anyone can shorten a URL) or enterprise (internal team use only)?
+
+> **Interviewer:** Public-facing. Anyone can create a short link.
+
+**Candidate:** And what's the expected scale? Millions of users, billions?
+
+> **Interviewer:** Let's say 100M URLs created total, 1M new URLs per day, and 100M redirects per day.
+
+**Candidate:** Got it. Do we need analytics — tracking click counts, geo distribution, referrers?
+
+> **Interviewer:** Yes, basic click analytics. How much does that change your design?
+
+*(Cross-question: the interviewer turns the clarification back on you.)*
+
+**Candidate:** Significantly. Without analytics, redirects are stateless — I just look up the mapping and redirect. With analytics, every redirect needs to write a click event. That creates a write-on-read pattern that affects database choice and potentially introduces a queue. I'll design for analytics but keep it asynchronous to avoid adding latency to the redirect path.
+
+> **Interviewer:** What about custom short codes — like "short.url/my-brand"?
+
+**Candidate:** I'll include custom codes as an optional feature. They require a uniqueness check against existing codes and user ownership tracking, but the redirect logic is identical. I'll note them in the data model.
+
+**Candidate:** To summarize scope: create short URLs, redirect users, basic analytics, optional custom codes. What I'm explicitly leaving out: authentication/accounts (I'll assume anonymous creation for simplicity unless you want me to add it), spam/abuse filtering, and paid tiers.
+
+> **Interviewer:** That's a reasonable scope. Go ahead.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Quick back-of-envelope. 1M new URLs/day = ~12 writes/sec. 100M redirects/day = ~1,160 reads/sec — so roughly a 100:1 read-to-write ratio. This is heavily read-skewed, which drives caching.
+
+Storage: each URL mapping is ~500 bytes (short code + long URL + metadata). 100M total records × 500B = 50GB. Fits comfortably on a single Postgres instance, but I'd shard at 10B records.
+
+Click event storage: 100M events/day. If I keep 1 year, that's 36B rows. Analytics data at ~200B/row = ~7TB — this needs a separate analytics store, not the primary DB.
+
+> **Interviewer:** You said 1,160 reads/sec. Is that a problem for Postgres?
+
+**Candidate:** Postgres handles ~10K simple reads/sec on a modern instance, so 1,160 is fine. BUT at 100:1 read skew, popular short links (viral URLs) create hotspots. One trending link might receive 50K reads/second. That's why I need Redis in front of the DB — hot URL mappings cached with a TTL. Cache hit rate on viral links will be near 100%; the DB only handles cache misses.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:**
+
+```
+POST /api/v1/urls
+  Body: { "long_url": "https://...", "custom_code": "optional" }
+  Response: { "short_code": "abc123", "short_url": "https://short.url/abc123" }
+
+GET /{short_code}
+  Response: HTTP 302 → Location: <long_url>
+  (302 so we can update destinations; 301 would cache permanently in browsers)
+
+GET /api/v1/urls/{short_code}/stats
+  Response: { "clicks": 12043, "created_at": "...", "last_clicked": "..." }
+```
+
+> **Interviewer:** Why 302 instead of 301?
+
+**Candidate:** With 301, the browser caches the redirect permanently and never calls our server again. We lose every analytics event for repeat visitors, and we can't update the destination URL for a given short code without breaking every browser that cached the 301. 302 is slightly slower — one extra round trip per new browser session — but gives us accurate click counting and URL mutability. For a URL shortener, these are more valuable than the marginal performance gain of 301.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:**
+
+```sql
+-- Primary mapping table (sharded by short_code hash)
+url_mappings (
+  short_code    VARCHAR(8)  PRIMARY KEY,
+  long_url      TEXT        NOT NULL,
+  user_id       BIGINT,     -- NULL for anonymous
+  created_at    TIMESTAMP,
+  expires_at    TIMESTAMP,  -- NULL = never expires
+  is_active     BOOLEAN     DEFAULT TRUE
+)
+
+-- Click events (append-only, written to analytics store)
+click_events (
+  event_id      BIGINT      AUTO_INCREMENT,
+  short_code    VARCHAR(8),
+  clicked_at    TIMESTAMP,
+  ip_hash       CHAR(64),   -- hashed for privacy
+  country_code  CHAR(2),
+  referrer      TEXT
+)
+
+-- Redis cache: short_code → long_url (TTL 24h)
+-- Hot entries stay warm; cold entries fall through to DB
+```
+
+> **Interviewer:** Why store ip_hash and not ip_address?
+
+**Candidate:** Privacy and compliance. Storing raw IPs in click logs implicates GDPR (EU users) and CCPA (California users). A SHA-256 hash of the IP lets us detect unique visitors without storing personally identifiable data. We can still answer "how many unique IPs clicked this link today" — the hash is consistent within a session — without being able to reverse it to an identity.
+
+---
+
+### Phase 5: High-Level Design + Deep Dive (20 min)
+
+**Candidate:**
+
+```
+User
+  │
+  ▼
+CDN (cache static assets + popular redirect responses)
+  │
+  ▼
+API Gateway (rate limiting, auth headers)
+  │
+  ├── POST /urls  → URL Creation Service
+  │                    │
+  │                    ├── Code Generator (base62, collision check)
+  │                    ├── Postgres (write url_mapping)
+  │                    └── Redis (warm cache on create)
+  │
+  └── GET /{code} → Redirect Service
+                       │
+                       ├── Redis lookup (L1 cache, ~1ms)
+                       │     hit → return 302 + async click event
+                       │     miss → Postgres lookup + cache fill
+                       └── Analytics Queue (Kafka)
+                               │
+                               ▼
+                           Analytics Consumer
+                               │
+                               ▼
+                           ClickHouse / BigQuery
+                           (time-series click aggregations)
+```
+
+> **Interviewer:** Your redirect service writes to Kafka asynchronously. What happens if Kafka is down?
+
+*(Cross-question: failure scenario.)*
+
+**Candidate:** The redirect still succeeds — I do not block the HTTP 302 response on the analytics write. The click event is dropped. This is an acceptable trade-off: analytics is best-effort, not the core product. If I needed guaranteed analytics (e.g., for billing purposes), I'd implement a local buffer in the redirect service that drains to Kafka when it recovers, with an in-memory queue bounded to prevent OOM. For bit.ly-style analytics, losing a few events during a Kafka outage is fine.
+
+> **Interviewer:** How do you generate unique short codes at scale?
+
+**Candidate:** Three approaches. (1) Random: generate 6-8 base62 characters randomly, check Redis/DB for collision, retry if taken. At 100M URLs, collision probability per attempt is 100M / 62^8 ≈ negligible. (2) Counter-based: atomic INCR in Redis, convert integer to base62. Simple, but single point of failure on Redis — mitigate with Redis Sentinel. (3) Hash-based: MD5 or SHA-1 the long URL, take first 7 chars of base62 encoding. Deterministic — same URL always gets the same code — but two different URLs can collide on the same prefix. I'd use counter-based for simplicity with Redis Sentinel for HA.
+
+> **Interviewer:** What if two users submit the same long URL simultaneously — do they get the same short code or different ones?
+
+**Candidate:** Depends on the product decision. If we deduplicate by long URL (same long URL → same short code), we save storage but combine analytics from different users. If we create separate codes per submission, analytics are isolated but storage grows. I'd default to separate codes since analytics isolation is usually more valuable. If deduplication is a requirement, I'd add a unique index on long_url and return the existing short code on duplicate inserts.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **"What happens at 1000x scale?"**
+
+At 1000× redirects, I add more redirect service instances behind a load balancer — they're stateless. Redis becomes a bottleneck; I'd move to Redis Cluster (16,384 slots, automatically sharded). The Postgres primary might strain at 10M+ writes/day; I'd shard url_mappings by short_code hash across 4-8 nodes.
+
+> **"How do you handle link expiration?"**
+
+Two options: (1) A TTL on the Redis key — expired entries fall through to DB, which checks expires_at and returns 410 Gone. (2) A background sweeper job that marks is_active=FALSE on expired rows daily. I'd combine both: Redis TTL aligned to the expiry time, plus a nightly sweeper to handle records that were never cached.
+
+> **"How do you prevent abuse — someone shortening a malicious URL?"**
+
+At creation time: check the long URL against a blocklist (Google Safe Browsing API). Rate-limit creation by IP (e.g., 100 creates/day per IP). On redirect: re-validate against Safe Browsing with a weekly background job; disable active = FALSE if flagged. Add a "report this link" endpoint for user reports.
+
+> **"Could you use a key-value store like DynamoDB instead of Postgres?"**
+
+Yes — DynamoDB is actually a natural fit: the primary access pattern is key-value (short_code → long_url), and it scales horizontally by design. I'd use DynamoDB for url_mappings if I'm AWS-native and want to avoid sharding complexity. Postgres gives more flexibility (complex queries, joins for user dashboards), but for the redirect hot path, DynamoDB with DAX (in-memory cache layer) would work well.
+
+---

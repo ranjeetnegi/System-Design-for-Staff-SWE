@@ -3821,3 +3821,237 @@ When the fan-out worker looks up a recipient's connections in Redis and finds no
 A Snowflake ID is a 64-bit integer ID format invented by Twitter that encodes three things: a timestamp in milliseconds (41 bits), a machine or datacenter ID (10 bits), and a per-machine sequence counter (12 bits). This makes Snowflake IDs globally unique without coordination, roughly time-sortable, and generatable locally by any server without a database round-trip. In a chat system, Snowflake IDs are used for `msg_id` because they are compact (8 bytes vs 16 bytes for UUID), index efficiently in databases (monotonically increasing within a millisecond window means inserts are sequential, reducing B-tree fragmentation), and embed a rough timestamp that can be used for debugging and time-range queries. The alternative -- UUID v4 -- is random, which causes index fragmentation on high-write tables and offers no time information. We use per-conversation `sequence_num` (from Redis INCR) for display ordering because Snowflake IDs only provide millisecond granularity and two messages within the same millisecond have no guaranteed relative order without the sequence counter.
 
 ---
+
+---
+
+## Interview Simulation — Real-Time Chat
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a real-time chat system like WhatsApp. Start wherever makes sense.
+
+**Candidate:** I want to make sure we're scoping the same thing. WhatsApp supports 1:1 messages, group chats, media sharing, voice/video — that's a lot. For a 45-minute interview I'd propose we focus on text messaging (1:1 and groups up to ~500 members), delivery receipts, and online presence. Does that sound right, or is there a specific piece you want to go deeper on?
+
+> **Interviewer:** Text messaging including groups, delivery receipts, and presence. Yes.
+
+**Candidate:** Good. Functional requirements: (1) send a message from user A to user B, delivered in real-time if B is online; (2) group messaging — a message sent to a group is delivered to all members; (3) delivery receipts — single checkmark when server received, double checkmark when delivered to recipient device; (4) online/offline presence — show when a user was last online; (5) message history — users can scroll back through conversation history. Non-functional: messages must be delivered exactly once — no duplicates, no drops. Ordering within a conversation must be consistent for all participants. Low latency — message delivery under 200ms p99 for users on the same continent. Highly available — the system should not lose messages even if a server crashes mid-delivery.
+
+> **Interviewer:** What about end-to-end encryption?
+
+**Candidate:** E2E encryption like Signal Protocol is a full topic on its own — key exchange, double ratchet algorithm, sealed sender. For this interview I'll treat it as a given protocol layer: the server stores and routes opaque encrypted blobs, never plaintext. The design is the same; I just want to flag it so you know I know it exists. If you want to drill into the cryptographic key management, I'm happy to, but I'd suggest we cover the distributed systems design first.
+
+> **Interviewer:** Fair. What are the hardest problems in this system?
+
+**Candidate:** Three hard problems. First: connection management at scale. Each online user holds a persistent WebSocket connection — with 500 million daily active users, that's tens of millions of concurrent connections. Connections are stateful and sticky to a server, which fights horizontal scalability. Second: fan-out for large groups. A message to a 500-member group requires delivering to 500 connections, potentially across 500 different servers — the coordination overhead is significant. Third: message ordering. Two messages sent within the same millisecond from different devices need a globally consistent ordering so all members see them in the same sequence.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Give me numbers.
+
+**Candidate:** WhatsApp at current scale: 2 billion users, ~500 million DAU, roughly 100 billion messages per day. That's 100B / 86,400 ≈ 1.16 million messages per second average. Peak is 3–4× average, so ~4 million messages per second at peak.
+
+For storage: average message is ~1 KB of text. 100 billion messages/day × 1 KB = 100 TB per day of raw message data. At that rate, storage is a significant cost — we'd tier to cold storage after 90 days.
+
+For connections: 500M DAU, assume 20% concurrently online at peak = 100 million concurrent WebSocket connections. If one Chat Server holds 10,000–50,000 connections (depends on RAM), we need 2,000–10,000 Chat Server instances. I'd plan for 5,000 servers at 20,000 connections each.
+
+> **Interviewer:** How much bandwidth does that require?
+
+**Candidate:** 4 million messages per second × 1 KB per message = 4 GB/s of message throughput at the message broker layer. That's well within what a Kafka cluster can handle — Kafka benchmarks at 500 MB/s per broker, so 10 brokers handles this with headroom. Network egress is the larger cost: each message fans out to potentially multiple recipients, so effective throughput is higher, but compression (Zstandard on Kafka) reduces wire size by 4–6×.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the API look like?
+
+**Candidate:** There are two API surfaces: the real-time WebSocket protocol and the REST API for non-real-time operations.
+
+**WebSocket message protocol** (JSON frames over the persistent connection):
+
+```
+// Client → Server: send message
+{ "type": "send_msg",
+  "msg_id": "01H2X3Y4Z5...",   // client-generated Snowflake ID
+  "conversation_id": "conv_abc",
+  "content": "Hey, want to meet?",
+  "client_seq": 42 }
+
+// Server → Client: delivery acknowledgement
+{ "type": "msg_ack",
+  "msg_id": "01H2X3Y4Z5...",
+  "server_seq": 1701,
+  "status": "delivered" }
+
+// Server → Client: incoming message
+{ "type": "new_msg",
+  "msg_id": "01H2X3Y6A7...",
+  "conversation_id": "conv_abc",
+  "sender_id": "user_bob",
+  "content": "Sure! 3pm?",
+  "server_seq": 1702 }
+
+// Client → Server: presence heartbeat (every 30s)
+{ "type": "heartbeat" }
+```
+
+**REST API** for history and profile:
+
+```
+GET  /conversations/{id}/messages?before={seq}&limit=50
+GET  /users/{id}/presence
+POST /conversations           — create a group
+PUT  /conversations/{id}/members — add/remove members
+```
+
+> **Interviewer:** Why a client-generated message ID?
+
+**Candidate:** Idempotency. If the client sends a message and the network drops before receiving the ack, it retries. If the server already stored the message, the duplicate insert is rejected by the unique constraint on `msg_id`. Without a client-generated ID, the retry creates a duplicate message. The Snowflake format gives us uniqueness without a server round-trip to generate the ID.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Walk me through the data model.
+
+**Candidate:** Four core tables, designed for Cassandra because of the write volume and the access pattern (range reads by conversation + time).
+
+**messages table — the core store:**
+```
+PRIMARY KEY: (conversation_id, sequence_num)
+columns: msg_id (Snowflake), sender_id, content_encrypted,
+         sent_at_ms, delivered_at_ms, read_at_ms, message_type
+```
+Partition key is `conversation_id` so all messages in a conversation co-locate on the same Cassandra nodes. Clustering key is `sequence_num` for sorted range reads. We read "last 50 messages" as a range scan on sequence_num DESC — very efficient.
+
+**conversations table:**
+```
+PRIMARY KEY: (conversation_id)
+columns: created_at, type (1:1 or group), name, member_count
+```
+
+**conversation_members table:**
+```
+PRIMARY KEY: (conversation_id, user_id)
+columns: joined_at, last_read_seq
+```
+`last_read_seq` drives the unread count badge — subtract last_read_seq from the conversation's max sequence_num.
+
+**user_conversations table** (denormalized for inbox view):
+```
+PRIMARY KEY: (user_id, last_activity DESC)
+columns: conversation_id, last_msg_preview, unread_count
+```
+This is a separate table because Cassandra cannot do "give me all conversations for user_id sorted by recency" efficiently from the messages table.
+
+> **Interviewer:** Where does presence live?
+
+**Candidate:** Presence is ephemeral and high-churn — it changes every time a user opens or closes the app. It lives in Redis, not Cassandra. Key: `presence:{user_id}` → `{status: online, last_seen: <timestamp>}` with a 60-second TTL. The Chat Server writes this on WebSocket connect, refreshes it on heartbeat, and lets it expire on disconnect. No explicit "user disconnected" write needed — TTL expiry handles it. For "last seen" display (WhatsApp shows "last seen yesterday at 3pm"), we write a durable last_seen timestamp to the user profile in Cassandra when the TTL expires.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:** Here's the high-level design:
+
+```
+  Mobile/Web Clients
+  ─────────────────
+  User A  User B  User C  ...  User N
+    │       │       │              │
+    │  WebSocket (persistent)      │
+    ▼       ▼       ▼              ▼
+  ┌─────────────────────────────────────┐
+  │        LOAD BALANCER (L4)           │
+  │   Sticky routing by user_id hash    │
+  └────┬────────┬────────┬─────────────┘
+       │        │        │
+  ┌────▼──┐ ┌───▼──┐ ┌───▼──┐
+  │ Chat  │ │ Chat │ │ Chat │  ... 5,000 nodes
+  │ Srv 1 │ │Srv 2 │ │Srv 3 │
+  │       │ │      │ │      │
+  │[Conn  │ │[Conn │ │[Conn │
+  │ Mgr]  │ │ Mgr] │ │ Mgr] │
+  └───┬───┘ └──┬───┘ └───┬──┘
+      │         │          │
+      └────┬────┘          │
+           │               │
+  ┌────────▼───────────────▼───────┐
+  │         MESSAGE BROKER          │
+  │         Apache Kafka            │
+  │  topic: messages (1024 parts)   │
+  └────────────┬────────────────────┘
+               │
+  ┌────────────▼────────────────────┐
+  │       FAN-OUT SERVICE            │
+  │  Reads Kafka, looks up members, │
+  │  routes to recipient Chat Srvs  │
+  └────┬────────────────────────────┘
+       │
+  ┌────▼──────────────────────────┐
+  │  PRESENCE SERVICE (Redis)     │
+  │  CONNECTION REGISTRY (Redis)  │
+  │  user_id → chat_server_id     │
+  └───────────────────────────────┘
+
+  ┌───────────────────────────────┐
+  │   MESSAGE STORE (Cassandra)   │
+  │   partitioned by conv_id      │
+  └───────────────────────────────┘
+
+  ┌───────────────────────────────┐
+  │  NOTIFICATION SERVICE         │
+  │  APNs (iOS) / FCM (Android)   │
+  └───────────────────────────────┘
+```
+
+**Candidate:** Message flow for User A sending "Hey" to User B:
+
+1. User A's WebSocket connection is on Chat Server 1. A sends the message frame with `msg_id` and `conversation_id`.
+2. Chat Server 1 publishes the message to Kafka topic `messages`, partitioned by `conversation_id`. Kafka durably stores it. Chat Server 1 sends `msg_ack` back to User A.
+3. Message is also written to Cassandra (Chat Server 1 or a separate writer service) with the next `sequence_num` from a Redis INCR on `seq:{conversation_id}`.
+4. Fan-Out Service consumes from Kafka. It looks up `conversation_members` for the conversation, gets the list of member user_ids.
+5. For each member, Fan-Out looks up `connection_registry:{user_id}` in Redis to find which Chat Server holds their connection. It sends the message to that Chat Server via internal gRPC.
+6. The target Chat Server pushes the message frame to the recipient's WebSocket connection.
+7. If the recipient is offline (no entry in connection_registry), Fan-Out publishes a push notification event to Kafka, consumed by the Notification Service which calls APNs or FCM.
+
+> **Interviewer:** How do you handle the case where User B is connected to Chat Server 3 but Chat Server 3 crashes right as the message arrives?
+
+**Candidate:** Two failure modes. If Chat Server 3 crashes before pushing to the WebSocket, the message is already in Cassandra and Kafka. When User B reconnects (to any Chat Server, since load balancing is stateless at the TCP level), the client sends its last known `sequence_num`. The server queries Cassandra for all messages with `sequence_num > client_last_seq` and streams them. No message is lost — durability is guaranteed by Cassandra before the fan-out even starts. The second failure mode is more subtle: Chat Server 3 crashes and the connection_registry still shows User B on Server 3. The Fan-Out will try to deliver there, get a connection refused, and should treat that as an offline event — switch to push notification path. We detect this via gRPC error on the internal delivery call.
+
+*(Cross-question: interviewer probes ordering)*
+
+> **Interviewer:** Two users send messages to the same group at exactly the same millisecond. How do you guarantee consistent ordering for all group members?
+
+**Candidate:** This is the classic concurrent write ordering problem. The `sequence_num` is the ordering authority, not the client timestamp. Sequence numbers are generated by Redis INCR on `seq:{conversation_id}` — INCR is atomic and returns a monotonically increasing integer. Whichever message executes INCR first gets sequence_num N, the other gets N+1. All members receive messages in sequence_num order because the Fan-Out Service delivers them in the order they come off Kafka, and Kafka preserves insertion order within a partition (and all messages for a conversation go to the same partition via `conversation_id` partition key). So the ordering is: first writer to Redis wins the lower sequence number, and all members see that same order. This is not wall-clock order — it's commit order, which is the correct semantic for chat.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** With 5,000 Chat Servers, how does the connection registry scale? Every heartbeat is a Redis write.
+
+**Candidate:** 100 million concurrent connections × 1 heartbeat per 30 seconds = 3.3 million Redis writes per second. A single Redis instance handles ~1 million writes/second. I shard the connection_registry by `user_id mod N` across N Redis clusters. With N=10, each cluster handles 330K writes/second — well within capacity. Reads (fan-out looking up which server a user is on) are also sharded the same way. The Fan-Out Service computes the shard at lookup time. Alternative: use consistent hashing on user_id so adding/removing Redis nodes doesn't invalidate all keys simultaneously.
+
+---
+
+> **Interviewer:** How do you enforce message ordering when the client sends two messages in rapid succession and the network reorders them?
+
+**Candidate:** Client-side sequence numbers plus server-side rejection of out-of-order sends. Each client maintains a per-conversation `client_seq` counter, incrementing with each send. The server tracks the last accepted `client_seq` per `(user_id, conversation_id)` in Redis. If `client_seq` in the new message is not `last_accepted + 1`, the server holds the message in a small reorder buffer (up to 5 messages, 500ms window) waiting for the gap to fill. If the gap doesn't fill in 500ms, the server requests a retransmit by sending a `nack` frame with the expected sequence. This handles mobile network reordering without visible gaps in the conversation.
+
+---
+
+> **Interviewer:** How do delivery receipts work across the system — single checkmark to double checkmark?
+
+**Candidate:** Single checkmark (server received) is sent as `msg_ack` immediately when the Chat Server writes to Kafka — before Cassandra write completes, meaning "we have it durably enough." Double checkmark (delivered to recipient device) requires a round-trip. When the Fan-Out Service successfully pushes to the recipient's Chat Server and that server pushes to the WebSocket, the recipient client sends a `delivered_ack` frame. This travels back to the sender's Chat Server, which pushes a `receipt` frame to the sender's WebSocket. The sender's client upgrades the UI from single to double checkmark. The `delivered_at_ms` timestamp is also written to the messages table for audit. Read receipts (the blue double checkmark) follow the same path but are triggered when the recipient opens the conversation — the client sends a `read_ack` with the highest `sequence_num` it has displayed.
+
+---
+
+> **Interviewer:** What's the fan-out bottleneck for a 500-member group and how do you address it?
+
+**Candidate:** For a 500-member group, each message triggers 500 Redis lookups (one per member to find their Chat Server), 500 gRPC calls to potentially 500 different Chat Servers, and 500 WebSocket pushes. At 4 million messages per second globally, a popular large group can generate 2 billion fan-out operations per second — clearly not sustainable at the same tier as 1:1 messages. Three mitigations: (1) Fan-out parallelism — the Fan-Out Service processes member list in parallel goroutines, not sequentially. 500 concurrent gRPC calls complete in roughly the time of 1. (2) Presence-aware fan-out — skip the gRPC call for members whose presence TTL has expired (offline). Only notify online members in real-time; offline members get push notifications and will sync on reconnect. This commonly reduces fan-out by 60–80% for large groups. (3) Fan-out workers scale independently — Kafka consumer group allows deploying more Fan-Out Service instances until throughput keeps up with Kafka lag.

@@ -4117,3 +4117,210 @@ Rate limiting is a critical piece of infrastructure that, when done well, is inv
 *End of Chapter 49: Global Rate Limiter*
 
 *Next: Chapter 50 — Distributed Cache*
+
+---
+
+## Interview Simulation — Global Rate Limiter (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive. Staff-level cross-questions probe organizational complexity, multi-region trade-offs, failure blast radius, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** We need a global rate limiter for our API gateway. Walk me through how you'd clarify requirements before designing anything.
+
+**Candidate:** I'd start with the access pattern questions that most affect architecture. First — who are the clients? Internal services, external developers, or both? Second — what's the granularity of limiting: per user, per API key, per endpoint, per tenant? Third — what's the failure mode contract: if the rate limiter becomes unavailable, do we fail open (allow all traffic) or fail closed (reject all traffic)?
+
+*(Cross-question: This surfaces organizational and product commitments before technical choices — Staff Engineers understand that a wrong failure-mode decision can cascade into an SLA breach.)*
+
+> **Interviewer:** External developers through an API gateway. Per API key, per endpoint. Fail open on limiter failure. What else?
+
+**Candidate:** Two more: What's the consistency requirement? Specifically — is it acceptable to allow a small over-quota burst due to cross-region propagation lag, or must we be exact? And what's the shape of legitimate traffic — bursty (mobile apps) vs. smooth (server-to-server)? This determines whether token bucket or fixed window is the right primitive.
+
+> **Interviewer:** Eventual consistency is fine — we care more about low latency than exact enforcement. Traffic is bursty. We also have one team using this for fraud detection that needs stricter guarantees.
+
+**Candidate:** That last point is important. We have two separate consistency tiers: the fraud detection path needs strong global counting, but the general API gateway path can tolerate eventual consistency. I'd design the architecture to handle both with different backends, rather than one system forced into the stricter contract.
+
+> **Interviewer:** Good catch. Let's say 50 million API keys, 500 endpoints, and we need sub-5ms latency at the rate limiter itself.
+
+**Candidate:** Confirmed: 50M keys, 500 endpoints, <5ms p99, eventual consistency for general tier, strong consistency option for fraud tier. Fail open on outage. Bursty traffic, so token bucket is the right algorithm.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Give me rough numbers.
+
+**Candidate:** Assuming 1M RPS at peak across all API keys — that's a reasonable number for a large API gateway. Each rate limit check needs to read and increment a counter. If we store one token bucket state per (API key, endpoint) pair, that's 50M × 500 = 25 billion combinations. But in practice only a small fraction are active at any time. At 1M RPS with a realistic active ratio of 0.1%, we have about 50,000 hot keys in any given second.
+
+For storage: each token bucket state is ~50 bytes (key, token count, last refill timestamp, burst credits). Hot working set is 50,000 × 50 bytes = 2.5MB — trivially fits in a single Redis node's memory. Even the full theoretical set at 25 billion entries × 50 bytes = 1.25TB, which is shardable across ~50 Redis nodes at 25GB each.
+
+Throughput: 1M RPS with 50ms TTL on local cache means each rate limiter node handles 50,000 local hits before the counter propagates. That's acceptable for eventual consistency. For the fraud tier requiring strong consistency, we pay the Redis round-trip on every request.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the rate limiter API look like — both the external-facing response and the internal service API?
+
+**Candidate:** The external-facing response adds standard headers to every API gateway response:
+
+```
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 743
+X-RateLimit-Reset: 1719360000
+X-RateLimit-Policy: sliding-window-60s
+Retry-After: 47  (only on 429)
+```
+
+The internal service API — what application services call — is:
+
+```
+POST /ratelimit/check
+{
+  "key": "api_key_abc123",
+  "endpoint": "POST /v1/messages",
+  "cost": 1,
+  "tier": "eventual"  // or "strong"
+}
+
+Response:
+{
+  "allowed": true,
+  "remaining": 743,
+  "reset_at": 1719360000,
+  "burst_remaining": 200
+}
+```
+
+I separate `cost` from a default of 1 because some endpoints — like batch operations or expensive ML inference — should consume multiple tokens per call. This avoids teams hard-coding workarounds at the gateway layer.
+
+> **Interviewer:** Why separate `tier` rather than inferring it from the endpoint?
+
+**Candidate:** Because the same endpoint might need different consistency guarantees depending on caller context. Fraud detection calling `/v1/messages` needs strong counting. A regular developer calling the same endpoint gets eventual. Making it explicit in the request lets the routing logic stay simple and auditable.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model the token bucket state, and what does the Redis data structure look like?
+
+**Candidate:** For the eventual consistency tier, I use a Redis hash per (key, endpoint) pair:
+
+```
+Key:   ratelimit:{api_key}:{endpoint_hash}
+Type:  Hash
+Fields:
+  tokens        → current token count (float, allows fractional refill)
+  last_refill   → unix timestamp in milliseconds
+  burst_credits → extra tokens available above base limit
+  version       → monotonic counter for CAS operations
+TTL:   2× the rate limit window (auto-expire inactive keys)
+```
+
+The refill is done atomically via a Lua script that runs on Redis — this avoids TOCTOU races within a single shard. The script reads `last_refill`, computes elapsed time, calculates tokens to add at the refill rate, caps at `limit + burst_credits`, then decrements by `cost`.
+
+For the strong consistency fraud tier, I use the same model but with Redis Cluster in a single region acting as the source of truth, and all write operations go through the primary with `WAIT 1 0` (wait for at least one replica acknowledgment before returning).
+
+> **Interviewer:** How do you handle cross-region counting for the eventual consistency tier?
+
+**Candidate:** Each region maintains its own token bucket. Periodically — every 100-500ms — a gossip process syncs the delta consumption to peer regions. Each region tracks how many tokens it has consumed locally, and when the gossip sync arrives, it adjusts the remaining count. The invariant is: `global_remaining = global_limit - sum(regional_consumed)`. If a region hasn't received a sync in 2× the gossip interval, it assumes the peer is unhealthy and falls back to its own local count — this is the fail-open behavior.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:**
+
+```
+                        ┌─────────────────────────────────────────────────────┐
+                        │                   API Gateway Cluster                │
+                        │                                                       │
+                        │  ┌──────────────┐      ┌──────────────┐             │
+                        │  │  GW Node 1   │      │  GW Node 2   │             │
+                        │  │              │      │              │             │
+                        │  │ L1 Cache     │      │ L1 Cache     │             │
+                        │  │ (in-process) │      │ (in-process) │             │
+                        │  │ ~50ms TTL    │      │ ~50ms TTL    │             │
+                        │  └──────┬───────┘      └──────┬───────┘             │
+                        └─────────┼────────────────────┼─────────────────────┘
+                                  │  cache miss         │  cache miss
+                        ┌─────────▼────────────────────▼─────────────────────┐
+                        │              Regional Rate Limit Service             │
+                        │         (stateless, horizontally scalable)           │
+                        │                                                       │
+                        │   ┌──────────────────────────────────────────────┐  │
+                        │   │           Redis Cluster (Region A)            │  │
+                        │   │   Shard 0     Shard 1     Shard 2   ...      │  │
+                        │   └──────────────────┬───────────────────────────┘  │
+                        └─────────────────────┼───────────────────────────────┘
+                                               │ gossip sync (every 200ms)
+                        ┌─────────────────────▼───────────────────────────────┐
+                        │              Regional Rate Limit Service             │
+                        │                  (Region B)                          │
+                        │                                                       │
+                        │   ┌──────────────────────────────────────────────┐  │
+                        │   │           Redis Cluster (Region B)            │  │
+                        │   └──────────────────────────────────────────────┘  │
+                        └─────────────────────────────────────────────────────┘
+                                               │
+                        ┌─────────────────────▼───────────────────────────────┐
+                        │         Fraud Tier: Single Global Redis Cluster      │
+                        │         (strong consistency, higher latency ok)      │
+                        └─────────────────────────────────────────────────────┘
+```
+
+The key layering is three tiers: L1 in-process cache on each gateway node absorbs repeated checks for the same key within a 50ms window. L2 is the regional Redis cluster, which handles cross-node coordination within a region. L3 is the gossip sync between regions for the eventual consistency tier.
+
+> **Interviewer:** Walk me through what happens when Region B's Redis cluster goes down.
+
+**Candidate:** The gateway nodes in Region B have their L1 in-process cache still populated from the last successful Redis read. For requests that hit a cached entry within the TTL, they proceed normally. For cache misses — new API keys or TTL-expired entries — the rate limit service detects the Redis connection failure and falls back to a local in-memory sliding window. This is the fail-open behavior, but it's bounded: each gateway node independently tracks a local count. In the worst case, traffic exceeds quota by a factor equal to the number of gateway nodes, since they're not coordinating. That's acceptable for the general API tier — we'd rather let traffic through than block legitimate users during an infrastructure failure.
+
+For the fraud tier, a Redis outage in Region B triggers an alert and fails the request with a 503 rather than allowing uncoordinated traffic. That's the explicit contract for that tier.
+
+> **Interviewer:** What about the gossip protocol — how does it avoid a thundering herd when a region comes back up after partition?
+
+**Candidate:** When a partition heals, we don't immediately sync the full counter state. Instead, we replay the delta — what was consumed during the partition — capped at the window size. If Region B was partitioned for 10 minutes and consumed 50,000 tokens locally during that time, we add those 50,000 to the global count. But we cap the retroactive deduction at the current window's limit. This prevents a situation where a region comes back with 10 minutes of stale debt that suddenly throttles users in Region A.
+
+Additionally, the gossip messages include a Lamport timestamp. When a region receives a gossip message older than its current state, it discards it. This prevents stale updates from overwriting fresher data during partition recovery.
+
+> **Interviewer:** How do you handle internal services that need rate limit bypass — for example, an on-call engineer running a migration?
+
+**Candidate:** I'd build a bypass token system, not a bypass flag. Internal services requesting elevated limits get a short-lived signed JWT with a specific claim: `{"bypass_limit": true, "scope": "migration-job-2024", "expires": "+1h", "approved_by": "oncall-eng-id"}`. The rate limiter validates the JWT signature and honors the bypass, but logs every bypassed request with the token's scope and approver. This creates an audit trail that security can review.
+
+The alternative — hardcoding internal service IDs as exemptions — is fragile. Service IDs rotate, teams merge, and the exemption list becomes a compliance liability. Signed JWTs with short expiration and audit logs are a much better pattern at org scale.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+> **Interviewer:** Your gossip-based sync allows up to 500ms of stale counting. A competitor launches a DDoS with 10,000 API keys, each just under the per-key limit. Your eventual consistency design lets them through. How do you detect and respond?
+
+**Candidate:** This is a fleet-wide abuse pattern, not a single-key pattern, so per-key rate limiting alone won't catch it. I'd layer in anomaly detection at the API gateway: if a source IP or ASN is generating traffic across many distinct API keys with high velocity, that's a signal regardless of per-key counts. This is a separate control plane from rate limiting — closer to a WAF rule or abuse detection service. The rate limiter handles resource fairness; the abuse detection layer handles coordinated attacks. Trying to make the rate limiter solve both problems makes it worse at both.
+
+*(Cross-question: Tests whether the candidate understands scope boundaries — rate limiting is not DDoS mitigation.)*
+
+> **Interviewer:** Three teams at your company want to build their own rate limiters. You're the Staff Engineer on platform. How do you handle this organizationally?
+
+**Candidate:** I don't fight it directly — I make the platform so easy to adopt that building your own is the harder path. That means publishing a rate limit service with a single-line SDK integration, clear SLA documentation, and a self-service dashboard for configuring limits. Then I'd go to each team, understand what gap they're trying to fill, and either close that gap in the platform or explicitly document why their use case needs a custom solution. If a team still builds their own after that, I'd ask them to register it in a central service catalog so on-call engineers know about it. The goal is visibility, not control.
+
+*(Cross-question: Probes org-scale influence — Staff Engineers lead through adoption, not mandate.)*
+
+> **Interviewer:** Your rate limiter Redis cluster is using 80% of memory. What's your operational response?
+
+**Candidate:** First, understand what's consuming memory. The most likely culprits are long TTLs on inactive API keys, or a bug where keys are being written without TTL. I'd run `redis-memory-usage` sampling and `DEBUG OBJECT` on a sample of keys to check TTL distribution. If TTLs look correct, the next step is horizontal scaling — add shards to the cluster to spread the keyspace. Redis Cluster supports online resharding without downtime. If the issue is inactive keys accumulating, I'd reduce TTL to 2× the rate limit window (from whatever it currently is) and run a one-time cleanup of keys with no recent access. Longer term, I'd add a memory utilization alert at 60% that triggers a capacity planning review, so we're never reacting at 80%.
+
+*(Cross-question: Tests operational maturity — Staff Engineers think about runbooks and alerting thresholds, not just architecture.)*
+
+> **Interviewer:** A new team wants to use your rate limiter for their ML inference API, where one request can cost 1000x more than a standard request. Their team lead says token bucket won't work. Are they right?
+
+**Candidate:** They're right that a naive 1-token-per-request model won't work, but token bucket absolutely handles this — that's what the `cost` field in the API design is for. An ML inference request with 10,000 tokens of compute consumes 10,000 credits from the bucket, not 1. The bucket refills at a rate calibrated to the team's allocated compute budget. The nuance is that a single large request might consume the entire bucket, leaving nothing for smaller requests from the same key. If that's a problem, I'd add a minimum reservation — a portion of the bucket earmarked for small requests — but that adds complexity. I'd first ask the team whether their actual usage pattern has that mixed-size problem. In my experience, ML inference APIs have fairly uniform request sizes per endpoint, so the concern is often theoretical.
+
+*(Cross-question: Tests whether the candidate can push back constructively on stakeholder assumptions while staying collaborative.)*
+
+---
+
+*End of Interview Simulation — Global Rate Limiter (Staff / L6)*

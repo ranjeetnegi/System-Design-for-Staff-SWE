@@ -3728,3 +3728,183 @@ My default behavior matches a browser's strict mode: reject self-signed certific
 *Section 5 — L5 / Senior SWE. Very high frequency at Google.*
 *~3,500+ lines. Full chapter with algorithm deep dives, race conditions,*
 *performance optimization, rollout safety, and operational runbook.*
+
+---
+
+## Interview Simulation — Web Crawler
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a web crawler for a search engine. Where do you start?
+
+**Candidate:** Scale and purpose first. Are we crawling the entire web — billions of pages — or a focused vertical like news sites? What's the target crawl frequency for fresh content: re-crawl popular pages every few hours, or index everything once? Do we need to handle JavaScript-rendered pages (SPAs), or is static HTML sufficient for V1? And what are the output requirements — just raw HTML, or should we extract structured data?
+
+> **Interviewer:** Full web crawl, targeting 5 billion pages. Re-crawl popular pages every 24 hours, long-tail pages every 30 days. JavaScript rendering is out of scope. Output is raw HTML + metadata (URL, crawl timestamp, HTTP headers).
+
+**Candidate:** Good. 5 billion pages is the key constraint that forces a distributed design. One more question: what are the politeness requirements? Do we respect robots.txt strictly, and is there a minimum crawl delay per domain?
+
+> **Interviewer:** Strict robots.txt compliance. Minimum 1 second between requests to the same domain.
+
+**Candidate:** That 1-second per domain minimum is crucial — it means a single crawler can't fetch more than 1 URL/second from any given domain, which shapes the parallelism model. With millions of domains, we need enough workers that each domain's 1-second gap doesn't bottleneck throughput.
+
+*(Cross-question: politeness enforcement)*
+
+> **Interviewer:** You said 1-second minimum between requests to the same domain. How do you enforce this across hundreds of distributed crawler workers without a centralized lock per domain?
+
+**Candidate:** Two-level approach. At the frontier level, URLs are assigned to workers by domain hash — all URLs for `example.com` always go to the same worker shard. This means each shard can enforce politeness locally with a simple in-memory per-domain timestamp map: `last_fetched[domain] = timestamp`, no cross-machine coordination needed. Within a shard, the worker checks `now - last_fetched[domain] >= 1s` before dequeuing a URL for that domain, otherwise it skips to the next domain's URLs. The frontier queue is organized as a per-domain bucket structure so workers can efficiently find a domain that's ready to crawl. This approach scales linearly with the number of shards and eliminates centralized lock contention entirely.
+
+---
+
+### Phase 2: Estimation (8 min)
+
+**Candidate:** Target throughput: 5 billion pages. Popular pages re-crawled every 24 hours, long-tail every 30 days. Let's say 10% of pages are "popular" (500M pages), the rest are long-tail (4.5B). Daily crawl volume: 500M / 1 + 4.5B / 30 = 500M + 150M = ~650M pages/day. That's 650M / 86,400 = ~7,500 pages/second sustained.
+
+Average page size: 200 KB HTML + 50 KB metadata = 250 KB. At 7,500 pages/second: 7,500 × 250 KB = ~1.9 GB/second of raw data to store. Per day: ~160 TB. Over 30 days of retention before archival: ~5 PB. This requires an object store (S3 or GCS) with Hadoop/Spark for downstream processing.
+
+For compute: each crawler worker can fetch roughly 100 pages/second (limited by network I/O, DNS, and connection overhead). To sustain 7,500 pages/second: 75 crawler workers. With politeness constraints and real-world variance, plan for 150-200 workers.
+
+> **Interviewer:** You estimated 200 KB average page size. What if 20% of pages are actually 2 MB due to inline scripts and large DOM trees? How does that affect your design?
+
+**Candidate:** At 20% of 650M pages/day being 2 MB, that's 130M × 2 MB = 260 TB/day from large pages alone, plus 520M × 200 KB = 104 TB from normal pages, totaling ~364 TB/day — more than double my estimate. The storage cost is manageable since object storage is cheap, but the network bandwidth to workers becomes the bottleneck. At 364 TB/day, average bandwidth per worker (150 workers) is ~28 MB/s — achievable on standard 10Gbps NICs. More importantly, I'd add a content size limit: if the Content-Length header or streaming response exceeds 5 MB, abort the fetch and record the URL as "skipped-oversized." Most legitimate web pages are under 2 MB; pages larger than 5 MB are usually binary files or misconfigured servers that aren't useful for search indexing anyway.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** The crawler has two primary APIs — one for URL submission (seeding) and one for crawl status:
+
+```
+POST /v1/crawl/seeds
+  Body: { urls: ["https://example.com", ...], priority: "high|normal|low" }
+  Returns: { job_id, accepted_count, rejected_count }
+
+GET /v1/crawl/status/{url_hash}
+  Returns: { url, last_crawled_at, status, next_scheduled_at, http_status }
+
+GET /v1/crawl/domains/{domain}/robots
+  Returns: { domain, robots_txt_content, crawl_delay, disallow_paths[], cached_at }
+
+POST /v1/crawl/domains/{domain}/block
+  Body: { reason, blocked_by }
+  Returns: { domain, blocked_until }
+```
+
+Internal components communicate via message queues (Kafka topics for URL frontier, parsed links, crawl results) rather than REST calls.
+
+> **Interviewer:** Why expose a robots.txt cache endpoint as an API rather than just letting workers fetch robots.txt themselves?
+
+**Candidate:** Two reasons. First, politeness: if 150 workers each independently fetch `robots.txt` from `example.com` when they first encounter a URL from that domain, that's 150 requests to the site before we've even fetched a single content page. Centralizing robots.txt fetching means we fetch it once per domain (with a 24-hour TTL), and all workers share the cached result. Second, the parsed robots.txt rules need to be consistently applied — if each worker parses `robots.txt` independently, a parsing edge case could cause different workers to disagree on whether a URL is allowed. Centralized parsing and caching guarantees all workers use the same allow/disallow decision for a given URL.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Core tables:
+
+```sql
+url_frontier(
+  url_hash CHAR(64) PK,         -- SHA-256 of normalized URL
+  url TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  priority FLOAT,               -- higher = crawl sooner
+  next_crawl_at TIMESTAMPTZ,
+  last_crawled_at TIMESTAMPTZ,
+  crawl_interval_hours INTEGER,
+  status ENUM('PENDING','IN_FLIGHT','CRAWLED','FAILED','BLOCKED')
+)  -- partitioned by next_crawl_at for efficient scheduler queries
+
+crawl_results(
+  crawl_id UUID PK,
+  url_hash CHAR(64) FK → url_frontier,
+  crawled_at TIMESTAMPTZ,
+  http_status INTEGER,
+  content_type TEXT,
+  content_hash CHAR(64),        -- SHA-256 of body (dedup detection)
+  s3_path TEXT,                 -- where raw HTML is stored
+  links_extracted INTEGER,
+  crawl_worker_id TEXT
+)
+
+domain_metadata(
+  domain TEXT PK,
+  robots_txt TEXT,
+  robots_cached_at TIMESTAMPTZ,
+  crawl_delay_ms INTEGER DEFAULT 1000,
+  is_blocked BOOLEAN DEFAULT FALSE
+)
+```
+
+The URL deduplication for the Bloom filter is handled separately in Redis — the `url_hash` in `url_frontier` is the on-disk authority, while Redis holds a Bloom filter for fast in-memory already-seen checks.
+
+> **Interviewer:** You store `content_hash` in crawl_results. How do you use this to avoid re-indexing pages that haven't changed?
+
+**Candidate:** Before passing a crawled page to the indexer, the crawler computes SHA-256 of the response body and compares it to the `content_hash` from the most recent previous crawl. If they match, the content is unchanged — we update `last_crawled_at` and `next_crawl_at` in `url_frontier` but send a `NO_CHANGE` signal to the indexer instead of the raw HTML. The indexer skips re-parsing and re-indexing, saving significant CPU. This is especially valuable for stable pages that are crawled every 24 hours — many will be unchanged, so content-hash comparison eliminates most indexer work. As a secondary benefit, pages that change content frequently get their `crawl_interval_hours` decremented (more frequent crawls); pages that never change get it incremented (crawl less often). This adaptive crawl frequency saves bandwidth on stable content and keeps fresh content current.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+  Seed URLs
+      │
+┌─────▼────────────┐     ┌──────────────────────────┐
+│  URL Frontier    │     │  Bloom Filter (Redis)    │
+│  Scheduler       │────▶│  already-seen dedup      │
+│  (partitioned by │     └──────────────────────────┘
+│   domain hash)   │
+└─────┬────────────┘
+      │ dequeue ready URLs (domain delay respected)
+┌─────▼────────────────────────────────────────────┐
+│              Crawler Worker Pool (150+)           │
+│  Per worker: fetch → parse → extract links       │
+│  DNS cache: 10min TTL per domain                 │
+│  Robots.txt: checked before fetch                │
+└──┬───────────────┬──────────────────────┬────────┘
+   │               │                      │
+   ▼               ▼                      ▼
+Raw HTML       Extracted links        Crawl metadata
+(S3)         (Kafka: new-urls)       (Postgres)
+                   │
+            ┌──────▼────────┐
+            │  Link Processor│
+            │  (normalize,  │
+            │  dedup, score,│
+            │  enqueue)     │
+            └───────────────┘
+```
+
+*(Cross-question: Bloom filter false positives)*
+
+> **Interviewer:** Your Bloom filter deduplicates already-seen URLs. What's the impact of a false positive — incorrectly marking a new URL as already seen?
+
+**Candidate:** A false positive means we skip crawling a URL we've never actually seen. For a search engine, this means that URL's content doesn't get indexed. The probability is tunable: with a Bloom filter sized at 50 billion bits (~6 GB) for 5 billion URLs, using 7 hash functions, the false positive rate is approximately 1% per URL. That's 1% of new URLs incorrectly skipped — acceptable for a web-scale crawler where completeness is a best-effort goal, not a guarantee. The trade-off against a hash set: a hash set storing 5 billion 64-byte SHA-256 hashes requires 320 GB of memory — prohibitively expensive. The Bloom filter uses 6 GB for a 1% error rate. If we need a lower error rate (0.1%), we size the filter at 100 GB, which is still 3× cheaper than the hash set. For correctness, we back the Bloom filter with the `url_frontier` Postgres table — the Bloom filter is a fast probabilistic pre-filter, and the authoritative dedup is the unique constraint on `url_hash` in Postgres. The Bloom filter prevents most duplicate Postgres lookups; Postgres prevents all actual duplicate crawls.
+
+*(Cross-question: DNS caching)*
+
+> **Interviewer:** You mentioned DNS caching in the workers. What's the failure mode if a domain's IP changes during an active crawl and your cache still has the old IP?
+
+**Candidate:** The crawler sends requests to a stale IP. Three outcomes: (1) the old IP is no longer active — TCP connection refused, the fetch fails with a connection error, and the URL is retried after backoff. The retry will re-resolve DNS if the TTL has expired. (2) The old IP is reassigned to a different server — we might get a 404 or completely unrelated content. Content-hash comparison catches the unrelated content case at the indexer level. (3) The old server is still alive and serving during a blue/green migration — we get valid content from the old deployment, which is usually fine since it's the same content with minor differences. Mitigation: set DNS cache TTL to 10 minutes maximum, and always respect the DNS record's actual TTL if it's shorter. On any TLS certificate hostname mismatch (which would happen if the IP changed to a different domain's server), reject the response and flag for re-resolution. The 10-minute DNS cache is a pragmatic balance between DNS server load reduction and staleness tolerance.
+
+*(Cross-question: distributed coordination)*
+
+> **Interviewer:** With 150 crawler workers all pulling from the URL frontier, how do you prevent two workers from crawling the same URL simultaneously?
+
+**Candidate:** Distributed locking via URL assignment. The frontier scheduler assigns each URL to a specific worker by computing `worker_id = hash(url_hash) % num_workers`. URL-to-worker assignment is deterministic — the same URL always goes to the same worker. When a worker dequeues a URL, it atomically updates `status = IN_FLIGHT` with a `claimed_by` and `claimed_at`. If a worker crashes mid-crawl, a separate watchdog process finds URLs that have been `IN_FLIGHT` for more than 5 minutes (fetch timeout) and resets them to `PENDING` for reassignment. The deterministic hashing prevents two workers from racing to claim the same URL, and the timeout-based recovery handles the worker crash case. An alternative would be using Redis SETNX as a distributed lock per URL, but that adds per-URL Redis writes which is expensive at 7,500 URLs/second.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: How does the URL priority queue work, and what signals determine a URL's priority?**
+
+The URL frontier uses a multi-level priority queue. Priority is a float computed from several signals: PageRank estimate of the linking page (URLs linked from high-PageRank pages are more important); freshness decay (URLs not crawled recently get increased priority); domain authority (top-1000 domains by traffic get higher priority); content type signals (sitemaps and RSS feeds get highest priority as they explicitly signal fresh content). Implementation: the frontier is sharded by domain hash across multiple Redis Sorted Sets, where the score is the computed priority. The scheduler pulls URLs by taking the highest-score URL from each domain that has passed its politeness delay. Redis Sorted Sets support O(log N) insert and O(log N) pop-max — efficient for the scheduler's access pattern. For the 5-billion-URL scale, the frontier metadata lives in Postgres (which supports the full history and persistence requirements) while Redis holds only the "ready to crawl" working set — URLs whose `next_crawl_at <= now`, typically a few hundred million at any given time.
+
+**Q: How do you handle crawler traps — pages that generate infinite URLs like `?page=1`, `?page=2`, up to `?page=999999`?**
+
+Three defenses. First, URL normalization: strip or canonicalize common pagination parameters. URLs that differ only in a known pagination parameter (page, offset, p) map to the same canonical URL, and we only crawl the canonical form. Second, per-domain URL count cap: if we've already queued more than 10,000 URLs from a single domain, new URLs from that domain are queued with very low priority and rate-limited to 100 new URLs per day. This prevents a single misbehaving domain from flooding the frontier. Third, path depth limit: URLs with more than 6 path segments (e.g., `/a/b/c/d/e/f/g/page`) are deprioritized heavily, as legitimate content is rarely this deeply nested. These three heuristics catch the vast majority of crawler traps. For adversarial cases (intentionally deceptive URLs with random query parameters), we additionally check if the rendered content hash is similar to already-crawled pages from the same domain using SimHash — pages with >90% SimHash similarity are treated as near-duplicates and skipped.
+
+**Q: What happens when a crawled page returns a 301 redirect? How do you handle redirect chains?**
+
+On a 301 (permanent redirect), the crawler follows the redirect to the destination URL and records a mapping in a `url_redirects` table: `{from_url_hash, to_url_hash, http_status, recorded_at}`. The destination URL is crawled and indexed. The source URL is marked as a redirect in the frontier — future crawls of the source URL skip the fetch and check if the redirect destination still resolves correctly every 7 days. For redirect chains (A → B → C), the crawler follows up to 5 hops before declaring a redirect loop. Each intermediate URL in the chain is recorded. The final destination is the only URL passed to the indexer; intermediate URLs are stored only in the redirect table for link equity calculation. Redirect loops (A → B → A) are detected by tracking the set of URLs visited in the current redirect chain — if we see the same URL twice, we abort with status `redirect-loop` and log all URLs in the cycle. This prevents infinite loops from consuming worker threads.

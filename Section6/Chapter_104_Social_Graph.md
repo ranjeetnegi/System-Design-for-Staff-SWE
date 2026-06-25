@@ -2498,3 +2498,151 @@ CONSISTENCY:
 *Consistent hashing for shard addition: dual-write during migration, config cutover, rollback.*
 *Platform comparison: Instagram (TAO), Twitter (in-memory), LinkedIn (Espresso+Venice).*
 *Last updated: 2026-06-25. System Design for L6: The Complete Guide.*
+
+---
+
+## Interview Simulation — Social Graph (Instagram / Twitter) (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design the social graph backend for a platform like Instagram. Where do you start?
+
+**Candidate:** A few questions before I draw anything. First — is this a directed graph (follow/unfollow, like Instagram) or undirected (friend/unfriend, like Facebook)? The storage and query patterns differ. Second — what are the core operations we're optimizing for: follow/unfollow, feed generation, or people-you-may-know recommendations? Third — what's the celebrity threshold — at what follower count does fan-out-on-write become infeasible? Fourth — do we need real-time consistency for follow relationships, or is eventual consistency acceptable?
+
+> **Interviewer:** Directed graph (follow/unfollow). Core operations: follow, unfollow, get-followers, get-following, feed generation, PYMK. Celebrity threshold is your call to justify. Eventual consistency acceptable for reads.
+
+**Candidate:** Functional requirements: (1) Follow/unfollow with < 200 ms write latency. (2) Get follower/following list with cursor pagination. (3) Hybrid feed generation (push for regular users, pull for celebrities). (4) PYMK recommendations updated nightly. Non-functional: 70 billion edges at full scale, 200 average follows per user, 1 million follower threshold for celebrity treatment, 1 billion daily active users, read:write ratio ~100:1 for graph reads vs writes.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 70 billion edges × 16 bytes per edge (follower_id + following_id as 8-byte integers) = 1.12 TB raw edge data. With metadata (created_at, state) and indexes, call it 2.5 TB. For 350 million users, that's a 2.5 TB dataset — too large for a single machine but manageable with a 10-node Cassandra cluster at 250 GB per node. Read throughput: 1 billion DAU × 10 feed loads per day ÷ 86,400 s = 115,000 feed reads per second. Each feed read requires fetching the user's following list (average 200 accounts) and merging their recent posts — but with fan-out-on-write for non-celebrities, this becomes a single Redis list read per user. Write throughput: follow events — Instagram at 5 billion follows processed per day ÷ 86,400 ≈ 57,000 follow writes/s. Fan-out writes for feed: each non-celebrity post fans out to all followers — at 200 followers average, 100,000 posts/s × 200 = 20 million Redis writes/s for feed fan-out.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Four endpoints. `POST /v1/users/{user_id}/follow` body `{target_user_id}` — creates a directed edge, returns 201. `DELETE /v1/users/{user_id}/follow/{target_user_id}` — removes the edge, returns 204. `GET /v1/users/{user_id}/followers?cursor={cursor}&limit=50` — paginated follower list using a cursor (last seen user_id for keyset pagination, not offset). `GET /v1/users/{user_id}/following?cursor={cursor}&limit=50` — symmetric. `GET /v1/users/{user_id}/feed?cursor={cursor}&limit=20` — returns feed items, assembled by the Feed Service. `GET /v1/users/{user_id}/pymk?limit=10` — returns PYMK suggestions from precomputed Cassandra results, not real-time computation.
+
+> **Interviewer:** Why keyset pagination instead of offset-based?
+
+**Candidate:** Offset pagination requires scanning and discarding N rows for page N — at O(N) cost per page. For a user with 10 million followers, fetching page 200,000 requires scanning 10 million rows. Keyset pagination (cursor = last_seen_user_id) turns this into a range query: `SELECT * FROM follows WHERE user_id = ? AND follower_id > ? LIMIT 50` — always O(1) regardless of page number. The trade-off: keyset cursors break if the client skips pages, and they can't jump to an arbitrary page. For social graph browsing, users scroll forward sequentially — keyset is the right choice.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Two tables in Cassandra, designed for the access patterns. `follows` table: partition key = `user_id`, clustering key = `follower_id`, columns = `created_at, state`. This supports `GET followers for user X` as a single partition scan. Inverted table `following`: partition key = `follower_id`, clustering key = `user_id`. This supports `GET all accounts that user X follows` as a single partition scan. Both writes happen atomically via a logged batch. We do NOT use a graph database (like Neo4j) for this — the access patterns are simple enough for a wide-column store, and Cassandra's horizontal scalability handles 70B edges far better than Neo4j's single-node architecture. Follower count: a separate `user_stats` table with a counter column — Cassandra counters support atomic increment, preventing the read-modify-write race condition on counts.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Here's the graph and feed architecture:
+
+```
+FOLLOW/UNFOLLOW WRITE PATH
+===========================
+Client → Follow Service
+  │
+  ├─► Cassandra Write (follows + following tables, logged batch)
+  │       partition: user_id → followers list
+  │       partition: follower_id → following list
+  │       ~5ms write latency
+  │
+  ├─► Kafka Event: follow.created / follow.removed
+  │
+  └─► (async) Fan-out Service consumes Kafka event
+          IF target_user follower_count < 1M (non-celebrity):
+            append post_ids to follower's Redis feed list
+          IF target_user follower_count >= 1M (celebrity):
+            no fan-out — pull at feed read time
+
+FEED READ PATH
+===============
+Client → Feed Service
+  │
+  ├─► Case 1: Regular User
+  │       Redis: GET feed:{user_id} (pre-populated list of post_ids)
+  │       fetch post metadata from Post Service (batch)
+  │       → return merged, sorted feed
+  │
+  └─► Case 2: User follows celebrities
+          Redis: GET feed:{user_id} (non-celeb post_ids)
+          Pull celebrity posts: query Post Service for each celeb
+            WHERE created_at > last_read_timestamp
+          Merge + sort by time
+          → return merged feed
+          Celebrity threshold: 1M followers
+          Blend ratio: ~20 celebs max in following list
+            → 20 pull queries, parallel, < 30ms total
+
+SOCIAL GRAPH STORAGE (TAO-inspired model)
+==========================================
+Cassandra Cluster (10 nodes, 2.5TB)
+  follows:  (user_id PK) → [follower_id, created_at, state]
+  following: (follower_id PK) → [user_id, created_at, state]
+
+TAO Two-Tier Cache:
+  L1: In-datacenter Memcached (per-region, hot edges)
+  L2: Cross-region Memcached (warm edges)
+  DB: Cassandra (cold reads, writes always go here)
+
+PYMK PIPELINE (nightly offline)
+=================================
+Cassandra (full graph snapshot)
+  │
+  ▼
+Spark Job (2-hop expansion)
+  │ for each user U:
+  │   friends-of-friends = following(following(U)) - following(U) - {U}
+  │   compute Jaccard similarity: |common follows| / |union of follows|
+  │   rank top-20 candidates by Jaccard score
+  ▼
+ML Re-ranking (XGBoost)
+  │ features: Jaccard score, mutual follows count,
+  │           same-school/employer signal, location proximity
+  ▼
+Cassandra: pymk_results table
+  │ (user_id → [ranked candidate list])
+  ▼
+PYMK API reads from pymk_results (no real-time computation)
+```
+
+**Deep Dive 1: Celebrity Problem and Hybrid Fan-Out.**
+
+The celebrity problem: Katy Perry has 150 million followers. If she posts, fan-out-on-write means 150 million Redis writes simultaneously — ~1.5 TB of data written in seconds. The threshold of 1 million followers is where fan-out cost exceeds the latency benefit of pre-populated feeds. At 1M followers, a fan-out takes 1M × 100 bytes = 100 MB of Redis writes per post. For a celebrity posting 5 times/day, that's 500 MB/day per celebrity × thousands of celebrities = unacceptable write amplification. The hybrid solution: celebrities never fan out. At feed read time, the Feed Service detects celebrities in the user's following list (a Redis set of the user's followed celebrity IDs, populated at follow time), pulls their latest posts inline, and merges them with the pre-populated fan-out feed from regular accounts. Latency cost: ~30 ms for 20 parallel celebrity pulls. This is hidden by the local fan-out read (~10 ms) — both happen in parallel. The threshold of 1M is operational: we run a nightly job that promotes/demotes users between celebrity and regular tiers based on current follower count.
+
+> **Interviewer:** What happens during the transition — a user crosses 1M followers?
+
+**Candidate:** *(Cross-question: celebrity tier promotion)* The transition is handled by a background migration job triggered when the follower count crosses the threshold. The job: (1) stops new fan-out writes for this user (flip a feature flag in Redis: `celebrity:{user_id}` = 1), (2) does NOT retroactively purge existing fan-out entries from followers' feed lists — those expire naturally as the feed list is TTL-capped at 7 days and length-capped at 500 items, (3) updates each follower's celebrity set to include the newly promoted user. From this point forward, all feed reads for followers will include this user in the pull-at-read path. The window of inconsistency is up to 7 days for followers who cached old fan-out data — acceptable for this use case.
+
+**Deep Dive 2: PYMK via Jaccard Similarity and Bidirectional BFS.**
+
+PYMK (People You May Know) is a graph problem: find users who are close in the graph but not yet connected. Jaccard similarity between users A and B = |following(A) ∩ following(B)| / |following(A) ∪ following(B)|. A Jaccard score of 0.3 means 30% of their combined following lists overlap — strong signal for a recommendation. The naive computation is O(N²) in the number of users — infeasible at 1 billion users. We reduce it with 2-hop expansion: for user A, the PYMK candidate set is all users followed by the users A follows (friends-of-friends). At 200 average follows, this is 200 × 200 = 40,000 candidates per user — manageable. The Spark job processes all users in parallel: partition the Cassandra snapshot by user_id range, each Spark task processes one user's 2-hop expansion and Jaccard computation. Runtime: ~4 hours for 1 billion users on a 500-node Spark cluster. The Jaccard score is then passed to an XGBoost re-ranker that adds signals Jaccard can't capture: mutual location, school affiliation, contact book matches (if the user granted contact access). The output is written to a Cassandra `pymk_results` table, read at API time.
+
+**Deep Dive 3: Sharding by user_id and Cross-Shard Edge Queries.**
+
+Cassandra partitions the `follows` table by `user_id` — all followers of user X are on the same partition (possibly the same Cassandra node). This makes fetching "all followers of X" fast (single-partition scan) and makes cross-shard queries rare. The cross-shard case arises when we need to check "does user A follow user B?" — A's following list is on A's partition, not B's. We handle this with the inverted `following` table: check if B appears in A's following partition. Both tables must be kept in sync, which is why we use a Cassandra logged batch (atomic write to both tables, or neither). The complexity: during a shard migration (adding a node), Cassandra uses virtual nodes (vnodes) and consistent hashing for rebalancing. New edges written during migration go to both old and new vnodes for the affected token range. This dual-write period is a known window of ~hours during which follower counts may be slightly inconsistent — acceptable given eventual consistency.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle block relationships — user A blocks user B?**
+A: Block relationships are stored in a separate `blocks` table with the same partition structure as `follows`. The critical invariant: a block must suppress the relationship in both directions — B's posts don't appear in A's feed, and A doesn't appear in B's suggested follows. We implement this as a filter at the Feed Service: before returning feed items, check if any post authors are in the requesting user's block list. The block list is cached in Redis per user (small set, < 100 entries for most users). PYMK also filters blocked users from suggestions. The edge case: if A blocks B after B has already fan-out-written posts to A's feed cache, those posts remain until the feed cache expires. Purging them immediately would require scanning A's entire feed list — an O(N) operation we avoid. The 7-day TTL ensures eventual cleanup.
+
+**Q: How do you measure the quality of PYMK recommendations?**
+A: The north star metric is follow-through rate: of PYMK suggestions shown, what percentage result in a follow within 7 days? We run a holdback experiment: 10% of users see no PYMK suggestions (control). The follow-through rate delta between treatment and control measures incremental value. Secondary metrics: acceptance rate (follows / suggestions shown), long-term retention (are the new follows still active 30 days later?). A PYMK suggestion that leads to a low-quality follow (user unfollows within 7 days) is worse than no suggestion — we track unfollow rate for PYMK-sourced connections separately. Model iteration: monthly retrain of the XGBoost re-ranker using follow/unfollow outcomes as labels.
+
+**Q: How would you add a "close friends" feature (showing posts to a subset of followers)?**
+A: Close friends is an access control list on posts. Storage: `close_friends` table in Cassandra, partition key = `user_id`, columns = `friend_user_id`. On post creation with `visibility = CLOSE_FRIENDS`, the post is tagged with the author's close friends list version (a counter incremented when the list changes). At feed read time, the Feed Service checks if the requesting user is in the post author's close friends list before including the post. For fan-out-on-write: instead of writing to all followers' feed lists, we write only to the subset who are in the close friends list. This reduces write amplification for close-friends posts significantly. The access check is critical: it must happen at read time even if the fan-out already happened, because the close friends list could have changed between post creation and feed read.
+
+*Consistent hashing for shard addition: dual-write during migration, config cutover, rollback.*
+*Platform comparison: Instagram (TAO), Twitter (in-memory), LinkedIn (Espresso+Venice).*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*

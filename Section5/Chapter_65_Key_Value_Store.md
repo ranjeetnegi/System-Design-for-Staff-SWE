@@ -2416,3 +2416,197 @@ Fix to reduce false positives: use a two-stage failure detection. "Suspected" st
 
 *Section 5 — L5 / Senior SWE. Highest-frequency pure depth probe at Google, Meta, and Amazon.*  
 *Full chapter. Pairs with Ch31 (Database Internals) for the B-tree side of the storage engine comparison.*
+
+---
+
+## Interview Simulation — Key-Value Store
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a key-value store — think building a simplified Redis or DynamoDB. Where do you start?
+
+**Candidate:** I want to understand the operational profile before touching internals. A few questions:
+
+What is the expected ratio of reads to writes? Some KV stores (session cache) are 95% reads; others (metrics ingestion) are 95% writes. The storage engine choice depends heavily on this.
+
+> **Interviewer:** Mixed workload — 60% reads, 40% writes.
+
+**Candidate:** What value sizes are we storing — small values like session tokens (under 1 KB), or large blobs like images (up to 10 MB)?
+
+> **Interviewer:** Small values only. Assume max 10 KB per value. The system does not need to handle binary blobs.
+
+**Candidate:** Durability requirements — if the server crashes, is it acceptable to lose the last second of writes, or must every write be durable before acknowledging success?
+
+> **Interviewer:** Strong durability. Every write that receives a success response must survive a single server crash.
+
+**Candidate:** Distribution — single node or distributed? If distributed, do we need strong consistency (every read sees the latest write) or eventual consistency (replicas may lag)?
+
+> **Interviewer:** Distributed — 3 to 5 nodes. Eventual consistency is acceptable. No strict linearizability needed.
+
+**Candidate:** Scale: keys, QPS, and data size?
+
+> **Interviewer:** 100 million keys, 1 KB average value — 100 GB total data. Peak 100,000 reads/second and 40,000 writes/second.
+
+**Candidate:** Summary: distributed KV store, eventual consistency, strong durability per node (WAL), optimized for mixed read-write workload with small values. Total data fits on 3 nodes with 64 GB RAM each (100 GB / 3 nodes ≈ 33 GB per node, fits in memory if we want in-memory storage, or use SSD-backed LSM-tree if we want persistence-first).
+
+*(Cross-question: Immediately tying durability and distribution to design choices — not just listing requirements — is what separates L5 from L4.)*
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Capacity estimates.
+
+**Candidate:** **Data volume:** 100M keys × (key avg 50 bytes + value avg 1 KB + metadata 100 bytes) = 100M × 1,150 bytes ≈ **115 GB total**. Divided across 3 nodes: ~38 GB per node on disk. With replication factor 3 (each key on 3 nodes), total disk across the cluster: 115 GB × 3 = **345 GB**. This fits on commodity SSD nodes.
+
+**Memory:** If we use an in-memory hash table for the index (key → offset in SSTable), 100M keys × 50 bytes overhead per entry (pointer + key hash) ≈ **5 GB per node** for the index. The data itself lives on disk in SSTables with a page cache serving hot keys. A 16 GB RAM node can hold the full index plus cache for frequently accessed values.
+
+**Write throughput:** 40,000 writes/second × 1,150 bytes = **46 MB/s** to the WAL. A modern NVMe SSD sustains 500 MB/s sequential writes — comfortable headroom. The WAL is sequential writes only, which is fast. The MemTable absorbs writes in memory. SSTable flushes happen every few hundred MB — not on the hot path.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the API.
+
+**Candidate:** Minimal API — three operations:
+
+```
+PUT /v1/keys/{key}
+  Body: { "value": "<base64-encoded bytes>", "ttl_seconds": 3600 }
+  Response: 200 OK
+
+GET /v1/keys/{key}
+  Response: 200 OK { "value": "<base64-encoded bytes>", "version": 42 }
+           404 Not Found
+           410 Gone (key existed but expired/deleted)
+
+DELETE /v1/keys/{key}
+  Response: 200 OK
+```
+
+For a more efficient binary protocol (like real Redis or RocksDB client), I'd use a custom TCP protocol instead of HTTP to avoid header overhead. For this discussion I'll use HTTP for clarity.
+
+> **Interviewer:** Should GET guarantee reading the latest write?
+
+**Candidate:** With eventual consistency, GET on a replica may return a value that is 1-2 seconds stale. If the client needs the latest value, they can send a `GET /v1/keys/{key}?consistency=strong` header, which routes the request to the primary node. Strong reads are more expensive (add ~5ms for cross-node coordination) but available when needed. This mirrors DynamoDB's eventually consistent reads (default) vs. strongly consistent reads (opt-in).
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What's the on-disk data model?
+
+**Candidate:** I'll use an **LSM-tree (Log-Structured Merge-tree)** storage engine, which is the right choice for our 40% write workload. Here is the structure:
+
+**MemTable (in-memory):** A sorted red-black tree or skip list. All writes land here first. Typical size 64-256 MB before flush. Provides O(log N) reads and writes in memory.
+
+**WAL (Write-Ahead Log, on disk):** Every write to the MemTable is first appended to the WAL. Sequential I/O only. On crash, the MemTable is rebuilt by replaying the WAL. The WAL guarantees durability before the write is ACKed to the client.
+
+**SSTables (on disk):** When the MemTable reaches its size limit (say 64 MB), it is flushed to disk as an immutable SSTable (Sorted String Table). Format:
+```
+[ data block | data block | ... | index block | bloom filter | footer ]
+```
+Data blocks: sorted key-value pairs. Index block: one entry per data block (first key + offset). Bloom filter: probabilistic structure to check "does key X exist in this SSTable" in O(1) without reading the SSTable.
+
+**Compaction:** Multiple SSTables accumulate. Reads must check the MemTable + all SSTables, which gets slow. Compaction merges multiple SSTables into fewer, larger SSTables, eliminating duplicates and deleted keys. **Leveled compaction** (RocksDB default): SSTables are organized in levels (L0, L1, L2...). Each level is 10x larger than the previous. Read amplification: O(number of levels) ≈ 5-7 levels. Write amplification: O(10) — data is rewritten ~10x across levels. Good for mixed workloads.
+
+*(Cross-question: Naming the specific compaction strategy — leveled vs. size-tiered — and its amplification trade-off is the expert-level answer.)*
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** High-level architecture across multiple nodes.
+
+**Candidate:**
+
+```
+              ┌──────────────────────────────────────────────┐
+              │                  Client                       │
+              └──────────────────────┬───────────────────────┘
+                                     │
+              ┌──────────────────────▼───────────────────────┐
+              │           Coordinator / Router                │
+              │  (consistent hashing ring, knows node health) │
+              └───────┬────────────────────────┬─────────────┘
+                      │                        │
+         ┌────────────▼──────┐      ┌──────────▼─────────┐
+         │     Node A        │      │      Node B         │
+         │  ┌─────────────┐  │      │  ┌─────────────┐   │
+         │  │  MemTable   │  │      │  │  MemTable   │   │
+         │  └──────┬──────┘  │      │  └──────┬──────┘   │
+         │         │ flush   │      │         │ flush     │
+         │  ┌──────▼──────┐  │      │  ┌──────▼──────┐   │
+         │  │  SSTable L0 │  │      │  │  SSTable L0 │   │
+         │  │  SSTable L1 │  │      │  │  SSTable L1 │   │
+         │  └─────────────┘  │      │  └─────────────┘   │
+         │  [ WAL on disk ]  │      │  [ WAL on disk ]    │
+         └───────────────────┘      └────────────────────┘
+                      │  replication          │
+                      └────────────┬──────────┘
+                                   │
+                         ┌─────────▼─────────┐
+                         │      Node C        │
+                         │  (replica for A+B) │
+                         └────────────────────┘
+```
+
+**Distribution via consistent hashing:** Keys are hashed to a ring (0 to 2^64). Each physical node owns N virtual nodes (vnodes) distributed across the ring. This prevents hot spots when a node is added or removed — only the keys between two adjacent vnodes migrate. With 3 nodes and 150 vnodes each, adding a 4th node migrates ~25% of keys instead of 33%.
+
+> **Interviewer:** Walk me through a write operation end-to-end.
+
+**Candidate:** Client sends `PUT /keys/user:123:session` to the Coordinator. Coordinator hashes the key using murmur3 (fast, good distribution) to find the responsible node — say Node A is the primary. The write is sent to Node A and simultaneously to 2 replicas (Node B, Node C) in parallel — this is the **replication factor = 3, write quorum W = 2** model. Node A must ACK + one of {B, C} must ACK before the client gets success. The third replica ACK is "fire and forget."
+
+On Node A receiving the write:
+1. Append to WAL (sequential disk write, ~0.1ms on NVMe)
+2. Insert into MemTable (red-black tree insert, O(log N), ~0.01ms)
+3. Return ACK to Coordinator
+
+Total write latency: ~1-2ms for the WAL write + network round trip.
+
+> **Interviewer:** How does a read work? The key might be in MemTable or any of several SSTables.
+
+**Candidate:** Read path on Node A for key `user:123:session`:
+
+1. Check MemTable (O(log N) red-black tree lookup, ~0.01ms) — if found, return.
+2. Check each SSTable from newest to oldest, starting with the Bloom filter. Bloom filter: 99% chance of "definitely not in this SSTable" or "maybe in this SSTable." Eliminates ~99% of unnecessary SSTable reads. If Bloom says "maybe": check the SSTable index block to find the data block offset, seek to disk and read the data block (~1ms per SSTable read on NVMe SSD).
+3. Return the value from the first SSTable that contains the key (newest wins).
+
+Worst case: key was deleted (tombstone in an old SSTable) and we must scan all levels. Leveled compaction keeps this bounded to ~5 levels. Bloom filters at each level reduce I/O to typically 0-1 disk reads.
+
+*(Cross-question: The "check newest to oldest" ordering is critical — if you check oldest first, you might return a stale or deleted value.)*
+
+> **Interviewer:** You have 5 levels of SSTables. A compaction is running. How does a read work during compaction?
+
+**Candidate:** Compaction is a background process that creates new SSTable files while the old ones still exist. Reads during compaction see both the old and new files — the LSM-tree file manifest tracks which SSTables are current. The manifest is updated atomically (via a file rename) only after the new compacted SSTable is fully written. During the compaction write phase, reads use the old SSTables. After the atomic swap, reads use the new compacted SSTable. The old SSTables are deleted only after the manifest swap is confirmed. This ensures zero downtime for reads during compaction — there is always a consistent view of the data.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** You chose LSM-tree. When would you choose B-tree instead?
+
+**Candidate:** B-tree is better for **read-heavy workloads** where reads vastly outnumber writes (90%+ reads). B-tree stores data in-place on disk, so a read is always O(log N) with a single seek to the correct leaf node — no need to check multiple SSTables. B-tree also supports efficient range scans with fewer I/O operations than LSM-tree. The downside: writes require random I/O (update in-place on the B-tree node), which is slow on HDDs and causes write amplification at high write rates. LSM-tree is better when writes are frequent (≥30%) because all writes are sequential appends. For our system with 40% writes, LSM-tree is the right call. PostgreSQL and MySQL InnoDB use B-trees (reads ≫ writes). RocksDB, Cassandra, and LevelDB use LSM-trees (write-heavy workloads).
+
+*(Cross-question: Giving the concrete decision boundary — "30%+ writes favors LSM" — is more useful than abstract "it depends.")*
+
+> **Interviewer:** What happens when Node A fails? How does the cluster detect and recover?
+
+**Candidate:** **Detection:** Each node gossips heartbeats to 3 random peers every 1 second (gossip protocol). If a node misses 3 consecutive heartbeats from Node A (~3 seconds), it marks A as "suspected." After 10 seconds of no heartbeat, A is marked "dead" and removed from the consistent hashing ring. This two-stage detection reduces false positives from network blips.
+
+**Recovery:** Writes that would have gone to A are rerouted to A's vnodes' successors on the ring (Nodes B and C absorb A's traffic). To avoid data loss for writes that were in-flight to A, the Coordinator uses **hinted handoff**: temporarily stores writes destined for A on another node with a "hint" that they belong to A. When A comes back, the hints are forwarded to it.
+
+**Read recovery:** Reads during A's outage go to B or C (the replicas). If W=2 was used during writes, B and C have the data. Anti-entropy: a Merkle tree comparison between B and C detects any diverged keys and triggers reconciliation.
+
+> **Interviewer:** How do you handle key expiration (TTL)?
+
+**Candidate:** Two mechanisms in combination: **lazy expiration** + **active expiration**. Lazy: on GET, check the key's TTL. If expired, return 404 and write a tombstone to mark the key as deleted. This is O(1) overhead per read. Active: a background job scans a random sample of keys every 100ms and deletes expired ones. Redis uses 20 random keys per scan, deletes expired ones, and repeats if more than 25% were expired. This keeps expired key buildup under control without a full table scan. The combination keeps memory overhead manageable — expired keys don't accumulate indefinitely (active sweep), and reads are never slow due to expiration checks (lazy check is instant).
+
+> **Interviewer:** Your system uses eventual consistency with W=2, R=1. Under what scenario can a client read a stale value even after a successful write?
+
+**Candidate:** Write goes to Node A (primary) and Node B (replica 1) — W=2 ACKs received, write returns success. Node C was slow and missed the write. The client immediately reads the same key — the Coordinator routes the read to Node C (R=1, one node sufficient) because A and B are temporarily overloaded. Node C returns the old value. This is a stale read. The fix for latency-tolerant clients: use R=2 (read from 2 nodes, return the value with the higher version number). This adds ~5ms latency but eliminates stale reads as long as at least one of the two read replicas had the write. With W=2, R=2, and N=3 (replication factor 3), W+R > N (4 > 3) guarantees no stale reads — this is the quorum condition. Trade-off: every read now requires 2 network round trips instead of 1.

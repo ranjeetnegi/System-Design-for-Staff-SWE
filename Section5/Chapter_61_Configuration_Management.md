@@ -3896,3 +3896,188 @@ The mechanism is deterministic hashing with sticky bucketing. Each feature flag 
 **Q18: What is a circuit breaker in config management -- auto-revert if error rate spikes?**
 
 There are two circuit breaker concepts here. The first is in the Config Client: if the Config API is slow or returning errors, after 3 consecutive fetch failures the client opens its circuit and stops making fetch requests for 30 seconds, preventing 2,000 instances from piling up retries that amplify a Config API degradation into a total failure. The background poll (60-second interval) still runs to self-heal once the API recovers. The second concept is at the system level: an automatic rollback trigger. After a config change propagates, a monitoring job watches the error rate and latency of the affected service in a 2-minute rolling window. If error rate rises above a configurable threshold (e.g., 3x the 24-hour baseline), the system automatically reverts to the previous config version and pages on-call. This converts a config-induced outage from "detected and rolled back in 15 minutes by a human" to "detected and rolled back in 2 minutes automatically." The on-call engineer still investigates why the config caused the spike, but the blast radius is contained automatically.
+
+---
+
+## Interview Simulation — Configuration Management System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a configuration management system for a large microservices platform. Where do you start?
+
+**Candidate:** A few scoping questions. How many services and instances are we talking — hundreds of services with thousands of instances, or more? Do configs need real-time propagation (sub-second) or is eventual consistency within a few minutes acceptable? Do we need feature flags with percentage rollouts, or just key-value config for things like timeouts and connection pool sizes? And is this internal-only infrastructure or does it need to serve external customers?
+
+> **Interviewer:** About 500 services, 10,000 instances total. Configs should propagate within 60 seconds. Include feature flags with percentage rollout. Internal infrastructure only.
+
+**Candidate:** Good. 60-second propagation with 10,000 instances is the key constraint — that rules out a naive push model where the config server pushes to all instances simultaneously, since that's a fan-out of 10,000 concurrent writes on every config change. Do we need per-environment configs (dev/staging/prod) and per-service overrides, or is it one flat namespace?
+
+> **Interviewer:** Yes, per-environment and per-service namespacing. Also, config changes must have an audit trail and be rollback-able.
+
+**Candidate:** That adds versioning requirements — every config write creates a new version, and rollback is just publishing a previous version as the current. One more: do we have SLA requirements for the config service itself? If it goes down, what happens to services that need to read a config at startup?
+
+> **Interviewer:** Services should not fail to start if the config service is unavailable. They should use a cached local copy.
+
+**Candidate:** Good — that tells me every instance needs a local cache with a fallback to disk-backed storage so it can survive config service restarts. I'll design around that.
+
+*(Cross-question: push vs pull)*
+
+> **Interviewer:** You mentioned push would be problematic with 10,000 instances. But push gives faster propagation. How would you decide between push and pull?
+
+**Candidate:** The deciding factor is fan-out management and reliability guarantees. Pure push means the config server must maintain 10,000 persistent connections — any server restart or network partition loses subscriptions silently, and a thundering herd on startup can overwhelm it. Pure pull at 60-second intervals means worst-case propagation is 60 seconds but load is predictable: 10,000 / 60 = ~167 requests per second sustained, which is trivial. My design uses pull as the baseline with an optional push notification as an optimization: when a config changes, the server publishes a "hey, something changed" event to a message bus, and clients use that as a signal to poll immediately instead of waiting for their next scheduled poll. This gives near-real-time propagation under normal conditions while keeping pull as the reliable fallback if the push channel is unavailable.
+
+---
+
+### Phase 2: Estimation (8 min)
+
+**Candidate:** Config reads dominate the load. 10,000 instances each polling every 60 seconds is ~167 reads/second sustained. Each poll is a conditional GET with an ETag — if the config hasn't changed, the server returns 304 Not Modified with no body, so bandwidth is near-zero in steady state. Config writes are rare — maybe 50 config changes per day across all services, so write QPS is effectively zero from a load-planning perspective.
+
+For storage: a config entry is typically 1-10 KB. With 500 services × 3 environments × average 20 config keys per service = 30,000 config keys. At 10 KB each with 100 versions retained, that's 30 GB total. Tiny — fits easily on a single Postgres instance with plenty of headroom.
+
+For the feature flag evaluation service: if we inline evaluation into the config client library (client does `hash(user_id + flag_salt) % 100 < rollout_pct`), there's no network call for evaluation — it's a local computation. The only network traffic is fetching the flag definitions, which follows the same 60-second poll pattern.
+
+> **Interviewer:** You said 167 reads/second with 10,000 instances polling every 60 seconds. What if we add 5,000 more instances during a traffic spike — can the config service handle sudden load jumps?
+
+**Candidate:** At 15,000 instances, sustained read load is 250 QPS — still trivial for a properly indexed Postgres behind a read replica. But the dangerous scenario isn't sustained load — it's the thundering herd at startup when 5,000 new instances all come up simultaneously and hit the config service for their initial fetch. That's 5,000 requests in a tight window, potentially with no ETag (first fetch). I handle this with two mechanisms: (1) jittered startup delay in the config client — each instance waits `random(0, 10)` seconds before its first fetch, spreading the burst over 10 seconds to ~500 QPS peak; (2) a CDN or caching proxy in front of the config API for read-only endpoints, so repeated reads for the same config version are served from cache without hitting Postgres. These two together absorb any realistic startup spike.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Core endpoints:
+
+```
+GET /v1/configs/{service}/{environment}
+  Headers: If-None-Match: {etag}
+  Returns: 200 { version, configs: {key: value, ...}, etag }
+           304 Not Modified (if etag matches current version)
+
+PUT /v1/configs/{service}/{environment}/{key}
+  Body: { value, description, author }
+  Returns: { version, key, value, updated_at }
+
+POST /v1/configs/{service}/{environment}/rollback
+  Body: { target_version }
+  Returns: { new_version, rolled_back_to_version }
+
+GET /v1/configs/{service}/{environment}/history
+  Query: ?limit=50&before_version=123
+  Returns: [{ version, changed_by, changed_at, diff }]
+```
+
+Feature flag operations are a subset of config operations — a flag is just a config key with a structured value (`{ enabled: true, rollout_pct: 25, salt: "abc123" }`).
+
+> **Interviewer:** The rollback endpoint takes a `target_version`. What prevents a race condition where two operators simultaneously roll back to different versions?
+
+**Candidate:** Optimistic locking. The rollback request includes the `current_version` the operator sees in their UI. The server does an atomic compare-and-swap: `UPDATE configs SET version = new_version WHERE current_version = expected_version`. If another operator already changed the version, the update finds zero rows and returns a 409 Conflict with the actual current version. The operator's UI refreshes and they can retry with full knowledge of what changed in between. This is the same pattern as git — you can't push if the remote has advanced; you pull, review, and retry.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Schema:
+
+```sql
+config_versions(
+  version_id BIGSERIAL PK,
+  service_name TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  config_data JSONB NOT NULL,       -- full snapshot at this version
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  is_current BOOLEAN DEFAULT FALSE,
+  INDEX(service_name, environment, is_current)
+)
+
+config_change_events(
+  event_id UUID PK,
+  version_id BIGINT FK → config_versions,
+  service_name TEXT,
+  environment TEXT,
+  key_changed TEXT,
+  old_value TEXT,
+  new_value TEXT,
+  changed_by TEXT,
+  changed_at TIMESTAMPTZ
+)  -- append-only audit log
+
+feature_flags(
+  flag_id UUID PK,
+  flag_key TEXT UNIQUE,
+  service_name TEXT,
+  environment TEXT,
+  enabled BOOLEAN,
+  rollout_pct INTEGER CHECK (rollout_pct BETWEEN 0 AND 100),
+  salt TEXT NOT NULL,              -- immutable after creation
+  updated_at TIMESTAMPTZ
+)
+```
+
+> **Interviewer:** You store the full config snapshot in `config_data JSONB`. For a service with 200 config keys and 100 versions retained, that's 200 × 100 versions stored redundantly. Why not store only diffs?
+
+**Candidate:** Classic space vs. time trade-off. Diffs are more space-efficient — you'd store maybe 1-5 changed keys per version instead of 200. But to reconstruct any historical version, you'd need to replay all diffs from the base — O(n) reconstruction for the nth version. For rollback — which happens under pressure during an incident — you want O(1) access to any version. Fetching a snapshot is one query: `SELECT config_data FROM config_versions WHERE version_id = $1`. With diffs, a rollback to version 50 requires fetching and applying 50 diff records. The storage cost is ~200 KB per version (200 keys × 1 KB average). At 100 versions per service × 500 services = 50,000 rows × 200 KB = 10 GB. Cheap. I'd store full snapshots and accept the storage overhead for guaranteed O(1) rollback.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+   Config UI / CLI
+         │ PUT/POST
+   ┌─────▼──────────┐        ┌──────────────────┐
+   │  Config API    │───────▶│   Postgres       │
+   │  Service       │        │  config_versions │
+   └─────┬──────────┘        │  + audit log     │
+         │ publish change     └──────────────────┘
+   ┌─────▼──────────┐
+   │ Message Bus    │  (Kafka topic: config-changes)
+   └─────┬──────────┘
+         │ notify (lightweight: service+env only)
+   ┌─────▼──────────────────────────────┐
+   │         Config Client Library      │
+   │  (embedded in every service)       │
+   │  - polls every 60s (+ jitter)      │
+   │  - ETag-based conditional GET      │
+   │  - local in-memory cache           │
+   │  - disk-backed fallback (startup)  │
+   │  - circuit breaker (3 failures →   │
+   │    stop polling for 30s)           │
+   └────────────────────────────────────┘
+```
+
+The Config API Service is stateless and horizontally scalable behind a load balancer. All state is in Postgres. On config write, the API atomically writes a new version row and publishes a lightweight notification to Kafka (just `{service, environment, new_version}` — no config data). Config clients receive the Kafka notification and immediately poll the API for the new version instead of waiting for their 60-second timer. Worst-case propagation remains 60 seconds for any client that missed the Kafka notification; typical propagation is 1-3 seconds.
+
+*(Cross-question: auto-revert)*
+
+> **Interviewer:** You mentioned a circuit-breaker auto-revert that triggers when error rate spikes after a config change. How do you avoid false positives — reverting a good config change because of an unrelated traffic spike?
+
+**Candidate:** The auto-revert uses a comparison baseline, not an absolute threshold. The monitoring job compares the error rate in the 2-minute window after the config change against the 24-hour rolling baseline for the same service, same time of day. If today's Tuesday at 2 PM and the baseline shows 0.5% error rate at this time historically, I trigger revert only if the post-change rate exceeds 3× baseline (1.5%). A 10x traffic spike that temporarily raises error rate from 0.5% to 0.8% doesn't trigger a revert because 0.8% is under the 1.5% threshold. I also require the elevated error rate to persist for 60 seconds continuously — a single 5-second blip doesn't revert. And critically, I scope the monitoring to the specific service whose config changed, not platform-wide. If a CDN outage hits everything simultaneously, the correlated spike across all services is a signal that it's not config-related. The combination of relative threshold + sustained duration + service-scoped monitoring gives acceptable false-positive rates in practice.
+
+*(Cross-question: schema validation)*
+
+> **Interviewer:** How do you prevent an operator from accidentally setting a database connection pool size to "twenty" (a string) instead of 20 (an integer)?
+
+**Candidate:** Config schema validation, enforced before write. Each config key is registered with a schema in a `config_schemas` table: key name, service, environment, type (integer/string/boolean/json), optional range (min: 1, max: 1000), and optional allowed values enum. On every PUT to a config key, the API validates the incoming value against the registered schema before writing to `config_versions`. Type mismatch returns a 400 with a specific error message: "Expected integer for key db.pool.size, got string 'twenty'". Range violations similarly: "Value 5000 exceeds maximum 1000 for key db.pool.size". Schema registration is a one-time operation when a service onboards to the config system. This is enforced at write time by the API layer, not just at read time by the client, so invalid configs can never enter the version history.
+
+*(Cross-question: bootstrap problem)*
+
+> **Interviewer:** Your config client needs to connect to Postgres (or Redis) to get its database connection string. But that connection string is stored in the config system. How do you solve this bootstrapping problem?
+
+**Candidate:** The bootstrap problem is the classic "you need config to get config" paradox. There are three layers. First, truly foundational config — the config service's own database URL, the message bus address — is injected via environment variables at deploy time (Kubernetes secrets or AWS Parameter Store called once at pod start). These never go through our config system. Second, the config client library writes its most recent successful fetch to a local disk file on each instance. On startup, if the config API is unreachable, the library reads from this local file and uses the cached values. This handles transient config-service unavailability. Third, the local cache file itself is bootstrapped on first deploy by the deployment pipeline, which fetches the initial config and writes it to the host before the service process starts. The three-layer approach means the config service is never a single point of failure for service startup.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Push vs. pull for config propagation — what are the exact trade-offs?**
+
+Pull: each client polls on its own schedule (e.g., every 60 seconds with jitter). Load is predictable and bounded — 10,000 clients × (1 request / 60 seconds) = 167 RPS regardless of how many config changes happen. The config server is stateless toward clients; it just responds to HTTP GETs. Drawback: worst-case propagation latency equals the poll interval. Push: the server maintains a persistent connection (WebSocket, SSE, or long-poll) per client and sends changes immediately. Best-case propagation is sub-second. Drawback: 10,000 persistent connections is a meaningful resource cost; connection management adds complexity; silent disconnects mean clients can miss notifications without knowing it. My hybrid approach uses pull as the reliability backbone and push (via Kafka + immediate poll) as a latency optimization. This gives pull's reliability guarantees with near-push propagation speeds under normal conditions.
+
+**Q: How does sticky bucketing work for feature flag rollouts, and why must the salt never change?**
+
+Sticky bucketing: `bucket = hash(salt + user_id) % 100`. If `bucket < rollout_pct`, the user sees the feature. The hash function (MurmurHash or SHA-256 truncated to 32 bits) distributes user IDs uniformly, so any 25-unit rollout_pct window selects ~25% of users. Critically, the same user always gets the same bucket for a given salt — the computation is deterministic and stateless. This means the experience is consistent: a user in the treatment group sees the feature on every request, not randomly 25% of the time. The salt must never change during an active rollout because changing the salt re-randomizes all bucket assignments — users who were in treatment may fall out, and users who were in control may suddenly see the new feature. This causes the experiment to lose validity (pre/post data is no longer comparable) and can cause jarring UX (users who were using the new feature suddenly see the old one). Salt should be set at flag creation and treated as immutable.
+
+**Q: What does a well-designed audit trail need to capture, and how do you make it tamper-evident?**
+
+The audit trail must capture: who made the change (authenticated user ID, not just a username that can be renamed), what changed (old value and new value, not just the new value), when (UTC timestamp with millisecond precision), from where (IP address and user-agent for forensic analysis), and under what authorization (if changes require approval, log the approver and approval timestamp separately). To make it tamper-evident: the `config_change_events` table is append-only — the database user that the config service runs as has INSERT privilege but not UPDATE or DELETE. A separate archival process periodically exports event rows to S3 with SHA-256 checksums stored in a separate immutable store. For high-assurance environments, each event row can include a hash of the previous row (blockchain-style chaining), making it detectable if any row is deleted or modified. In practice, append-only + S3 archival is sufficient for most compliance requirements; the hash-chaining approach is used in financial audit systems where the audit trail itself is a compliance artifact.

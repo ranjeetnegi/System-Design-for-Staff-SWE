@@ -1986,6 +1986,248 @@ In Python or Go, simulate a simplified fan-out system:
 *Capacity: 10M DAU, 5M posts/day, ~950M ZADDs/day at peak, 200M feed reads/day.*
 *Last updated: 2026-06-25.*
 
+## Interview Simulation — News Feed L5
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a social media news feed — something like Instagram or Twitter's home timeline. Walk me through how you'd approach this.
+
+**Candidate:** Before I draw anything, I need to narrow the scope. A few questions. Is this a follow-based feed (I see posts from people I follow) or a recommendation-based feed (TikTok-style, algorithmically ranked)?
+
+> **Interviewer:** Follow-based for now. Keep it straightforward.
+
+**Candidate:** Good. What's the scale — DAU and rough post volume?
+
+> **Interviewer:** 10 million DAU. About 5 million posts per day.
+
+**Candidate:** What's the read-to-write ratio — how often does a typical user read their feed vs post?
+
+> **Interviewer:** Mostly reads. Assume 20 feed loads per DAU per day.
+
+**Candidate:** Are there any celebrity accounts — users with millions of followers? That changes fan-out behavior significantly.
+
+> **Interviewer:** Yes. Some users have up to 10 million followers. Handle that case.
+
+**Candidate:** SLO for feed load?
+
+> **Interviewer:** Feed should load in under 500ms p99.
+
+**Candidate:** Scope confirmed: follow-based feed, 10M DAU, hybrid fan-out to handle celebrities, Redis ZSET for feed storage, cursor-based pagination, 500ms p99. Skipping ML ranking, ads, multi-region. Good?
+
+> **Interviewer:** Perfect.
+
+*(Cross-question: scope clarity)* Calling out the celebrity case early shows you know where the hard problem is. Interviewers reward candidates who identify non-obvious edge cases before the design starts.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** What are the key numbers?
+
+**Candidate:** Posts written: 5M posts/day = ~58 posts/sec average. Peaking at 3× = ~175 posts/sec.
+
+Fan-out writes: each post fans out to all followers. Average follower count — assume a power-law distribution, mean is about 200 followers. 5M posts/day × 200 followers = 1 billion ZADD operations/day = ~11,600 ZADDs/sec average, peaking around 35,000/sec. That's the write pressure on Redis.
+
+Feed reads: 10M DAU × 20 reads/day = 200M feed reads/day = ~2,300 reads/sec. Much lower than writes — classic fan-out-on-write asymmetry.
+
+Redis memory for feed storage: keep 200 posts per user. Each ZSET entry = post_id (8 bytes) + score/timestamp (8 bytes) + overhead ≈ 50 bytes. 10M users × 200 entries × 50 bytes = 100 GB. Comfortably fits in a 6-node Redis Cluster with 20 GB RAM per node, with room for growth.
+
+> **Interviewer:** Why keep only 200 posts per user?
+
+**Candidate:** Users rarely scroll more than 200 posts between sessions. Storing the full history in Redis wastes memory with zero user-visible benefit. Trim with `ZREMRANGEBYRANK feed:{user_id} 0 -201` after each write — keeps only the newest 200 entries. If a user wants to go back further, fall through to PostgreSQL for historical pagination.
+
+*(Cross-question: estimation rationale)* The 35K ZADDs/sec peak is the scary number. That's what justifies the celebrity exclusion from synchronous fan-out.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Show me the feed API.
+
+**Candidate:** Two endpoints matter most: post creation and feed retrieval.
+
+**Create a post:**
+```
+POST /posts
+Authorization: Bearer {token}
+Body: { text, media_url? }
+Response: { post_id, created_at }
+```
+
+**Get feed (cursor pagination):**
+```
+GET /feed?limit=20&cursor={cursor}
+Authorization: Bearer {token}
+Response: {
+  posts: [ { post_id, author_id, text, media_url, like_count, created_at } ],
+  next_cursor: "1719360000_a3f9b2c1",
+  has_more: true
+}
+```
+
+The cursor is `{unix_timestamp}_{post_id}` — a composite cursor. Timestamp gives the ZSET score range, post_id breaks ties when two posts have the same timestamp (unlikely but possible at high volume).
+
+On the client side: pass `cursor=null` for first load, pass `next_cursor` from the previous response for subsequent pages.
+
+> **Interviewer:** Why not use offset-based pagination like `?page=2&per_page=20`?
+
+**Candidate:** Offset pagination breaks under concurrent writes. If 3 new posts appear between page 1 and page 2 loads, every item shifts down in the offset index — the user skips 3 posts and never sees them. Cursor pagination uses an absolute position (the timestamp+id of the last seen post), so new inserts don't affect subsequent page loads. Critical for feeds where the underlying sorted set is live.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Walk me through the data model.
+
+**Candidate:** Three tiers: PostgreSQL for durable source-of-truth, Redis for hot feed caches, Kafka for async fan-out.
+
+**PostgreSQL — `posts` table:**
+```
+post_id      UUID PRIMARY KEY
+author_id    UUID NOT NULL REFERENCES users(user_id)
+text         TEXT
+media_url    TEXT
+like_count   INT DEFAULT 0
+created_at   TIMESTAMPTZ NOT NULL
+deleted_at   TIMESTAMPTZ   -- soft delete
+INDEX (author_id, created_at DESC)
+```
+
+**PostgreSQL — `follows` table:**
+```
+follower_id  UUID NOT NULL
+followee_id  UUID NOT NULL
+created_at   TIMESTAMPTZ
+PRIMARY KEY (follower_id, followee_id)
+INDEX (followee_id)  ← used during fan-out to find all followers of a poster
+```
+
+**Redis — feed ZSET (per user):**
+```
+Key:   feed:{user_id}
+Type:  Sorted Set
+Score: unix timestamp of the post (float, for range queries)
+Value: post_id (UUID string)
+TTL:   7 days (evict inactive user feeds)
+```
+
+**Redis — post content cache (per post):**
+```
+Key:   post:{post_id}
+Type:  Hash
+Fields: author_id, text, media_url, like_count, created_at
+TTL:   24 hours
+```
+
+> **Interviewer:** Why cache post content separately from the feed ZSET?
+
+**Candidate:** Separation of concerns and memory efficiency. The ZSET stores 200 post IDs — it's tiny (50 bytes per entry). Post content can be 1 KB+ with text and URLs. If you store full post content inside the ZSET score payload, you balloon Redis memory by 20×. Separate keys let you cache content independently and expire them on different schedules. Feed page load: one `ZREVRANGEBYSCORE` to get 20 post IDs, then 20 `HGETALL` calls pipelined — Redis pipeline round-trip, sub-millisecond total.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the full system.
+
+**Candidate:**
+
+```
+  Creator
+    │
+    ▼
+  API Server ──► POST /posts ──► PostgreSQL (insert post)
+                                      │
+                                      ▼
+                               Kafka topic: post.created
+                                      │
+                          ┌───────────┴────────────┐
+                          │     Fan-out Service     │
+                          │  (Kafka consumer group) │
+                          └───────────┬─────────────┘
+                                      │
+                    ┌─────────────────┼──────────────────┐
+                    │                 │                  │
+               Normal user       Celebrity poster    Celeb follower
+               (< 10K followers) (≥ 10K followers)  (reads feed)
+                    │                 │                  │
+              ZADD to all        Skip fan-out    Fan-out-on-read:
+              follower feeds      Redis feeds    merge ZSET feed +
+              in Redis           (async write)   author's post list
+                    │
+                    ▼
+              Redis Cluster
+              feed:{user_id} ZSET
+
+  Viewer
+    │
+    ▼
+  API Server ──► GET /feed
+                    │
+                    ├─ ZREVRANGEBYSCORE feed:{user_id} (Redis)
+                    │
+                    ├─ For celebrity followees: ZREVRANGEBYSCORE
+                    │  post_index:{celeb_id} (real-time merge)
+                    │
+                    ├─ HGETALL post:{post_id} × 20 (Redis, pipelined)
+                    │
+                    └─ Response: sorted, deduplicated feed posts
+```
+
+**Candidate:** The key design decision is the hybrid fan-out threshold. I set the threshold at 10,000 followers.
+
+For normal users (< 10K followers): fan-out-on-write. The Kafka consumer reads the `post.created` event, queries `follows` for all follower IDs, and issues `ZADD feed:{follower_id} {timestamp} {post_id}` for each one. At 10K followers × 58 posts/sec, this generates 580K ZADDs/sec, which Redis Cluster handles fine.
+
+For celebrities (≥ 10K followers): we skip writing to individual feeds. Instead, we maintain a `post_index:{user_id}` ZSET with the celebrity's own posts in chronological order. At read time, the feed service fetches this ZSET for each celebrity the viewer follows and merges the results with the viewer's regular feed ZSET. The merge is a sorted merge of N sorted lists — O(N × K) where N is the number of celebrity followees and K is the page size (20). For users following 5 celebrities, that's at most 100 Redis reads, sub-millisecond pipelined.
+
+> **Interviewer:** How do you find the celebrity threshold efficiently at write time?
+
+**Candidate:** Fan-out Service reads follower count from a `user_stats` Redis Hash keyed by `user:{user_id}` with a `follower_count` field. This is updated asynchronously by the Follow Service whenever a follow/unfollow happens. The Fan-out Service does: `HGET user:{poster_id} follower_count` before deciding the fan-out strategy. One extra Redis read per fan-out event — negligible cost.
+
+> **Interviewer:** What about like counts — how do you handle high-frequency increments?
+
+**Candidate:** Like counts are the classic write-amplification problem. A viral post can receive thousands of likes per second. If you do `UPDATE posts SET like_count = like_count + 1 WHERE post_id = ?` in PostgreSQL for each like, you create a hot row with lock contention.
+
+Solution: `INCR post:{post_id}:likes` in Redis for the hot counter. Asynchronously flush to PostgreSQL every 30 seconds with a background job: `UPDATE posts SET like_count = $redis_count WHERE post_id = ?`. Feed reads serve the `like_count` from the Redis Hash, which reflects near-real-time counts. If a post's Redis cache expires before the flush, the PostgreSQL value is at most 30 seconds stale — acceptable for a like counter.
+
+> **Interviewer:** What's your cache invalidation strategy when a post is deleted?
+
+**Candidate:** Soft delete in PostgreSQL: set `deleted_at = now()`. Then: (1) delete `post:{post_id}` from Redis immediately, (2) publish a `post.deleted` Kafka event, (3) a cleanup consumer removes the post_id from all feed ZSETs using `ZREM feed:{follower_id} {post_id}` — but only for feeds that are warm (i.e., have been accessed in the last 7 days). For cold feeds (TTL expired), no action needed. At feed read time, if `HGETALL post:{post_id}` returns nil (cache miss) and PostgreSQL returns a soft-deleted record, the API layer skips that entry silently.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+*(Cross-question: fan-out lag)*
+> **Interviewer:** The fan-out Kafka consumer can lag during traffic spikes. A user posts and their friends don't see it for 5 minutes. Is that acceptable?
+
+**Candidate:** For most social feeds, yes — eventual consistency within 5 seconds p99 is the norm. If you need lower latency for the poster's own followers, you can fast-path: after writing to PostgreSQL, synchronously fan-out to followers who are online right now (check presence service). All other followers get the async Kafka path. This limits synchronous fan-out to a small set (maybe 5% of followers are concurrently online), keeping p99 write latency under 100ms.
+
+*(Cross-question: Redis failure)*
+> **Interviewer:** What happens if the Redis Cluster goes down?
+
+**Candidate:** Feed reads fall back to PostgreSQL. The feed service has a fallback query: `SELECT p.* FROM posts p JOIN follows f ON p.author_id = f.followee_id WHERE f.follower_id = ? ORDER BY p.created_at DESC LIMIT 20`. This is slower (100-300ms vs 5ms for Redis) but correct. PostgreSQL has indexes on `(followee_id)` and `(author_id, created_at DESC)` to make this feasible. Graceful degradation: Redis down → slower feed, not broken feed.
+
+*(Cross-question: ZSET ordering)*
+> **Interviewer:** You use timestamp as the ZSET score. What if two posts have the exact same timestamp?
+
+**Candidate:** Redis ZSET with equal scores orders by lexicographic key (the post_id value). This is deterministic but arbitrary — which is fine. Users don't notice 1ms ordering differences. If you want strict ordering, use a composite score: `timestamp * 1e6 + sequence_number`, where sequence_number is a per-user monotonic counter from PostgreSQL. This guarantees uniqueness and chronological order at millisecond granularity.
+
+*(Cross-question: cold start)*
+> **Interviewer:** A user signs up and follows 50 accounts. Their feed ZSET is empty. How do you populate it?
+
+**Candidate:** Backfill job triggered on first feed load: for each of the 50 followees, fetch the latest 10 posts from PostgreSQL and ZADD them to `feed:{user_id}`. That's 50 × 10 = 500 ZADD operations — sub-second in Redis. Trim to 200 entries. Mark the feed as initialized with a `feed_initialized:{user_id}` Redis key so the backfill only runs once. The first feed load is slightly slower (backfill is synchronous), but all subsequent loads are fast from cache.
+
+*(Cross-question: cursor stability)*
+> **Interviewer:** What if a post is deleted between page 1 and page 2 of the same feed session?
+
+**Candidate:** The cursor points to a timestamp+post_id. On page 2, the backend queries `ZREVRANGEBYSCORE feed:{user_id} {cursor_timestamp} -inf LIMIT 20`. If the next post in that range was deleted, `HGETALL post:{post_id}` returns nil, and the API layer skips it and fetches the next one. In the worst case, a full page of deletions means fetching page 3 data to fill page 2 — the API handles this with a retry loop up to 3 depths before returning a partial page. Practically, deletions are rare enough that this edge case never triggers.
+
+---
+
 <!-- END OF CHAPTER 73 -->
 <!--
   Scope: L5 single-region. Fan-out hybrid model. Skip: ML ranking, multi-region, ads.

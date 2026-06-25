@@ -2589,3 +2589,129 @@ double-spends?" Give a 10-minute answer. Record yourself. Review and identify:
 *Chapter 84 complete. Pairs with Chapter 27 (HLC/CockroachDB), Chapter 29 (Bigtable),
 and Chapter 85 (CockroachDB in depth). Section 6 concludes with Chapter 86: NewSQL
 and the Future of Distributed Databases.*
+
+---
+
+## Interview Simulation — Spanner
+
+*45-minute deep-dive interview on Google's Spanner paper (Corbett et al., OSDI 2012). Interviewers expect you to understand TrueTime's role in achieving external consistency, how 2PC works across Paxos groups, and why bounded-staleness reads are an architectural win.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** What problem does Spanner solve that Bigtable doesn't?
+
+**Candidate:** Two problems. First, global distribution with strong consistency. Bigtable gives you tablet-level consistency within a single data center. If you want replicas in multiple data centers for fault tolerance or read latency, Bigtable doesn't help — you'd have to implement cross-datacenter replication yourself, and you'd lose strong consistency across regions. Spanner places data across multiple Paxos groups in multiple datacenters and gives you external consistency globally: if transaction T1 commits before T2 starts, T2 is guaranteed to see T1's writes, even if T2 runs on a different continent.
+
+Second, cross-row transactions. Bigtable has single-row atomicity but no multi-row transactions. Spanner provides full ACID transactions across any number of rows in any number of tables, globally distributed, with serializable isolation. This is what Google needed for its ads system (F1 on top of Spanner): a transaction must atomically update multiple tables (campaign, budget, billing) while remaining globally consistent.
+
+> **Interviewer:** What is TrueTime and why is it necessary?
+
+**Candidate:** TrueTime is Google's time API that returns not a single timestamp but an interval: [earliest, latest]. It guarantees that the true current wall-clock time is somewhere within that interval. The interval width is typically 1-7ms, determined by the precision of GPS receivers and atomic clocks deployed in each Google datacenter. Standard NTP gives you a single time value that might be off by 100ms or more — the error is unknown. TrueTime makes the uncertainty explicit and bounded.
+
+Why is this necessary for Spanner? External consistency requires that if transaction T1 commits before T2 starts in real time, T2's snapshot must include T1's writes. To enforce this guarantee, Spanner needs to know when "before" and "after" mean in absolute time. If the commit timestamps of T1 and T2 are assigned from clocks on different servers, and those clocks might differ by up to ε, you could assign T2 a commit timestamp earlier than T1's even though T2 physically started later. TrueTime solves this: when Spanner commits T1 at time t1, it waits until TrueTime.now().earliest > t1 before releasing the commit (the "commit wait"). This ensures no future transaction can start at a time earlier than t1 according to TrueTime's guaranteed lower bound.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Walk me through how a read-write transaction works in Spanner.
+
+**Candidate:** Spanner's read-write transaction uses two-phase locking for concurrency control and two-phase commit across Paxos groups for atomic commitment.
+
+```
+Spanner Read-Write Transaction
+================================
+
+1. Client begins transaction, chooses a coordinator Paxos group.
+
+2. READ phase (reads use snapshot reads at current TrueTime):
+   Client → Paxos group A: read row X (acquires shared lock)
+   Client → Paxos group B: read row Y (acquires shared lock)
+
+3. WRITE phase (buffered until commit):
+   Client sends all writes to coordinator.
+
+4. Two-Phase Commit:
+   Coordinator → Participant A: PREPARE (A acquires write lock on X, logs to Paxos)
+   Coordinator → Participant B: PREPARE (B acquires write lock on Y, logs to Paxos)
+   [If any participant can't acquire locks → abort]
+
+5. Coordinator chooses commit timestamp s ≥ TrueTime.now().latest
+   (timestamp must be after any TrueTime upper bound to ensure external consistency)
+
+6. COMMIT WAIT: coordinator waits until TrueTime.now().earliest > s
+   (ensures real time has actually passed s before releasing commit)
+
+7. Coordinator → Participants: COMMIT at timestamp s
+   Each Paxos group applies the write at timestamp s
+
+8. Client receives commit confirmation.
+
+Typical latency: ~14ms intra-datacenter, ~150ms cross-datacenter (dominated by Paxos rounds)
+```
+
+The key insight: the commit wait (step 6) is what buys external consistency. It feels wasteful to wait, but the wait is bounded by the TrueTime interval width (~7ms for GPS-calibrated clocks). Without TrueTime, you'd need a centralized timestamp server (a bottleneck) or accept weaker consistency.
+
+> **Interviewer:** What are bounded-staleness reads and why are they important?
+
+**Candidate:** Spanner supports three read modes. Strong reads use a snapshot at the current time — they require reading from a Paxos leader to guarantee seeing all committed writes, adding latency proportional to leader distance. Bounded-staleness reads specify a maximum staleness (e.g., "data no older than 15 seconds") — Spanner can serve them from any nearby replica that has applied updates through the staleness bound, without contacting the leader. Exact-staleness reads specify an exact timestamp — again servable from any replica that has applied up to that timestamp.
+
+Bounded-staleness reads are architecturally critical for read-heavy workloads. If you have read replicas in 10 datacenters, strong reads always go to the leader (one datacenter), defeating the purpose of geographic distribution. Bounded-staleness reads can go to the nearest replica — for analytics queries where 15 seconds of staleness is acceptable, you get local-datacenter latency (1-5ms) instead of cross-datacenter latency (50-150ms). F1 (Google's ads database on Spanner) uses bounded-staleness reads for reporting queries.
+
+*(Cross-question: what's the relationship between Paxos groups and shards?)* Each Paxos group manages one tablet — a contiguous row range (a shard). A Paxos group has one leader and multiple followers across datacenters. The leader handles all writes and strong reads. Followers apply writes from the leader and handle bounded-staleness reads. A table with billions of rows is split into thousands of tablets, each managed by its own Paxos group, enabling horizontal scaling.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** How does CockroachDB achieve Spanner-like consistency without GPS hardware?
+
+**Candidate:** CockroachDB uses Hybrid Logical Clocks (HLC) instead of TrueTime. HLC combines a physical clock (NTP-synchronized, potentially drifting) with a logical counter. The HLC algorithm: on send, advance the physical clock to max(local, received) and set counter=0 if physical advanced, or counter=counter+1 if physical didn't advance. This gives you causal ordering (like Lamport clocks) with physical time piggyback.
+
+The tradeoff: without bounded uncertainty like TrueTime, CockroachDB can't do commit-wait with a millisecond bound. Instead, CockroachDB uses "uncertainty intervals" — when a transaction starts at time T with NTP uncertainty ε, it's uncertain about any transaction that committed in [T-ε, T+ε]. If a read encounters a value in that window, it either waits or restarts the transaction with a later timestamp. This means CockroachDB may have more transaction restarts under high contention, but it achieves similar external consistency without GPS hardware. The practical result: CockroachDB is deployable on commodity cloud infrastructure; Spanner requires Google's custom hardware investment.
+
+> **Interviewer:** What's the cost of Spanner's external consistency for write-heavy workloads?
+
+**Candidate:** Three costs. First, commit wait: every write transaction waits ~7ms for TrueTime uncertainty to resolve. This sets a floor on write latency — you can't commit faster than the TrueTime interval width. For writes that already have cross-datacenter Paxos latency (150ms+), 7ms is negligible. For intra-datacenter writes, 7ms may be significant. Second, two-phase commit overhead: cross-shard transactions require 2PC, which adds one extra round trip (prepare → commit) compared to single-shard transactions. Spanner's paper reports that Google's workloads are >90% single-row or single-shard transactions, so 2PC is rare in practice. Third, Paxos latency for writes: writes must be committed to a Paxos majority across datacenters, which is inherently limited by the speed of light between datacenters. Spanner is not the right choice for write-heavy workloads that require sub-millisecond commit latency.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** Your company needs a globally distributed database for financial transactions. How would you evaluate Spanner, CockroachDB, and Vitess?
+
+**Candidate:** The key requirements for financial transactions are: ACID transactions, external consistency (a payment that completes before a query must be visible to that query), and high availability. All three systems provide ACID, but with different availability and consistency profiles.
+
+Spanner is the strongest choice for external consistency and availability at Google's scale. If you're running on GCP, Cloud Spanner is managed and battle-tested. The main constraints: cost (significantly more expensive than self-hosted), vendor lock-in to GCP, and write latency (14ms minimum for intra-region, 150ms for cross-region). For a payment system where transactions are infrequent but absolutely must be consistent, Spanner's cost is justified.
+
+CockroachDB is the right choice if you need Spanner-like semantics but must run on multi-cloud or on-premise infrastructure. It provides serializable transactions with HLC-based consistency. The operational overhead is higher than managed Spanner but lower than running your own Paxos implementation. Write latency is ~5-10ms intra-datacenter, comparable to Spanner without the GPS requirement.
+
+Vitess is a MySQL sharding layer — not a good fit here. Vitess provides horizontal scale for MySQL but doesn't add distributed transactions across shards. Cross-shard transactions require application-level coordination. For financial systems where "debit account A, credit account B" must be atomic, Vitess's lack of cross-shard transactions is a dealbreaker.
+
+> **Interviewer:** How would you implement a global unique-ID generation system using Spanner's TrueTime primitive?
+
+**Candidate:** The straightforward approach: use Spanner's commit timestamp directly as the ID. Every transaction gets a unique commit timestamp from Spanner's TrueTime-based assignment — no two transactions get the same timestamp, and timestamps are ordered to match commit order (external consistency). For most use cases, the timestamp IS the globally unique, causally-ordered ID.
+
+For high-throughput ID generation (millions per second), Spanner's per-transaction overhead is too high. The production pattern: pre-allocate blocks of IDs using a Spanner transaction (reserve IDs 1M through 2M), then assign IDs from the block in memory without Spanner round trips. Each block allocation uses one Spanner transaction; individual IDs are assigned locally. The Spanner transaction ensures no two nodes get the same block. Block size is tuned to balance memory waste (large blocks) against Spanner QPS (small blocks). This is how Twitter's Snowflake and similar systems work — the Spanner variant just uses Spanner for the block allocation coordination instead of ZooKeeper.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: What is external consistency and how does it differ from linearizability?**
+
+A: Linearizability is a single-object property: each operation appears to take effect atomically at some point between its invocation and response. External consistency is a multi-object, multi-transaction property: the commit order of transactions must match their real-time order. Specifically, if T1 commits before T2 begins (in real time), then T2's snapshot must reflect T1's writes. External consistency implies linearizability for single operations but additionally orders multi-operation transactions against each other. Spanner achieves external consistency; many distributed databases achieve serializability (any serial order, not necessarily real-time order) which is weaker.
+
+**Q: Spanner's data model is described as "directory-sharded." What does that mean?**
+
+A: A directory is a set of contiguous rows with the same prefix key, and it's the unit of data movement in Spanner. All rows in a directory are co-located on the same Paxos group (same machine). When the directory gets too large or too hot, Spanner splits it into smaller directories and may move directories between Paxos groups. The key implication for schema design: if you want two tables to be co-located (to enable single-shard transactions without 2PC), use table interleaving — define one table as a child of another, sharing the parent's prefix key. An "Account" table and a "Transaction" table can be interleaved so that account 123 and all its transactions live on the same shard, making "list all transactions for account 123" a single-shard read.
+
+**Q: What does the F1 SQL layer add on top of Spanner?**
+
+A: F1 adds a full SQL query engine: the ability to express joins, aggregations, subqueries, and secondary indexes in standard SQL, executed against Spanner's key-value storage. Spanner itself only understands key-value reads and writes; it has no query planner. F1 translates SQL queries into Spanner key-range reads, handles cross-shard joins by fetching data from multiple Paxos groups and joining in F1's execution layer, and maintains secondary indexes as interleaved tables that F1 updates transactionally alongside the primary data. F1's existence is what made Spanner practical for Google's ads system — the ads engineering team wrote SQL, not raw key-value operations.
+
+---
+
+*Chapter 84 complete. Pairs with Chapter 27 (HLC/CockroachDB), Chapter 29 (Bigtable),
+and Chapter 85 (CockroachDB in depth). Section 6 concludes with Chapter 86: NewSQL
+and the Future of Distributed Databases.*

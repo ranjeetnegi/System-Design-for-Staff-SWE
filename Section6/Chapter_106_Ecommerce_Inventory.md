@@ -2346,3 +2346,147 @@ choice in the flash sale architecture.
 
 *Chapter 106. Pairs with Chapter 105 (Fraud Detection) and Chapter 70 (Payment Systems).*
 *Section 6: Staff/L6 System Design Case Studies.*
+
+---
+
+## Interview Simulation — E-commerce / Inventory (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design the inventory management system for an e-commerce platform at Amazon scale. Where do you start?
+
+**Candidate:** A few scoping questions. First — are we designing inventory tracking only, or also the order fulfillment workflow (picking, packing, shipping)? Second — do we need to support flash sales, meaning inventory goes from 10,000 units to 0 in under 1 minute? Third — do we operate multiple warehouses, and does the system need to route orders to the nearest warehouse with stock? Fourth — are we the marketplace operator (like Amazon selling its own inventory) or a platform for third-party sellers (where each seller manages their own stock)?
+
+> **Interviewer:** Multi-warehouse, first-party inventory. Flash sales are a critical requirement — a product can sell out in seconds. Third-party sellers are future scope. Focus on preventing oversells and handling peak traffic.
+
+**Candidate:** Functional requirements: (1) Display accurate available inventory to buyers. (2) Reserve inventory on add-to-cart (soft reservation). (3) Commit inventory on purchase (hard allocation). (4) Release reservations on cart expiry or checkout abandonment. (5) Route orders to the closest warehouse with available stock. Non-functional: inventory reads at < 5 ms p99, reservation operations at < 50 ms p99, zero oversells (hard constraint), handle 100,000 orders/second during flash sales.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Normal operations: 10 million daily orders ÷ 86,400 s ≈ 116 orders/s average. Flash sale peak: assume a single product, 1 million buyers hitting "buy" in the first 10 seconds → 100,000 requests/s on a single SKU. That's the number to design for. Inventory read traffic: 100× write traffic (browsing vs purchasing) → 10 million reads/s peak, fully cacheable in Redis. Reservation records: 1 million concurrent carts × 5 items average = 5 million active reservations, each ~100 bytes → 500 MB, easily fits in Redis. Warehouse routing: 10 warehouses, each with ~100,000 SKUs → inventory matrix is 1 million records, ~200 MB in RAM — fits in memory tier.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Four core operations. `GET /v1/inventory/{sku_id}` returns `{available_qty, reserved_qty, warehouse_breakdown}` — served from cache, never from DB on read path. `POST /v1/cart/{cart_id}/reserve` body `{sku_id, qty}` — creates a soft reservation, returns reservation_id and expiry_time (15 min). `POST /v1/order/{order_id}/commit` — converts reservation to hard allocation, returns warehouse assignment. `DELETE /v1/cart/{cart_id}/reserve/{reservation_id}` — explicit release; also triggered automatically on expiry. Idempotency key required on reserve and commit operations — if the network retries, we return the same reservation_id instead of creating a duplicate.
+
+> **Interviewer:** Why separate reserve and commit instead of a single "buy" operation?
+
+**Candidate:** Separating reserve from commit models the real business flow: the buyer adds to cart (reserve), then goes through a multi-step checkout (address, payment) that takes 1–5 minutes. If we don't reserve on add-to-cart, the buyer reaches the payment step and finds the item is out of stock — terrible UX. If we do a hard commit on add-to-cart, we prevent others from buying during the entire checkout flow even if this buyer abandons. Soft reservation with an expiry is the industry-standard solution: hold the inventory for 15 minutes, release it if checkout is not completed.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Two storage tiers. Source of truth (PostgreSQL with row-level locking): `inventory` table — `sku_id, warehouse_id, on_hand_qty, reserved_qty, available_qty` (available = on_hand - reserved), with a CHECK constraint `available_qty >= 0`. `reservations` table — `reservation_id, sku_id, warehouse_id, qty, cart_id, expires_at, status` (ACTIVE/COMMITTED/RELEASED). We use `SELECT ... FOR UPDATE` on the inventory row to serialize concurrent reservation attempts. Hot cache (Redis): `inv:{sku_id}` → hash of available_qty per warehouse. Updated via a change-data-capture stream from PostgreSQL (Debezium → Kafka → Redis consumer). Read path hits Redis; write path hits PostgreSQL. The Redis value is eventually consistent — acceptable for display, but reservation decisions are made against PostgreSQL.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+INVENTORY READ PATH (browsing)
+================================
+Buyer App → API Gateway → Inventory Read Service
+  │
+  ▼
+Redis Cache (inv:{sku_id}, TTL 30s)
+  │ HIT (99%+): return available_qty
+  │ MISS: read PostgreSQL replica → populate cache
+  ▼
+PostgreSQL Read Replica
+
+RESERVATION PATH (add to cart)
+================================
+Buyer App → API Gateway → Reservation Service
+  │
+  ▼
+Redis Idempotency Check (dedup retry within 30s)
+  │
+  ▼
+PostgreSQL Primary
+  BEGIN;
+  SELECT available_qty FROM inventory
+    WHERE sku_id=? AND warehouse_id=?
+    FOR UPDATE;           -- row-level lock
+  -- if available_qty >= requested_qty:
+  UPDATE inventory SET available_qty = available_qty - qty,
+                       reserved_qty  = reserved_qty  + qty;
+  INSERT INTO reservations (...);
+  COMMIT;
+  │
+  ▼
+Kafka Event: inventory.reserved
+  → Cache Invalidation Consumer (update Redis)
+  → Expiry Worker (scheduled job: release expired reservations)
+
+FLASH SALE PATH
+================
+Buyer App
+  │
+  ▼
+Flash Sale Queue (SQS FIFO, per-SKU queue)
+  │ rate-limited ingest: 100K req/s → queue
+  │ queue depth = available inventory units
+  │
+  ▼
+Queue Consumer (single-threaded per SKU)
+  │ pops N requests, runs batch reservation in PostgreSQL
+  │ accepted: reservation confirmation to buyer
+  │ rejected (queue exhausted): sold-out notification
+  │
+  └─► No direct DB contention during the spike
+
+WAREHOUSE ROUTING
+==================
+Commit Service (on order payment)
+  │
+  ▼
+Routing Engine
+  │ query: which warehouses have available_qty >= ordered_qty?
+  │ rank by: shipping_distance_score + fulfillment_SLA_score
+  │ assign to closest warehouse with stock
+  ▼
+Hard Allocation (UPDATE inventory, INSERT shipment_assignment)
+```
+
+**Deep Dive 1: Oversell Prevention — The Core Problem.**
+
+The CHECK constraint `available_qty >= 0` in PostgreSQL is the last line of defense. But at 100,000 concurrent reservation attempts on a single SKU, row-level locking becomes the bottleneck — PostgreSQL can handle ~10,000 row-locked transactions/second on a single row. For flash sales, the queue-based approach is essential: we funnel all requests for a single SKU through a FIFO queue, with queue depth equal to available inventory. The queue consumer is single-threaded per SKU, so there is zero lock contention at the database level. The queue acts as a serialization point. Alternative approach: inventory counter in Redis with DECRBY atomic operation — Redis can handle 500,000 atomic decrements/second. We use Redis as the tentative reservation (decrement to 0 = sold out, reject further decrements) and PostgreSQL as the durable record. This is a two-phase approach: Redis is the "fast path" gate, PostgreSQL is the durable commit.
+
+> **Interviewer:** With the Redis fast-path approach, what happens if the PostgreSQL write fails after the Redis decrement?
+
+**Candidate:** *(Cross-question: Redis/PostgreSQL consistency)* This is the split-brain scenario. Redis says "sold," PostgreSQL says "unsold." Recovery: we use a saga pattern. Step 1: decrement Redis counter (tentative reservation). Step 2: write to PostgreSQL. If step 2 fails, a compensating transaction increments Redis back (rollback). We wrap this in an outbox pattern: the reservation service writes to a local `reservation_outbox` table in PostgreSQL atomically with the inventory update. A Debezium CDC stream reads the outbox and updates Redis. This means PostgreSQL is the source of truth and Redis is derived — we never have a state where Redis is decremented but PostgreSQL has no record. Latency cost: ~5 ms extra for the PostgreSQL write before confirming to the user. Worth it for correctness.
+
+**Deep Dive 2: Flash Sale Traffic Spike — Queue-Based Ordering.**
+
+The flash sale problem is not just about inventory correctness — it's about the web tier surviving the spike. 1 million users hitting "buy" simultaneously will overwhelm the API servers (C10M problem) before they even reach the database. Three defenses: First, CDN-level rate limiting — Cloudflare Workers enforce a token bucket per IP, throttling to 10 requests/s per IP before the spike reaches origin. Second, virtual waiting room — users who arrive during the spike get a queue position page (static HTML, served by CDN) and receive a position token. When their token is called, they get a 60-second window to complete checkout. This prevents the stampede from reaching the reservation service. Third, inventory pre-announcement — for known flash sales, we pre-configure the SQS queue with a capacity equal to available inventory. Once the queue is full, subsequent requests immediately get "sold out" without touching any backend service.
+
+> **Interviewer:** How does price history and catalog versioning interact with inventory?
+
+**Candidate:** *(Cross-question: price and catalog consistency with inventory)* Price changes and catalog updates (new images, descriptions) are separate from inventory mutations. Price is stored in a `price_history` table (`sku_id, price, effective_from, effective_to`) — we never update a price record, we only INSERT new records. This gives us a full audit trail (important for regulatory compliance and dispute resolution) and allows us to query "what was the price at time T?" without complex CDC archaeology. At checkout, the price is locked at the price at add-to-cart time (stored in the reservation record) — this protects buyers from price increases during checkout. Catalog versioning uses a similar approach: `catalog_versions` table, current version pointer in Redis. The buyer's cart stores the version_id at the time of add-to-cart; if the catalog version changes, we show a "product updated, please review your cart" notice.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle returns — an item is returned to Warehouse B but was originally sold from Warehouse A?**
+A: Returns create new inventory records at the receiving warehouse regardless of origin. When a return is received and inspected, we run an `INSERT` into inventory for the return's warehouse with quantity +1, and update the original order status to RETURNED. We do NOT attempt to "undo" the original warehouse's debit — that would create a reconciliation nightmare. The receiving warehouse's on_hand_qty increases, making the unit available for resale. Return processing triggers a cache invalidation for that SKU's inventory display.
+
+**Q: Your PostgreSQL primary is at 95% CPU during a Black Friday flash sale. What do you do?**
+A: Immediate mitigation: activate the queue-based path (if not already on), which shifts the serialization point from PostgreSQL row locks to SQS. Reduce the reservation TTL from 15 min to 5 min to accelerate expiry-release cycles. Enable read shedding: drop non-critical read queries (analytics, reporting) from hitting the replica. Medium-term: add a read replica specifically for the inventory display path (separate from the reservation replica). The root cause is likely write amplification from too many concurrent long-running transactions — check for lock wait time in `pg_stat_activity` and kill stale transactions. Pre-Black-Friday: run load tests at 3× expected peak with the queue architecture.
+
+**Q: How do you detect and prevent inventory hoarding (bots adding thousands of items to cart to prevent competitors from buying)?**
+A: Three controls. Reservation cap per account per SKU per day (e.g., max 5 reservations, prevents bulk holding). Velocity check: if an account creates > 20 reservations in 60 s, flag for CAPTCHA or temporary block. Reservation conversion rate: if an account has > 500 expired reservations with < 5% checkout conversion, the account is flagged for review (bot-like behavior). These signals feed into the trust & safety platform — similar to fraud detection, they run as a lightweight check in the Reservation Service before creating the reservation record.
+
+---
+
+*Chapter 106. Pairs with Chapter 105 (Fraud Detection) and Chapter 70 (Payment Systems).*
+*Section 6: Staff/L6 System Design Case Studies.*

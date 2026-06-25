@@ -4634,3 +4634,221 @@ Real-time collaboration teaches that Staff Engineering is about understanding th
 *End of Chapter 52: Real-Time Collaboration*
 
 *Next: Chapter 53 — Messaging Platform*
+
+## Interview Simulation — Real-Time Collaboration (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a real-time collaborative document editor. Where do you start?
+
+**Candidate:** A few constraints will fundamentally shape the architecture before I draw anything.
+
+What's the concurrency model—are we talking Google Docs-style where dozens of people edit the same paragraph simultaneously, or more like Notion where concurrent edits are common but rarely to the exact same location?
+
+What's the offline story? Can users edit offline and sync when reconnected? If yes, we need a conflict resolution algorithm (OT or CRDT) that can handle arbitrary divergence, not just real-time merging.
+
+Document size and structure: flat text, or structured (blocks, cells, code)? Structured documents often use CRDT trees rather than linear sequence CRDTs.
+
+What's the scale? Documents per day, concurrent editors per document, document size limits?
+
+Persistence model: is the document the CRDT state (like Yjs), or is it a canonical document that the CRDT modifies and we reconstruct?
+
+> **Interviewer:** Google Docs scale—100M documents, up to 50 concurrent editors per doc, offline editing required, structured block-based format (like Notion). Documents can be megabytes with embedded assets.
+
+**Candidate:** Offline + concurrent + block-based pushes me toward CRDTs over Operational Transformation. OT requires a central server to serialize operations—offline editing means operations accumulate client-side and the merge problem becomes a full distributed CRDT problem anyway. CRDTs handle arbitrary merge without a server arbiter. But CRDTs have metadata overhead (Yjs uses roughly 3-5x document size in CRDT state). I need to address that with snapshots and compaction. Let me size the system.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk through the numbers.
+
+**Candidate:** 100M documents. Assume 1% are "active" at any time (being edited): 1M concurrent active documents. Average 5 editors per active document: 5M connected WebSocket sessions peak.
+
+Operation rate: an active editor produces roughly 5 keystrokes/second on average. At 5M active editors, that's 25M ops/second total across the system. These are tiny operations (individual character inserts), but the volume requires aggressive batching.
+
+Storage: average document 500 KB (text + metadata). 100M × 500 KB = 50 TB. CRDT state overhead ~3x = 150 TB total. With compression (CRDT state compresses well), roughly 60 TB on disk.
+
+Per-document operation log: keep last 30 days of ops for history. Average 10,000 ops/day per active document, 100 bytes each: 30 GB per million active documents. Manageable with tiered storage.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the API look like?
+
+**Candidate:** Two layers: the HTTP API for document lifecycle, and the WebSocket protocol for real-time collaboration.
+
+```
+// HTTP API
+POST   /v1/docs                          → create document, returns doc_id
+GET    /v1/docs/{doc_id}                 → fetch latest snapshot + CRDT state vector
+PATCH  /v1/docs/{doc_id}/snapshot        → force snapshot creation (admin/compaction)
+GET    /v1/docs/{doc_id}/history?since=  → operation log for a time range
+
+// WebSocket protocol (per-session messages)
+// Client → Server
+{ type: "join",  doc_id, client_id, state_vector }
+{ type: "op",    doc_id, ops: [CRDTOp], clock: HLC }
+{ type: "awareness", doc_id, cursor_pos, selection, user_info }
+
+// Server → Client
+{ type: "ops",   ops: [CRDTOp], source_client }  // broadcast ops from peers
+{ type: "sync",  missing_ops: [CRDTOp] }          // catch-up on reconnect
+{ type: "awareness_update", peers: [AwarenessState] }
+{ type: "snapshot_hint" }  // client should persist local snapshot
+```
+
+The `state_vector` on join is the client's CRDT clock—the server responds with all operations the client hasn't seen yet. This is the reconnect sync protocol.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model the document and operation log?
+
+**Candidate:** Three storage layers:
+
+**Document snapshot (object storage + metadata DB):**
+```
+document_snapshots {
+  doc_id:       uuid
+  version:      int64           // monotonic snapshot counter
+  crdt_state:   blob            // serialized Yjs or Automerge state
+  snapshot_at:  timestamp
+  s3_key:       string          // for large documents
+  block_count:  int
+}
+```
+
+**Operation log (append-only, Cassandra):**
+```
+operations {
+  doc_id:       uuid
+  client_id:    uuid
+  hlc_clock:    int64           // Hybrid Logical Clock for ordering
+  op_type:      enum(INSERT, DELETE, FORMAT, BLOCK_MOVE)
+  op_payload:   bytes           // CRDT delta, compressed
+  session_id:   uuid
+  PRIMARY KEY: (doc_id, hlc_clock, client_id)
+}
+```
+
+**Awareness state (ephemeral, Redis):**
+```
+Key: awareness:{doc_id}
+Value: hash of {client_id → {cursor_pos, selection, user_name, color, last_seen}}
+TTL: 30 seconds (refreshed by heartbeat)
+```
+
+The Hybrid Logical Clock gives us causally consistent ordering of operations across clients without requiring a central sequencer. Two operations with the same HLC timestamp are concurrent; both are applied and CRDT semantics resolve the conflict.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Describe the full architecture.
+
+**Candidate:**
+
+```
+CLIENTS (browser / mobile / desktop)
+  │   WebSocket + local CRDT state (Yjs)
+  │   Offline op queue (IndexedDB)
+  ▼
+[WebSocket Gateway]  ─── auth, rate limit, session routing
+  │
+  ├── consistent hash on doc_id
+  ▼
+[Collaboration Server — per-doc shard]
+  │   holds live CRDT state for active docs in memory
+  │   broadcasts ops to all connected clients for the doc
+  │
+  ├──────────────────────────────┐
+  ▼                              ▼
+[Operation Log (Cassandra)]  [Awareness (Redis)]
+  │
+  ▼
+[Snapshot Service]
+  │   runs async, triggered when op_count > threshold
+  ├──► [S3 / Object Store]    (snapshot blob)
+  └──► [metadata DB]           (version record)
+
+[Reconnect Sync Service]
+  │   handles clients rejoining after offline period
+  │   reads ops from Cassandra since client's state_vector
+  └──► streams missing ops to client
+```
+
+**Per-document sharding:** The collaboration server uses consistent hashing on `doc_id` to route all WebSocket connections for a document to the same server process. This means the in-memory CRDT state is authoritative on that node—no distributed locking needed for the hot path. When a server node fails, documents re-home to other nodes (cold start from latest snapshot + replayed ops).
+
+**Document sharding by section:** For very large documents (100+ blocks), a single collaboration server can become a bottleneck. We shard by document section: blocks 1-50 on server A, blocks 51-100 on server B. Cross-section moves are handled by a coordinator that briefly locks both shards. This is rare—most edits are local—but necessary for drag-and-drop block reordering.
+
+**Offline sync on reconnect:** When a client reconnects, it sends its CRDT state vector (the HLC clocks it's seen from each peer). The reconnect sync service queries Cassandra for all operations since the minimum clock in that vector. It streams missing operations to the client. The client merges them with its local CRDT state. Because CRDTs are commutative and associative, order of application doesn't matter—the result converges regardless of how long the client was offline.
+
+> **Interviewer:** OT vs. CRDT—make the case for your choice given 50 concurrent editors and offline editing.
+
+**Candidate:** *(Cross-question: algorithm trade-off)*
+
+OT requires a central server to serialize all concurrent operations into a canonical order. The transformation functions are complex—Google's OT implementation had subtle bugs for years (the "dOPT puzzle"). More critically, OT breaks down for offline editing: when a client comes back online with 500 queued operations, the server must transform each operation against all concurrent operations it missed. The transformation complexity is O(n²) in the number of concurrent ops.
+
+CRDTs eliminate the central serializer. The data structure itself defines merge semantics. Yjs's sequence CRDT handles 50 concurrent editors gracefully—each insertion is uniquely identified by (client_id, clock), so there's no ambiguity about where it goes. Merging two diverged states is O(n) in operation count, not O(n²).
+
+Trade-off: CRDT metadata overhead. A Yjs document with 10,000 characters carries ~50,000 characters of CRDT metadata (client IDs, clocks, tombstones for deleted characters). We address this with periodic garbage collection: once all connected clients have seen a deletion, tombstones can be removed. Snapshots compress the accumulated metadata. For a 500 KB document, the CRDT overhead after compaction is typically under 2x.
+
+For a block-based document (like Notion), the CRDT tree structure (Yjs Y.XmlFragment) maps naturally to the block hierarchy. OT for tree structures requires even more complex transformations. CRDT wins decisively for this use case.
+
+> **Interviewer:** Your collaboration server node dies mid-session. 200 users are editing a document on that node. What happens?
+
+**Candidate:** *(Cross-question: failure recovery)*
+
+T+0: Node dies. Load balancer health check fails. WebSocket connections drop.
+
+T+0 to T+3s: Clients detect disconnection (WebSocket close event). They switch to offline mode immediately—edits are queued locally in IndexedDB. The UI shows a "reconnecting" indicator. Users can keep typing.
+
+T+3s: Clients reconnect to the WebSocket gateway. Consistent hashing re-routes the document to a new collaboration server (the next node in the ring).
+
+T+3-5s: New server loads the document. It fetches the latest snapshot from object storage (~100ms for a 500 KB doc). It replays all operations since the snapshot from Cassandra (~50ms). The in-memory CRDT state is reconstructed.
+
+T+5s: New server is ready. Reconnecting clients send their state vectors. The sync service streams missing operations to each client. Clients apply ops to their local CRDT state.
+
+T+7s: All 200 clients are reconnected. CRDT state is consistent across all of them—regardless of what edits were made during the 7-second gap.
+
+Total data loss: zero. The operation log in Cassandra is the source of truth. No operation is acknowledged to a client until it's persisted in Cassandra. The in-memory CRDT state is a performance optimization, not the authoritative state.
+
+> **Interviewer:** How do you handle the permission model at scale? A document can be shared with 10,000 people via a link.
+
+**Candidate:** *(Cross-question: permissions)*
+
+Permission checks happen at two points: WebSocket join (can this user open this document?) and operation application (can this user perform this operation type?).
+
+The permission model has three levels: owner, editor, commenter. These are stored in a permissions service (PostgreSQL, cached in Redis). At join time, the collaboration server calls the permissions service with a 5-second cached result—not a per-operation call.
+
+For link-sharing with 10,000 people: the document has a `public_link_permission` field (read-only, comment, or edit). When the WebSocket gateway receives a join with a link token, it validates the token and assigns the link's permission level. This is resolved before the collaboration server sees the connection.
+
+For large documents with many sections: we support section-level permissions (only editors of section A can modify blocks in section A). The collaboration server enforces this at operation application time—operations targeting a protected section from an unauthorized client are rejected with an error response and not broadcast.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle cursor/awareness at scale—50 users with live cursors is a lot of traffic.**
+
+Awareness is eventually consistent and lossy-by-design. Cursor positions are not persisted—they're ephemeral Redis state. Clients send awareness updates at most every 100ms (throttled) and only when the cursor actually moves. The server broadcasts awareness updates to a document's subscribers but drops updates older than 200ms if the broadcast queue backs up. Users might see a cursor jump rather than smooth movement under load. This is acceptable—cursors are a UX hint, not a data guarantee. At 50 concurrent editors, that's at most 500 awareness messages/second for a single document, easily handled by the collaboration server.
+
+**Q: You're migrating from a legacy OT-based system to CRDTs. How do you do it without losing documents?**
+
+Two-phase migration. Phase 1: run both systems in parallel. New documents are created with CRDT. Legacy documents remain OT-based. The document metadata carries a `collab_type: {OT | CRDT}` flag. The WebSocket gateway routes to the appropriate collaboration server.
+
+Phase 2: bulk migration. For each legacy document, run a one-time conversion job: take the current OT state, convert to equivalent CRDT state (this is lossy for history—CRDT can't reconstruct OT history—but preserves current content perfectly). After conversion, the document is flagged as CRDT. Migration runs during off-hours, documents are briefly locked during the conversion (typically under 1 second). A queue of 100M documents, processing 10K/second, takes ~3 hours. We run this over a week with human monitoring, starting with low-traffic documents.
+
+**Q: A document accumulates 5 years of CRDT history—millions of tombstones. How do you garbage collect it?**
+
+Tombstone GC requires knowing that all clients have applied the tombstoned deletion. We track this via the `acknowledged_clock` per client (stored in the operation log). When the minimum acknowledged clock across all clients who have ever opened the document is greater than a tombstone's creation clock, that tombstone can be safely removed from the CRDT state.
+
+For stale clients (users who opened a document 2 years ago and never came back), we set a GC horizon: after 90 days of inactivity, a client's clock is no longer required for GC. When that client reconnects, they receive a full snapshot rather than a delta from their old state vector. The snapshot is already compacted. This is transparent to the client—it's just a slightly larger initial sync.
+

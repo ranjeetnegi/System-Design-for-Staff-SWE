@@ -2162,3 +2162,201 @@ At any company with financial products, ignoring regulations is not "out of scop
 - **Ch61f (Leaderboard — Redis ZSET):** The stop-loss monitor ZSET (`ZADD stops:AAPL stop_price order_id` + `ZRANGEBYSCORE` on price cross) is the same Redis ZSET pattern used in leaderboards. Different domain, same data structure.
 - **Ch33 (Caching at Scale):** Redis as a price cache (HSET prices:AAPL bid ask last) and portfolio cache (HSET holdings:{user_id}) follows the same cache-aside pattern covered in the caching chapter. Review TTL strategy, cache-warm-up, and cache-invalidation patterns there.
 - **FIX Protocol primer (external reading):** Search "FIX protocol tutorial for developers." Understanding message types 35=D (NewOrderSingle), 35=8 (ExecutionReport), and 35=H (OrderStatusRequest) at a conceptual level is expected knowledge for interviews at trading firms. You don't need to memorize field numbers, but you should know what information flows in each direction and why the protocol uses sequence numbers.
+
+---
+
+## Interview Simulation — Stock / Trading Feed
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a real-time stock trading platform — users can see live prices and place orders. Where would you like to start?
+
+**Candidate:** I want to nail down scope before drawing anything. A few clarifying questions — are we building the full brokerage (account management, order routing to exchanges) or focusing on the price-feed and order-placement experience?
+
+> **Interviewer:** Focus on price delivery to clients and order placement. Assume a brokerage back-end exists.
+
+**Candidate:** Good. Two subsystems then: (1) market data fan-out — pushing live prices to subscribers, and (2) order flow — users placing buy/sell orders with funds validation. Let me confirm scale: how many concurrent subscribers watching prices, and how many orders per second at peak?
+
+> **Interviewer:** 2 million concurrent users watching prices. About 50,000 orders per second at market open.
+
+**Candidate:** Got it. Latency targets — for price delivery, sub-second is table stakes; most retail brokers push once per second per symbol. For order acknowledgement, under 200 ms to the user. Consistency: prices are eventually consistent (staleness up to 1 second is fine), but order placement must be strongly consistent — we cannot double-debit an account.
+
+> **Interviewer:** Agreed. What about symbols?
+
+**Candidate:** I'll scope to US equities — roughly 8,000 symbols on NYSE + NASDAQ. Price updates arrive from exchanges at up to 1 million ticks per second across all symbols during peak. We normalize and throttle before pushing to clients.
+
+*(Cross-question: confirms candidate scopes the fan-out ratio — 1M ticks/sec in, 2M clients × 1 update/sec out)*
+
+> **Interviewer:** Any other requirements to call out?
+
+**Candidate:** Three more: (1) funds hold must be atomic — no race condition where a user places two simultaneous orders and overdrafts. (2) we need at-least-once delivery for order fills, with ExecID deduplication. (3) regulatory — PDT rule and Reg NMS best-execution are real constraints; I'll note them as out-of-scope for this session but flag that a production design must address them.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk me through your capacity numbers.
+
+**Candidate:** Price fan-out first. 8,000 symbols × 1 update/sec = 8,000 price events/sec inbound after throttling. Each event is ~100 bytes (symbol, bid, ask, last, volume). 2 million subscribers, each holding one WebSocket connection. If I push every symbol update to every subscriber that's 8,000 × 2M = 16 billion pushes/sec — obviously impossible. In practice, users subscribe to a watchlist of ~20 symbols. So the actual fan-out is 2M × 20 subscriptions = 40M active subscriptions, and we push ~8,000 relevant events/sec, meaning on average ~5 pushes per connection per second. That's 2M × 5 × 100 bytes = 1 GB/s outbound bandwidth — manageable across a cluster of WebSocket servers.
+
+> **Interviewer:** What about storage?
+
+**Candidate:** For current prices, a Redis hash per symbol — `HSET prices:AAPL bid ask last` — 8,000 symbols × ~200 bytes = 1.6 MB. Trivial. For order state, 50,000 orders/sec × 500 bytes = 25 MB/sec write throughput to PostgreSQL — needs write partitioning by user_id. Order history at 50K/sec × 86,400 sec/day = ~4.3 billion orders/day — we'd partition by date and archive aggressively.
+
+*(Cross-question: interviewer checks whether candidate knows that Redis handles 8K symbol writes trivially but fan-out routing is the real challenge)*
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the key APIs.
+
+**Candidate:** Three surfaces: WebSocket for streaming, REST for orders.
+
+WebSocket handshake:
+```
+WS /stream?token=<jwt>
+CLIENT → { "type": "subscribe", "symbols": ["AAPL","TSLA"] }
+SERVER → { "type": "price", "symbol": "AAPL", "bid": 182.50, "ask": 182.51, "last": 182.50, "ts": 1700000000123 }
+```
+
+Order placement REST:
+```
+POST /v1/orders
+Body: { "symbol": "AAPL", "side": "buy", "qty": 10, "order_type": "market", "idempotency_key": "uuid-v4" }
+Response 201: { "order_id": "...", "status": "pending", "funds_held": 1825.00 }
+```
+
+Order status:
+```
+GET /v1/orders/{order_id}
+Response: { "order_id": "...", "status": "filled", "fill_price": 182.49, "fill_qty": 10 }
+```
+
+The idempotency_key on POST orders prevents duplicate submissions on client retry. Server stores the key with the order and returns the existing order if the key is replayed within 24 hours.
+
+> **Interviewer:** Why WebSocket over SSE for price delivery?
+
+**Candidate:** SSE is HTTP/1.1 unidirectional — fine for read-only feeds but we also need the client to send subscription changes (add/remove symbols from watchlist) without opening a second connection. WebSocket is bidirectional, so a single connection handles both the subscribe control messages and the price stream. SSE would require a second REST call each time the user changes their watchlist, which adds latency and complexity.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does your data model look like?
+
+**Candidate:** Three stores: Redis for hot path, PostgreSQL for durable state, Kafka for async decoupling.
+
+Redis:
+- `HSET prices:{symbol} bid 182.50 ask 182.51 last 182.50 ts 1700000000123` — current quote, TTL 5 seconds
+- `ZADD stops:{symbol} {stop_price} {order_id}` — stop-loss orders indexed by trigger price for O(log N) range scan
+- `HSET holdings:{user_id} AAPL 10 TSLA 5` — current portfolio, invalidated on fill
+
+PostgreSQL (orders table):
+```
+orders(order_id UUID PK, user_id UUID, symbol VARCHAR(10),
+       side ENUM('buy','sell'), qty INT, order_type ENUM,
+       status ENUM('pending','submitted','filled','cancelled'),
+       fill_price DECIMAL(10,4), idempotency_key UUID UNIQUE,
+       created_at TIMESTAMPTZ, filled_at TIMESTAMPTZ)
+```
+
+Accounts table funds hold:
+```
+accounts(user_id UUID PK, total_cash DECIMAL(12,2), available_cash DECIMAL(12,2))
+```
+
+Funds debit is atomic:
+```sql
+UPDATE accounts SET available_cash = available_cash - :cost
+WHERE user_id = :uid AND available_cash >= :cost
+```
+Check `rows_affected == 1`. If 0, reject the order — insufficient funds.
+
+*(Cross-question: interviewer asks why not a separate SELECT then UPDATE — answer: TOCTOU race condition)*
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the high-level design.
+
+**Candidate:**
+
+```
+Exchange Feed (FIX/TCP)
+        |
+   [Market Data Gateway]   ← normalizes FIX ticks, deduplicates
+        |
+   [Kafka: market-data topic]   ← at-most-once, high throughput
+        |
+   [Price Aggregator]   ← throttles to 1 update/sec per symbol, dirty-flag flush
+        |
+     Redis HSET prices:{symbol}
+        |
+   [Fan-out Service]   ← reads subscriptions map, pushes to WebSocket servers
+        |
+[WebSocket Server Pool]  ←→  Clients (2M connections)
+        |
+  (subscription registry in Redis: SET ws:{symbol} → set of server IDs)
+
+Order Flow (separate path):
+Client → REST Gateway → Order Service → [PostgreSQL funds hold] → [FIX Order Router]
+                                                                          |
+                                                               Exchange ExecutionReport
+                                                                          |
+                                                              [Fill Processor] → Kafka fills topic
+                                                                          |
+                                                              [Portfolio Updater] → Redis holdings
+                                                                          |
+                                                              [WebSocket push: fill notification]
+
+Stop-Loss Monitor (separate loop):
+   [Price Aggregator] publishes price updates → [Stop-Loss Monitor]
+   Monitor: ZRANGEBYSCORE stops:{symbol} 0 {current_price} → triggered orders
+   Triggered orders → Order Service (market sell)
+```
+
+> **Interviewer:** How does the Fan-out Service know which WebSocket server holds a given subscriber?
+
+**Candidate:** Each WebSocket server registers its connections in Redis: `SADD subscribers:{symbol} {server_id}:{connection_id}`. When a price update fires, the fan-out service does `SMEMBERS subscribers:{symbol}` to get the set of server+connection pairs, then publishes to each server via Redis pub/sub or a direct internal gRPC call. Each WebSocket server maintains an in-process map from connection_id to the actual socket object.
+
+> **Interviewer:** What happens when a WebSocket server crashes?
+
+**Candidate:** The load balancer detects the health check failure and stops routing new connections to it. Existing clients get a TCP close and their client library reconnects to a different server. On reconnect they re-send their subscribe list. The crashed server's Redis keys (`subscribers:{symbol}` entries) become stale — we address this with a TTL heartbeat: each server periodically does `SETEX server_alive:{server_id} 30 1`; the fan-out service skips dead servers. Alternatively, we remove the server's entries from all subscriber sets on graceful shutdown.
+
+*(Cross-question: interviewer asks about the dirty-flag throttling mechanism)*
+
+> **Interviewer:** Explain the dirty-flag flush loop you mentioned.
+
+**Candidate:** Naive approach: for each tick received, immediately push to all subscribers. At 1M ticks/sec across 8K symbols, a popular symbol like AAPL might receive 500 ticks/sec from the exchange. Pushing each tick to 200,000 AAPL subscribers is 100 million pushes/sec for one symbol — untenable.
+
+The dirty-flag pattern: maintain an in-memory map `{symbol → latest_price, dirty_bit}`. When a tick arrives, update the latest price and set `dirty = true`. A separate loop runs every 1 second, scans all symbols, and for any symbol where `dirty == true`, atomically reads the latest price, clears the dirty bit, and enqueues one push. Result: at most 8,000 pushes/sec regardless of tick rate. The client always gets the most recent price — it just doesn't get every intermediate tick.
+
+> **Interviewer:** How would you handle stop-loss orders?
+
+**Candidate:** Redis ZSET `stops:{symbol}` with stop_price as the score and order_id as the member. When a price update fires, the stop-loss monitor calls `ZRANGEBYSCORE stops:AAPL 0 {current_price}` — this returns all stop orders whose trigger price is at or below current price in O(log N + M) time. For each returned order, submit a market sell. Remove triggered orders with `ZREM`. The monitor is single-threaded per symbol to avoid double-triggers; we shard by symbol across multiple monitor instances.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+*(Cross-question: Why not just use a message queue per user for price delivery?)*
+
+**Candidate:** Per-user queues at 2 million subscribers would require 2M Kafka partitions or equivalent — Kafka's recommended max is tens of thousands of partitions per cluster. The WebSocket server + in-process subscription registry scales better: the fan-out service routes by symbol, not by user, and each WebSocket server multiplexes thousands of connections without a per-user queue.
+
+*(Cross-question: What's the risk of the atomic funds-hold UPDATE pattern?)*
+
+**Candidate:** The UPDATE acquires a row-level lock in PostgreSQL, so under high contention (same user placing many simultaneous orders) you get lock queuing. Mitigation: rate-limit order submissions per user to 10/sec at the API gateway. For the common case of a single user placing one order at a time, the single UPDATE is correct and fast (~1 ms).
+
+*(Cross-question: How do you handle an exchange connectivity outage — prices stop arriving?)*
+
+**Candidate:** The Market Data Gateway monitors the FIX sequence number. If no messages arrive for 5 seconds, it sends a FIX Heartbeat (35=0); if no response within 10 seconds, it reconnects. Meanwhile the Fan-out Service detects staleness via the `ts` field in the Redis hash: if `now - ts > 5 seconds`, it pushes a special `{ "type": "stale", "symbol": "AAPL" }` message to subscribers. The UI renders a stale indicator rather than a potentially misleading old price.
+
+*(Cross-question: Why does the order submission use idempotency keys instead of just relying on HTTP retries?)*
+
+**Candidate:** HTTP retries without idempotency risk double-order submission. If the client sends a POST, the server processes it (debits funds, sends to exchange), but the response is lost in transit, the client retries and submits a second order — a real overdraft risk. The `idempotency_key` (client-generated UUID) is stored in the orders table with a UNIQUE constraint. The second POST hits the constraint, returns the original order's response, and no second debit occurs. This is the same pattern used in Stripe's payment API.

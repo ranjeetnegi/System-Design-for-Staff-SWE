@@ -2295,3 +2295,204 @@ Barcode validity (at gate):
 ```
 
 **The five-minute window test:** mentally trace any sequence of events (user holds seat, pays, ticket is generated, user transfers ticket, original user shows up at gate) through this state diagram. If the diagram handles it without ambiguity, the schema is correct. If you find a sequence that puts the ticket in two valid states simultaneously, you've found a schema bug.
+
+---
+
+## Interview Simulation — Ticketing System (Ticketmaster)
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a ticketing system like Ticketmaster. Where do you start?
+
+**Candidate:** Let me scope this before drawing anything. Are we building the full end-to-end system — seat selection, payment, PDF ticket delivery, and gate scanning — or a specific component? What's the peak scale: a Taylor Swift sale where millions of users hit the site simultaneously, or more like a regional venue? And what are the consistency requirements: is it acceptable to occasionally double-sell a seat, or is that a hard no?
+
+> **Interviewer:** Full system. Peak scenario: a major artist sale, up to 1 million concurrent users trying to buy 50,000 seats. No double-selling — ever.
+
+**Candidate:** Good. "No double-selling ever" is the core invariant that drives every design decision. One more: is the seat selection a specific seat (seat 12, row C, section 101) or general admission? And do we need to support ticket transfers and resale on the platform?
+
+> **Interviewer:** Specific seat selection. Transfers yes — the original buyer can transfer to another user. Resale is out of scope.
+
+**Candidate:** Understood. Transfers mean barcodes must be invalidated and re-issued — I need to handle that in the state machine. Last question: what's the acceptable hold time for a seat — how long can a user hold a seat in their cart before it's released back?
+
+> **Interviewer:** 10 minutes.
+
+**Candidate:** Good. 10-minute hold with optimistic locking prevents double booking. I'll design around that.
+
+*(Cross-question: hold duration trade-off)*
+
+> **Interviewer:** Why 10 minutes specifically? What's the risk if we make it longer, say 30 minutes?
+
+**Candidate:** The hold duration trades off user experience against inventory utilization. Longer holds mean more seats are locked by users who abandon checkout — at peak sales with 1 million users and only 50,000 seats, a 30-minute hold could leave all 50,000 seats held by users who never complete payment, showing the event as "sold out" while no money has changed hands. 10 minutes is long enough for most users to complete checkout (select payment, enter card, confirm) but short enough that abandoned holds recycle quickly. Empirically, Ticketmaster data suggests >95% of users who reach checkout either complete in under 8 minutes or abandon — so 10 minutes captures almost all genuine buyers while recycling seats within 10 minutes of abandonment. If we wanted to be aggressive, 8 minutes. The risk of going too short: users on slow connections or distracted users lose their seat mid-checkout, causing frustration and support tickets.
+
+---
+
+### Phase 2: Estimation (8 min)
+
+**Candidate:** Peak load: 1 million concurrent users during the on-sale window (first 5-10 minutes). Let me break down the request types:
+
+Browse/queue page: 1M users × 2 requests/minute = ~33,000 requests/second. These are read-only and highly cacheable.
+
+Seat availability checks: users repeatedly poll seat maps during selection — maybe 5 refreshes/minute per user = ~83,000 requests/second. This is the hot read path.
+
+Seat hold requests: 1M users × 1 attempt (Ticketmaster uses a queue system) = 1M hold requests in a 5-minute window = ~3,300 write transactions/second. This is the critical write path.
+
+Payment completions: 50,000 seats × average 1.5 attempts per seat (some holds expire) = ~75,000 payment transactions over the sale window. Spread over 10 minutes, that's ~125 payment completions/second.
+
+Storage: each ticket is ~500 bytes. 50,000 tickets × 500 bytes = 25 MB — trivially small. The seat_holds table during peak holds ~50,000 rows (one per held seat). The event seats table: 50,000 rows per event, millions of rows across all events. Standard Postgres with a hot-standby replica handles this comfortably.
+
+> **Interviewer:** You estimated 83,000 seat availability requests/second. That's a lot for a database. How do you serve this without collapsing the database?
+
+**Candidate:** The seat map is cached in Redis as a hash: `event:12345:seats` → `{seat_id → {status, held_by, held_until}}`. On any write (seat hold, release, purchase), we update Redis atomically. Reads for seat availability hit Redis exclusively — the database is not in the read path for availability checks. The Redis hash for 50,000 seats at ~100 bytes/entry = 5 MB per event. With 100 active events, that's 500 MB — well within a single Redis instance. Read throughput for Redis HGETALL on a 5 MB hash is ~100 MB/s, so serving 83,000 requests/second at 5 MB each would be ~415 GB/s — clearly we don't send the full hash per request. Each user's client caches the full seat map locally for 2 seconds and the API returns only delta updates (changed seats since the client's last-seen version). This reduces per-request payload to kilobytes and Redis load to delta computations.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Core endpoints:
+
+```
+GET /v1/events/{event_id}/seats
+  Query: ?since_version=12345  (delta fetch)
+  Returns: { version, seats: [{seat_id, status, section, row, number, price}] }
+
+POST /v1/events/{event_id}/seats/{seat_id}/hold
+  Body: { user_id, idempotency_key }
+  Returns: { hold_id, seat_id, expires_at (now + 10min), version }
+
+DELETE /v1/events/{event_id}/seats/{seat_id}/hold
+  Headers: X-Hold-Id: {hold_id}
+  Returns: { seat_id, status: "AVAILABLE" }
+
+POST /v1/orders
+  Body: { hold_ids: [hold_id, ...], payment_method_token, idempotency_key }
+  Returns: { order_id, ticket_ids: [...], status: "CONFIRMED" }
+
+POST /v1/tickets/{ticket_id}/transfer
+  Body: { recipient_user_id, idempotency_key }
+  Returns: { new_ticket_id, old_ticket_id, status: "TRANSFERRED" }
+```
+
+> **Interviewer:** Your hold endpoint takes a single seat_id. For group purchases (buying 4 seats together), the user needs all 4 or none. How does your API support atomic group holds?
+
+**Candidate:** The hold endpoint should accept a list of seat_ids for atomic group reservation: `POST /v1/events/{event_id}/hold` with `{ seat_ids: ["A1", "A2", "A3", "A4"], user_id, idempotency_key }`. The implementation uses a database transaction that attempts to acquire holds on all requested seats in a deterministic order (always sort seat_ids lexicographically before locking — this prevents deadlocks between concurrent group requests). If any seat in the list is already held, the transaction rolls back all holds atomically and returns a 409 with `{ available_seats_in_request: 2, unavailable: ["A1", "A3"] }`. The client can then show the user which specific seats are gone and offer alternatives. This all-or-nothing semantic is essential — partial holds that leave users with 2 of 4 requested seats are a worse UX than a clean failure with a retry prompt.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Core tables:
+
+```sql
+event_seats(
+  seat_id UUID PK,
+  event_id UUID FK → events,
+  section TEXT,
+  row TEXT,
+  number INTEGER,
+  price_cents INTEGER,
+  status ENUM('AVAILABLE','HELD','SOLD'),
+  version BIGINT DEFAULT 0,   -- optimistic lock version
+  INDEX(event_id, status)
+)
+
+seat_holds(
+  hold_id UUID PK,
+  seat_id UUID FK → event_seats,
+  user_id UUID,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ,
+  INDEX(expires_at)   -- for GC job sweeping expired holds
+)
+
+tickets(
+  ticket_id UUID PK,
+  seat_id UUID FK → event_seats,
+  order_id UUID FK → orders,
+  user_id UUID,
+  status ENUM('VALID','SCANNED','TRANSFERRED','REFUNDED','CANCELLED'),
+  barcode TEXT UNIQUE,
+  transferred_to UUID,   -- new ticket_id if transferred
+  created_at TIMESTAMPTZ
+)
+
+ticket_events(
+  event_id UUID PK,
+  ticket_id UUID FK → tickets,
+  event_type ENUM('ISSUED','SCANNED','TRANSFER_INITIATED','TRANSFERRED','REFUNDED'),
+  actor_id TEXT,
+  occurred_at TIMESTAMPTZ
+)  -- append-only audit log
+```
+
+> **Interviewer:** You have both a `status` column on `event_seats` and a separate `seat_holds` table. Why not just encode the hold in the `event_seats.status`?
+
+**Candidate:** The hold needs metadata that doesn't belong on `event_seats`: who holds it and when does it expire. If I embed all that in `event_seats`, the row becomes: `{seat_id, status, held_by_user_id, hold_expires_at, ...}`. The `hold_expires_at` column then needs an index for the GC job that sweeps expired holds — now `event_seats` has a GC-specific index that clutters the table. More importantly, when a hold expires, the GC job needs to find all expired rows: `SELECT seat_id FROM event_seats WHERE status='HELD' AND hold_expires_at < NOW()`. With millions of seats across thousands of events, this scans a lot of rows. By separating holds into `seat_holds`, the GC job queries a small table (only seats currently held — at most 50,000 rows during a sale) indexed by `expires_at`, making expiry sweeps O(expired holds) rather than O(all seats).
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+     1M Users
+         │
+   ┌─────▼──────────┐     ┌─────────────────────────┐
+   │  Virtual Queue │     │   Redis                 │
+   │  (Fair entry   │     │   - seat availability   │
+   │   throttling)  │     │   - hold lock (SETNX)   │
+   └─────┬──────────┘     │   - session tokens      │
+         │                └─────────────────────────┘
+   ┌─────▼──────────┐              ▲
+   │  API Gateway   │──────────────┘
+   └─────┬──────────┘
+         │
+   ┌─────▼──────────┐     ┌─────────────────────────┐
+   │  Ticket        │────▶│   Postgres              │
+   │  Service       │     │   event_seats           │
+   │  (stateless)   │◀────│   seat_holds            │
+   └─────┬──────────┘     │   tickets               │
+         │                └─────────────────────────┘
+         │ confirmed order
+   ┌─────▼──────────┐     ┌─────────────────────────┐
+   │  Payment       │     │   PDF Generator         │
+   │  Service       │     │   + Barcode Service     │
+   └────────────────┘     │   + Email Delivery      │
+                          └─────────────────────────┘
+```
+
+The virtual queue is the first line of defense. Before users even enter the seat selection UI, they enter a waiting room. The queue issues tokens every 5 seconds to the next batch of users (sized to match throughput capacity — say 500 users/5 seconds = 100/second). Users without a valid queue token get the waiting page. This converts the thundering herd of 1M simultaneous users into a controlled stream of ~100 users/second entering seat selection — 100 write transactions/second vs. 3,300 uncontrolled.
+
+*(Cross-question: preventing double booking)*
+
+> **Interviewer:** Walk me through the exact mechanism that prevents two users from both successfully holding the same seat simultaneously.
+
+**Candidate:** Two-layer protection. Layer 1: Redis distributed lock. When user A requests a hold on seat 12C, the Ticket Service calls `SET seat:12345:12C:lock user_A_hold_id NX PX 11000` (SET if Not eXists, expiry 11 seconds — 1 second longer than the hold TTL so the lock outlives the hold). If `NX` succeeds, user A has the lock. If user B simultaneously requests the same seat, `SET ... NX` returns nil — the seat is already locked and B gets a 409 immediately, no database hit needed. Layer 2: database optimistic lock. The Redis `NX` prevents the race condition, but to defend against Redis failures, the database write uses optimistic locking: `UPDATE event_seats SET status='HELD', version=version+1, ... WHERE seat_id='12C' AND status='AVAILABLE' AND version=7`. If two requests somehow both pass the Redis layer (e.g., Redis failover caused the first NX to appear to fail), the second UPDATE affects 0 rows (version no longer matches), and the application treats it as a conflict. The two layers together make double-booking effectively impossible under normal operations and survivable under Redis failure.
+
+*(Cross-question: ticket transfer)*
+
+> **Interviewer:** User A buys a ticket and transfers it to User B. User A still has the PDF with the barcode. What prevents User A from using the original barcode at the gate?
+
+**Candidate:** Barcode invalidation at transfer time. The state machine handles this precisely. When user A initiates a transfer to user B: (1) the original ticket's status changes from VALID to TRANSFERRED and `transferred_to` is set to the new ticket_id; (2) a new ticket record is created for user B with a freshly generated barcode (cryptographically random, never reused); (3) a TRANSFER_INITIATED event is appended to `ticket_events`. At the gate, the scanner checks the database (or a recent cache): ticket with barcode `ABC123` has `status = TRANSFERRED` — reject with message "This ticket has been transferred." User A's PDF is now worthless. User B's new barcode `XYZ789` has `status = VALID` and scans successfully. The critical detail is that barcode generation uses a server-side CSPRNG — the barcode is never derived from predictable values like seat number or user ID, so user A cannot guess user B's new barcode.
+
+*(Cross-question: scale on sale day)*
+
+> **Interviewer:** The sale starts at 10 AM. At 9:59 AM there are 0 users. At 10:00 AM there are 1 million. How do you handle this instantaneous ramp?
+
+**Candidate:** Pre-warming and pre-scaling are the answer. The infrastructure scales proactively, not reactively. At 9:45 AM, an automated runbook: (1) pre-warms the Redis cluster by loading all seat maps for the event into memory — no cold-cache misses at 10:00 AM; (2) scales the Ticket Service fleet from steady-state (say 10 instances) to sale capacity (say 200 instances) — Kubernetes HPA triggered manually or by a scheduled scale event; (3) pre-positions the virtual queue infrastructure and sets the queue token emission rate; (4) warms the CDN for all static assets (seat map images, event pages). At 10:00 AM when traffic arrives: the CDN handles all static requests, the virtual queue absorbs the connection spike (a 1M-user queue page is mostly static HTML + a polling call every 5 seconds), and the Ticket Service fleet is already running at capacity. The database doesn't see a spike because the queue throttles actual write transactions to the 100/second designed capacity. The pre-scaling at T-15 minutes is the key — reactive auto-scaling (CloudWatch alarm → scale → new instances start → health checks pass) takes 3-7 minutes, which is exactly the window during which the sale would get crushed.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why use optimistic locking instead of SELECT FOR UPDATE (pessimistic locking) for seat holds?**
+
+SELECT FOR UPDATE acquires a row-level lock that persists until the transaction commits. For a seat hold operation that involves: read seat status → validate → update + write hold → commit, the lock is held for the entire duration including the application-level validation and any I/O. At 100 concurrent hold attempts per second on 50,000 seats, lock contention is low for different seats but high for the same popular seat. The real problem with pessimistic locking is the failure mode: if the transaction holding the lock crashes or the connection drops, the lock is released only when the database detects the dead connection — this can take 30 seconds on a TCP timeout. During that window, all other requests for that seat are queued waiting. Optimistic locking avoids locks entirely: read the seat with its version number, compute the update, then `UPDATE WHERE version = old_version`. If another request beat us, the WHERE clause matches 0 rows and we retry. No lock is held between read and write. The trade-off: under high contention for the same seat (e.g., 1,000 users all trying to hold seat 12C simultaneously), optimistic locking causes many retries. In practice, the virtual queue limits contention to a manageable level, and the Redis `NX` layer pre-filters duplicate attempts before they reach the database.
+
+**Q: How does barcode generation work, and what prevents forgery?**
+
+A ticket barcode encodes a signed, unguessable token. Implementation: at ticket creation, generate 128 random bytes from the server's CSPRNG (os.urandom or /dev/urandom), encode as base58 or base32 to get a human-unreadable string, and sign it with HMAC-SHA256 using a server-side secret key. The barcode embeds: {ticket_id, event_id, seat_id, issued_at, hmac_signature}. At the gate, the scanner: (1) decodes the barcode; (2) verifies the HMAC signature — any tampered barcode has an invalid signature; (3) queries the database for the ticket_id to check current status (VALID/SCANNED/TRANSFERRED). Forgery requires the server's HMAC secret key — an attacker who obtains a valid barcode cannot generate a valid barcode for a different seat or event, because changing any field invalidates the signature. The random component (128 random bytes) ensures the barcode cannot be guessed even if the attacker knows the ticket_id — the HMAC signature requires the server secret. For physical tickets, the barcode is a QR code containing the signed token; for mobile tickets, the app decodes the QR from a server-signed payload fetched over TLS.
+
+**Q: How do you handle partial refunds when a user bought 4 seats but only wants to refund 2?**
+
+Each seat in a group purchase generates an independent ticket with its own ticket_id. The order record links to multiple tickets: `order_tickets(order_id, ticket_id)`. A partial refund request specifies `{ order_id, ticket_ids_to_refund: ["T1", "T2"] }`. The refund flow: (1) verify each ticket belongs to this order and is in VALID status (not already scanned or transferred — you can't refund used tickets); (2) initiate partial refund with the payment processor for 2 × ticket_price; (3) on payment processor confirmation, update tickets T1 and T2 to status REFUNDED, update event_seats S1 and S2 to status AVAILABLE (so they can be re-sold); (4) append REFUNDED events to ticket_events; (5) the remaining 2 tickets (T3, T4) retain VALID status and the user keeps them. The order moves to status PARTIAL_REFUND. The gate scanner still accepts T3 and T4's barcodes. For the seat inventory, making S1 and S2 available again happens synchronously before the refund is confirmed to the user — you don't want to tell the user their refund succeeded and then fail to release the inventory.

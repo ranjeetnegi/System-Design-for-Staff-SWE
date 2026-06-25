@@ -3763,3 +3763,217 @@ CORS (Cross-Origin Resource Sharing) is enforced at the gateway because it is a 
 ---
 
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident table, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.
+
+---
+
+## Interview Simulation — API Gateway
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design an API Gateway for a large e-commerce platform like Amazon. Where do you want to start?
+
+**Candidate:** I want to nail down requirements before touching design. Let me ask a few scoping questions. How many backend microservices are we routing to — ballpark?
+
+> **Interviewer:** Around 200 services. Mobile clients, browser clients, third-party partners. All of them go through this gateway.
+
+**Candidate:** Got it. Three distinct caller types — that shapes auth and rate limiting differently. Are we designing the gateway from scratch, or is this replacing something like an aging monolithic proxy?
+
+> **Interviewer:** Greenfield. You have a blank slate.
+
+**Candidate:** Then I want to lock in the functional requirements first. The gateway must do: (1) routing — match an incoming request to the correct upstream service, (2) authentication and authorization — validate tokens before traffic reaches backends, (3) rate limiting — protect backends from overload and enforce per-client quotas, (4) SSL termination — decrypt TLS once at the edge so backends run plaintext, (5) request/response transformation — add correlation IDs, rewrite paths, strip internal headers, (6) observability — emit metrics and distributed trace spans per request. Does that match what you're thinking?
+
+> **Interviewer:** Yes. What are the non-functional requirements you'd set?
+
+**Candidate:** Latency: the gateway should add less than 5ms p99 overhead over a direct backend call — it's in the hot path of every request. Availability: 99.99%, meaning roughly 52 minutes of downtime per year; the gateway going down means the entire platform is down. Throughput: for an e-commerce platform at Amazon's scale I'd estimate peak around 2 million requests per second. Horizontal scalability: stateless nodes behind a load balancer so we can add capacity by adding machines. No single point of failure at any layer.
+
+> **Interviewer:** What about third-party partners specifically? Any different requirements?
+
+**Candidate:** Yes — partners get OAuth 2.0 client credentials flow with API keys rather than user JWTs. They also get stricter rate limits (maybe 1,000 req/min per key versus unlimited for internal services), and we want per-endpoint scopes so a partner key for the inventory API cannot call the payments API. That's a standard API product concern.
+
+*(Cross-question: interviewer checks if candidate knows the difference between authentication at the gateway vs. delegating to a backend identity service)*
+
+> **Interviewer:** Should the gateway do auth itself, or call an identity service?
+
+**Candidate:** JWT validation — verifying signature and expiry — happens at the gateway without a remote call. The gateway caches the public key set from the identity provider and validates locally. This is O(1) CPU, no network hop. Authorization — "does this user have permission to call /admin/pricing" — is more nuanced. Coarse-grained authorization (is this token scoped for this API?) stays at the gateway. Fine-grained authorization (can user 123 see order 456?) belongs in the backend service because it requires business-context data the gateway doesn't have.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Give me rough numbers for the gateway infrastructure.
+
+**Candidate:** Starting with traffic. Amazon processes roughly 20 million orders per day at peak. But orders are a tiny fraction of total requests — product views, searches, cart operations dwarf orders. I'll estimate 100 requests per user per session and 50 million daily active users during peak season. That's 5 billion requests per day. Spread over 16 active hours: 5B / (16 × 3600) ≈ 87,000 RPS average. Peak is 3–5× average, so 300,000–400,000 RPS peak.
+
+> **Interviewer:** How many gateway nodes does that require?
+
+**Candidate:** A single Nginx or Envoy proxy node on modern hardware can handle 50,000–100,000 RPS with minimal transformation. At 400,000 RPS peak I need roughly 6–8 nodes plus headroom. I'd run 20 nodes in production for 2.5× headroom, geographic redundancy, and rolling deploy capacity. Each node is CPU-bound, not memory-bound — a 16-core machine with 32 GB RAM is sufficient.
+
+**Candidate:** For rate limiting state: I'll use Redis. If we track 10 million distinct clients, each with a token bucket (key + 2 integers + TTL), that's about 200 bytes per key = 2 GB of RAM total. A Redis cluster with 3 primaries handles this easily.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the gateway's own management API look like?
+
+**Candidate:** The gateway itself exposes a control-plane REST API for route and policy management — separate from the data-plane that handles traffic. Key endpoints:
+
+```
+POST   /routes            — register a new route (path pattern → upstream)
+PUT    /routes/{id}       — update route config (e.g., change upstream URL)
+DELETE /routes/{id}       — remove a route
+
+POST   /policies/rate-limit     — create a rate limit policy
+POST   /policies/circuit-breaker — create a circuit breaker policy
+POST   /policies/auth           — attach an auth policy to a route
+
+GET    /health            — liveness + readiness probe
+GET    /metrics           — Prometheus scrape endpoint
+```
+
+**Candidate:** The route registration payload looks like:
+
+```json
+{
+  "path_pattern": "/api/v1/orders/**",
+  "upstream": "order-service:8080",
+  "strip_prefix": "/api/v1",
+  "auth_policy": "jwt-required",
+  "rate_limit_policy": "standard-user"
+}
+```
+
+> **Interviewer:** How do route changes propagate to all 20 gateway nodes?
+
+**Candidate:** The control plane writes route config to a distributed config store — etcd or Consul. Each gateway node watches the config store via long-poll or watch API. On a change event, the node reloads its routing table in memory without restart. This is sub-second propagation across all nodes without a deploy cycle.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What data does the gateway need to persist?
+
+**Candidate:** The gateway is deliberately stateless on the data plane — it reads config and writes logs, it doesn't own business data. But there are three storage concerns:
+
+**Route/Policy Config — stored in etcd:**
+```
+/routes/{route_id}          → RouteConfig JSON
+/policies/rate-limit/{id}   → RateLimitPolicy JSON
+/policies/auth/{id}         → AuthPolicy JSON
+```
+
+**Rate Limit Counters — stored in Redis:**
+```
+key:  rl:{client_id}:{endpoint}:{window_start_unix}
+type: integer (INCR + EXPIRE)
+TTL:  window size (e.g., 60s)
+```
+Using a sliding window log requires a sorted set (ZADD). I'd use a fixed window counter for p99 latency reasons — 1ms vs. 3ms per rate limit check.
+
+**Access Logs — append-only, Kafka → cold storage:**
+```
+{ ts, request_id, client_id, method, path, upstream,
+  latency_ms, status_code, bytes_sent, auth_result }
+```
+Not queried at request time — written async to Kafka, consumed by a log aggregation pipeline to Elasticsearch or BigQuery.
+
+> **Interviewer:** What about circuit breaker state?
+
+**Candidate:** Circuit breaker state — closed/open/half-open — is local to each gateway node. I intentionally do not share it via Redis. Sharing it introduces a network dependency on the state that's supposed to protect against network failures — circular. Each node independently tracks error rates per upstream over a 10-second rolling window. If 50% of calls in the window fail, that node opens the circuit. Nodes may disagree momentarily, which is fine: a partially-open circuit still protects the upstream from catastrophic overload.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the high-level design.
+
+**Candidate:** Here's the architecture:
+
+```
+                        ┌─────────────────────────────────┐
+   Clients              │         EDGE LAYER               │
+  ─────────             │                                  │
+  Mobile App  ─────────►│  CDN (CloudFront / Fastly)       │
+  Browser     ─────────►│  DDoS scrubbing (AWS Shield)     │
+  Partners    ─────────►│  TLS termination (ACM certs)     │
+                        └──────────────┬──────────────────┘
+                                       │ HTTP/1.1 or HTTP/2
+                        ┌──────────────▼──────────────────┐
+                        │      LOAD BALANCER (L4/L7)       │
+                        │    AWS ALB / GCP LB              │
+                        └──────┬───────┬───────┬──────────┘
+                               │       │       │
+                   ┌───────────▼┐  ┌───▼───┐  ┌▼──────────┐
+                   │  Gateway   │  │Gateway│  │  Gateway  │
+                   │  Node 1    │  │Node 2 │  │  Node N   │
+                   │            │  │       │  │           │
+                   │ [Auth]     │  │[Auth] │  │ [Auth]    │
+                   │ [RateLimit]│  │[RL]   │  │ [RL]      │
+                   │ [Router]   │  │[Rtr]  │  │ [Rtr]     │
+                   │ [CircuitBr]│  │[CB]   │  │ [CB]      │
+                   └─────┬──────┘  └───┬───┘  └────┬──────┘
+                         │             │            │
+              ┌──────────┼─────────────┼────────────┤
+              │          │             │            │
+     ┌────────▼──┐  ┌────▼──────┐  ┌──▼──────┐  ┌─▼────────┐
+     │  Order    │  │  Product  │  │  User   │  │ Payment  │
+     │  Service  │  │  Service  │  │ Service │  │ Service  │
+     └───────────┘  └───────────┘  └─────────┘  └──────────┘
+
+         ┌───────────────────────────────────┐
+         │         CONTROL PLANE             │
+         │  etcd cluster (route/policy cfg)  │
+         │  Redis cluster (rate limit state) │
+         │  Prometheus + Grafana (metrics)   │
+         └───────────────────────────────────┘
+```
+
+**Candidate:** Walking through a single request — a mobile app calls `GET /api/v1/products/123`:
+
+1. TLS terminates at the CDN edge. The CDN forwards plaintext HTTP/2 to the load balancer.
+2. The load balancer sends the request to a gateway node using least-connections.
+3. The gateway node runs a pipeline: (a) Auth — extract JWT from Authorization header, verify RS256 signature against cached public key, check expiry. Reject with 401 if invalid. (b) Rate limit — INCR the Redis key for this client+endpoint+window. If over limit, return 429 with Retry-After header. (c) Route matching — longest-prefix match on /api/v1/products/** → product-service:8080. (d) Circuit breaker check — if circuit is open for product-service, return 503 immediately. (e) Request transformation — strip /api/v1 prefix, add X-Request-ID, add X-Forwarded-For. (f) Forward to product-service over HTTP/1.1 keep-alive connection pool.
+4. Product-service responds. Gateway strips internal headers, adds response correlation ID, emits metrics span, returns to client.
+5. Async: log line written to Kafka.
+
+> **Interviewer:** How do you handle a slow upstream? Say product-service starts taking 10 seconds instead of 50ms.
+
+**Candidate:** Two mechanisms. First, every upstream call has a per-route timeout — I'd set product-service to 500ms. If the upstream doesn't respond in 500ms, the gateway returns 504 to the client and records the timeout as an error. Second, the circuit breaker. If more than 50% of calls in a 10-second window time out or return 5xx, the circuit opens. Subsequent requests fail fast with 503 — no waiting 500ms each — until a half-open probe succeeds. This prevents a slow upstream from exhausting the gateway's connection pool and taking down unrelated routes.
+
+*(Cross-question: interviewer probes retry logic)*
+
+> **Interviewer:** Should the gateway retry failed requests?
+
+**Candidate:** Retries at the gateway are dangerous without careful constraints. I only retry on: (1) network-level failures (connection refused, TCP reset) on idempotent methods (GET, HEAD, PUT, DELETE), never on POST. (2) 503 responses with a Retry-After header. Never on 500 — a backend bug doesn't get better with retries. Retry once with 50ms jitter, no more. Without these constraints, retries during an incident multiply traffic by 2–3× and convert a partial outage into a total one — retry storms are a well-known failure mode (this famously happened in several AWS S3 incidents).
+
+> **Interviewer:** Walk me through a config push to enable a new route without downtime.
+
+**Candidate:** An operator calls POST /routes on the control-plane API with the new route config. The control plane validates the config (reachable upstream? valid path pattern? auth policy exists?), writes it to etcd. Each gateway node has a watch on the etcd keyspace — it receives the change event and hot-reloads the routing table in memory. No process restart, no dropped connections. The watch notification propagates in under 100ms. I'd also do a canary validation: the control plane first writes the route to a single "canary" gateway node, runs a synthetic health-check request through it, and only if that succeeds does it write to all nodes.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** How does the gateway handle gRPC traffic differently from REST?
+
+**Candidate:** Three meaningful differences. (1) gRPC uses HTTP/2 with binary framing — the load balancer must do L7 HTTP/2 load balancing, not L4 TCP, or all gRPC calls from one client will stick to one backend and defeat horizontal scaling. (2) gRPC uses long-lived streaming connections — rate limiting by request count doesn't map cleanly to bidirectional streams; I'd rate limit by stream initiation rather than message count. (3) gRPC uses Protobuf, so request/response transformation (logging, header injection) must work at the HTTP/2 frame layer, not text parsing. Envoy Proxy handles all three natively, which is a strong reason to use Envoy as the gateway data plane.
+
+---
+
+> **Interviewer:** Your rate limiter uses Redis. What happens when Redis goes down?
+
+**Candidate:** I have a hard choice: fail open (let all traffic through, no rate limiting) or fail closed (drop all traffic). Fail open is correct for an e-commerce platform — a temporary Redis outage should not take down customer checkout. The failure mode of "rate limiting is disabled for 30 seconds" is acceptable; the failure mode of "no customer can buy anything" is not. I implement fail open by catching Redis connection errors and setting a flag that bypasses the rate limit check. I alert on this condition immediately so the team knows rate limiting is degraded. I also run Redis in a cluster with sentinel and replicas so the MTTR for Redis failure is under 30 seconds.
+
+---
+
+> **Interviewer:** How would you do A/B testing at the gateway layer?
+
+**Candidate:** This is traffic splitting — route X% of requests for an endpoint to service-v2 and the remaining to service-v1. The gateway reads a routing rule like `{path: /api/v1/checkout, split: [{upstream: checkout-v1, weight: 90}, {upstream: checkout-v2, weight: 10}]}`. For each request it picks the upstream based on weighted random selection. For sticky sessions (same user always hits the same version during an experiment), I hash the user ID and assign them deterministically — same approach as feature flag bucketing. The gateway adds an X-AB-Variant header to the forwarded request so backend services can log which variant handled each request for analysis.
+
+---
+
+> **Interviewer:** What's the biggest operational risk of an API gateway, and how do you mitigate it?
+
+**Candidate:** The gateway is a synchronous choke point in front of everything — it is the highest-blast-radius component in the system. A bug in gateway code or a bad config push can take down all 200 services simultaneously, which no single microservice failure can do. Three mitigations: (1) Progressive rollout — deploy gateway code changes to 1 node, then 10%, then 50%, then 100%, with automated rollback on error rate increase. (2) Config validation — all route and policy changes are validated by a dry-run simulation before writing to etcd. (3) Circuit breaker on the gateway itself — if the gateway's own error rate is anomalously high, the load balancer stops sending traffic to unhealthy nodes. The lesson from every major gateway incident is that centralization of cross-cutting concerns has operational risk proportional to the blast radius, so the deployment and testing practices must be significantly more rigorous than for any individual service.

@@ -4483,3 +4483,178 @@ DEEP DIVES (30-45 min):
   → When asked about relevance: Multi-phase ranking pipeline
   → When asked about operations: Schema migration, reindex strategy, monitoring
 ```
+
+## Interview Simulation — Search and Indexing System (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, build-vs-buy.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a search and indexing system for a product like Google Shopping — 500M product listings, 50K queries per second at peak, results must be fresh within 60 seconds of a listing update.
+
+**Candidate:** Before I dive in, let me confirm scope. A few clarifying questions:
+
+> **Interviewer:** Sure, go ahead.
+
+**Candidate:** First — query types. Are we doing keyword search only, or do we need semantic/vector search as well? Second — who are the clients? Is this an external user-facing search or also an internal API for downstream services like ads ranking? Third — what does "fresh within 60 seconds" mean operationally — is that a P99 SLA or a best-effort target?
+
+> **Interviewer:** Keyword + light semantic (you decide the split). External user-facing. It's a P99 SLA — 95% of updates visible within 60 seconds, hard cap at 5 minutes.
+
+**Candidate:** Got it. So functionally: a query service returning ranked results, an indexing pipeline that processes document updates with sub-60s latency, and index storage that can serve low-latency lookups. I'll treat relevance ranking as a first-class concern — multi-phase. Non-goals: I'll exclude ad ranking integration, personalization beyond session signals, and image search.
+
+*(Cross-question: scope)*
+> **Interviewer:** Why exclude personalization?
+
+**Candidate:** At Staff level I want to call out scope explicitly, not accidentally include it. Personalization requires a feature store, user profile service, and changes the ranking objective — it's a full additional system. If we fold it in silently the design becomes unfocused. I'd handle it as a separate layer that wraps the core ranking pipeline.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 500M documents, each ~2KB of indexed fields → roughly 1TB of raw index data. With inverted index compression and posting list encoding (e.g., FOR/PFOR-delta), expect 3–5x compression, so ~200–300GB of hot index. At 50K QPS, assuming 5ms p50 query latency, we need ~250 in-flight requests at any moment — manageable with a coordinator tier of 20–30 nodes. For write throughput: 60s freshness with 500M documents means we're budgeting for up to ~100K document updates/sec during bulk catalog refreshes. That drives queue sizing.
+
+*(Cross-question: back-of-envelope)*
+> **Interviewer:** 100K writes/sec seems high — how did you get there?
+
+**Candidate:** Worst case: flash sale or bulk merchant upload — assume 1% of the catalog (5M listings) refreshes in under an hour. That's ~1,400 writes/sec steady, but with bursty upload patterns you need 10–20x headroom → 20K–30K writes/sec sustained. I said 100K to leave margin; in practice the queue absorbs bursts and the pipeline drains at a more moderate rate. I'd rather over-estimate here and right-size later.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Three APIs:
+
+```
+GET /v1/search
+  ?q=<query>
+  &filters=<facets>      // price_min, category, brand
+  &page_token=<cursor>
+  &limit=<int>
+  → { results: [{id, title, score, snippet}], next_page_token, total_hint }
+
+POST /v1/index/documents
+  body: [{ doc_id, fields: {title, description, price, ...}, timestamp }]
+  → { accepted: [doc_id], rejected: [{doc_id, reason}] }
+
+DELETE /v1/index/documents/{doc_id}
+  → { status: "queued" }
+```
+
+> **Interviewer:** Why return `total_hint` instead of an exact count?
+
+**Candidate:** Exact counts on distributed sharded indexes require a scatter-gather across all shards, then summing — that adds latency and is often wrong anyway (documents being indexed mid-query). A hint (estimated count, often from shard-level metadata) is accurate to ~5% and costs nothing extra. Google does this — "About 2.3 billion results" is not a precise count.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Two primary stores:
+
+**Inverted Index (per shard)**
+```
+term → posting list: [ (doc_id, term_freq, field_mask, position_offsets[]) ]
+```
+Stored in segments (immutable files), merged in background (Lucene-style). Each segment has a bloom filter for term existence checks.
+
+**Document Store (forward index)**
+```
+doc_id → { all stored fields, vector embedding (384-dim), last_indexed_ts }
+```
+Used for snippet generation and re-ranking feature retrieval. Stored separately from the inverted index to allow independent scaling.
+
+**Metadata / Routing Table**
+```
+shard_id → { node_primary, [node_replicas], doc_id_range_hash, segment_count }
+```
+Stored in ZooKeeper/etcd, read by coordinators on every query.
+
+*(Cross-question: schema migration)*
+> **Interviewer:** You add a new required field `seller_rating` to the index schema. How do you migrate without downtime?
+
+**Candidate:** Three-phase approach. Phase 1: deploy code that writes `seller_rating` to new documents only — old documents get a sentinel value. Phase 2: run a background reindex job that backfills `seller_rating` for all existing documents in shard order; the inverted index for that term is built incrementally. Phase 3: once reindex confirms 100% coverage (tracked via a progress counter in the metadata store), flip the schema version flag and enable queries that filter on `seller_rating`. At no point do we take the index offline — the ranking model treats missing `seller_rating` as a neutral signal during the transition window.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Here's the end-to-end architecture:
+
+```
+                        WRITE PATH
+  Merchant API / Event Bus
+         |
+         v
+  [Kafka Topic: doc-updates]  ← partitioned by doc_id % N
+         |
+   [Indexing Workers]  (stateless, horizontally scalable)
+     - parse & normalize fields
+     - generate embeddings (batched, GPU-backed)
+     - tokenize → term list
+     |
+   [Shard Router]  (consistent hashing on doc_id)
+     /       \
+  [Shard A]  [Shard B]  ...  [Shard N]
+  Primary     Primary         Primary
+  Replica(s)  Replica(s)      Replica(s)
+         |
+    [Segment Manager]  (write to new segment, background merge)
+
+
+                        READ PATH
+  Client
+    |
+    v
+  [Query Gateway]  (auth, rate limit, spell-check, synonym expansion)
+    |
+    v
+  [Query Coordinator]  (scatter-gather, timeout management)
+    |         |         |
+  [Shard A] [Shard B] [Shard C]  ← top-K per shard
+    |
+  [Phase 1: Recall]    BM25 / inverted index lookup → ~1000 candidates
+    |
+  [Phase 2: Relevance] Lightweight XGBoost model, query-doc features
+    |
+  [Phase 3: Rerank]    Optional: dense retrieval re-score (ANN + dot product)
+    |
+  [Coordinator: merge + global top-K]
+    |
+  [Response]  ← snippets fetched from doc store
+```
+
+**Near-real-time indexing pipeline detail:** Kafka consumers (indexing workers) commit offsets only after a document is durably written to the shard's write-ahead segment. If the worker crashes mid-batch, the segment is marked dirty and replayed from the last committed Kafka offset. This guarantees at-least-once indexing; deduplication is handled by comparing `last_indexed_ts` — if the incoming document timestamp is older than what's stored, the write is a no-op.
+
+**Index sharding strategy:** We shard by hash(doc_id) to distribute writes evenly. We do NOT shard by category/brand (semantic sharding) because that creates hot shards during events (e.g., all queries for "iPhone" go to one shard). The downside of hash sharding is that a faceted query (filter by category) still fans out to all shards — we mitigate with bloom filters per shard for high-cardinality filter values.
+
+**Multi-region:** Primary index built in us-east-1, replicated asynchronously to eu-west-1 and ap-southeast-1. Read traffic is region-local; write traffic is globally routed to the primary region. For the 60-second freshness SLA: within the primary region, writes are visible in ~10–20s. Cross-region replication adds ~30–40s, so global freshness is ~50–60s — just within SLA. If we needed <30s globally, we'd need a multi-master write architecture, which significantly complicates conflict resolution.
+
+*(Cross-question: build vs buy)*
+> **Interviewer:** Would you build this on Elasticsearch or build from scratch?
+
+**Candidate:** At Google scale — build from scratch (or use internal systems like Colossus + custom inverted index). At startup or mid-size company — use Elasticsearch or OpenSearch as the storage/indexing layer, and build the ranking pipeline (the multi-phase funnel) on top. The key insight is that the ranking pipeline is the differentiator — that's proprietary. The inverted index is a solved problem. Where I would NOT use Elasticsearch as-is: when I need sub-5ms query latency at 50K QPS with custom ranking, because ES's JVM overhead and generic scoring is too slow. In that case I'd build a thin C++ query engine on top of custom segment files, as Google did with Caffeine.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: partial failures)*
+> **Interviewer:** During a query, 2 of 20 shards time out. What does the coordinator do?
+
+**Candidate:** Return partial results with a `degraded: true` flag in the response. The coordinator tracks which shard IDs responded; missing shards are noted in a side-channel metric. The client shows results that are complete for 18/20 shards — in practice, the missing 10% of the catalog is unlikely to contain the best result for most queries. For SLA purposes, we define "available" as ≥16/20 shards responding. If we drop below that threshold, we return a 503 rather than mislead the user with very incomplete results.
+
+*(Cross-question: org complexity)*
+> **Interviewer:** Three teams want to add signals to the ranking model — ads team, personalization team, and trust & safety. How do you manage this?
+
+**Candidate:** Feature governance model. Each team owns a named feature namespace in the feature store. They register their feature (name, type, latency budget, fallback value) and the ranking team owns the model training pipeline. New features go through an A/B experiment before promotion. The model has a hard latency budget — each feature must have a p99 latency under 2ms or it's excluded. Trust & safety features (fraud scores) are pre-computed and cached, never computed at query time. Ads signals are injected post-ranking in a separate blending layer — they don't touch the organic ranking model, which is a hard organizational boundary.
+
+*(Cross-question: reindex at scale)*
+> **Interviewer:** You need to reindex all 500M documents because you're changing the tokenization algorithm. How long does it take and what's the risk?
+
+**Candidate:** At 30K documents/sec (realistic sustained throughput with 10 indexing workers), 500M documents takes ~4.6 hours. Risk: during reindex, some documents exist in both old and new segments. Queries against the new index get a mix of old and new scoring — relevance is temporarily inconsistent. Mitigation: run the new index as a shadow index in parallel. Serve queries from the old index until the new index reaches 100% coverage and passes quality checks (NDCG regression test). Then do a single atomic routing table swap. This doubles storage cost for ~5 hours, which is acceptable. The atomic swap means users never see mixed results.
+
+*(Cross-question: monitoring)*
+> **Interviewer:** What's your indexing freshness SLA monitoring strategy?
+
+**Candidate:** Each document written to Kafka carries a `source_timestamp`. After indexing, we write `source_timestamp` and `indexed_timestamp` to a side table (BigQuery or a time-series store). A monitoring job queries: `SELECT percentile(indexed_timestamp - source_timestamp, 99) FROM indexing_events WHERE event_time > NOW() - 5m`. If P99 lag exceeds 45 seconds, PagerDuty fires. We also run a canary: a synthetic document with a known content is written every 30 seconds; a probe queries for it and measures time-to-visible. This catches silent failures (documents accepted by Kafka but never indexed) that lag metrics alone would miss.

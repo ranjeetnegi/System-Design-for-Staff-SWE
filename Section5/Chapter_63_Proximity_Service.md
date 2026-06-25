@@ -2683,3 +2683,233 @@ Each search request is fully stateless -- the user sends their current GPS coord
 ---
 
 *Extended depth sections for cross-questioning readiness. Append to Chapter 61c.*
+
+---
+
+## Interview Simulation — Proximity Service
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a proximity service — something like the "find nearby businesses" feature in Yelp or Google Maps. Where would you like to start?
+
+**Candidate:** I want to nail down requirements before touching any architecture. Can I ask a few questions?
+
+> **Interviewer:** Go ahead.
+
+**Candidate:** First, what kinds of entities are we searching for — static businesses like restaurants and coffee shops, or dynamic entities like Uber drivers? That distinction matters a lot for write frequency.
+
+> **Interviewer:** Static businesses for now. Restaurants, cafes, gas stations. Assume drivers are out of scope.
+
+**Candidate:** Good. What search radius are we supporting — fixed like "5 km" or user-configurable?
+
+> **Interviewer:** User can pick: 500m, 1km, 2km, 5km, 10km. Default is 5km.
+
+**Candidate:** What does a search result look like — just business IDs and distances, or full business details like name, address, photos?
+
+> **Interviewer:** The proximity service returns business IDs and distances. A separate Business Info service handles the full profile. You don't need to design that.
+
+**Candidate:** Scale: how many businesses, and what's peak QPS for searches?
+
+> **Interviewer:** 200 million businesses globally. 100 million daily active users. Figure out the QPS yourself.
+
+**Candidate:** 100M DAU, assume each user does 5 searches per day — 500M searches/day. That is about 6,000 searches/second average. Peak is roughly 3x — call it **17,000 QPS**. Business updates — new businesses opening, addresses changing — maybe 10 updates/day per business on average? That is 200M × 10 / 86,400 ≈ **23 writes/second**. Read-heavy by roughly 700:1.
+
+*(Cross-question: Establishing read vs. write asymmetry early signals the candidate will design for the dominant workload.)*
+
+> **Interviewer:** That math looks right. Latency target?
+
+**Candidate:** I'd target **under 100ms** p99 for the search query itself, excluding the downstream Business Info call. Does that align with your expectations?
+
+> **Interviewer:** Yes. What about availability?
+
+**Candidate:** High availability, 99.99% uptime. Proximity search is user-facing and directly affects conversion. Slight staleness on business locations is acceptable — a business moving 50 meters overnight is fine to serve stale for up to 1 hour.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk me through your capacity estimates.
+
+**Candidate:** Storage first. Each business record in the geo-index needs: business_id (8 bytes), latitude (8 bytes), longitude (8 bytes), geohash (8 bytes). That's about 32 bytes per business. 200M × 32 bytes = **6.4 GB** for the geo-index. That fits comfortably in RAM — a single Redis instance with 16 GB handles it.
+
+For the business metadata store (name, address, category, hours): roughly 500 bytes per business average. 200M × 500 bytes = **100 GB**. That is relational database territory — sharded PostgreSQL or MySQL.
+
+> **Interviewer:** What about read throughput? Can one Redis instance handle 17,000 QPS?
+
+**Candidate:** Redis can sustain about 100,000 simple commands/second on a single instance. A geosearch command — `GEORADIUS` or `GEOSEARCH` — scans a bounded area and is more expensive, maybe 1,000-5,000 geosearch/second per instance depending on result set size. So yes, a single instance is a bottleneck at 17,000 QPS. I'd use **2–4 Redis read replicas** and route Location Service instances to replicas in round-robin. Writes go to the primary. This gives us roughly 4,000–8,000 geosearch/second per replica across 4 replicas = comfortable headroom.
+
+*(Cross-question: Candidate correctly identified that Redis GEORADIUS is slower than simple GET — shows awareness of operation cost.)*
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the API for the proximity search endpoint.
+
+**Candidate:** One primary endpoint:
+
+```
+GET /v1/businesses/nearby
+  ?latitude=37.7749
+  &longitude=-122.4194
+  &radius_km=5
+  &category=restaurant       # optional filter
+  &limit=50                  # max results per page
+  &page_token=<opaque>       # for pagination
+```
+
+Response:
+
+```json
+{
+  "businesses": [
+    { "business_id": "biz_abc123", "distance_meters": 430 },
+    { "business_id": "biz_def456", "distance_meters": 890 }
+  ],
+  "next_page_token": "eyJvZmZzZXQiOjUwfQ=="
+}
+```
+
+The client then calls the Business Info service in parallel for the IDs it wants to display.
+
+> **Interviewer:** Why GET and not POST? The user's location is sensitive.
+
+**Candidate:** Fair concern. In practice Yelp and Google use GET here because the location is not more sensitive in the URL than in the POST body — both are encrypted in transit via TLS. GET also benefits from HTTP-layer caching at the CDN for repeated queries. If the security policy mandates POST, I would switch, but the functional design does not change. The location data is ephemeral — we do not log it server-side beyond request logs.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does your data model look like?
+
+**Candidate:** Two stores:
+
+**Geo-index (Redis, in-memory):**
+- One sorted set per geohash prefix level, or use Redis's built-in `GEO` data structure.
+- Redis `GEO` commands store lat/lon internally as a 52-bit integer geohash in a sorted set.
+- Key: `geo:businesses`, Members: `business_id`, Score: encoded geohash integer.
+- `GEOSEARCH geo:businesses FROMMEMBER <pos> BYRADIUS 5 km ASC COUNT 50` returns the 50 nearest.
+
+**Business metadata (PostgreSQL, sharded by business_id):**
+
+```
+businesses (
+  business_id    BIGSERIAL PRIMARY KEY,
+  name           VARCHAR(255),
+  address        TEXT,
+  city           VARCHAR(100),
+  category       VARCHAR(50),
+  latitude       FLOAT,
+  longitude      FLOAT,
+  is_active      BOOLEAN,
+  created_at     TIMESTAMPTZ
+)
+```
+
+Index on `(city, category)` for category-filtered searches. The Redis geo-index is the hot path; PostgreSQL is the source of truth and is queried only on cache miss or for full profile retrieval.
+
+*(Cross-question: Keeping geo-index in Redis separate from metadata in SQL shows the candidate understands the impedance mismatch between spatial and relational queries.)*
+
+> **Interviewer:** How do you keep Redis and PostgreSQL in sync when a business updates its address?
+
+**Candidate:** Business updates flow through a Business Update Service that writes to PostgreSQL first (source of truth), then updates Redis with `GEOADD` using the new coordinates and `DEL`/`GEOREM` for the old entry. This is a synchronous dual-write within the same request. If the Redis write fails, we retry with exponential backoff. As a safety net, a nightly batch job re-syncs Redis from PostgreSQL for any diverged entries — we compare timestamps and patch differences.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw out the high-level architecture and then pick one area to go deep on.
+
+**Candidate:** Here is the system:
+
+```
+                         ┌─────────────────────────────────────────┐
+                         │              Client (Mobile/Web)         │
+                         └──────────────────┬──────────────────────┘
+                                            │ HTTPS
+                                            ▼
+                         ┌─────────────────────────────────────────┐
+                         │           API Gateway / Load Balancer    │
+                         └──────┬──────────────────────┬───────────┘
+                                │                      │
+                     ┌──────────▼──────┐    ┌──────────▼──────────┐
+                     │ Location Service │    │ Business Info Service│
+                     │  (stateless)     │    │  (read-heavy cache)  │
+                     │  10 instances    │    │  CDN + Redis L2      │
+                     └──────┬──────────┘    └─────────────────────-┘
+                            │
+               ┌────────────┼────────────────┐
+               │            │                │
+       ┌───────▼──┐  ┌──────▼───┐    ┌──────▼───┐
+       │  Redis   │  │  Redis   │    │  Redis   │
+       │ Primary  │  │ Replica 1│    │ Replica 2│
+       │ GEO idx  │  │ (reads)  │    │ (reads)  │
+       └────┬─────┘  └──────────┘    └──────────┘
+            │ WAL replication
+            ▼
+  ┌──────────────────────┐
+  │ PostgreSQL (sharded) │  ← source of truth
+  │  businesses table    │
+  └──────────────────────┘
+            ▲
+            │ sync
+  ┌──────────────────────┐
+  │  Business Update Svc │ ← admin / data pipeline writes
+  └──────────────────────┘
+```
+
+> **Interviewer:** Walk me through a search request end-to-end.
+
+**Candidate:** User opens the Yelp app and searches "coffee near me." Their device sends GPS coordinates (37.7749, -122.4194) and radius 5km to the API Gateway. The Load Balancer routes to one of 10 Location Service instances (stateless, so any instance works).
+
+The Location Service first checks an **application-level cache** keyed on the geohash at precision 4 (covers ~39km×20km cells) + radius + category. Cache hit rate is high because millions of users in the same city search the same area. Cache TTL is 10 seconds — acceptable staleness for static businesses.
+
+On cache miss: Location Service calls Redis with `GEOSEARCH geo:businesses FROMLONLAT -122.4194 37.7749 BYRADIUS 5 km ASC COUNT 50`. Redis returns 50 business_ids with distances in ~2ms. Location Service caches the result and returns it to the client.
+
+The client then fires parallel requests to Business Info Service for the displayed businesses (the first 10 visible on screen).
+
+> **Interviewer:** Why GeoHash instead of a quadtree? What is the trade-off?
+
+**Candidate:** GeoHash is a string-based hierarchical grid. Each character in the geohash string adds precision. Prefix queries in a sorted set give you all businesses in a bounding box. The downside is the **edge problem**: businesses right on a geohash cell boundary may be closer than businesses inside the cell, but the prefix query misses them. Fix: always search the target cell plus its 8 neighbors.
+
+Quadtree is a tree structure that subdivides space into quadrants dynamically, so cells are smaller where businesses are denser (downtown San Francisco) and larger where sparse (rural Nevada). This gives better precision naturally without the edge problem. The downside: quadtree requires a persistent tree structure, harder to distribute across nodes, more complex to update when businesses are added/removed.
+
+**My choice:** GeoHash + Redis `GEO` for this system because Redis implements it natively, it is operationally simpler, and the 8-neighbor search fixes the edge problem completely. Quadtree would be the right choice if our business density varied 1000x across regions and we needed sub-10-meter precision.
+
+*(Cross-question: Specific trade-off with concrete fix — this is the answer the interviewer wants, not "GeoHash is better.")*
+
+> **Interviewer:** How would you handle the hot partition problem — San Francisco downtown has 10,000 businesses in a 2km radius and 500,000 searches per day targeting that area?
+
+**Candidate:** Three layers of defense:
+
+1. **Application-level cache in Location Service:** The 500,000 searches/day hitting downtown SF mostly land on the same geohash precision-4 cell. With a 10-second TTL, we serve up to 86,400 / 10 × (cache hit rate ~95%) from cache, not Redis. That means only ~1,200 Redis calls/day for that cell instead of 500,000.
+
+2. **Dedicated Redis shard for hot cells:** If the precision-4 cell `9q8y` still overloads Redis, promote it to its own Redis shard. The Location Service uses consistent hashing to route `9q8y` to the dedicated shard and other cells to the main cluster. This avoids one hot shard degrading searches for other cities.
+
+3. **CDN edge cache:** At extreme scale, push the top 100 most-searched geohash cells to CDN edge nodes with a 30-second TTL. Yelp's SF downtown results change maybe once a day (new business openings). Serving from CDN eliminates Redis calls entirely for those cells.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** If you had to support real-time driver location for a ride-sharing app (location updates every 4 seconds), how would your design change?
+
+**Candidate:** Static business proximity and dynamic driver location are fundamentally different problems. Drivers update every 4 seconds; at 10 million active drivers, that is 2.5 million writes/second — a Redis `GEO` cluster cannot absorb this without sharding by city or region. I would partition drivers by geohash prefix (one Redis shard per major city), use a dedicated Location Update Service with write batching (aggregate 4-second updates into 1-second Redis writes using a buffer), and set TTLs on driver positions (expire after 10 seconds of no update = driver went offline). Searches for nearby drivers use the same `GEOSEARCH` pattern but on the driver-sharded cluster.
+
+*(Cross-question: Tests whether the candidate can adapt a design to a different write profile.)*
+
+> **Interviewer:** Your Redis geo-index is 6.4 GB and fits in RAM. What happens at 2 billion businesses (10x growth)?
+
+**Candidate:** 2 billion × 32 bytes = 64 GB, which exceeds a single Redis instance. Two options: (1) **Horizontal sharding** — partition the geo-index by region (continent or country prefix). A geohash prefix like `9` covers North America; prefix `u` covers Europe. Each shard handles ~400M businesses. Location Service routes queries to the correct shard based on the first character of the query's geohash. (2) **Hierarchical index** — keep a coarse global index (precision 4) fully in memory across 2 nodes, and load fine-grained sub-indexes (precision 7) on demand from SSD. Coarse search narrows the region, then fine-grained search runs in the targeted sub-index. This trades latency (two-hop lookup adds ~5ms) for memory efficiency.
+
+> **Interviewer:** How do you handle a business that changes its location — say a food truck that moves every day?
+
+**Candidate:** Food trucks are a hybrid between static businesses and dynamic entities. The update pipeline: food truck owner updates location via the Business Owner app → Business Update Service writes new (lat, lon) to PostgreSQL → atomically calls `GEOADD geo:businesses lon lat truck_id` (Redis GEOADD updates in place if member exists) → publishes a `business.location.updated` event to Kafka → Location Service cache entries for the old geohash cell are invalidated by listening to this event. Cache TTL of 10 seconds means even without explicit invalidation, old results expire quickly. The key insight: GeoHash representation makes updates cheap — it is a single sorted set member update, not a tree re-balance.
+
+> **Interviewer:** The proximity search returns results sorted by distance. What if the product requirement changes to sort by relevance (rating × distance decay)?
+
+**Candidate:** Redis `GEOSEARCH` returns results sorted by raw distance only. To sort by a composite score, I retrieve the top-N results by distance from Redis (say N=200 for a 5km radius), fetch their ratings from a Redis hash or PostgreSQL, compute `relevance_score = rating × exp(-distance_km / decay_constant)` in the Location Service, sort in memory, and return the top 50. This "retrieve more, re-rank in memory" pattern is standard in recommendation systems. The only concern is tail latency: if N=200 means 200 PostgreSQL reads, I'd preload ratings into a Redis hash (`HGET business:ratings business_id`) to keep the re-ranking step under 5ms. For a large radius (10km) with thousands of businesses, I'd limit the candidate set to N=500 and accept that very distant high-rated businesses may not surface — acceptable trade-off for latency.

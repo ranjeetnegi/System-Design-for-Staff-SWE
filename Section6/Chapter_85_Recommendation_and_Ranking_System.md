@@ -3498,3 +3498,192 @@ Build a two-stage funnel: retrieval (two-tower + ANN, 5–15ms) narrows 1B items
 **Chapter statistics:** 40 parts, 3,500+ lines, covering retrieval, ranking, re-ranking, cold start, diversity, privacy, A/B testing, training-serving skew, deployment, and Google-specific context.
 
 `Chapter 85 | Section 6: Staff/L6 Systems | Recommendation and Ranking System`
+
+## Interview Simulation — Recommendation and Ranking System (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, build-vs-buy.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a recommendation system for a video platform — 100M active users, 50M videos, homepage feed recommendations that need to be fresh and personalized.
+
+**Candidate:** A few scoping questions before I start. First — latency requirement for the feed? Is this a synchronous call at page load or pre-computed? Second — freshness: does a video uploaded 10 minutes ago need to appear in recommendations, or is next-day fine? Third — what signals do we have? Explicit ratings, watch history, likes, or purely implicit behavior?
+
+> **Interviewer:** P99 latency < 200ms at page load. Videos uploaded in the last hour should be recommendable. We have watch history, likes, shares, and session context (current video being watched).
+
+**Candidate:** Clear. So I need: a retrieval stage that handles 50M videos including new ones, a ranking stage that runs in <100ms to leave budget for the feed assembly, a training pipeline that incorporates fresh signal, and a cold start solution for new videos. Non-goals: ads insertion, live stream recommendations (different latency profile), cross-platform recommendations (TV vs mobile).
+
+*(Cross-question: scope)*
+> **Interviewer:** Why separate retrieval from ranking? Why not one big model?
+
+**Candidate:** Compute budget. Running a deep neural network over all 50M videos per user request is infeasible. Retrieval is a coarser filter — it reduces 50M to ~500 candidates using approximate nearest-neighbor search (microseconds per candidate). Ranking then scores those 500 candidates with a richer, more expensive model (milliseconds per candidate). The split is a latency-accuracy trade-off: you sacrifice some precision in retrieval to make ranking tractable. This is the YouTube DNN architecture — it's the industry standard precisely because it works.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 100M DAU, each user making ~3 feed requests per day → 300M feed requests/day → ~3,500 QPS. User embedding dimension: 256-dim, 100M users → ~100GB. Item embedding: 256-dim, 50M videos → ~50GB. Both fit in distributed memory (Redis Cluster or Vertex Matching Engine). Training data: ~10B watch events/day, ~100GB/day compressed. Model training cadence: daily full retrain + hourly incremental update for freshness. Feature store read latency budget: 10ms p99 (fits within the 200ms total budget).
+
+*(Cross-question: estimation)*
+> **Interviewer:** You said user embeddings are 100GB. How do you serve that at 3,500 QPS with 200ms budget?
+
+**Candidate:** Distributed in-memory across a Redis Cluster — 10 nodes × 12GB = 120GB capacity. User embedding lookup is a single key-value read, O(1), sub-millisecond. The 200ms budget is dominated by the ANN search (5–15ms), feature retrieval (10ms), and ranking model inference (20–50ms on GPU). The embedding lookup is noise. The concern is cache invalidation — user embeddings are recomputed on a cadence. We use a versioned key scheme: `user_emb:v42:{user_id}`. After a model retrain, we warm the new version before swapping the served version, so there's no cold cache during rollover.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:**
+
+```
+GET /v1/feed/{user_id}
+  ?context=homepage|watch_next|search_result
+  ?session_token=<token>   // carries current-video context
+  ?limit=<int>             // default 20
+  → {
+      recommendations: [{video_id, score, reason_code, metadata}],
+      model_version: "v42",
+      experiment_id: "exp_823"
+    }
+
+POST /v1/feedback
+  body: { user_id, video_id, event_type: watch|skip|like|share,
+          watch_fraction: 0.0–1.0, timestamp }
+  → { accepted: true }
+
+GET /v1/explain/{user_id}/{video_id}   // Staff: explainability endpoint
+  → { contributing_features: [{name, value, weight}] }
+```
+
+> **Interviewer:** Why is `model_version` in the response?
+
+**Candidate:** Observability and A/B analysis. When we see a regression in engagement, we need to correlate it with the model version that served the request. If we don't log it at response time, we lose the attribution — especially during gradual rollouts where multiple model versions serve concurrently. The experiment_id serves the same purpose for A/B assignment. Both are opaque to the client but logged by our analytics pipeline.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Four stores:
+
+**Feature Store**
+```
+user_features:  { user_id → [watch_history_ids(100), genre_affinity[], age_bucket, ...] }
+item_features:  { video_id → [category, duration, upload_ts, creator_id, avg_ctr, ...] }
+```
+Stored in Bigtable (low-latency point reads) + Hive (batch training). The critical design constraint: the same feature computation logic must produce identical values in both training (Hive) and serving (Bigtable). Training-serving skew is the #1 production failure mode — we enforce this with a shared feature computation library deployed to both.
+
+**Embedding Store**
+```
+user_emb:  { user_id → float[256], model_version, updated_ts }
+item_emb:  { video_id → float[256], model_version, updated_ts }
+```
+Stored in Redis Cluster for serving. Source of truth is a vector database (Vertex Matching Engine / Faiss) for ANN.
+
+**Interaction Log (append-only)**
+```
+{ user_id, video_id, event_type, watch_fraction, session_id, ts, model_version }
+```
+Kafka → Flink (real-time aggregation) → BigQuery (training batch) + Redis (session features).
+
+**Experiment Assignment Table**
+```
+{ user_id, experiment_id, variant, assignment_ts }
+```
+Used by the ranker to select the correct model variant for a user.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Full system diagram:
+
+```
+                    ONLINE SERVING PATH
+  User Request (GET /feed/user_123)
+          |
+          v
+  [Feed Service]  (auth, rate limit, experiment assignment)
+          |
+          v
+  [Retrieval Stage]  ~5–15ms
+    Two sources:
+    A) Two-Tower ANN: user_emb → ANN query → top 200 candidates
+    B) Collaborative Filtering: users-like-you → item overlap → 100 candidates
+    Union → deduplicate → ~300 candidates
+          |
+          v
+  [Feature Assembly]  ~10ms
+    Fetch item features (Bigtable) + cross features (ctr, freshness score)
+    Session context (current video embeddings from Redis)
+          |
+          v
+  [Ranking Model]  ~20–50ms  (GPU inference, XGBoost or DNN)
+    Input: (user_emb, item_emb, cross features, context)
+    Output: pCTR, pWatch, pLike scores per candidate
+    Objective: weighted sum (0.6*watch + 0.3*like + 0.1*share)
+          |
+          v
+  [Post-Ranking]  ~5ms
+    Diversity constraint (max 2 videos per creator)
+    Freshness boost (videos < 2hr get +0.05 score)
+    Business rules (safe-search filter, geographic restrictions)
+          |
+          v
+  Response → {video_id, score, reason_code}
+
+                    OFFLINE TRAINING PATH
+  [Kafka: interaction events]
+          |
+    ┌─────┴──────┐
+    |            |
+  [Flink]     [BigQuery]
+  real-time    batch store
+  feature      (training data)
+  aggregation       |
+    |          [Spark: feature join]
+    v               |
+  [Redis: session  [TFX pipeline: daily retrain]
+   features]        |
+                [Model Registry]
+                    |
+              [Shadow Eval]  ← NDCG, offline A/B
+                    |
+              [Gradual Rollout]  1% → 10% → 50% → 100%
+```
+
+**Cold start — new video uploaded 10 minutes ago:**
+The two-tower model needs an embedding for the new video, but it hasn't been seen in training. Solution: content-based bootstrap. At upload time, a content embedding pipeline (text encoder on title/description + visual encoder on thumbnail) produces a 256-dim embedding. This is written to the embedding store with a `content_only: true` flag. The ANN index gets this embedding within 60 seconds via streaming update. The ranking model sees a feature `is_new_item: true` and uses a learned prior for pCTR (average CTR for that category). After the video accumulates 100 watch events, the collaborative signal phase-in kicks in and the content-only flag is cleared.
+
+**Training-serving skew prevention:**
+We maintain a `feature_lib` Python package versioned with the model. The same package is imported by both the Spark training job and the online feature assembly service. CI runs a skew validation test: take 100 random users, compute features via both paths, assert values are identical within floating-point tolerance. Any PR that changes feature computation must pass this test.
+
+*(Cross-question: A/B at ranking layer)*
+> **Interviewer:** How do you run A/B tests at the ranking layer without contaminating the control group?
+
+**Candidate:** User-level random assignment, not request-level. If we assign per-request, the same user gets different rankers within a session, which creates interference effects and noisy metrics. We hash user_id + experiment_id to get a deterministic variant assignment that's stable for the experiment's duration. For social systems (where user A recommending to user B creates cross-contamination), we use ego-network splitting — assign all users in a connected component to the same variant. That's expensive to compute, so we do it only for experiments where social spillover is a concern (e.g., trending video experiments). For pure ranking experiments, user-level split is sufficient.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: privacy-preserving recommendations)*
+> **Interviewer:** We're launching in the EU. GDPR requires we not retain user watch history beyond 30 days. How does that affect the recommendation system?
+
+**Candidate:** Three changes. First, the feature store TTL for `watch_history` drops from unlimited to 30 days — straightforward. Second, the training data pipeline must filter interaction events older than 30 days from the training dataset; we retrain from a rolling 30-day window. Third — and this is the hard one — user embeddings encode historical behavior. An embedding computed from 2 years of history violates the spirit of GDPR. We shift to a federated approach for the EU cohort: compute a session-level embedding on-device from recent interactions only, send only the embedding (not raw events) to the server, and never store the raw events server-side. Accuracy drops ~8% vs full history (our estimate from offline experiments), which is a business decision, not a technical one.
+
+*(Cross-question: build vs buy)*
+> **Interviewer:** Would you use a managed recommendation service (AWS Personalize, Google Recommendations AI) or build in-house?
+
+**Candidate:** Depends on scale and differentiation. Under 10M users, managed services are the right call — the engineering cost of building a two-tower pipeline with a feature store is 6–12 engineer-months, which outweighs the quality gain. Above 50M users, the managed service pricing becomes expensive, the latency SLAs are often too loose, and — critically — you can't implement custom ranking objectives or A/B experiments with the granularity you need. The recommendation algorithm is a product differentiator at scale; it should be owned in-house. I'd use managed services for commodity pieces (vector database, feature store) but own the model architecture and training pipeline.
+
+*(Cross-question: org complexity)*
+> **Interviewer:** The trust & safety team wants to suppress certain videos from recommendations. The creator monetization team wants creators' new videos boosted for 24 hours. How do you handle competing objectives?
+
+**Candidate:** Post-ranking policy layer. The ranking model optimizes a single objective (engagement). Business rules — suppression, boosts, sponsored content — are applied in a deterministic post-ranking step after the model scores candidates. Each rule is registered in a policy registry with: priority (T&S suppression always beats monetization boost), TTL, and the team that owns it. Conflicts are resolved by priority, not by runtime negotiation. This keeps the ML model clean and the business logic auditable. The key governance principle: the ranking team owns the model; each downstream team owns their policy rules; no team can edit another's rules without a code review process that includes the ranking team.
+
+*(Cross-question: multi-region)*
+> **Interviewer:** You're expanding to Southeast Asia. Users there complain recommendations are Western-centric. How do you fix this?
+
+**Candidate:** The root cause is training data imbalance — 80% of training events come from North America and Europe, so the model learns Western content preferences. Fix at the data layer: stratified sampling by region during training — oversample SEA events to ~20% of training data regardless of their natural proportion. Add a `region` feature to both user and item embeddings so the model can learn region-specific preferences. Deploy a region-specific model for SEA that's fine-tuned on local data. For the retrieval stage, maintain a separate ANN index seeded with locally popular content. This is a 2–3 month project; the quick fix while it's in progress is a post-ranking boost for content where creator_country matches user_country, weighted by 0.1.

@@ -2499,3 +2499,119 @@ If you have 5 minutes before a system design interview where Bigtable is likely 
 *Chapter 84 complete. Next in the Google Foundational Systems series: Chapter 85 — MapReduce.*
 
 *Pairs with: Ch41b (overview of all Google systems), Ch35 (batch processing and data pipelines), Ch28 (databases), Ch83 (GFS), and Ch82 (Chubby).*
+
+---
+
+## Interview Simulation — Bigtable
+
+*45-minute deep-dive interview on Google's Bigtable paper (Chang et al., OSDI 2006). Interviewers expect you to understand the tablet→SSTable→GFS layering, row key design for scan locality, and why Bigtable needs Chubby despite running on GFS.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** What problem does Bigtable solve that GFS doesn't?
+
+**Candidate:** GFS stores flat files with no understanding of the data inside them. If you want to look up a specific user's data in a GFS file, you read the entire file. Bigtable adds a structured layer: a sorted, sparse map from (row key, column key, timestamp) to bytes. The sort order enables range scans — "give me all rows from user_100 to user_200" — which maps naturally to many Google workloads: web crawl data (sorted by URL), search index (sorted by term), analytics (sorted by time + user). GFS provides the durable storage underneath; Bigtable provides the structured access pattern.
+
+The other key gap: GFS has relaxed consistency. GFS can't be the source of truth for "does this row exist" without application-level coordination. Bigtable provides tablet-level sequential consistency: within a tablet (a contiguous row range), operations are serialized through the tablet server holding that tablet. This is weaker than distributed ACID transactions (Bigtable has no cross-row transactions in the original paper) but strong enough for most Google use cases.
+
+> **Interviewer:** Describe the Bigtable data model precisely.
+
+**Candidate:** The data model is a sparse, distributed, persistent, sorted map with the key: (row, column family:qualifier, timestamp) → byte array. Row is an arbitrary string up to 64KB; all data for a row is stored together and accessed atomically within a single row. Column family groups related columns and must be declared upfront — it determines physical co-location and compression settings. Qualifier is the sub-column name, arbitrary, created dynamically. Timestamp is a 64-bit integer (usually microseconds since epoch); multiple versions of the same (row, column) can coexist, distinguished by timestamp. The newest version is returned by default.
+
+*(Cross-question: why is the column family declared upfront but the qualifier is dynamic?)* Physical locality. All columns within a family are stored together on disk (same SSTable). This enables efficient column-family-level reads ("give me all 'anchor:' columns for this row") without reading columns from other families. But if you had to declare every qualifier at schema time, you couldn't do dynamic schemas like "store all anchor text for all URLs that link to this page" — the set of qualifying columns is data-dependent.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Walk me through a write path in Bigtable from client to durable storage.
+
+**Candidate:** The write path has three phases and four components.
+
+```
+Bigtable Write Path
+===================
+
+Client
+  |
+  |--[1. locate tablet via 3-level lookup]-->
+  |       Root tablet (in Chubby)
+  |         └─ METADATA table (in Bigtable)
+  |               └─ user table tablets
+  |
+  |--[2. write request]-->  Tablet Server (owns tablet for row key)
+                              |
+                              |--[3. WAL append]-->  GFS (commit log file)
+                              |   (must succeed before ACK)
+                              |
+                              |--[4. memtable insert] (in-memory sorted buffer)
+                              |   (no GFS write for memtable)
+  |<--[5. ACK]--
+
+Background:
+  memtable full → minor compaction → SSTable written to GFS
+  N SSTables → merging compaction → fewer SSTables
+  All SSTables → major compaction → one clean SSTable (no tombstones)
+```
+
+The WAL write to GFS must succeed before the client gets an ACK — that's the durability guarantee. The memtable is purely in-memory and would be lost on crash, but the WAL allows replay. A minor compaction freezes the current memtable and writes it to a new SSTable in GFS asynchronously — no blocking on the client write path.
+
+*(Cross-question: what happens if a tablet server crashes before flushing the memtable?)* The master detects the crash via Chubby session expiration. It reassigns the tablet to another tablet server. The new tablet server replays the WAL from GFS — WAL entries for this tablet are mixed with entries for other tablets in the same log file, so the new server must sort through to find relevant entries. The paper notes this as a recovery optimization opportunity: splitting the commit log by tablet reduces recovery scan time.
+
+> **Interviewer:** Why does Bigtable use three levels of tablet location metadata?
+
+**Candidate:** The three-level hierarchy — Chubby file → root tablet → METADATA tablets → user tablets — is designed to support very large tables without overwhelming any single metadata server. The root tablet location is stored in a Chubby file (the lock service), which clients read first. The root tablet itself is a special Bigtable tablet containing locations of all METADATA tablets. METADATA tablets contain the locations of all user tablets. Each METADATA row is about 1KB; one METADATA tablet (100-200MB) can hold locations for ~128 million user tablets. At 100-200MB per user tablet, that's ~12.8PB of user data indexed by a single METADATA tablet. The three-level hierarchy is designed so that even at enormous scale, the depth never exceeds three hops. Clients cache all three levels — a cache miss only requires one, two, or three RPCs to refill, not a full re-scan.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** Why does Bigtable use an LSM tree (memtable + SSTable) rather than a B-tree for on-disk storage?
+
+**Candidate:** The LSM tree converts random writes into sequential writes, which maps perfectly to GFS's strengths. GFS is optimized for sequential access — random small writes to GFS would require seeking within large chunks, fighting the append-optimized design. With an LSM tree, every write to durable storage (whether WAL or SSTable flush) is a sequential append. B-trees require random in-place updates: to update a leaf node, you seek to that location on disk. On spinning disks (the hardware era of the original Bigtable), sequential writes are 100x faster than random writes. On SSDs, the gap is smaller but sequential writes still win for write amplification reasons.
+
+The LSM tradeoff: reads can be slower because you may need to search multiple SSTables and the memtable. Bigtable mitigates this with Bloom filters (per SSTable, to skip SSTables that don't contain the requested row key) and block caches (recently read SSTable blocks stay in memory). Read-heavy workloads with cold data benefit less from LSM; that's why MySQL (B-tree) still dominates for OLTP.
+
+> **Interviewer:** What are the limits of Bigtable's consistency model?
+
+**Candidate:** Bigtable provides single-row atomicity: a read-modify-write on a single row is atomic. But there are no multi-row transactions. If you need to atomically update two rows (e.g., debit one account and credit another), you can't do it with native Bigtable operations. Applications had to implement their own two-phase commit (using Chubby locks) for cross-row consistency, which is complex and error-prone.
+
+This is exactly the gap Spanner was built to fill. Spanner adds distributed transactions with external consistency across arbitrary rows and tables, built on top of Paxos rather than Bigtable's single-master tablet model. The cost is higher latency (multi-phase commit across replicas) vs Bigtable's single-tablet operations.
+
+*(Cross-question: Bigtable has no cross-row transactions — how did Gmail work?)* Gmail's data model was designed to fit in single-row operations. A mailbox was one very wide row (all messages as columns). Operations on a single mailbox (mark read, move to folder) were single-row atomic operations. Cross-row operations (rare in Gmail's case) were handled with application-level idempotency and retry.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** How would you use Bigtable (or an equivalent) to store time-series metrics for a monitoring system?
+
+**Candidate:** The row key design is everything. For time-series data, the naive key is `metric_name#timestamp`, but that creates a write hotspot: all writes for the most recent timestamp go to the last region/tablet as time advances. The fix: reverse the timestamp in the key — `metric_name#(MAX_LONG - timestamp)`. Now the most recent data is at the start of the keyspace and doesn't create a hotspot at the end.
+
+For high-cardinality metrics (millions of distinct metric series), you also want to hash-distribute the metric name prefix to prevent hot tablets. A common pattern: `hash(metric_name)[0:4]#metric_name#reversed_timestamp`. The hash prefix distributes writes across tablets while the metric name and timestamp preserve scan locality for "give me the last 1 hour of metric X." Column families: one for the raw metric value, one for computed rollups (5m average, 1h average), one for metadata (labels). Set TTL at the column family level — raw data expires in 7 days, rollups expire in 2 years.
+
+> **Interviewer:** HBase is the open-source implementation of Bigtable. What would you need to change in HBase for a production deployment at Google scale?
+
+**Candidate:** Three major things. First, the master: HBase's master is a single JVM process. Google's Bigtable master is also single but runs on dedicated hardware with Chubby-backed HA. For production you'd want automated master failover with a standby, ideally multi-AZ. Second, the WAL: HBase writes WAL to HDFS synchronously (like Bigtable to GFS), but HDFS write latency spikes at GC pauses in the DataNode JVMs. Google used native C++ GFS clients. For HBase in production, tune HDFS DataNode GC aggressively or consider HDFS over SSDs. Third, compaction scheduling: uncontrolled compactions can spike read latency. Google's Bigtable throttled compactions during peak traffic. HBase's compaction throughput controls (`hbase.hstore.compaction.throughput.higher.bound`) need explicit tuning — the defaults are conservative.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why does Bigtable need Chubby? Can't it self-coordinate?**
+
+A: Chubby serves two roles that Bigtable can't provide for itself. First, it stores the root tablet location — you can't store Bigtable's root in Bigtable (chicken-and-egg: where do you look up the location of the place that stores locations?). Chubby is an external, always-available storage for this bootstrapping metadata. Second, Chubby provides master election: when the Bigtable master dies, a candidate master acquires a Chubby lock before taking over. Without this external consensus service, you'd need Bigtable itself to be a distributed consensus system — circular dependency. The design lesson: distributed systems often need an external coordination service at the bottom of the dependency stack.
+
+**Q: What is a tablet split and how does it work?**
+
+A: When a tablet grows past ~200MB, the tablet server splits it at the median row key. It writes two new tablet metadata entries to the METADATA table and notifies the master. The split is cheap: since tablet data is SSTables on GFS, the split only requires updating metadata to point two tablets at different keyspace ranges; the physical files don't move. The master then assigns the two new tablets to tablet servers (possibly different ones for load balancing). This is why GFS's file-sharing semantics matter: multiple tablet servers can read the same SSTable file (with different keyspace filters) during and after a split.
+
+**Q: How does Bigtable handle tablet server failure during a write?**
+
+A: The client detects the failure (RPC timeout or Chubby session expiry). The master detects the failure when the tablet server's Chubby session expires (within a few seconds). The master reassigns the tablet to another tablet server. The new tablet server loads the tablet's SSTable files from GFS and replays the commit log to recover in-flight writes. The client retries after getting the new tablet server address from METADATA. The total failover time is a few seconds to tens of seconds — acceptable for batch workloads, high for interactive applications, which is why Spanner added synchronous cross-replica replication.
+
+---
+
+*Chapter 84 complete. Next in the Google Foundational Systems series: Chapter 85 — MapReduce.*
+
+*Pairs with: Ch41b (overview of all Google systems), Ch35 (batch processing and data pipelines), Ch28 (databases), Ch83 (GFS), and Ch82 (Chubby).*

@@ -3204,3 +3204,253 @@ Workers are stateless: they poll the queue, execute, and report results. Adding 
 **Q18: What is exactly-once execution and why is it nearly impossible to guarantee?**
 
 Exactly-once execution means every job runs precisely one time -- not zero, not two. Achieving it requires atomicity between two independent systems: the job queue (marking the job done) and the handler's side effect (sending the email, writing to the database). If you mark the job done first and then the handler crashes, the side effect never happens -- that is at-most-once, not exactly-once. If the handler executes first and then the ACK fails, the job gets re-dispatched and executes again -- that is at-least-once. Making both atomic requires a distributed transaction spanning the queue store and every external system the handler touches, which is impractical and not supported by most dependencies. The industry-standard solution is at-least-once delivery paired with idempotent handlers, which achieves the same user-visible outcome as exactly-once -- the business effect happens exactly once -- without the distributed transaction complexity.
+
+---
+
+## Interview Simulation — Background Job Queue
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a background job queue system — like Celery or Sidekiq. What do you need to know before you start?
+
+**Candidate:** Good. Let me understand the problem space. First, what types of jobs are we running? Short tasks like sending an email — under a second — or long-running jobs like video transcoding that take minutes?
+
+> **Interviewer:** Both. The majority are short tasks under 5 seconds. A meaningful minority are long-running — up to 30 minutes.
+
+**Candidate:** That matters for timeout and heartbeat design. Second: what are the delivery guarantees we need? At-least-once — every job runs at least once, with idempotency handling duplicates — or do stakeholders expect exactly-once?
+
+> **Interviewer:** The business wants "exactly-once" behavior. How you achieve it is up to you.
+
+**Candidate:** *(Cross-question: tests whether candidate knows exactly-once is impossible at the infrastructure level)* Understood. I will design for at-least-once delivery with idempotent handlers, which achieves the same business outcome as exactly-once without requiring a distributed transaction. I will explain the trade-off during the design. Third: scale — how many jobs per second at peak?
+
+> **Interviewer:** About 50,000 job submissions per second. Each job runs within a few seconds of submission on average.
+
+**Candidate:** That is a significant throughput requirement. Fourth: do we need priority queues — some jobs are more urgent than others?
+
+> **Interviewer:** Yes. We have three tiers: critical, normal, and bulk. Critical jobs must run within 1 second of submission.
+
+**Candidate:** Priority queues with different SLAs — noted. Fifth: what is the failure behavior? If a job fails, how many retries, and what happens after all retries are exhausted?
+
+> **Interviewer:** Up to 3 retries with exponential backoff. After that, the job goes to a dead-letter queue for manual review.
+
+**Candidate:** Clear. Summarizing: 50K jobs/second, three priority tiers (critical <1s, normal <5s, bulk <60s), at-least-once delivery with idempotent handlers, 3 retries with exponential backoff, dead-letter queue, long-running jobs up to 30 minutes. V1 out of scope: job chaining/DAG workflows, result streaming.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Size the system.
+
+**Candidate:** Job submission rate: 50K jobs/second. Job payload size: let's say average 1 KB including job type, arguments, and metadata. That is 50 MB/second of write throughput into the queue.
+
+Job execution time: average 3 seconds per job. Worker throughput: each worker handles 1 job at a time. To sustain 50K jobs/second with 3s average execution time, I need 50,000 × 3 = 150,000 concurrent job executions. If each worker machine runs 100 threads, I need 1,500 worker machines. That is a large fleet — in practice I would use async workers with an event loop where jobs do mostly I/O, allowing 1,000 concurrent jobs per machine, bringing the fleet to 150 machines.
+
+Queue depth at peak: if submission rate briefly exceeds processing rate, jobs queue up. At a 10% burst — 55K submitted vs. 50K processed — jobs accumulate at 5K/second. I would design for a maximum queue depth of 500K jobs before backpressure kicks in — about 100 seconds of surplus, giving me time to auto-scale workers.
+
+Storage for job records: job record = ~2 KB (payload + metadata + retry state). If jobs have a 24-hour TTL after completion, and we process 50K/second = 4.3 billion jobs/day, the completed job table grows at 4.3B × 2KB = 8.6 TB/day. I would archive completed jobs to cold storage after 1 hour and retain only failed jobs for 7 days in hot storage.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the core APIs.
+
+**Candidate:** Three key operations: submit, query status, and acknowledge (internal).
+
+**Job submission (producer-facing):**
+```
+POST /v1/jobs
+{
+  "job_type": "send_email",
+  "payload": {
+    "to": "user@example.com",
+    "template_id": "welcome_v2",
+    "user_id": "U-9821"
+  },
+  "priority": "normal",           // "critical" | "normal" | "bulk"
+  "idempotency_key": "email-U-9821-welcome-20240101",
+  "scheduled_at": null,           // null = run immediately
+  "max_retries": 3
+}
+
+Response: 202 Accepted
+{
+  "job_id": "J-a3f8bc21",
+  "status": "queued",
+  "estimated_start_ms": 250
+}
+```
+
+The `idempotency_key` is the caller's responsibility — it is a unique string that the system uses to deduplicate submissions. If the same key is submitted twice, the second call returns the existing job's status rather than creating a new one.
+
+**Job status query (producer-facing):**
+```
+GET /v1/jobs/{job_id}
+
+Response:
+{
+  "job_id": "J-a3f8bc21",
+  "status": "completed",     // queued | running | completed | failed | dead_lettered
+  "attempts": 1,
+  "started_at": "2024-01-01T10:00:01Z",
+  "completed_at": "2024-01-01T10:00:02Z",
+  "result": {"delivered": true}
+}
+```
+
+**Internal worker lease API (worker-facing):**
+```
+POST /v1/internal/jobs/lease
+{
+  "worker_id": "W-42",
+  "queue": "critical",
+  "lease_duration_seconds": 30
+}
+
+Response: job record + lease_token
+```
+
+Workers call `DELETE /v1/internal/jobs/{job_id}/lease` with the lease_token to acknowledge success, or let the lease expire to trigger retry. *(Cross-question: interviewer may ask about polling vs. long-polling)*
+
+> **Interviewer:** How does the worker know a new job is available without constant polling?
+
+**Candidate:** Long-polling: the worker holds the HTTP connection open for up to 30 seconds. The server responds immediately if a job is available, or holds the connection and responds within 30 seconds when a job arrives. This reduces polling overhead by 20–30× compared to 1-second polling. Alternatively, if I use Redis as the queue backend, I use `BRPOP` — a blocking pop that returns immediately when an item is available. Both achieve sub-second job pickup latency without tight polling loops.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Design the data model for job persistence.
+
+**Candidate:** I keep two separate concerns: the queue (for fast pickup) and the job record (for durability and auditability).
+
+**Job record table (PostgreSQL):**
+```
+jobs
+  job_id          UUID PRIMARY KEY
+  idempotency_key TEXT UNIQUE
+  job_type        TEXT NOT NULL
+  payload         JSONB NOT NULL
+  priority        SMALLINT NOT NULL      -- 0=critical, 1=normal, 2=bulk
+  status          TEXT NOT NULL          -- queued/running/completed/failed/dead_lettered
+  attempts        SMALLINT DEFAULT 0
+  max_retries     SMALLINT DEFAULT 3
+  next_run_at     TIMESTAMPTZ NOT NULL   -- for exponential backoff scheduling
+  leased_by       TEXT                   -- worker_id holding current lease
+  lease_expires_at TIMESTAMPTZ
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+```
+
+**Index for worker polling:**
+```sql
+CREATE INDEX jobs_pickup_idx
+  ON jobs (priority ASC, next_run_at ASC)
+  WHERE status = 'queued';
+```
+
+Workers query: `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1` on this index. `SKIP LOCKED` is critical — it allows multiple workers to poll concurrently without blocking each other on the same row.
+
+**Dead-letter table:**
+```
+dead_letter_jobs
+  job_id         UUID PRIMARY KEY REFERENCES jobs(job_id)
+  failure_reason TEXT
+  final_payload  JSONB
+  dead_lettered_at TIMESTAMPTZ
+  reviewed_by    TEXT
+  reviewed_at    TIMESTAMPTZ
+```
+
+**Idempotency store (Redis, TTL 24h):**
+```
+idempotency:{idempotency_key} → job_id (STRING, TTL 86400s)
+```
+
+On submit, the API server does a Redis SET NX (set if not exists). If the key already exists, return the existing job_id — no duplicate created.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:** Here is the full system:
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     SUBMISSION PATH                             │
+  │                                                                 │
+  │  Producer ──► API Gateway ──► Job API Service                  │
+  │                                    │                            │
+  │                          ┌─────────┴──────────┐                │
+  │                          │                    │                 │
+  │                     Redis SET NX         Postgres INSERT        │
+  │                    (idempotency          (job record,           │
+  │                     check, 24h TTL)       status=queued)        │
+  │                                                                 │
+  │                                    │                            │
+  │                                    ▼                            │
+  │                             Priority Queue                      │
+  │                         (Redis Sorted Set                       │
+  │                          score = priority * 1e12 + epoch_ms)   │
+  └─────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     EXECUTION PATH                              │
+  │                                                                 │
+  │  Workers (fleet) ──BRPOP──► Dequeue ──► Execute Handler        │
+  │      │                                      │                   │
+  │      │  (lease: job locked to worker        │                   │
+  │      │   for lease_duration_seconds)        ▼                   │
+  │      │                              SUCCESS → ACK               │
+  │      │                              FAILURE → retry with        │
+  │      │                                        backoff, or DLQ   │
+  │      │                                                          │
+  │  Lease Monitor (cron, 10s)                                      │
+  │  → finds expired leases → requeues job                         │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+**Priority queue implementation:** I use a Redis Sorted Set per priority tier: `queue:critical`, `queue:normal`, `queue:bulk`. The score is `epoch_milliseconds` — lower score = older job = higher priority within the same tier. Workers check `queue:critical` first, then `queue:normal`, then `queue:bulk` using `BRPOP`. This ensures critical jobs are never starved by bulk backlog.
+
+**Lease mechanism — the key to reliability:** When a worker picks up a job, it atomically sets `status = running`, `leased_by = worker_id`, `lease_expires_at = now + 30s`. If the worker crashes or hangs, the Lease Monitor — a lightweight cron job running every 10 seconds — scans for jobs where `status = 'running' AND lease_expires_at < now()`. It resets them to `status = 'queued'`, increments `attempts`, and sets `next_run_at` based on exponential backoff: `attempts² × 30 seconds`. At `attempts = max_retries`, status is set to `dead_lettered`.
+
+**Long-running job heartbeats:** For jobs that run longer than the lease duration (up to 30 minutes), the worker sends a heartbeat every 20 seconds: `UPDATE jobs SET lease_expires_at = now() + 30s WHERE job_id = ? AND leased_by = worker_id`. If the worker dies mid-job, heartbeats stop and the lease expires after 30 seconds, triggering a retry.
+
+> **Interviewer:** How do you achieve the sub-1-second SLA for critical jobs?
+
+**Candidate:** Critical jobs bypass the database for their initial queue entry. On submission: (1) write to Postgres synchronously for durability, (2) immediately push to `queue:critical` Redis sorted set. Workers that handle critical jobs use `BRPOP queue:critical 0` — a blocking pop with zero timeout — so they pick up jobs the instant they appear. End-to-end: Postgres write ~5ms + Redis push ~1ms + worker wakeup ~1ms = under 10ms for the queue-to-execution transition. The sub-1-second SLA also requires enough critical workers to be idle and waiting — I keep the critical worker pool at 2× expected concurrency to ensure there is always an available worker.
+
+> **Interviewer:** A job handler fails halfway through — it charged a user's credit card but did not send a confirmation email. The job retries, tries to charge again — how do you prevent the double charge?
+
+**Candidate:** This is precisely why idempotent handlers matter. The job handler for charging must check an idempotency key before executing. For the charge step: the job record has a `job_id` (UUID). The handler calls the payment API with `idempotency_key = job_id`. Payment APIs like Stripe deduplicate requests on the same idempotency key and return the original result without executing a second charge. For the email step: the handler checks a `email_sent_flags` table — `INSERT INTO email_sent_flags (job_id, step) VALUES (?, 'confirmation') ON CONFLICT DO NOTHING` — and only calls the email API if the insert succeeded (row did not exist). This is the "at-least-once + idempotent handler = exactly-once effect" guarantee. The retry can safely replay every step because each step is guarded by an idempotency check.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** At 50K jobs/second, the jobs table in Postgres grows fast. How do you keep queries fast?
+
+**Candidate:** Three strategies. First, table partitioning: partition `jobs` by `created_at` using range partitioning — one partition per day. The worker pickup query always targets `status = 'queued'` which is disproportionately in today's partition; Postgres prunes older partitions automatically. Second, archive completed jobs aggressively: a background job moves `status IN ('completed', 'dead_lettered')` records older than 1 hour to an `jobs_archive` table (or S3 in Parquet format). The hot `jobs` table stays small — only in-flight and recently queued jobs. Third, the `jobs_pickup_idx` partial index covers only `status = 'queued'` — as jobs complete and change status, they fall out of the index, keeping the index size proportional to queue depth, not total job volume.
+
+> **Interviewer:** How do you prevent a thundering herd when you add 100 new worker machines?
+
+**Candidate:** New workers start polling immediately, all hitting the database at the same second. With `SELECT FOR UPDATE SKIP LOCKED`, each worker gets a different row — there is no lock contention. However, 100 new workers opening 100 new connection pool connections simultaneously can spike Postgres connection count. I mitigate this with a connection pooler (PgBouncer in transaction mode) in front of Postgres — workers connect to PgBouncer, which maintains a fixed pool of backend connections. New workers joining the fleet acquire PgBouncer connections, not direct Postgres connections. Additionally, I stagger worker startup: Kubernetes pod startup jitter (a random 0–30 second delay per pod) spreads the connection establishment over time.
+
+> **Interviewer:** The DLQ is growing — 10,000 failed jobs per day. How do you operationalize it?
+
+**Candidate:** The DLQ is a signal, not a graveyard. First, classify failures: the dead-letter record stores the exception type and message. A weekly report groups DLQ jobs by `failure_reason` and `job_type` — this surfaces systemic bugs (e.g., all `resize_image` jobs failing due to a library change) vs. one-off data issues. Second, expose a replay API: `POST /v1/dead_letter_jobs/{job_id}/replay` resets status to `queued` and sets `attempts = 0`. Operators can replay individual jobs or bulk-replay by job type after a fix is deployed. Third, alert on DLQ growth rate — if DLQ receives more than 100 jobs per minute, page on-call. This catches a new code deployment that is silently failing jobs before it affects tens of thousands of records. Fourth, auto-expire DLQ entries after 7 days to prevent unbounded growth — before expiry, a summary is emailed to the owning team.
+
+> **Interviewer:** How would you add scheduled/delayed jobs — run this job at 3 PM tomorrow?
+
+**Candidate:** Scheduled jobs use the `next_run_at` field that is already in the schema. On submission, set `next_run_at = scheduled_timestamp` instead of `now()`. The worker pickup query already filters `next_run_at <= now()`, so scheduled jobs stay invisible until their time. I would add a dedicated `scheduled_job_scheduler` process — a simple cron that runs every second, queries `SELECT job_id FROM jobs WHERE status = 'queued' AND next_run_at <= now() LIMIT 1000`, and pushes those job IDs to the appropriate Redis priority queue. The gap between `next_run_at` and actual execution depends on scheduler polling frequency — at 1-second polling, scheduled jobs start within 1 second of their target time. For millisecond precision, I would use Redis's `ZADD` with the target timestamp as the score and a separate sweeper using `ZRANGEBYSCORE queue:scheduled 0 {now_ms} LIMIT 100` to move due jobs to the execution queue.
+
+---
+
+`Chapter 57 | Section 5: Advanced L5 Systems | Background Job Queue`

@@ -3005,3 +3005,240 @@ Downsampling stores min, max, sum, and count — never just the average. Storing
 *Pairs with Chapter 55 (Search System) for instrumentation patterns, and Chapter 121 (Observability) for logs/traces to complete the three-pillar picture.*
 
 `Chapter 56 | Section 5: Advanced L5 Systems | Metrics Collection System`
+
+---
+
+## Interview Simulation — Metrics Collection System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a metrics collection system — think Prometheus or Datadog. What questions do you have?
+
+**Candidate:** Great problem. Let me scope it before I start drawing boxes. First, what types of metrics are we collecting — infrastructure metrics like CPU and memory, application-level metrics like request counts and latencies, or both?
+
+> **Interviewer:** Both. Services instrument themselves and emit counters, gauges, and histograms. The infra team also wants host-level metrics.
+
+**Candidate:** Got it. Second: push or pull model — do services push metrics to us, or do we scrape them? I am asking because the choice affects almost every other design decision.
+
+> **Interviewer:** Good question. The team is debating exactly this. Let's say we need to support both — some services can only push, others prefer to be scraped.
+
+**Candidate:** *(Cross-question: tests understanding of the push vs. pull trade-off)* Understood, I will design for both with a unified ingestion layer. Third: scale. How many unique time series do we need to support, and what is the ingestion rate?
+
+> **Interviewer:** 10 million active time series, ingesting at about 1 million data points per second during peak.
+
+**Candidate:** That is a significant cardinality load — cardinality is the hardest problem in this space. Next: query patterns. What does the query side look like — dashboards updated every 30 seconds, alerting rules evaluated every minute, ad-hoc queries?
+
+> **Interviewer:** All three. Alerting rules must be evaluated at least every 60 seconds. Dashboards need recent data with low latency. Ad-hoc queries can be slower.
+
+**Candidate:** And retention — how long do we keep raw data?
+
+> **Interviewer:** Raw data for 15 days, then downsampled to 5-minute resolution for 90 days, then 1-hour resolution for 2 years.
+
+**Candidate:** Perfect — tiered retention. Last question: do we need to support custom dimensions or labels on metrics, and what is the expected label cardinality per metric?
+
+> **Interviewer:** Yes, labels are a first-class feature. Each time series has 3–10 labels. But we have had incidents where a developer adds a high-cardinality label like `user_id` and the system falls over.
+
+**Candidate:** Cardinality governance — I will treat that as a hard requirement. To summarize: 10M time series, 1M data points/second, push and pull ingestion, alerting at 60s intervals, three-tier retention (15 days raw → 90 days 5m → 2 years 1h), cardinality guardrails. V1 out of scope: anomaly detection, metric-based auto-scaling integration.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Size the storage and compute.
+
+**Candidate:** Raw data storage: 1M data points/second. Each data point is a float64 value (8 bytes) plus a timestamp (8 bytes) = 16 bytes raw. Prometheus-style delta-of-delta + XOR compression (Gorilla encoding) compresses time series data to roughly 1.37 bytes per data point on average. So: 1M × 1.37 bytes/s = 1.37 MB/s ingestion rate. Over 15 days: 1.37 MB/s × 86,400 × 15 ≈ 1.78 TB. With replication factor 3: 5.3 TB for raw tier.
+
+For the 5-minute downsampled tier: raw data is one point per second per series; downsampled to one point per 5 minutes = 12× reduction. 1.78 TB / 12 × (90/15) = 890 GB for the 5m tier.
+
+For the 1-hour tier: 1.78 TB / 720 × (730/15) ≈ 60 GB. Total storage across all tiers with replication: roughly 20 TB.
+
+For ingest compute: at 1M points/second, and assuming each ingest node handles 100K points/second (writing to a columnar store like ClickHouse or a purpose-built TSDB), I need about 10 ingest nodes. I would provision 20 for headroom.
+
+> **Interviewer:** How many unique time series does your alerting engine need to scan every 60 seconds?
+
+**Candidate:** 10 million time series. At one evaluation per 60 seconds, that is 10M / 60 ≈ 167K series evaluated per second across all alert rules. Most rules query an aggregation (sum, rate) not individual series — so the actual number of PromQL subqueries is far smaller. Prometheus handles this with recording rules that pre-aggregate expensive queries. I would estimate 100–500 recording rules reducing the alert query fan-out by 90%.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the key APIs — ingestion and query.
+
+**Candidate:** I'll start with the push ingestion endpoint:
+
+```
+POST /v1/ingest
+Content-Type: application/x-protobuf   // Prometheus remote-write format
+
+WriteRequest {
+  timeseries: [
+    {
+      labels: [
+        {name: "__name__", value: "http_requests_total"},
+        {name: "service",  value: "checkout"},
+        {name: "method",   value: "POST"},
+        {name: "status",   value: "200"}
+      ],
+      samples: [
+        {value: 1542.0, timestamp_ms: 1700000000000},
+        {value: 1543.0, timestamp_ms: 1700000001000}
+      ]
+    }
+  ]
+}
+
+Response: 204 No Content (on success)
+          429 Too Many Requests (cardinality limit exceeded)
+          400 Bad Request (malformed labels)
+```
+
+For the pull scrape path, services expose a `/metrics` endpoint in Prometheus text format — the scraper calls this on schedule and writes to the same ingest pipeline.
+
+For querying:
+
+```
+GET /v1/query_range
+  ?query=rate(http_requests_total{service="checkout"}[5m])
+  &start=1700000000
+  &end=1700003600
+  &step=60
+
+Response:
+{
+  "status": "success",
+  "data": {
+    "resultType": "matrix",
+    "result": [
+      {
+        "metric": {"service": "checkout", "method": "POST"},
+        "values": [[1700000060, "12.4"], [1700000120, "13.1"], ...]
+      }
+    ]
+  }
+}
+```
+
+This is the Prometheus HTTP API format — I would follow it exactly so existing tools like Grafana work without modification. *(Cross-question: may ask about authentication/authorization)*
+
+> **Interviewer:** How do you prevent one team's metrics from starving another team's queries?
+
+**Candidate:** Tenant isolation. Each service is assigned a tenant ID. The query engine enforces per-tenant rate limits — for example, 100 concurrent queries per tenant, max 10M series scanned per query. Tenants that exceed limits get 429 responses. For ingest, a per-tenant series limit (say, 500K series per service) prevents cardinality explosions from taking down shared infrastructure. When a new time series would exceed the limit, ingest returns 429 and the agent drops it — this is the Prometheus `per_series_sample_limit` pattern applied at the service boundary.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you store time series data? Walk me through the data model.
+
+**Candidate:** I separate the series identity from the sample values — this is the core insight behind Prometheus's TSDB and VictoriaMetrics.
+
+**Series identity store (low-cardinality lookup):**
+```
+series_id (uint64, hash of label set)  →  {labels: {...}, created_at, tenant_id}
+```
+This is a hash map stored in memory (and periodically flushed to disk). Looking up a series ID from a label set is O(1).
+
+**Sample store (columnar, append-only):**
+```
+(series_id, timestamp_ms) → float64 value
+```
+Stored in chunks per series. Each chunk covers a 2-hour window and stores 120 samples. Chunks are compressed with Gorilla encoding: delta-of-delta for timestamps (exploiting regular scrape intervals), XOR encoding for float values. A full chunk for 2 hours at 15s scrape interval = 480 samples, compresses to roughly 660 bytes.
+
+**Index for label-based queries:**
+```
+label_name="service" label_value="checkout" → [series_id_1, series_id_2, ...]
+```
+This is an inverted index on labels — same concept as search. It enables queries like `{service="checkout", status="200"}` to resolve to a set of series IDs in O(label selectivity) time.
+
+**Downsampled tiers** use the same schema but with a different chunk resolution and pre-aggregated values: for each series, store `min`, `max`, `sum`, `count` per 5-minute window so any aggregation can be reconstructed without touching raw data.
+
+> **Interviewer:** How do you handle a metric that stops reporting — say a host goes down?
+
+**Candidate:** When a scrape target returns no data, Prometheus records a stale marker — a special NaN value with a sentinel bit — at the last scrape timestamp. This tells the query engine to stop extrapolating the series rather than assume it is zero. After a configurable staleness window (default 5 minutes), the series is considered stale and excluded from range queries. This prevents `rate()` calculations from producing false positives when a service restarts. In my system I would replicate this: the scrape manager writes a stale marker on missed scrape, and the query engine's staleness handling skips the series after two missed intervals.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the full architecture.
+
+**Candidate:** Here is the complete system:
+
+```
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                        INGESTION LAYER                           │
+  │                                                                  │
+  │  Services ──push──► Ingest Gateway ──► Kafka (partitioned       │
+  │                      (validates,         by series_id hash)      │
+  │                       rate-limits,                               │
+  │                       tenant-checks)    Scrape Manager           │
+  │                                         (pull targets,           │
+  │  /metrics ◄──scrape──                   writes to Kafka)        │
+  └──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                       STORAGE LAYER                              │
+  │                                                                  │
+  │  Kafka ──► Ingest Workers ──► TSDB Cluster (raw, 15d)           │
+  │                │               (VictoriaMetrics / ClickHouse)    │
+  │                └──► Downsampling Job ──► Mid-tier (5m, 90d)     │
+  │                                     └──► Cold-tier (1h, 2yr)    │
+  └──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                       QUERY / ALERT LAYER                        │
+  │                                                                  │
+  │  Grafana ──► Query Frontend ──► Query Engine (PromQL)           │
+  │               (caches results,    (routes to correct tier        │
+  │                deduplicates        based on time range)          │
+  │                concurrent reqs)                                  │
+  │                                                                  │
+  │  Alert Manager ──► Alert Evaluator ──► Recording Rule Engine    │
+  │                    (60s eval cycle)    (pre-aggregates to        │
+  │                                         reduce fan-out)          │
+  └──────────────────────────────────────────────────────────────────┘
+```
+
+**Ingest path detail:** The Ingest Gateway validates labels, checks tenant series count, and rejects or accepts. Accepted data points are written to Kafka partitioned by `series_id % num_partitions`. This ensures all samples for the same series land in the same partition, preserving write order. Ingest Workers read from Kafka and append to the TSDB cluster. I use VictoriaMetrics as the TSDB because it supports cluster mode with separate ingest and query nodes, handles 10M series natively, and provides a Prometheus-compatible query API.
+
+**Cardinality governance:** The Ingest Gateway maintains a per-tenant series count in Redis (incremented when a new series ID is first seen). When a tenant hits their limit, new series are rejected with 429. A weekly cardinality report is emailed to service owners showing their top labels by uniqueness — this proactively catches `user_id` or `request_id` labels before they become incidents.
+
+**Downsampling:** A Flink job reads raw samples from the TSDB at the end of each 5-minute window, computes min/max/sum/count per series, and writes to the mid-tier store. The raw data is expired by TTL after 15 days. The query engine's routing logic checks the time range: if `start` is within 15 days, query raw tier; if between 15 and 90 days, query mid-tier; if older than 90 days, query cold-tier.
+
+> **Interviewer:** How do you make alerting reliable? If the alert evaluator crashes, alerts must not be silently missed.
+
+**Candidate:** Alert evaluation state is persisted. Each alert rule evaluation writes its result (firing/resolved) and the last evaluation timestamp to a durable store — PostgreSQL or Redis with AOF persistence. When the evaluator restarts, it reads the last evaluation timestamp per rule and resumes from there. For "for" duration alerts — alerts that must be firing for 5 consecutive minutes before notifying — the pending state is also persisted so a restart does not reset the timer. The Alert Manager itself is deployed in HA mode with two replicas using a gossip protocol (the Prometheus AlertManager mesh mode) to deduplicate notifications — both replicas evaluate and one sends, preventing double-alerts.
+
+> **Interviewer:** Push vs. pull — you said you support both. What is the key operational difference?
+
+**Candidate:** The key difference is failure visibility. In a pull model, the scraper knows immediately when a target is unreachable — the HTTP scrape fails with a connection error, and the scraper emits a `up=0` metric for that target. You can alert on `up == 0` and know a service is down within one scrape interval. In a push model, silence is ambiguous — you cannot distinguish "service is down and cannot push" from "service is healthy but busy." To compensate in push mode, you require services to push a heartbeat metric on every interval; if the heartbeat goes missing, you alert. This is the "dead man's switch" pattern. Pull is generally preferred for infrastructure monitoring for this reason. Push is preferred when targets are behind NAT, in ephemeral containers, or in environments where the scraper cannot reach them.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** Cardinality explosion takes down your Prometheus cluster. Walk me through exactly what happens at the data layer.
+
+**Candidate:** Each unique label-set combination creates a new time series. When a developer labels a metric with `user_id`, which has 50 million unique values, they create 50 million new time series instead of one. Each time series requires an entry in the in-memory series index (the inverted label index), a head chunk in the TSDB's memory-mapped WAL, and periodic flushes to disk. At 10,000 bytes per series in memory, 50M series = 500 GB of RAM — the node OOMs immediately. Even before that, the label index construction itself is O(N) per scrape across the unique value set. This is why cardinality is the enemy: it is a memory problem, not a disk problem.
+
+> **Interviewer:** How do you store histograms efficiently? A histogram has many buckets.
+
+**Candidate:** A Prometheus histogram metric emits one time series per bucket boundary — for example, `http_request_duration_seconds_bucket{le="0.1"}`, `{le="0.5"}`, `{le="1.0"}`, plus `_sum` and `_count`. If a histogram has 15 buckets, one histogram metric creates 17 time series. For 1,000 services each emitting 10 histograms, that is 170,000 series just for histograms. To control this: use Native Histograms (Prometheus 2.40+) which store the full histogram as a single time series using a sparse bucket representation — only non-zero buckets are stored, and the resolution is adaptive. This reduces histogram cardinality by 10–20× while improving accuracy for percentile calculations. For existing classic histograms, I enforce a maximum of 10 buckets and use exponentially spaced boundaries rather than linear spacing to cover a wide dynamic range.
+
+> **Interviewer:** A customer says their P99 latency graph in Grafana is wrong. How do you debug it?
+
+**Candidate:** I would work backwards through the pipeline. First, verify the raw data is correct: query the TSDB directly for the histogram `_bucket` series for that service over the time window. If bucket counts are missing or inconsistent, the bug is in collection — either the service stopped emitting, the scrape failed (check `up` metric), or the Ingest Gateway rejected samples (check ingest error rate). Second, verify the PromQL query: `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))` requires a sufficient `rate()` window — if the window is too short relative to the scrape interval, `rate()` returns NaN for sparse buckets. Third, check if Grafana is routing to the wrong tier — if the time range straddles the raw/downsampled boundary, results are mixed. The downsampled tier stores `sum` and `count` but not the histogram buckets needed for quantile reconstruction — this is a known limitation: you cannot compute P99 from downsampled histograms. I would surface this as a Grafana annotation: "data beyond 15 days is unavailable for percentile metrics."
+
+> **Interviewer:** How do you handle a cascading alert storm during an incident — 500 alerts fire at once?
+
+**Candidate:** The Alert Manager's inhibition and grouping rules are the answer. Grouping: alerts with the same `service` and `severity` label are grouped into one notification, regardless of how many individual alerts fire — a single PagerDuty incident rather than 500. Inhibition: a high-severity alert on a core service (e.g., database down) can inhibit dependent downstream alerts (e.g., all services reporting DB connection errors) — this surfaces the root cause rather than the symptoms. Silences: during a known maintenance window, a silence rule suppresses all alerts matching a label selector. For the alert storm scenario specifically, I would also implement alert routing by severity: `critical` alerts page immediately, `warning` alerts are batched and sent every 5 minutes as a digest, `info` alerts go only to a Slack channel. This prevents on-call engineers from being woken up for informational noise during a cascading failure.
+
+---
+
+`Chapter 56 | Section 5: Advanced L5 Systems | Metrics Collection System`

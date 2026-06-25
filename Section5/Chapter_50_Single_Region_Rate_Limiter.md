@@ -3348,3 +3348,151 @@ With 10 nodes and purely local counters, each node enforces the full limit indep
 Truly global consistency requires cross-region coordination, which means at minimum one cross-region round-trip per rate limit check -- typically 50-200ms. That latency is unacceptable for a system that must add under 2ms. The practical answer is: you cannot have both global consistency and low latency for rate limiting. The standard production approach is per-region rate limiting with independent Redis clusters per region. Each region enforces limits locally. If a user routes requests to multiple regions, they could exceed the global limit by the number of regions. For most protection use cases this is acceptable -- you might allow 1.5x the limit globally but you protect each region fully. For billing-accurate global limits, you need eventual consistency: periodically sync regional counters to a global store and apply corrections, accepting that accuracy lags by the sync interval (typically 10-30 seconds).
 
 ---
+
+## Interview Simulation — Single-Region Rate Limiter
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a rate limiter for an API platform.
+
+**Candidate:** A few questions first. Is this rate limiting per user, per IP, per API key, or some combination?
+
+> **Interviewer:** Per user API key. A user gets a quota: 1,000 requests per minute.
+
+**Candidate:** Single region or globally distributed?
+
+> **Interviewer:** Single region for now.
+
+**Candidate:** What should happen when a user exceeds the limit — hard reject with 429, or queue the excess and process later?
+
+> **Interviewer:** Hard reject. What are the trade-offs with queuing?
+
+*(Cross-question: the interviewer tests your depth on the choice.)*
+
+**Candidate:** Queuing seems kinder to users but introduces complexity and unpredictable latency. If I queue excess requests, the queue must be bounded — otherwise a DDoS fills the queue and crashes the system. The queue also changes the latency profile: a user sending a burst gets delayed responses instead of immediate errors, making it harder to debug on the client side. Hard reject with a clear 429 + Retry-After header is operationally simpler and standard for API protection. I'll design for hard reject.
+
+> **Interviewer:** What algorithm would you use?
+
+**Candidate:** Four options: fixed window, sliding window log, sliding window counter, and token bucket. Fixed window is simplest but has a boundary exploit — a user can send 2,000 requests by timing them around the minute boundary. Sliding window log is accurate but memory-intensive at scale. Token bucket is good for burst allowances. I'd use sliding window counter — it approximates a true sliding window at O(1) memory per user, using two adjacent fixed-window counters weighted by overlap. It's the right balance of accuracy and efficiency for 1,000 req/min at scale.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** If the platform has 1M registered users and on average 10% are active at any given minute, that's 100K concurrent users. Each user can send up to 1,000 req/min = ~17 req/sec. At 100K concurrent users: 100K × 17 = 1.7M req/sec sustained. Each rate limit check is one Redis INCR + one read — 2 Redis ops per request. At 1.7M req/sec, I need Redis to handle ~3.4M ops/sec. A single Redis node handles ~100K-200K ops/sec. I'd need a Redis Cluster with at least 20 nodes, sharding by user_id hash.
+
+> **Interviewer:** Are 20 Redis nodes necessary, or are you over-estimating?
+
+**Candidate:** Possibly. 1M users at 10% activity might be generous. At 1% active (10K users × 17 req/sec = 170K req/sec → 340K Redis ops/sec), 2-3 Redis nodes suffice with headroom. I'd start with 3 Redis nodes and auto-scale. The estimation tells me the system scales out horizontally — which is the right architectural conclusion regardless.
+
+---
+
+### Phase 3: API (Middleware Interface — 4 min)
+
+**Candidate:** The rate limiter is middleware, not a user-facing API. It intercepts every request internally:
+
+```
+allow(api_key, limit, window_sec) → (allowed: bool, remaining: int, retry_after_sec: int)
+```
+
+On reject, the gateway returns:
+
+```
+HTTP 429 Too Many Requests
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1703123456
+Retry-After: 23
+```
+
+> **Interviewer:** Why return Retry-After in both a header and X-RateLimit-Reset?
+
+**Candidate:** Different clients parse different conventions. Standard HTTP clients use Retry-After (RFC 7231). SDKs typically parse X-RateLimit-* for finer backoff logic. Returning both maximizes compatibility — it's two extra headers, zero extra latency.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Sliding window counter uses two Redis keys per user per window:
+
+```
+Key:   ratelimit:{api_key}:{window_start_minute}
+Value: INCR counter (integer), TTL = 2 minutes
+
+Algorithm:
+  elapsed  = (now % 60) / 60.0
+  estimate = prev_count × (1 - elapsed) + current_count
+  if estimate >= limit → REJECT
+  else → INCR current window key; ALLOW
+```
+
+> **Interviewer:** Is the INCR + check atomic? What if two requests hit simultaneously?
+
+**Candidate:** Separate GET and INCR would race. I use a Redis Lua script — Redis executes Lua atomically:
+
+```lua
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then redis.call('EXPIRE', KEYS[1], 120) end
+if current > tonumber(ARGV[1]) then return 0 end
+return 1
+```
+
+No race condition possible — INCR and limit check are a single atomic unit.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+Client Request
+      │
+      ▼
+API Gateway
+      │
+      ├── Rate Limiter Middleware
+      │         │
+      │         ├── Redis Cluster (sharded by api_key hash)
+      │         │     within limit  → pass through
+      │         │     over limit    → 429
+      │         │     Redis down    → fail open (configurable)
+      │         │
+      │         └── Config Store (per-user limit tiers)
+      │
+      └── Backend Services
+```
+
+> **Interviewer:** What happens if Redis goes down?
+
+**Candidate:** Fail open (allow requests) or fail closed (429 all). Fail open risks unprotected traffic reaching backends. Fail closed rejects legitimate users during infra failure. I'd fail open for 30-60 seconds with a circuit breaker, then switch to fail closed if outage continues. As a degraded fallback, each gateway node enforces limits locally — accepting over-admission across nodes but protecting backends from complete flooding.
+
+> **Interviewer:** How do you handle users with different rate limits — free vs. paid tier?
+
+**Candidate:** Config Store maps api_key → limit. Rate limiter reads the limit per key, cached for 5 minutes. `allow(api_key, get_limit(api_key), 60)`. Limit changes take up to 5 minutes to propagate — acceptable for tier changes.
+
+> **Interviewer:** What's the Redis memory footprint?
+
+**Candidate:** Two keys per active user, 50 bytes each, 2-min TTL. At 100K active users: 10MB. At 10M active users: 1GB — single Redis node. Memory is not the bottleneck; throughput is.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **"Why not use a database instead of Redis?"**
+
+Database writes for every request add 5-20ms latency — unacceptable for sub-1ms rate limiting. A database also requires locking for atomic increment-and-check. Redis INCR is O(1), in-memory, and atomic. Redis is the right tool here.
+
+> **"How do you handle clock skew across gateway nodes?"**
+
+Window boundaries are `floor(now / 60)`. If one node's clock is 500ms off, it computes a slightly different boundary. At 1,000 req/min, 500ms = ~8 requests of imprecision — acceptable. Use NTP with sub-100ms sync (standard in cloud) or derive timestamps from Redis TIME command for perfect consistency.
+
+> **"How do you test correctness?"**
+
+Unit tests for the sliding window algorithm. Integration tests with real Redis: verify exactly N+1 requests trigger 429. Load tests: 1,000 clients at the limit — verify no over-admission at steady state. Chaos tests: kill Redis mid-test — verify fail-open behavior and no silent request drops.
+
+---

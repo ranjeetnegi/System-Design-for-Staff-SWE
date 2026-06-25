@@ -2122,3 +2122,154 @@ Push notifications are fast but unreliable (the device might be offline). Cursor
 
 **Signal 4: You address storage cost without being asked.**
 The deduplication story is not just about bandwidth (delta sync) — it's also about storage. If a 4 MB image is uploaded by 10,000 users, only 1 copy is stored in S3 (content-addressed, key = SHA-256). The L5 candidate mentions this and the privacy implication (cross-user dedup leaks chunk existence) and the fix (confirm chunk existence only for that user's prior uploads). This shows you understand the second-order consequences of design decisions.
+
+---
+
+## Interview Simulation — File Sync Service (Dropbox)
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a file sync service like Dropbox.
+
+**Candidate:** Before I jump in — a few quick clarifications. First, is this file-level sync (Dropbox model, where the whole file is the unit of change) or real-time collaborative editing like Google Docs? Those are completely different architectures — the latter needs CRDTs or operational transforms.
+
+> **Interviewer:** File-level sync. Dropbox-style.
+
+**Candidate:** Great. Second: do we need sharing with other users, or just personal multi-device sync?
+
+> **Interviewer:** Sharing is in scope. Read and write access.
+
+**Candidate:** Third: version history? And what's the target sync latency — seconds or minutes?
+
+> **Interviewer:** 30 days of version history. Target latency 30 seconds for a change to appear on other devices.
+
+**Candidate:** Got it. Let me state scope: 500M registered users, 50M DAU, desktop and mobile clients, file-level sync with sharing, 30-day version history, 30-second end-to-end sync latency SLA.
+
+Core use cases — P0: upload a changed file and have it appear on all devices within 30 seconds; download latest version on a new device; detect local changes and upload only the delta. P1: share a folder with another user, view version history, restore a previous version, handle offline edit conflicts.
+
+Out of scope: real-time co-editing within a document, full-text search inside files, video transcoding.
+
+*(Cross-question: interviewers often follow up here: "What do you mean by 'only the delta'?" — this probes whether you know chunking before you draw anything.)*
+
+**Candidate:** When a user edits a 10 MB document and changes one paragraph, a naive approach re-uploads the entire 10 MB on every save. Dropbox auto-saves every 30 seconds — that's 10 MB × 2 saves/min × 8 hours = 9.6 GB uploaded per user per day. With 50M DAU that's 480 petabytes per day ingested. Completely infeasible. The fix is chunking: split the file into 4 MB fixed-size chunks, compute SHA-256 per chunk, and on each save only upload the chunks whose hash changed. Changing one paragraph in a 10 MB file (3 chunks) typically changes 1 chunk — 4 MB uploaded instead of 10 MB.
+
+> **Interviewer:** What if the user inserts text at the beginning of a large file?
+
+**Candidate:** That's the boundary-shift problem with fixed chunking — inserting even 1 byte shifts all downstream chunk boundaries, causing every chunk to re-hash and requiring a full re-upload. The production fix is variable-length chunking via Rabin fingerprinting: chunk boundaries are determined by content patterns rather than fixed byte offsets, so an insertion only creates a new boundary near the insert point and the rest of the file reuses existing chunks unchanged. For this interview I'll proceed with fixed 4 MB chunks and call out Rabin as the production improvement.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 50M DAU, 20 file updates per user per day = 1 billion updates per day, or about 11,600 updates per second. Delta sync averages 20% of the file changed per update — roughly 2 chunks per update. Ingest bandwidth: 11,600 × 2 × 4 MB = 92 GB per second at peak. With 70% cross-user deduplication (Dropbox's reported ratio), unique data written is ~28 GB per second.
+
+Storage: 10 billion files, average 500 KB = 5 PB logical. With 5 versions per file and 70% dedup: 5 PB × 5 × 0.30 = 7.5 PB actual storage. Metadata: ~410 bytes per file version, 10B files × 5 versions = 20.5 TB of metadata — needs sharding (8 PostgreSQL shards by user_id, ~2.5 TB each).
+
+Notification fan-out: each upload notifies an average of 2.5 other devices. Shared folders with 1,000 members generate 999 notifications per update — for very large shared folders we'd need a pull-based sync fallback.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Four key endpoints.
+
+`POST /v1/files/chunks/check` — client sends all chunk hashes for the changed file; server returns only the hashes it does not have for this user. This is the delta negotiation step. Max 1,000 hashes per batch to prevent accidental DoS. Privacy note: the server only confirms chunk existence against the requesting user's own prior uploads — never cross-user, to prevent the 2011 Dropbox dedup privacy vulnerability.
+
+`PUT /v1/files/chunks/{sha256_hex}` — upload one chunk, 4 MB max. Idempotent: same hash → same S3 key → no-op write. Returns 409 if the chunk already exists.
+
+`POST /v1/files` — commit metadata after all chunks are uploaded. Request body includes `path`, `chunk_hashes[]`, and `parent_version` (the version the client was editing from). Server uses `parent_version` for conflict detection: if `parent_version` is not the current latest, a conflict copy is created.
+
+`GET /v1/files/changes?cursor=<token>&limit=500` — cursor-based pull for catching up on missed changes. Cursor encodes a sequence ID, not a timestamp, to avoid clock-skew gaps.
+
+> **Interviewer:** Why cursor-based instead of timestamp-based?
+
+**Candidate:** Two reasons. Clock skew: device clocks can differ by minutes, so a timestamp cursor can miss events that happened at nearly the same millisecond. And strict ordering: a `BIGSERIAL seq_id` assigned by the database is strictly monotonic — no two writes share the same seq_id. The cursor approach also naturally handles paging through a large catch-up (e.g., a device offline for a week).
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three core tables. `files`: file_id, owner_user_id (shard key), folder_id, filename, is_deleted, created_at. `file_versions`: file_id, version, chunk_hashes (TEXT[] or a join table), size_bytes, modified_at, device_id, base_version, seq_id (BIGSERIAL for the cursor API). `chunks`: sha256_hex PK, s3_key, size_bytes, ref_count (for GC — delete from S3 when ref_count drops to 0 with a 7-day grace period to avoid a race with new references being added). Plus a `version_chunks` join table in the production DDL that makes ref_count updates easy: decrement for chunks in the old version, increment for chunks in the new version.
+
+Sharding by owner_user_id across 8 PostgreSQL shards. Shared folders span user shards — the `folder_members` table is denormalized so that each user's shard has a copy of the folders they belong to, avoiding cross-shard joins.
+
+One schema callout: `user_quotas` is a separate table from `users`. Quota is updated on every chunk upload (high write frequency); user profile data is low write, high read. Separating them prevents quota writes from blocking auth reads.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:** Here is the full flow.
+
+```
+[Laptop / Desktop Client]          [Mobile Client]
+  File Watcher (FSEvents/inotify)    Event Trigger
+  Debounce 2 seconds                 Debounce 2 seconds
+  Chunk Splitter + SHA-256           Chunk Splitter + SHA-256
+         |                                  |
+         +------------>  API GATEWAY  <------+
+                          (auth, rate limit)
+                         /              \
+              UPLOAD SERVICE       METADATA SERVICE
+              1. check_chunks       file tree
+              2. receive chunks     versions
+              3. commit metadata    sharing perms
+                    |                     |
+               CHUNK STORE          POSTGRES (sharded)
+               (S3, key=SHA-256)    file_versions, chunks
+                    |                     |
+                  KAFKA            <------+
+              (file-sync-events)
+                    |
+         NOTIFICATION SERVICE
+         WebSocket (desktop)
+         APNs / FCM (mobile)
+                    |
+         All connected devices of user + shared-folder members
+```
+
+Upload path: (1) file watcher fires after 2-second quiet period; (2) client splits file into 4 MB chunks, computes SHA-256 per chunk, diffs against local sync state; (3) calls check_chunks — server returns which hashes are missing; (4) uploads only missing chunks via PUT; (5) commits metadata with parent_version for conflict detection; (6) Upload Service publishes to Kafka; (7) Notification Service fans out to other devices via WebSocket or APNs/FCM.
+
+Download path: on receiving a sync notification, client fetches the new chunk_hashes list, diffs against its local cache (which chunks it already has), downloads only the missing chunks from CDN (chunks are immutable and Cache-Control: max-age=31536000), reassembles the file locally.
+
+> **Interviewer:** What happens when two devices edit the same file offline?
+
+**Candidate:** Conflict detection via the `base_version` field. Device A edits from version 4 and commits version 5. Device B was also offline, editing from version 4. When Device B comes online and tries to commit, the server sees `base_version=4` but the current version is 5 — concurrent edit detected. Server applies keep-both strategy: Device A's version 5 stays as the canonical version. Device B's changes become a conflict copy: a new file named "report (Device B's conflicted copy 2024-12-24).docx." Both files are synced to all devices. The user manually merges. No data is lost.
+
+The alternative — last-write-wins on timestamp — is dangerous because device clocks can have minutes of skew, silently discarding the earlier-timestamped edit.
+
+> **Interviewer:** Walk me through the notification architecture. How does Device B know to download the new version?
+
+**Candidate:** Two-path design — push for speed, pull for correctness. Desktop clients maintain a persistent WebSocket to the Notification Service. On each file commit, Upload Service publishes an event to Kafka; Notification Service consumes it, looks up all connected devices for the file's owner and all shared-folder members in Redis (`SMEMBERS user:{user_id}:devices`), and pushes a WebSocket message to connected desktop clients and APNs/FCM to mobile devices.
+
+But push is best-effort. If a device is offline or the WebSocket drops, it may miss the notification. So clients also poll `GET /v1/files/changes?cursor=last_cursor` every 5 minutes as a fallback. The cursor-based API guarantees no missed changes regardless of push delivery. The system is eventually consistent via polling alone even if the entire notification tier is down.
+
+> **Interviewer:** How do you handle large shared folders with 10,000 members?
+
+**Candidate:** At 11,600 file changes per second with 10,000-member folders, that's 116 million notification fan-outs per second — server push cannot scale there. We switch to a pull-first model for large groups: instead of pushing to all 10,000 members, we only push to the top 100 most-active members. The rest rely on the cursor-based polling fallback (5-minute interval). This is the "pull for large groups" threshold — configurable per folder based on member count.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: Why content-addressed storage (key = SHA-256) instead of a path-based key like user_id/filename?**
+
+SHA-256 of the content means two files with identical bytes share a single S3 object. Dropbox reports ~70% dedup ratio across their storage — for a 5 PB logical dataset, only 1.5 PB is physically stored. Path-based keys would store duplicates. The immutability guarantee is also valuable: a chunk stored under its SHA-256 hash never changes, so CDN TTLs can be set to one year (Cache-Control: max-age=31536000). Path-based keys would need short TTLs because the content under the path can change.
+
+*(Cross-question: "What's the privacy risk of content-addressed dedup?")*
+
+Cross-user dedup creates a privacy vulnerability: if the check_chunks API confirms a chunk exists across all users, a malicious user who knows the SHA-256 of another user's file can "add" it to their drive without possessing the bytes. Dropbox was attacked this way in 2011. The fix: check_chunks only returns "already have it" if the requesting user has previously uploaded that chunk themselves. Cross-user dedup still happens at the storage layer, but it is invisible through the API.
+
+**Q: Why are version vectors better than timestamps for conflict detection?**
+
+Timestamps have clock skew — device clocks can differ by minutes, so "the newer timestamp wins" may discard a later-made edit from a device with a fast clock. Version vectors are logical: each device maintains a counter for its own updates, forming a vector like `{laptop: 4, phone: 2}`. Concurrency is detected when neither vector dominates the other — Device A's `{laptop:4, phone:0}` and Device B's `{laptop:3, phone:1}` are concurrent because phone counter: A=0, B=1 and laptop counter: A=4>B=3. No clock skew possible. Dropbox reportedly uses vector clocks for this reason.
+
+**Q: What happens if the Upload Service crashes mid-upload?**
+
+The upload session is stored in Redis with a 24-hour TTL. Each successfully received chunk is tracked (`SET upload_session:{session_id}:chunk:{n} 1 EX 86400`). On client reconnect, it calls `POST /uploads/status?session_id=X` — server returns which chunks were received. Client resumes from the first missing chunk. Since chunks are content-addressed, re-uploading an already-stored chunk is idempotent (same hash → same S3 key → no-op). Zero data loss, zero bandwidth waste on already-uploaded chunks.
+
+**Q: How do you handle quota enforcement atomically?**
+
+Single-statement UPDATE with a WHERE guard: `UPDATE user_quotas SET storage_used = storage_used + $delta WHERE user_id = $uid AND storage_used + $delta <= storage_limit`. `rows_affected = 0` means quota exceeded — the check and update are atomic at the row level. The alternative (SELECT then UPDATE) has a race condition: two concurrent uploads both read 14.9 GB remaining, both decide they fit under 15 GB, and both succeed — overcharging the user's quota by one upload's worth.

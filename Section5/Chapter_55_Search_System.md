@@ -3002,3 +3002,205 @@ Traditional keyword search (BM25) matches exact tokens and their stems. It fails
 *Pairs with Chapter 56 (Metrics Collection) for instrumentation of the search pipeline, and Chapter 85 (Recommendation System) for the two-stage retrieve-then-rank pattern.*
 
 `Chapter 55 | Section 5: Advanced L5 Systems | Search System`
+
+---
+
+## Interview Simulation — Search System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a search system for an e-commerce platform — think something like Amazon product search. Walk me through how you'd approach this.
+
+**Candidate:** Before jumping to solutions, I want to nail down the requirements. A few quick questions. First, what is the primary query type — keyword search, or do we also need semantic/natural-language queries like "warm jacket for cold weather"?
+
+> **Interviewer:** Mostly keyword-based, but relevance matters a lot. Users expect "running shoes nike" to surface Nike running shoes even if the description says "athletic footwear."
+
+**Candidate:** Got it — so we need some query understanding, not just raw keyword matching. Second question: what is the corpus size? Number of products, and how frequently does it change?
+
+> **Interviewer:** About 500 million product listings. New products are added continuously — maybe 100,000 new or updated documents per hour at peak.
+
+**Candidate:** That sets the index-freshness target. Next: search latency — what is the SLA the product team cares about?
+
+> **Interviewer:** P99 under 200 milliseconds at the search API level.
+
+**Candidate:** And query volume?
+
+> **Interviewer:** About 50,000 queries per second at peak — Black Friday type load.
+
+**Candidate:** *(Cross-question: sets the scale so estimation is grounded)* Understood. Last functional requirement: do we need faceted filtering — filter by price range, brand, rating — as part of the same search call?
+
+> **Interviewer:** Yes, filters are critical. At least price range, category, and rating.
+
+**Candidate:** So to summarize: 500M documents, 100K updates/hour, 50K QPS read, P99 200ms, keyword search with relevance ranking, faceted filtering. Out of scope for V1: personalization, ads ranking, image search. Does that match your intent?
+
+> **Interviewer:** Exactly right. Proceed.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Give me a rough sizing.
+
+**Candidate:** Let me work through storage first. An average product document — title, description, attributes — is about 2 KB of raw text. 500M documents × 2 KB = 1 TB of raw data. The inverted index typically runs 3–5× the raw text size due to term dictionaries and posting lists. Call it 4 TB for the full index. With replication factor 3, that is 12 TB of index storage total.
+
+For query throughput: 50K QPS. A single Elasticsearch or Lucene node can handle roughly 1,000–2,000 QPS at P99 < 100ms, depending on query complexity. So I need 25–50 query nodes in a cluster. I would size for 60 nodes to allow for headroom and rolling upgrades.
+
+For index update latency: 100K docs/hour is ~28 docs/second. Near-real-time indexing in Lucene commits every 1 second, so freshness is achievable at sub-minute latency without special architecture. I would target a 30-second freshness SLA.
+
+> **Interviewer:** Good. How large is the term dictionary for 500M documents?
+
+**Candidate:** If we assume 10,000 unique terms per document on average after tokenization and stemming, with significant overlap across documents, the total unique vocabulary is roughly 10–50 million terms. A term dictionary entry is ~50 bytes average. So 50M terms × 50 bytes = 2.5 GB — fits in memory on any modern search node. That is why Elasticsearch keeps the term dictionary in the JVM heap and only hits disk for posting lists.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the search API.
+
+**Candidate:** I'll define the main search endpoint.
+
+```
+POST /v1/search
+{
+  "query": "nike running shoes",
+  "filters": {
+    "category": "footwear",
+    "price_min": 50,
+    "price_max": 200,
+    "rating_min": 4.0
+  },
+  "sort": "relevance",          // or "price_asc", "newest"
+  "page": 1,
+  "page_size": 20
+}
+
+Response:
+{
+  "total_hits": 1842,
+  "took_ms": 38,
+  "results": [
+    {
+      "product_id": "P123",
+      "title": "Nike Air Zoom Pegasus 40",
+      "score": 0.92,
+      "price": 130.00,
+      "rating": 4.7,
+      "highlight": "...best <em>running shoes</em> for..."
+    }
+  ],
+  "facets": {
+    "brands": [{"value": "Nike", "count": 412}, ...],
+    "price_ranges": [{"label": "$50-$100", "count": 203}, ...]
+  }
+}
+```
+
+I am using POST rather than GET because the filter payload can be large and I want JSON body semantics. The `took_ms` field is critical for SLA monitoring. The `highlight` field shows which passage matched — this is Lucene's fragmenter in action. *(Cross-question: interviewer may ask about cursor vs. page pagination)*
+
+> **Interviewer:** Why not cursor-based pagination?
+
+**Candidate:** For deep pagination — beyond page 10 — cursor pagination using a search_after token is better because Elasticsearch can skip directly to the last seen document by sort key, rather than fetching and discarding the first 200 results. For V1 I use page/offset but I would note this as a known limitation and implement search_after for page > 10.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** Walk me through the data model — both the document schema and the index structures.
+
+**Candidate:** The document stored in the index has two layers. First, the indexed fields that go into the inverted index:
+
+- `title` — analyzed with standard tokenizer + lowercase + stemming
+- `description` — analyzed, lower weight in BM25
+- `brand`, `category` — keyword fields, not analyzed, used for exact-match and faceting
+- `tags` — multi-value keyword field
+
+Second, the stored fields returned in results but not used for matching:
+- `price`, `rating`, `image_url`, `created_at`
+
+The inverted index structure for a term like "running": `"running" → [(doc_id: P123, tf: 3, positions: [5,12,40]), (doc_id: P456, tf: 1, positions: [2]), ...]`
+
+The term frequency and field length are stored per document so BM25 can compute scores at query time. Field length normalization is precomputed and stored as a single byte per document per field using a float-to-byte compression.
+
+For faceting, I use doc_values — a columnar store separate from the inverted index. `brand` and `category` are stored in a sorted columnar format so the aggregation engine can collect bucket counts without scanning posting lists. This is why keyword fields in Elasticsearch have `doc_values: true` by default.
+
+> **Interviewer:** How do you handle schema changes — adding a new filterable field?
+
+**Candidate:** In Elasticsearch, you add the field to the mapping and reindex. For 500M documents, a full reindex takes hours. The zero-downtime approach: create a new index with the updated mapping, run the reindex job in the background writing to the new index, and use an alias (e.g., `products_search`) that points to the current live index. Once reindexing completes and you verify document counts, you flip the alias atomically. The old index stays live until you confirm the flip. This is the blue-green deployment pattern applied to search indices.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw out the high-level architecture.
+
+**Candidate:** Here is the full system:
+
+```
+                         ┌─────────────────────────────────────────────┐
+                         │              WRITE PATH                      │
+                         │                                             │
+  Product DB ──CDC──► Kafka Topic ──► Index Workers ──► Elasticsearch │
+  (Postgres)   (Debezium)  (product_events)  (Flink/custom)  Cluster   │
+                                                                        │
+                         └─────────────────────────────────────────────┘
+
+                         ┌─────────────────────────────────────────────┐
+                         │              READ PATH                       │
+                         │                                             │
+  Client ──► API Gateway ──► Query Service ──► ES Coordinator Node    │
+               (rate limit)   (parse, expand,    (scatter-gather)      │
+                              spell-correct)   /         \             │
+                                          Shard 1  ...  Shard N        │
+                                          (each 3-replica)             │
+                         └─────────────────────────────────────────────┘
+
+  Query Service stages:
+  1. Spell correction  (symmetric-delete dictionary, O(1) lookup)
+  2. Query expansion   (synonym file: "shoes" → ["footwear","sneakers"])
+  3. NER              (brand/model detection → boost on brand field)
+  4. BM25 retrieval   (against inverted index on each shard)
+  5. Score merge      (coordinator merges top-K from each shard)
+  6. Re-ranking       (optional: LambdaMART on top-100 candidates)
+```
+
+**Write path in detail:** Debezium tails the Postgres WAL and publishes every product insert/update to a Kafka topic `product_events`. Index Workers consume from Kafka, apply tokenization and field normalization, and call the Elasticsearch bulk API. I batch 500 documents per bulk request to amortize the HTTP overhead — Elasticsearch's bulk API can handle 10MB requests. Kafka consumer groups allow me to scale Index Workers independently.
+
+**Sharding strategy:** I shard by `product_id` hash. This distributes load evenly and avoids hotspots from popular categories. Each shard holds ~5M documents (500M / 100 shards). Each shard has 3 replicas — one primary, two replicas — so any node failure loses no data and queries continue.
+
+**BM25 vs. TF-IDF:** BM25 has two advantages. First, it applies document length normalization — a long product description should not automatically score higher than a short, precise title. The `b` parameter (default 0.75) controls how strongly length is penalized. Second, it caps term frequency via the `k1` parameter (default 1.2) — the 100th occurrence of "running" in a description adds much less score than the 2nd. TF-IDF has no saturation — each additional occurrence linearly increases score.
+
+> **Interviewer:** How do you handle index freshness at 100K updates per hour?
+
+**Candidate:** Lucene's near-real-time (NRT) search works by periodically refreshing the index reader to include newly written segments. By default Elasticsearch refreshes every 1 second — this means a document indexed at T=0 is searchable by T=1s. For our 100K/hour = 28/second rate, this is fine. The trade-off: frequent refreshes create many small segments, increasing merge overhead. I would tune `refresh_interval` to 5 seconds during bulk reindex windows and revert to 1 second for real-time operation. For the update path, I use optimistic concurrency — each document has a `_seq_no`, and I pass it in update requests to prevent stale overwrites from slow Kafka consumers.
+
+> **Interviewer:** How would you handle a query like "red dress under $50"? That has a keyword, an attribute, and a price filter.
+
+**Candidate:** The Query Service NER step detects "red" as a color attribute and "$50" as a price ceiling. It rewrites the query to: BM25 search on "dress" in title/description fields, plus a filter clause `price <= 50`, plus a boost on products where `color_tags` contains "red". In Elasticsearch this is a bool query: `must` clause for BM25 on "dress", `filter` clause for price (filter clauses do not affect scoring and are cached), and `should` clause for the color boost. The `should` clause contributes to score but is not required — so a dress at $45 without explicit color tagging can still appear, just ranked lower than one tagged "red".
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+> **Interviewer:** How do you handle relevance tuning? The product team says results are "not relevant" but can't be more specific.
+
+**Candidate:** I would set up an offline evaluation pipeline using NDCG@10 as the north star metric. Concretely: take the past week of query logs, sample 1,000 representative queries, have human raters label the top-20 results for each as relevant/somewhat-relevant/not-relevant. This gives you a labeled test set. Then you can measure NDCG@10 for the current BM25 model as a baseline. To improve: (1) tune BM25 `k1` and `b` parameters, (2) add field boosts (title match > description match), (3) incorporate behavioral signals like click-through rate as a ranking feature in a LambdaMART re-ranker. Never tune by feel — every change must move NDCG on the held-out test set.
+
+> **Interviewer:** The index is 4 TB. A node dies. How long does recovery take?
+
+**Candidate:** With 3-replica shards, a node failure triggers automatic replica promotion — another replica becomes primary in under 30 seconds, no data loss. The cluster continues serving queries from the remaining replicas. Recovery (restoring the failed node's shards to a new node) depends on replica copy speed: at 1 Gbps network, 4 TB / 3 nodes ≈ 1.3 TB per node, which transfers in about 3 hours. During recovery, the cluster operates at reduced redundancy. Elasticsearch's `delayed_allocation` setting (default 1 minute) prevents unnecessary shard movement if the node comes back up quickly — say, after a network blip.
+
+> **Interviewer:** How do you prevent one bad document from taking down the indexing pipeline?
+
+**Candidate:** The Index Worker wraps each document in a try-catch. A document that fails parsing or field validation is sent to a dead-letter Kafka topic (`product_events_dlq`) rather than retrying indefinitely. This keeps the main consumer lag low. A separate monitoring job reads the DLQ, alerts on volume spikes, and a human reviews the malformed documents. For Elasticsearch bulk API failures (partial failures are returned in the response body — some docs succeed, some fail), the worker parses the response, retries failed docs with exponential backoff for transient errors (429 rate limit, 503), and DLQs permanent errors (400 bad mapping, 413 too large).
+
+> **Interviewer:** How would you add vector/semantic search on top of this system?
+
+**Candidate:** I would use a hybrid retrieval model. On the write path, a model like `sentence-transformers/all-MiniLM-L6-v2` generates a 384-dimensional embedding for each product title+description. These vectors are stored in the same Elasticsearch index using the `dense_vector` field type and indexed with HNSW (Hierarchical Navigable Small World) — this gives approximate nearest-neighbor search at O(log N) with 97%+ recall. On the query path, the Query Service embeds the incoming query using the same model and runs two retrievals in parallel: BM25 for keyword precision, HNSW ANN for semantic recall. The scores are fused using Reciprocal Rank Fusion (RRF) — each document's final rank is `1/(k + rank_bm25) + 1/(k + rank_vector)` where k=60. RRF is robust and requires no score normalization. The result set from both retrievers is merged, deduplicated, and re-ranked. This hybrid approach handles paraphrases and intent queries that pure BM25 misses, while retaining BM25's precision on brand/model exact matches.
+
+---
+
+`Chapter 55 | Section 5: Advanced L5 Systems | Search System`

@@ -1993,6 +1993,239 @@ If you can answer all of these clearly and concisely, you are ready.
 
 ---
 
+## Interview Simulation — Typeahead Autocomplete L5
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a typeahead autocomplete service — like the search suggestions you see in Google Search or Twitter's search box. Walk me through your approach.
+
+**Candidate:** Let me nail down scope before touching data structures. A few questions. What corpus are we completing over — web search queries, usernames, product titles?
+
+> **Interviewer:** Search queries — think Google-style. Suggest the top completions for a prefix typed so far.
+
+**Candidate:** What's the latency target? Autocomplete feels instant below 100ms; above 200ms users notice lag.
+
+> **Interviewer:** Sub-100ms p99 end-to-end from keypress to suggestions displayed.
+
+**Candidate:** How many users, and how many queries per second?
+
+> **Interviewer:** 100 million DAU. Each user averages 5 searches per day, and they type roughly 4 characters per query before selecting. That's ~400 million prefix requests per day.
+
+**Candidate:** How many suggestions to return per prefix?
+
+> **Interviewer:** Top 5 by popularity.
+
+**Candidate:** Is personalization in scope? Meaning, should "apple" show different results for a food blogger vs a tech user?
+
+> **Interviewer:** No personalization. Global popularity ranking only.
+
+**Candidate:** How do we compute popularity — from query logs, or is there a separate signal?
+
+> **Interviewer:** From actual query logs. Recent queries should weight higher than old ones.
+
+**Candidate:** Scope confirmed: prefix-based suggestion of globally popular queries, top-5, sub-100ms p99, no personalization, trending-weighted by recency. Single-region. I'll skip fuzzy matching, multi-language stemming, and spell correction. Good?
+
+> **Interviewer:** Perfect.
+
+*(Cross-question: scope narrowing)* Sub-100ms p99 with 400M requests/day is the design constraint that drives everything — it kills server-side trie traversal at scale and mandates Redis ZSET with in-process LRU.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk me through the numbers.
+
+**Candidate:** Query volume: 100M DAU × 5 searches × 4 keystrokes = 2 billion prefix requests/day = ~23,000 requests/sec average. Peak at 3× = 70,000 requests/sec.
+
+Prefix key space: Google indexes hundreds of billions of queries, but the top 99% of traffic concentrates on a much smaller set. Assume 100 million unique prefixes up to length 20. Each Redis ZSET entry for a prefix stores up to 20 query strings (top-20, prune to top-5 at read time): average entry size 50 bytes × 20 = 1 KB per prefix. 100M prefixes × 1 KB = 100 GB of Redis ZSET data. Needs a 5-node Redis Cluster with 24 GB RAM each, plus 20% headroom.
+
+Update frequency: query logs batch-aggregated every 5 minutes. 5M new queries per minute, top-K extraction per prefix, ZSET updates. This is offline/near-real-time batch — not per-user write path.
+
+> **Interviewer:** Why batch every 5 minutes instead of updating Redis on every search?
+
+**Candidate:** Per-search updates would mean 23,000 ZADD operations/sec hitting Redis from production traffic, competing with reads. Batch aggregation amortizes this: aggregate counts in a Count-Min Sketch over 5-minute windows, extract top-K per prefix once, batch-update Redis with the deltas. 23K writes/sec → one batch job every 5 minutes. Read latency is unaffected. The tradeoff is 5-minute staleness for trending queries — acceptable since autocomplete suggestions don't need second-level freshness.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Show me the API.
+
+**Candidate:** One primary endpoint — query suggestions by prefix.
+
+**Autocomplete suggestions:**
+```
+GET /autocomplete?q=app&limit=5
+Response: {
+  query: "app",
+  suggestions: [
+    { text: "apple", score: 9823041 },
+    { text: "apple store", score: 7234109 },
+    { text: "appleton", score: 3421007 },
+    { text: "apple id", score: 2891203 },
+    { text: "apple music", score: 2104382 }
+  ],
+  latency_ms: 4
+}
+```
+
+The `score` is the normalized popularity weight — a function of raw query frequency and recency decay. Clients display it as rank, not as the raw number.
+
+**Trending prefix update (internal, batch job calls this):**
+```
+POST /internal/prefixes/{prefix}/suggestions
+Authorization: Internal-Token
+Body: { suggestions: [ { text, score }, ... ] }
+Response: 204
+```
+
+> **Interviewer:** Should the client debounce keystrokes before calling the API?
+
+**Candidate:** Yes. The client should debounce at ~100ms — only fire the API call if the user pauses typing for 100ms. Without debounce, a user typing "apple" fires 5 API calls (a, ap, app, appl, apple) in 500ms. With 100ms debounce, they fire 1-2 calls for typical typing speed. This reduces server QPS by ~80% with zero user-visible impact. The UI should also cancel any in-flight request when the user types another character — you only want the result for the latest prefix, not for intermediate ones that arrive out of order.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What's the data model?
+
+**Candidate:** Three layers: Redis ZSETs for hot prefix-to-suggestion mapping, in-process LRU cache at each API server, and a query log aggregation pipeline (Kafka + batch compute).
+
+**Redis ZSET — prefix suggestions:**
+```
+Key:   prefix:{prefix_text}  e.g. prefix:app
+Type:  Sorted Set
+Score: popularity score (float, higher = more popular)
+Value: full query text  e.g. "apple", "appleton"
+TTL:   24 hours (refreshed on each batch update)
+```
+
+Example Redis commands:
+```
+ZADD prefix:app 9823041 "apple"
+ZADD prefix:app 7234109 "apple store"
+ZREVRANGE prefix:app 0 4 WITHSCORES  ← top 5 by score
+```
+
+**In-process LRU cache (per API server instance):**
+```
+Capacity:  10,000 prefix entries (covers top 10K most-typed prefixes)
+TTL:       60 seconds (stale entries refresh from Redis)
+Key:       prefix text (normalized: lowercase, trimmed)
+Value:     List<Suggestion>  (pre-serialized JSON, ready to return)
+```
+At 70K req/sec across 20 API server instances, each handles 3,500 req/sec. With an in-process cache hit rate of ~80% for top prefixes, only 700 req/sec per server hit Redis — well within Redis Cluster capacity.
+
+**Count-Min Sketch — trending detection:**
+```
+Width:  2,000 counters × 5 hash functions
+Window: 5-minute tumbling window
+Purpose: estimate frequency of each query prefix without O(N) exact counting
+```
+
+> **Interviewer:** Why Count-Min Sketch instead of an exact HashMap for counting?
+
+**Candidate:** At 23K queries/sec over 5 minutes, an exact HashMap tracking every unique query would accumulate ~7M unique queries. At 50 bytes per entry, that's 350 MB in RAM per aggregation window — and the HashMap grows with cardinality. Count-Min Sketch uses fixed memory (2,000 × 5 × 4 bytes = 40 KB) regardless of how many unique queries arrive. The tradeoff is overcount bias — the estimate is always ≥ true count, never under. For top-K extraction this is acceptable: popular queries remain at the top even with slight overcount. Rare queries are overestimated but never promoted to top-5 since their true count is orders of magnitude lower than popular ones.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the full system.
+
+**Candidate:**
+
+```
+  User keystroke: "app"
+       │  (debounced 100ms)
+       ▼
+  API Server (20 instances, stateless)
+       │
+       ├── L1: In-process LRU Cache (10K prefixes, 60s TTL)
+       │        │ HIT (80%): return immediately < 1ms
+       │        │ MISS (20%):
+       │        ▼
+       ├── L2: Redis Cluster (ZREVRANGE prefix:app 0 4)
+       │        │ HIT (99%): < 5ms round-trip
+       │        │ MISS (1%): return empty or fallback
+       │        ▼
+       └── Response: top-5 suggestions
+
+                    TRENDING UPDATE PIPELINE
+  User queries
+       │
+       ▼
+  Query Log Service ──► Kafka topic: query.events
+                              │
+                        Flink/Spark Streaming (5-min windows)
+                              │  Count-Min Sketch per prefix
+                              │  Extract top-20 per prefix
+                              ▼
+                        Redis Updater (batch job)
+                              │
+                    ZADD prefix:{p} {score} {text} × top-20
+                    EXPIRE prefix:{p} 86400
+                              │
+                    Shadow namespace swap
+                    (write to prefix_v2:* → atomic RENAME → prefix:*)
+
+  Double-buffer swap:
+  ┌─────────────────────────────────────────────────────────┐
+  │  Batch job writes to prefix_staging:{p}                │
+  │  After all writes done: RENAME prefix_staging:{p}      │
+  │                              → prefix:{p}              │
+  │  Atomic at Redis level — readers never see partial data│
+  └─────────────────────────────────────────────────────────┘
+```
+
+**Candidate:** The two key design decisions are in-process LRU and double-buffer swap.
+
+**In-process LRU.** At 70K req/sec, even 5ms Redis latency means each API server thread spends time waiting on Redis. With an in-process LRU (e.g., Caffeine cache in Java, or a dict+deque in Python), the top 10,000 prefixes are served from L1 heap in under 0.1ms. The top 10,000 prefixes typically account for 80%+ of traffic due to the power-law distribution of what users type. Cache size: 10,000 entries × 1 KB = 10 MB per server — negligible JVM heap. TTL 60 seconds means at worst 60-second staleness for trending updates, which is acceptable.
+
+**Double-buffer swap.** The batch job takes 30 seconds to write all 100M prefix ZSETs. If we update prefix keys live during that window, readers see partially-updated data — a prefix that was updated shows new scores while its parent prefix still shows old scores. Fix: write all updates to `prefix_staging:*` keys. After all writes complete, the job runs a Lua script that atomically renames each key: `RENAME prefix_staging:app prefix:app`. Redis RENAME is O(1) and atomic — readers always see either the full old version or the full new version, never a half-written state.
+
+> **Interviewer:** What if a very popular query emerges in the last 5 minutes — a breaking news event? Can users see it in autocomplete within a minute?
+
+**Candidate:** With 5-minute batch windows, no — there's up to 5 minutes of lag. For truly real-time trending, add a fast path: a lightweight in-memory Count-Min Sketch running on the query log stream, flushing its top-K deltas to Redis every 30 seconds. This creates two ZSET keys per prefix: `prefix:app` (batch, stable) and `prefix_trending:app` (streaming, volatile). At query time, the API server does a weighted merge: `ZUNIONSTORE` with weights 0.7 (batch) and 0.3 (trending), take top-5. This is a Staff-level addition — for L5, the 5-minute batch window is the expected answer.
+
+> **Interviewer:** How do you handle a user typing in uppercase or with leading spaces?
+
+**Candidate:** Normalize at the API server before all lookups: lowercase, strip leading/trailing whitespace, collapse internal runs of spaces to single space, strip non-alphanumeric except hyphens. This normalization also runs at index time when the batch job processes query logs — ensuring `Apple`, `apple`, and `  apple ` all map to the same prefix key `apple`. The normalization function must be identical in both the serving path and the indexing path, otherwise you get cache misses for queries that were typed differently than they were indexed.
+
+> **Interviewer:** What is `MAX_PREFIX_LENGTH` and why does it matter?
+
+**Candidate:** Typically 20 characters. If a user types 30 characters, you only compute and cache prefixes up to length 20. Beyond 20 characters, the query is almost certainly a long-tail unique string with no popular completions — returning an empty suggestion list is correct. This bounds your key space: with 26^20 theoretical combinations you'd never pre-index all possible prefixes. In practice, you only store prefixes that appear in actual query logs above a minimum frequency threshold (say, 100 occurrences/day). Rare prefixes are evicted from Redis and return empty results — graceful degradation, not an error.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+*(Cross-question: Trie vs Redis ZSET)*
+> **Interviewer:** Classic textbooks use a Trie for prefix search. Why Redis ZSET instead?
+
+**Candidate:** Tries are excellent for in-process prefix lookups — O(L) where L is prefix length, memory-efficient with shared prefixes. The problem is distribution: a single Trie is an in-memory data structure on one machine. Serving 70K req/sec from one process requires 70K concurrent reads, which means locking contention or copy-on-write. Redis ZSET scales horizontally across a Cluster and is accessed by multiple stateless API servers with no shared state. Trie also stores all suffixes, making updates expensive: inserting a new popular query requires traversing to its node and updating scores on the path. Redis ZADD is O(log N) per update. For a production service with 100GB of prefix data, Redis wins operationally. Trie wins for embedded search (mobile app local suggestions, IDE symbol completion).
+
+*(Cross-question: cache stampede)*
+> **Interviewer:** The in-process LRU expires a hot prefix entry. 3,500 concurrent requests for that prefix hit Redis simultaneously — is that a problem?
+
+**Candidate:** That's a cache stampede. Fix with probabilistic early expiration: instead of expiring at exactly 60 seconds, each request checks `remaining_ttl < 10s AND random() < 0.1` — 10% of requests refresh the cache proactively while it's still valid. By the time the entry expires, it's already been refreshed. Alternatively, use a read-lock per cache key: when an entry is missing, one goroutine fetches Redis while others wait on a condition variable. The "lock+single fetch" pattern is common in Caffeine (Java) and is called "cache loading." For autocomplete, probabilistic early expiration is simpler and avoids lock contention.
+
+*(Cross-question: blocklist)*
+> **Interviewer:** How do you prevent offensive or trademarked terms from appearing in autocomplete?
+
+**Candidate:** Apply the blocklist at batch time, not at query time. The batch job that extracts top-K per prefix checks each candidate query against a blocklist set (stored in Redis as a SET, `SISMEMBER blocklist {text}`). Blocked terms are simply excluded from the top-K before writing to the prefix ZSET. Blocklist updates trigger a re-run of the affected prefix batch jobs. Applying the blocklist at query time would add a Redis lookup on every single suggestion result — 5 lookups per suggestion × 70K req/sec = 350K extra Redis ops/sec. Batch-time filtering is free at serving time.
+
+*(Cross-question: prefix key explosion)*
+> **Interviewer:** For a query "hello world", how many prefix keys do you write?
+
+**Candidate:** Depends on whether you support mid-string prefix matching or only leading-prefix. For leading-prefix only (industry standard for search bars), you write: `h`, `he`, `hel`, `hell`, `hello`, `hello `, `hello w`, `hello wo`, `hello wor`, `hello worl`, `hello world` — 11 keys, one per character in the normalized query, up to MAX_PREFIX_LENGTH. For each key, you ZADD this query as a candidate. This is why the key space grows to 100M prefixes — 100M unique queries × average 10 prefixes each / de-duplication factor ≈ 100M total keys. At MAX_PREFIX_LENGTH=20, you never write more than 20 keys per query, which bounds the fan-out.
+
+---
+
 <!-- END OF CHAPTER 75 -->
 <!-- Total parts: 15 + Exercises + Homework + Interview Self-Check -->
 <!-- Line count target: 2,000+ lines -->

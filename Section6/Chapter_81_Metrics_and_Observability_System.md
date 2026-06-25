@@ -5146,3 +5146,238 @@ All code examples in this chapter use language-agnostic pseudo-code:
 7. Study the common L5 mistakes section to avoid interview pitfalls
 
 ---
+## Interview Simulation — Metrics and Observability (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a metrics and observability platform for a large engineering organization. Where do you start?
+
+**Candidate:** A few questions that will change the architecture substantially.
+
+Is this an internal platform serving our own engineering teams, or a product (like Datadog) serving external customers? Internal platforms have different governance models—I can enforce cardinality limits via policy; external products need different controls.
+
+What's the scale? Number of services, metrics per service, time-series cardinality, query patterns?
+
+What types of signals? Metrics alone, or the full observability stack: metrics + traces + logs? The Staff-level answer usually involves all three and the linking between them (exemplars).
+
+What's the retention and downsampling story? Raw 10-second data forever is expensive. Most orgs want raw for 15 days, 1-minute rollups for 90 days, 1-hour rollups for 2 years.
+
+Who owns cost governance? This is the politically sensitive question. High-cardinality labels are usually created by individual teams who don't pay the storage bill. The platform team needs a mechanism to charge back or enforce limits without becoming a bottleneck.
+
+> **Interviewer:** Internal platform, 1,000 microservices, 500M time-series, traces + metrics + logs, you own cost governance. Three regions.
+
+**Candidate:** 500M time-series is the cardinality number that shapes everything. That's well past what a single Prometheus instance can handle—we're in Thanos or Cortex / Mimir territory, or Clickhouse for long-term storage. The cost governance problem is real: at 500M series, a single team adding a high-cardinality label (like `user_id` or `request_id` to a metric) can double the entire org's storage bill overnight. I need enforcement mechanisms, not just guidelines. Let me size it.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk through the numbers.
+
+**Candidate:** 500M active time-series. Each data point: 8 bytes value + 8 bytes timestamp = 16 bytes. At 15-second scrape intervals: 500M × 4 samples/min × 60 min × 24 hours = 2.88 trillion samples/day. At 16 bytes each: 46 TB/day raw.
+
+That's too expensive for raw retention. With compression (Gorilla / XOR encoding is typical in Prometheus, achieves ~1.5 bytes/sample): 46 TB × (1.5/16) ≈ 4.3 TB/day compressed. Over 15 days: ~65 TB for raw tier.
+
+After downsampling to 1-minute resolution: 12x compression → ~5 TB/day. 90 days: 450 TB.
+
+Hourly for 2 years: 24x further reduction → ~200 GB/day. 2 years: ~150 TB.
+
+Total storage across tiers: ~670 TB. Spread across 3 regions with replication: ~2 PB. This is consistent with what orgs of this size actually spend on observability.
+
+Query throughput: 1,000 services × 5 dashboards × 10 panels = 50,000 active dashboard panels, each refreshing every 30 seconds = ~1,700 QPS to the query layer.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the platform API look like?
+
+**Candidate:** Four surfaces: ingest, query, alert management, and governance.
+
+```
+// Ingest (Prometheus remote_write compatible)
+POST /api/v1/push
+Headers: X-Tenant-ID, X-Service-ID
+Body: prometheus.WriteRequest (protobuf)
+Rate limit: per-service, enforced at ingestion
+
+// Query (PromQL-compatible)
+GET  /api/v1/query?query={promql}&time={unix}
+GET  /api/v1/query_range?query={promql}&start=&end=&step=
+// Extended: exemplar query (metrics → traces)
+GET  /api/v1/query_exemplars?query={promql}&start=&end=
+
+// Alert management
+POST /api/v1/alerts/rules          → create alerting rule
+GET  /api/v1/alerts/rules/{id}     → get rule + SLO burn rate state
+POST /api/v1/alerts/silences       → create silence
+
+// Governance API
+GET  /api/v1/cardinality/top?service_id=   → top-N cardinality contributors
+POST /api/v1/cardinality/limits            → set per-service cardinality quota
+GET  /api/v1/cost/attribution?period=      → per-team cost breakdown
+```
+
+The governance API is what makes this Staff-level. Without it, the platform devolves into a tragedy of the commons—every team adds labels they want, the platform team scrambles to add capacity, and no one has visibility into who's responsible for the cost.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model time-series data and its metadata?
+
+**Candidate:** Three storage layers with different access patterns:
+
+**Time-series data (Cortex/Mimir or ClickHouse):**
+```
+// Chunk store (object storage, e.g., S3)
+Key: {tenant_id}/{metric_name}/{label_hash}/{time_range_block}
+Value: compressed chunk (Gorilla encoding)
+
+// Index (Cassandra or DynamoDB)
+metric_index {
+  tenant_id:    string
+  metric_name:  string
+  label_set:    map<string, string>
+  series_id:    int64
+  first_seen:   timestamp
+  last_seen:    timestamp
+  chunk_refs:   []string    // S3 keys
+}
+```
+
+**Exemplars (linking metrics → traces):**
+```
+exemplars {
+  series_id:    int64
+  timestamp:    unix_ms
+  trace_id:     string      // Jaeger/Zipkin trace ID
+  span_id:      string
+  value:        float64
+  labels:       map<string, string>
+  TTL:          24 hours    // exemplars are short-lived
+}
+```
+
+**Cardinality metadata (for governance):**
+```
+series_budget {
+  service_id:   string
+  budget:       int64       // max active series allowed
+  current:      int64       // current active series
+  alert_at:     float64     // fraction (e.g., 0.8 = alert at 80%)
+  block_at:     float64     // fraction (e.g., 1.0 = block at 100%)
+  top_labels:   []LabelCardinality  // updated hourly
+}
+```
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Walk me through the full architecture.
+
+**Candidate:**
+
+```
+PRODUCERS (1,000 services)
+  │  Prometheus client libraries
+  │  OTLP exporter (metrics + traces + logs)
+  ▼
+[Ingest Gateway]
+  │  auth, tenant routing, cardinality enforcement
+  │  rejects series over budget (429 with cardinality report)
+  ▼
+[Write Path]
+  ├──► [Distributor] (consistent hash → ingester)
+  │         │
+  │    [Ingesters] (in-memory WAL + chunk write)
+  │         │
+  │    [Compactor] ──► [Object Store (S3)] ──► [Chunk Cache (Memcached)]
+  │
+  └──► [Trace Collector (Jaeger/Tempo)]
+  └──► [Log Aggregator (Loki)]
+
+[Query Path]
+  [Query Frontend] (caching, query splitting by time range)
+      │
+  [Querier] (fan-out to ingesters + object store)
+      │
+  [Ruler] (evaluates alerting rules every 15s)
+      │
+  [Alertmanager] (deduplication, routing, silencing)
+
+[Governance Layer]
+  [Cardinality Analyzer] ──► updates series_budget hourly
+  [Cost Attribution Service] ──► per-team cost report
+  [Anomaly Detector] ──► flags sudden cardinality spikes
+```
+
+**Cardinality enforcement at ingestion:** The ingest gateway checks the per-service cardinality budget before accepting new series. New series are identified by their label fingerprint—if the fingerprint isn't in the active series set and the service is at budget, the sample is dropped and a counter `observability_dropped_samples_total{reason="cardinality_limit"}` is incremented. The service owner gets an alert. This is the critical enforcement point—putting it at ingestion means the storage tier never sees illegal series.
+
+**SLO burn rate alerting:** The ruler evaluates multi-window burn rate alerts. A 1-hour burn rate of 14.4x (consuming 14.4x the allowed error budget per unit time) combined with a 5-minute burn rate of 14.4x triggers a page. Single window alerts have high false positive rates at short windows and slow detection at long windows. Multi-window eliminates both problems. The ruler pre-computes burn rates as recorded rules (materializing them as time-series) to avoid recomputing expensive queries at alert evaluation time.
+
+**Exemplar linking:** Every service emits exemplars on high-latency requests: a sample value (e.g., request duration = 450ms) tagged with the trace ID of the request that caused it. The platform stores exemplars with a 24-hour TTL. A dashboard panel showing the 99th percentile latency metric can click through to a specific trace that was at that latency. This is the metrics → traces link that makes the observability stack closed rather than three separate tools.
+
+**Retention tiering and downsampling:** A background compactor runs every hour. It reads raw chunks from object storage, computes 1-minute aggregates (min/max/sum/count/p50/p90/p99), and writes them to the "medium-resolution" tier. At 90 days, another compactor produces hourly aggregates. The query frontend automatically routes to the appropriate tier based on the query time range. Queries spanning more than 15 days use the downsampled tier transparently.
+
+> **Interviewer:** A team deploys a new service and accidentally adds `user_id` as a metric label. Cardinality explodes from 10K to 50M series overnight. What happens?
+
+**Candidate:** *(Cross-question: cardinality incident response)*
+
+With the enforcement model I described, this scenario is partially contained but I want to walk through the full event:
+
+T+0: Service deploys. First scrape arrives at the ingest gateway with `user_id` labels. The gateway sees 10,000 new series in the first minute (as unique user IDs appear in requests). The cardinality anomaly detector flags a >100x growth rate for this service.
+
+T+1 min: The cardinality analyzer fires an alert to the service team and the platform team. The alert includes the top cardinality contributor label (automatically: `user_id`).
+
+T+5 min: If the service hasn't responded, the ingest gateway automatically throttles new series creation for this service to 1,000 new series/hour (the "cardinality circuit breaker"). Existing series continue to ingest. No new `user_id` values are accepted.
+
+T+10 min: The service team gets paged. They fix the label definition and redeploy. Within 2 hours, the stale `user_id` series fall out of the active series set via TTL. The storage impact is bounded to ~5M series × 2 hours × 4 samples/min × 16 bytes ≈ 4 GB. Recoverable.
+
+Without the circuit breaker: unconstrained, this would have created 50M series in ~12 hours, consuming ~200 GB/day of additional storage. At org scale, a cardinality incident like this can cost $50K/month in incremental storage.
+
+> **Interviewer:** How do you run this across three regions with consistent SLO burn rate alerts?
+
+**Candidate:** *(Cross-question: multi-region)*
+
+Two options: federated or centralized query with replicated data.
+
+I use a federated model with global aggregation. Each region runs its own Mimir/Thanos cluster and evaluates its own alerts for region-local services. Services that operate globally (API gateway, CDN edge) emit metrics to all three regions.
+
+For global SLOs, I run a global query tier: a Thanos Query component that federates queries across all three regional Thanos Stores. Global SLO dashboards query this federated layer. Global alerting rules run on a dedicated global ruler that reads from the federated query layer.
+
+The consistency trade-off: regional data is available in ~15 seconds (scrape interval). Cross-region replication adds ~200ms. For SLO burn rate alerts with a 1-hour window, 200ms latency is irrelevant. For real-time dashboards, we show per-region data directly from the regional tier and reserve the global view for SLO reporting.
+
+Cross-region alert deduplication: the Alertmanager clusters in each region sync state via the mesh gossip protocol. If the same alert fires in all three regions (e.g., global service degradation), only one page is sent to the on-call engineer, with all three regions noted in the alert annotation.
+
+> **Interviewer:** Build vs. buy—why not just use Datadog or New Relic?
+
+**Candidate:** *(Cross-question: build vs. buy)*
+
+For 90% of companies: buy Datadog. The operational overhead of running Mimir/Thanos at scale is significant, and Datadog's cost is predictable and often cheaper than the engineering time to maintain the platform.
+
+At 500M time-series with internal cost governance requirements: the math changes. Datadog charges per custom metric per host. At 500M series, Datadog's pricing would be approximately $2-5M/month depending on tier and negotiation. Running Mimir on object storage costs approximately $50-100K/month in infrastructure (S3 + compute). The $2M/month delta justifies a 10-person platform team.
+
+The other factor is governance. Datadog gives you visibility into cardinality but doesn't let you enforce quotas or automatically throttle teams. An internal platform can enforce standards programmatically. For an org with 1,000 services and no internal chargeback model, that enforcement is the difference between a $2M/year observability bill and a $20M/year one.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle the "observability of observability" problem—what if the metrics platform itself is the thing that's broken?**
+
+The platform has a dedicated self-monitoring tier that's architecturally separate from the main cluster. The ingest gateway, distributors, and ingesters emit their own metrics to a small, independent Prometheus instance (not Mimir) that a different team operates. This Prometheus is intentionally simple and cheap—no high cardinality, no complex queries. If the main cluster is down, this small Prometheus still shows the health of the ingest pipeline. Separately, we use synthetic monitoring: a canary service emits known metrics on a fixed schedule; if those metrics don't arrive in the main cluster within 60 seconds, an external monitoring service (PagerDuty Healthchecks, or a Pingdom equivalent) fires an alert.
+
+**Q: A developer asks why their latency P99 metric looks wrong. How do you debug it?**
+
+First question: is the metric wrong at the producer (client library), at ingestion (scrape or remote_write), or at query time (PromQL evaluation bug)? I walk through each layer. Check the raw metric via the service's `/metrics` endpoint—does the histogram show the right buckets and counts? Check the ingestion lag metric—is the platform dropping samples for this service? Check the PromQL query—`histogram_quantile` is notoriously easy to get wrong (using the wrong `le` label or wrong rate window). Nine times out of ten, the bug is in the query, not the platform. I'd use the exemplar link to find a trace that corresponds to the high P99 and verify whether the actual latency matches the metric—that end-to-end verification closes the loop.
+
+**Q: How do you enforce cardinality limits without making the platform team a bureaucratic bottleneck?**
+
+Self-service with automated guardrails. Every service gets a default budget (100K active series for a typical microservice, 1M for high-traffic services). Teams can request increases via a Terraform module—no human approval needed if the increase is under 10x and the service has a nominated cost owner. Over 10x requires a 5-minute async review from the platform team (a Slack approval, not a meeting). The cardinality analyzer generates a weekly per-team cost report that goes to engineering managers—this creates social pressure without requiring the platform team to police individuals. Most teams self-correct when they see their cost attribution.
+

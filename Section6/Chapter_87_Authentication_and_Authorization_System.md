@@ -4195,3 +4195,194 @@ SCOPE BOUNDARIES (intentional, not gaps):
 → HSM operational details infrastructure-specific
 ```
 
+
+## Interview Simulation — Authentication and Authorization System (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, build-vs-buy.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design an authentication and authorization system for a large enterprise SaaS platform — 50M end users, 500 microservices, multi-tenant (each company is a tenant with their own roles and permissions).
+
+**Candidate:** A few clarifying questions. First — authorization model: do tenants need custom permission models, or is a fixed RBAC schema (roles per tenant) sufficient? Second — service-to-service auth: are internal microservices already on a shared network, or do they need mutual authentication? Third — token lifetime: how strict is the security requirement — short-lived JWTs that require frequent refresh, or longer-lived tokens acceptable?
+
+> **Interviewer:** Tenants need custom roles AND some tenants have hierarchical resource ownership (folders containing projects containing resources). Service-to-service needs mutual auth — the network is not trusted. JWTs: 15-minute access tokens, 24-hour refresh tokens. Security team requirement, non-negotiable.
+
+**Candidate:** The hierarchical resource ownership immediately tells me RBAC alone won't work. We need ReBAC — relationship-based access control (like Google Zanzibar). That's a significantly more complex authorization system. Let me scope: I'll design the auth system (AuthN — token issuance, refresh, rotation) and the authorization system (AuthZ — Zanzibar-style policy evaluation). mTLS for service-to-service. OPA for policy-as-code at the service layer. Non-goals: SAML/OIDC federation with external identity providers (I'll note the extension point), MFA enrollment flow (I'll assume it exists).
+
+*(Cross-question: RBAC vs ReBAC)*
+> **Interviewer:** Why is hierarchical ownership a problem for RBAC?
+
+**Candidate:** In pure RBAC, permissions are assigned to roles, roles to users. To grant a user "editor" access to a folder and have that propagate to all projects inside the folder and all resources inside those projects, you'd either: (a) enumerate every resource explicitly — doesn't scale, breaks when new resources are added, or (b) re-check the entire hierarchy on every authorization call — slow and complex. ReBAC models this natively: "User A has editor on Folder 1" and "Project X is in Folder 1" — the authorization engine traverses the relationship graph to determine that A has editor on Project X transitively. Google Zanzibar handles 10 trillion relationships this way. It's the right tool for hierarchical multi-tenant resource ownership.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 50M users, 500 services. Authorization calls: every API request triggers an authZ check. Assume 10 requests/user/day → 500M authZ calls/day → ~6K authZ QPS steady, 30K QPS peak. Each authZ call must be <10ms P99 to not blow up service latency. Relationship data: 50M users × avg 10 role assignments × 3 resource levels = 1.5B relationship tuples. At ~100 bytes per tuple → 150GB. This fits in a distributed cache (Spanner or a Redis Cluster) but is too large for a single node. JWT validation is CPU-bound (RSA-256 signature verification) — benchmark ~0.5ms per validation, so 30K QPS needs ~15 CPU cores dedicated to JWT validation. That's a single auth service cluster, easily manageable.
+
+*(Cross-question: estimation)*
+> **Interviewer:** The authorization data is 150GB. How do you serve 30K QPS at <10ms?
+
+**Candidate:** Three-layer caching. L1: in-process cache in each microservice (LRU, ~10K entries, 1ms lookup) — handles repeated checks for the same user within the same service instance. L2: distributed cache (Redis) shared across service instances — handles authZ for recently active users across the cluster, ~5ms lookup. L3: Zanzibar-style authorization service with its own in-memory relationship graph — full consistency, ~8ms. Cache hit rate on L1+L2 is typically >90% for active sessions, so P99 stays well under 10ms. Cache invalidation trigger: any role assignment change emits an event to Kafka; each service subscribes and purges affected cache entries.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:**
+
+```
+// AuthN: Token issuance
+POST /v1/auth/token
+  body: { grant_type: password|refresh_token|client_credentials,
+          credentials: {username, password} | {refresh_token} | {client_id, client_secret} }
+  → { access_token (JWT), refresh_token, expires_in: 900, token_type: Bearer }
+
+// AuthN: Token rotation (refresh)
+POST /v1/auth/token/refresh
+  body: { refresh_token }
+  → { access_token, refresh_token (rotated), expires_in: 900 }
+  // Old refresh_token is immediately invalidated (rotation prevents replay)
+
+// AuthZ: Policy check (called by services, or via OPA sidecar)
+POST /v1/authz/check
+  body: {
+    subject: { user_id | service_id },
+    resource: { type: folder|project|resource, id, tenant_id },
+    action: read | write | delete | admin
+  }
+  → { allowed: bool, reason: "direct_role" | "inherited" | "policy_rule" | "denied",
+      decision_id: <uuid> }   // for audit trail
+
+// Service identity (mTLS — certificate issued by internal CA)
+POST /v1/certs/issue
+  body: { service_name, namespace, ttl: 24h }
+  → { certificate (PEM), private_key (PEM), ca_chain }
+```
+
+> **Interviewer:** Why does the authZ check return `reason` and `decision_id`?
+
+**Candidate:** Observability and compliance. `reason` allows the calling service to log why access was granted — critical for security audits ("why did user X access resource Y?"). `decision_id` ties the authorization decision to a specific point-in-time snapshot of the policy and relationship graph — if policy changes after the fact, you can still reconstruct what was true at decision time. This is a compliance requirement for SOC 2 and GDPR — demonstrating that access decisions were made under documented policies.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three stores:
+
+**Identity Store**
+```
+users: { user_id, tenant_id, email, password_hash (bcrypt), mfa_enabled,
+         created_ts, last_login_ts, status: active|suspended }
+```
+PostgreSQL per-tenant shard (tenant isolation) or a shared DB with tenant_id as partition key.
+
+**Relationship Store (Zanzibar tuples)**
+```
+relation_tuples: {
+  namespace: "folder" | "project" | "resource",
+  object_id,
+  relation: "owner" | "editor" | "viewer" | "parent",
+  subject: user_id | group_id | "namespace:object_id#relation"  // userset
+}
+```
+The last subject form is the key to inheritance: "Project X's editors = Folder 1's editors" is expressed as `project:X#editor → folder:1#editor`. Spanner (for global consistency) or CockroachDB. Indexed on `(namespace, object_id, relation)` and `(subject)` for bidirectional traversal.
+
+**Token Store (refresh token tracking)**
+```
+refresh_tokens: { token_hash, user_id, device_id, issued_ts, expires_ts, revoked: bool }
+```
+Redis with TTL = 24h (automatic expiry). On rotation: old token marked revoked, new token inserted. On logout: token marked revoked.
+
+**Audit Log (append-only)**
+```
+{ decision_id, subject, resource, action, allowed, reason, policy_version, ts }
+```
+Kafka → BigQuery. Never deleted. Used for compliance reporting.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** The system splits into AuthN and AuthZ planes:
+
+```
+                    AUTHENTICATION PLANE
+  Client (user or service)
+          |
+          v
+  [Auth Service]  (stateless, horizontally scaled)
+    - Validates credentials
+    - Issues JWT (RS256, signed with private key from KMS)
+    - Issues refresh token (stored hash in Redis)
+          |
+          v
+  JWT payload: { sub: user_id, tenant_id, exp, iat, jti (unique id) }
+  Signed with RSA private key → services verify with public key (JWKS endpoint)
+
+  [JWKS Endpoint]  GET /.well-known/jwks.json
+    → public key set (cached by services for 5min)
+    // Key rotation: new key added to JWKS, old key removed after 15min (JWT lifetime)
+
+                    AUTHORIZATION PLANE
+  Service receives request with JWT
+          |
+    ┌─────┴──────────────────┐
+    v                        v
+  [OPA Sidecar]           [Zanzibar AuthZ Service]
+  (policy-as-code          (relationship graph traversal)
+   evaluation)                      |
+    |                         [Relationship Store]
+    |                         (Spanner/CockroachDB)
+    └───────────┬─────────────┘
+                v
+          { allowed: bool }
+
+
+                    SERVICE-TO-SERVICE mTLS
+  [Internal CA]  (certificates issued to each service)
+    Service A                    Service B
+    cert: service-a.internal     cert: service-b.internal
+    |                            |
+    └──── mTLS handshake ────────┘
+          (mutual cert verification)
+    After handshake: Service A's identity is verified;
+    AuthZ check: "can service-a call service-b/endpoint?"
+    → OPA policy: service_acl rules
+```
+
+**JWT rotation at org scale:**
+The auth service signs JWTs with an RSA private key stored in KMS. The corresponding public key is published at the JWKS endpoint. When we rotate the signing key: (1) generate new key pair in KMS, (2) add the new public key to JWKS (both old and new are now valid), (3) start signing new JWTs with the new key, (4) wait 15 minutes (JWT lifetime) — all old JWTs expire naturally, (5) remove old public key from JWKS. This is zero-downtime rotation. The `kid` (key ID) claim in the JWT header tells verifiers which public key to use — they fetch the key set once and cache it, checking the `kid` on each JWT.
+
+**OPA (policy as code) integration:**
+Each microservice runs an OPA sidecar. Policies are defined in Rego and stored in a policy registry (Git-backed). OPA pulls policy updates every 30 seconds. A policy defines: "service X with role editor can call POST /documents/{id}". This decouples policy from code — a security team member can update a policy without a code deploy. Policy changes are reviewed in Git (PR process), and the OPA sidecar maintains a versioned bundle so rollback is instant.
+
+**RBAC vs ABAC vs ReBAC decision framework:**
+RBAC: user has role, role has permissions. Good for: simple org structures, <100 permission types. ABAC: policy evaluated against attributes (user.department == resource.department). Good for: dynamic policies based on metadata, no need to enumerate all possible relationships. ReBAC: permission derives from relationships in a graph. Good for: hierarchical resources, sharing models (Google Drive), multi-tenant with custom resource trees. For this system: RBAC for flat tenant-level roles (admin, member, viewer), ReBAC for resource hierarchy traversal, ABAC for cross-cutting policies (e.g., "users can only access resources in their geographic region").
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: centralized vs per-service auth)*
+> **Interviewer:** Should every service call the central AuthZ service on every request, or should services make local decisions?
+
+**Candidate:** Hybrid model. For coarse-grained checks (is this user authenticated? what is their tenant?), the JWT carries the answer — verified locally by each service using the public key. No network call needed, sub-millisecond. For fine-grained checks (does this user have editor access to this specific resource?), the service calls the AuthZ service (or OPA sidecar, which caches the relationship graph locally). The OPA sidecar approach is the best of both worlds — it's a local process call (<1ms) with a stale-allowed-with-refresh policy (policy updates every 30 seconds). The central AuthZ service is the source of truth for relationship data; the OPA sidecar is a read-through cache with 30-second staleness tolerance.
+
+*(Cross-question: mTLS at scale)*
+> **Interviewer:** Managing certificates for 500 services sounds like an operational nightmare. How do you scale this?
+
+**Candidate:** SPIFFE/SPIRE — the industry standard for workload identity at scale. Each service gets a SPIFFE identity (`spiffe://company.internal/ns/payments/sa/payment-service`) tied to its deployment identity (Kubernetes service account, not a human). The SPIRE agent running on each node issues short-lived x.509 SVIDs (certificates) that auto-rotate every hour. No human ever touches private keys. The control plane (SPIRE server) is the only component that needs HSM protection. This eliminates certificate management toil — 500 services is handled the same as 50. The operational complexity shifts from "managing 500 certificate files" to "running a reliable SPIRE deployment," which is a solved problem.
+
+*(Cross-question: migration path)*
+> **Interviewer:** We have 500 services currently using API keys for auth. How do you migrate to JWT + mTLS without a big-bang cutover?
+
+**Candidate:** Strangler fig migration in three phases. Phase 1 (weeks 1–4): Deploy the Auth Service. Run it in parallel. Existing API key validation continues to work. New services use JWT from day one. Phase 2 (weeks 5–16): For each existing service, add a middleware layer that accepts BOTH API keys and JWTs. The middleware validates whichever is presented. Services migrate one-by-one (tracked on a migration dashboard). No service is forced to migrate immediately. Phase 3 (week 17+): After 90% of services have migrated, set a sunset date for API key support. The remaining 10% get engineering support to migrate. On the sunset date, API key validation is disabled. The key principle: never make a migration that requires all 500 services to change simultaneously. The dual-acceptance window is the migration path.
+
+*(Cross-question: multi-region)*
+> **Interviewer:** Your Zanzibar authorization service lives in us-east-1. A user in Europe queries an EU service. The authZ call crosses the Atlantic — how do you fix that?
+
+**Candidate:** Geo-replicated relationship store. Zanzibar uses a global consistent store (Google uses Spanner globally). For a self-hosted deployment, I'd use CockroachDB with nodes in each region. AuthZ service instances are deployed in each region and read from the local Spanner/CockroachDB follower. For reads, the authZ service uses stale reads (up to 10 seconds stale) from the local replica — 10 seconds of stale authZ data is acceptable for permission changes (there's a human in the loop making that change). Writes (role assignments) go to the global leader. This gives sub-5ms authZ latency in all regions, with the trade-off that a permission revocation takes up to 10 seconds to propagate globally. For immediate revocation (e.g., account compromise), we push an invalidation event to all regions' local caches, bypassing the stale read window.

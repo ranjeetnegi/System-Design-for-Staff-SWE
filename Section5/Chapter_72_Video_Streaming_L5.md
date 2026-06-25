@@ -1997,6 +1997,252 @@ at the Staff level.
 
 ---
 
+## Interview Simulation — Video Streaming L5
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a video streaming platform — something like YouTube or Netflix. Where would you like to start?
+
+**Candidate:** I want to nail down scope before touching architecture. A few questions. Is this upload-and-watch (VOD), or are we including live streaming?
+
+> **Interviewer:** VOD only. Assume uploads from creators, playback for viewers.
+
+**Candidate:** Good. Rough scale — how many daily active viewers, and how many videos get uploaded per day?
+
+> **Interviewer:** 50 million DAU for playback. About 500,000 video uploads per day. Average upload is 500 MB.
+
+**Candidate:** Are we targeting global delivery or single-region for now?
+
+> **Interviewer:** Single-region is fine. Don't worry about multi-DC or DRM for this session.
+
+**Candidate:** Great. So my scope: upload pipeline with async transcoding, HLS/DASH adaptive bitrate delivery, CDN-backed playback, and metadata storage separate from media storage. I'll skip live streaming, DRM, and recommendations. Does that match what you want?
+
+> **Interviewer:** Exactly right. Go ahead.
+
+**Candidate:** One more — latency target for playback start?
+
+> **Interviewer:** Under 2 seconds to first frame. Smooth playback at varying network speeds.
+
+**Candidate:** Perfect. That drives the ABR design and CDN strategy. I'll revisit after estimation.
+
+*(Cross-question: scope confirmation)* Always restate scope as a sentence so the interviewer can correct misunderstandings early. Saves 20 minutes of designing the wrong thing.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk me through the numbers.
+
+**Candidate:** Starting with storage. 500,000 uploads per day × 500 MB raw = 250 TB raw/day. After transcoding into 6 renditions (240p, 360p, 480p, 720p, 1080p, 1440p) at roughly 2× expansion factor, call it 500 TB/day. At 30-day retention for hot content, that's ~15 PB in object storage. Fine for S3-class systems.
+
+Bandwidth for playback: 50M DAU, assume each watches 40 minutes/day, average bitrate 2 Mbps. 50M × 40 min × 60 s × 2 Mbps / 8 = ~30 PB/day egress. That's 3.5 GB/s average, peaking at 3× = ~10 GB/s. You cannot serve that from a single origin; CDN is mandatory.
+
+Write throughput for uploads: 500K uploads/day = ~6 uploads/sec. Each triggers one transcoding job. Workers need to handle bursting — assume 10× peak = 60 concurrent transcoding jobs.
+
+> **Interviewer:** Why 10× burst headroom for transcoding?
+
+**Candidate:** Upload patterns are bursty — primetime creators and batch schedulers hit the same window. If you size for average (6/sec), a 10× spike fills the queue instantly and latency blows out. 60 concurrent workers with auto-scaling keeps p99 transcode lag under 30 minutes.
+
+*(Cross-question: estimation sanity check)* These numbers are back-of-envelope. The key insight is CDN is non-negotiable at this scale, and object storage is the right tier for media blobs — no database can absorb 500 TB/day of binary writes.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Show me the key APIs.
+
+**Candidate:** Three surfaces: upload, playback, and metadata.
+
+**Upload flow:**
+```
+POST /videos
+Body: { title, description, content_type }
+Response: { video_id, presigned_upload_url, expires_at }
+```
+The client uploads directly to S3 using the presigned URL. The API server never touches the bytes — it just creates the metadata record and returns a short-lived signed URL (15-minute expiry). After the upload completes, S3 fires an event notification that enqueues the transcoding job.
+
+**Playback manifest:**
+```
+GET /videos/{video_id}/manifest
+Response: 302 redirect to CDN URL for .m3u8 (HLS) or .mpd (DASH) manifest
+```
+The manifest file lists all renditions with their chunk URLs. The video player parses this and chooses bitrate via ABR logic on the client.
+
+**Metadata fetch:**
+```
+GET /videos/{video_id}
+Response: { title, description, duration, thumbnail_url, status, created_at }
+```
+Status field: `uploading → processing → ready → failed`. Client polls or uses SSE to detect when processing is done.
+
+> **Interviewer:** Why redirect instead of returning the CDN URL directly?
+
+**Candidate:** Indirection. The redirect response comes from our API, which can enforce auth, geo-restrictions, and signed URL expiry. The CDN URL itself can be time-limited. Direct embedding of CDN URLs in API responses couples the client to CDN topology, making key rotation painful.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does your data model look like?
+
+**Candidate:** Two completely separate storage tiers — metadata in PostgreSQL, media blobs in object storage (S3). Never mix them.
+
+**PostgreSQL — `videos` table:**
+```
+video_id      UUID PRIMARY KEY
+user_id       UUID NOT NULL
+title         TEXT
+description   TEXT
+status        ENUM('uploading','processing','ready','failed')
+duration_sec  INT
+raw_s3_key    TEXT   -- s3://raw-bucket/video_id/original.mp4
+created_at    TIMESTAMPTZ
+updated_at    TIMESTAMPTZ
+```
+
+**PostgreSQL — `renditions` table:**
+```
+rendition_id  UUID PRIMARY KEY
+video_id      UUID FK → videos.video_id
+resolution    TEXT   -- '1080p', '720p', etc.
+bitrate_kbps  INT
+s3_key        TEXT   -- s3://transcoded-bucket/video_id/1080p.m3u8
+codec         TEXT   -- 'h264', 'av1'
+status        ENUM('pending','encoding','done','failed')
+```
+
+**S3 object layout:**
+```
+raw-bucket/
+  {video_id}/original.mp4
+
+transcoded-bucket/
+  {video_id}/master.m3u8      ← HLS master manifest
+  {video_id}/1080p/
+    seg000.ts, seg001.ts, ...  ← 6-second TS segments
+  {video_id}/720p/
+    seg000.ts, ...
+```
+
+> **Interviewer:** Why split raw and transcoded into separate S3 buckets?
+
+**Candidate:** Different lifecycle policies. Raw files are expensive and needed only once — you keep them 30 days for re-transcode and then move to Glacier or delete. Transcoded segments are served continuously and benefit from S3 Transfer Acceleration and CloudFront integration. Mixing them in one bucket makes IAM policies, lifecycle rules, and cost attribution messy.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the system.
+
+**Candidate:**
+
+```
+                          UPLOAD PATH
+  Creator
+    │
+    ▼
+  API Server ──► PostgreSQL (video record, status=uploading)
+    │  presigned URL
+    ▼
+  S3 Raw Bucket ──► S3 Event Notification
+                          │
+                          ▼
+                    SQS Transcode Queue
+                          │
+                    ┌─────┴──────┐
+                    │  Transcode │ × N workers (EC2 Auto Scaling)
+                    │   Workers  │  ffmpeg: 6 renditions × HLS segments
+                    └─────┬──────┘
+                          │
+                    S3 Transcoded Bucket
+                          │
+                    Update PostgreSQL (status=ready)
+
+                         PLAYBACK PATH
+  Viewer
+    │
+    ▼
+  API Server ──► PostgreSQL (fetch video metadata)
+    │  302 redirect to CDN
+    ▼
+  CloudFront CDN ──(cache miss)──► S3 Transcoded Bucket
+       │
+       ▼ (cache hit, ~95% of requests)
+  Video Player
+       │  ABR: pick 1080p → 720p → 480p based on bandwidth
+       ▼
+  HLS segments (.ts files, 6 seconds each)
+```
+
+**Candidate:** Let me walk through the transcoding pipeline in detail since that's the hardest part.
+
+When S3 receives the raw upload, it fires an event to an SQS queue. A pool of EC2 transcode workers polls the queue. Each worker runs `ffmpeg` to produce 6 renditions. For a 10-minute video at 6-second segments, that's 100 segments × 6 renditions = 600 `.ts` files plus 7 manifest files (1 master `.m3u8` + 6 child `.m3u8`). Workers write segments directly to the transcoded S3 bucket using multipart upload for large files. On completion, the worker updates the `renditions` table and sets `videos.status = ready`.
+
+> **Interviewer:** How does the viewer's player choose which bitrate to play?
+
+**Candidate:** ABR — Adaptive Bitrate Rate. The master `.m3u8` manifest lists all renditions with their declared bandwidth. Example:
+
+```
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080
+1080p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720
+720p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480
+480p/index.m3u8
+```
+
+The player starts at a mid-tier rendition (720p), measures download speed for each segment, and adjusts up or down. If a 6-second segment takes 3 seconds to download, available bandwidth = segment_size / 3 seconds. The player compares this against rendition bandwidths and switches. This is all client-side logic — the server just serves static files.
+
+> **Interviewer:** Where does CDN caching fit in, and what's the cache hit rate?
+
+**Candidate:** CloudFront sits in front of the transcoded S3 bucket. Cache keys are the full S3 path including `video_id` and segment filename. TTL on `.ts` segments is 30 days — they're immutable once written. TTL on `.m3u8` manifests is 5 minutes because a video in `processing` state will update its manifest as renditions complete.
+
+Expected cache hit rate: ~95% for popular content. Cold cache on a newly uploaded video will miss until the first viewer warms it. For the long tail (videos watched once), cache hit rate is low — those requests fall through to S3, which is fine since S3 can absorb the load.
+
+> **Interviewer:** What happens if a transcode worker crashes mid-job?
+
+**Candidate:** SQS visibility timeout handles this. The message stays invisible during processing (say, 30 minutes). If the worker crashes, the visibility timeout expires, the message reappears in the queue, and another worker picks it up. The worker writes segments to a `video_id/transcode-attempt-{n}/` prefix, and only on full completion does it atomically update PostgreSQL and rename the prefix. This makes the operation idempotent — a restarted job just overwrites the previous incomplete attempt.
+
+> **Interviewer:** How do you handle the 2-second time-to-first-frame SLO?
+
+**Candidate:** Three levers. First, serve the manifest from CDN (warm), not origin — that's ~5ms instead of ~100ms. Second, use pre-positioned CDN edge nodes: the manifest redirect uses GeoDNS to route to the nearest CloudFront PoP. Third, the first segment of each rendition is pre-fetched by the CDN during transcoding via a warmup API call that fires after `status=ready`. So when the first viewer hits the video, the first few segments are already cached at edge. Together these reliably keep TTFF under 2 seconds on a 10+ Mbps connection.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+*(Cross-question: presigned URL expiry)*
+> **Interviewer:** What if the creator takes 20 minutes to upload and the presigned URL expires?
+
+**Candidate:** The client detects the 403 from S3 and calls `POST /videos/{id}/refresh-upload-url`. The API server validates the video is still in `uploading` status and issues a new presigned URL. The client resumes with S3 multipart upload — it keeps the `UploadId` and just continues adding parts. No re-upload from the start.
+
+*(Cross-question: metadata vs blob storage)*
+> **Interviewer:** Could you store video metadata in the same S3 bucket as a sidecar JSON file instead of PostgreSQL?
+
+**Candidate:** You could, but you lose queryability. With PostgreSQL you can do `WHERE status = 'processing' AND created_at > now() - interval '1 hour'` to find stuck jobs. With S3 sidecar files you'd need S3 Select or a full bucket scan. PostgreSQL also gives you atomic updates — setting `status=ready` and inserting rendition rows in one transaction. S3 has no transactions. Use the right tool: structured queryable metadata belongs in a relational DB.
+
+*(Cross-question: ABR ladder)*
+> **Interviewer:** When would you add AV1 to the codec ladder?
+
+**Candidate:** When storage and egress costs matter more than encoding cost. AV1 achieves ~30% better compression than H.264 at equal quality, which directly reduces CDN egress bills at this scale — 30% of 30 PB/day = 9 PB/day savings. The tradeoff is encode time: AV1 is 10-20× slower than H.264. Strategy: encode H.264 immediately for fast availability, then enqueue a lower-priority AV1 job. Once AV1 renditions are ready, swap the manifest. New viewers get AV1; old sessions continue on H.264.
+
+*(Cross-question: thumbnail generation)*
+> **Interviewer:** How would you generate thumbnails?
+
+**Candidate:** Piggyback on the transcode worker. After the main renditions complete, the worker runs `ffmpeg -ss 10 -vframes 1` to extract a frame at 10 seconds (or multiple frames for animated previews), writes the JPEG to S3 under `thumbs/{video_id}/default.jpg`, and updates `videos.thumbnail_url`. No separate system needed — thumbnails are a side effect of the transcode job.
+
+*(Cross-question: stuck job detection)*
+> **Interviewer:** How do you detect a video stuck in `processing` for 6+ hours?
+
+**Candidate:** A background cron job (runs every 15 minutes) queries: `SELECT video_id FROM videos WHERE status = 'processing' AND updated_at < now() - interval '6 hours'`. For each result, re-enqueue the SQS message with a `retry_count` attribute. After 3 retries, set `status = failed` and alert on-call via PagerDuty. The cron also emits a `transcode_stuck_count` metric to CloudWatch for dashboard visibility.
+
+---
+
 <!-- END OF CHAPTER 72 -->
 <!-- Line count target: 2,000+ lines -->
 <!-- Scope: L5 single-region VOD. Skip: DRM, live, multi-DC. Staff version: Ch100. -->

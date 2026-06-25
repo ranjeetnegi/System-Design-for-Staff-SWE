@@ -5395,3 +5395,223 @@ All code examples in this chapter use language-agnostic pseudo-code:
 8. Practice the brainstorming questions to anticipate follow-ups
 
 ---
+
+## Interview Simulation — API Gateway and Edge Routing (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design an API gateway and edge request routing system. Where do you start?
+
+**Candidate:** Several questions will fundamentally shape this.
+
+Single-tenant or multi-tenant? If this gateway serves multiple teams' APIs (internal platform), I need per-tenant rate limiting, per-tenant auth configuration, and blast-radius isolation between tenants. If it's single-tenant, the design is simpler.
+
+Where does it sit? Edge PoP (closest to users, CDN-like), regional (per-datacenter), or both? Edge compute for latency-sensitive operations (auth token validation, request routing) versus regional for API logic is a real architectural decision.
+
+What are the primary responsibilities? Auth and authN enforcement, rate limiting, routing, request/response transformation, traffic splitting (A/B, canary), or all of the above?
+
+What's the scale? Requests per second, number of upstream services, number of registered API routes?
+
+What's the deployment model for the gateway itself? How do we do zero-downtime upgrades of the gateway—it's in the critical path for every user request.
+
+> **Interviewer:** Multi-tenant, 100 teams, edge + regional, 500K RPS peak, 2,000 registered routes, blue/green gateway deployment required, mTLS for service-to-service.
+
+**Candidate:** Multi-tenant at 100 teams with per-tenant rate limiting is the hard governance problem. At 500K RPS, we can't afford per-request database lookups for rate limit state—it must be approximate and local. The blue/green gateway deployment with zero traffic disruption is interesting—I'll detail a specific migration strategy in Phase 5. mTLS for service-to-service means the gateway is also the mTLS termination point for internal traffic. Let me size it.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk through the numbers.
+
+**Candidate:** 500K RPS peak. Average request processing at the gateway: auth validation (JWT, ~1ms), rate limit check (local token bucket, ~0.1ms), routing lookup (trie, ~0.1ms), proxy to backend (~5ms network). Total gateway overhead: ~1.5ms.
+
+Gateway throughput: a modern Go or Rust gateway (Envoy, NGINX, or custom) handles ~50K-100K RPS per instance on 8 vCPUs. At 500K RPS with 3x headroom: 15-20 gateway instances per region, behind a hardware load balancer (AWS ALB or GCP Cloud Load Balancer).
+
+Rate limit state: token bucket per tenant per route. 100 tenants × 2,000 routes = 200,000 rate limit buckets. Each bucket: 32 bytes (current tokens + last_refill_time + config). 200K × 32 bytes = 6.4 MB. Fits in memory per gateway instance. Local-first rate limiting with periodic sync to Redis for cross-instance accuracy.
+
+TLS termination: 500K RPS × 2 KB average payload = 1 GB/s. At edge PoPs, TLS termination is hardware-accelerated (AWS Nitro, GCP Titanium). Per-PoP bandwidth is typically 10-100 Gbps, so no bottleneck.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the gateway's management API look like?
+
+**Candidate:** Two surfaces: the control plane API (for configuring the gateway) and the data plane (what clients call through the gateway).
+
+```
+// Control plane API (for 100 teams to register their routes)
+POST /admin/v1/tenants                  → register tenant, get tenant_id + API key
+POST /admin/v1/routes                   → register route
+Body: {
+  tenant_id, path_pattern, methods,
+  upstream_url, timeout_ms,
+  auth_policy: {type: JWT|mTLS|API_KEY, config},
+  rate_limit: {rpm, burst, per: TENANT|USER|IP},
+  retry_policy: {attempts, backoff_ms},
+  circuit_breaker: {threshold, window_s}
+}
+PATCH /admin/v1/routes/{route_id}       → update route (propagated to data plane within 5s)
+GET   /admin/v1/tenants/{id}/metrics    → per-tenant request/error/latency stats
+
+// Traffic splitting (canary/blue-green)
+POST /admin/v1/routes/{route_id}/splits
+Body: {
+  variants: [{upstream_url, weight_percent}]
+  // e.g., [{url: "v1.svc", weight: 90}, {url: "v2.svc", weight: 10}]
+}
+
+// Data plane (what clients call — no special API, just HTTP through the gateway)
+// Headers injected by gateway:
+// X-Request-ID:    uuid (generated at edge)
+// X-Tenant-ID:     from auth token
+// X-Forwarded-For: client IP
+// X-B3-TraceId:    distributed trace ID
+```
+
+The control plane API is eventually consistent with the data plane. Route changes propagate within 5 seconds via a push channel (same pattern as feature flags). The gateway data plane never calls the control plane on the hot path.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model routes and rate limit state?
+
+**Candidate:** Two stores:
+
+**Route configuration (PostgreSQL + local cache):**
+```
+routes {
+  route_id:         uuid
+  tenant_id:        uuid
+  path_pattern:     string      // e.g., "/api/v2/users/{id}"
+  methods:          []string
+  upstream_url:     string
+  priority:         int         // for overlapping pattern resolution
+  auth_policy:      jsonb
+  rate_limit_config: jsonb
+  circuit_breaker:  jsonb
+  traffic_splits:   jsonb       // [{upstream, weight}]
+  version:          int64       // for delta sync to data plane
+  updated_at:       timestamp
+}
+```
+
+**Rate limit state (local memory + Redis for sync):**
+```
+// In-memory per gateway instance (hot path):
+rate_limit_state {
+  bucket_key:   string  // "{tenant_id}:{route_id}:{window}"
+  tokens:       float64
+  last_refill:  int64   // unix_ms
+}
+
+// Redis (for cross-instance accuracy, updated every 100ms):
+Key: rl:{tenant_id}:{route_id}
+Value: {consumed_tokens: int, window_start: unix_ms}
+TTL: 2 × window_duration
+```
+
+**mTLS certificate store (for service-to-service):**
+```
+service_certs {
+  service_id:   string    // SPIFFE SVID format: spiffe://cluster/ns/svc
+  cert_pem:     text
+  valid_until:  timestamp
+  fingerprint:  string
+}
+// Auto-rotated by SPIRE, pushed to gateway via SPIFFE Workload API
+```
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Walk me through the complete architecture.
+
+**Candidate:**
+
+```
+INTERNET
+  │
+  ▼
+[Edge PoPs — 20 locations globally]
+  │  TLS termination, JWT validation (local public key cache)
+  │  IP-based rate limiting, geo-routing
+  │  mTLS origination for internal traffic
+  ▼
+[Regional API Gateway — 3 regions]
+  │
+  ├── [Control Plane]                    ├── [Data Plane (hot path)]
+  │   PostgreSQL (route config)          │   In-memory route trie
+  │   Config push service (SSE)          │   Local rate limit buckets
+  │   Admin API                          │   mTLS client pool
+  │                                      │   Circuit breakers per upstream
+  │                                      │   Traffic split state
+  ▼                                      ▼
+[Internal Services via mTLS]        [Redis — rate limit sync]
+  service-A, service-B, ...              (cross-instance consistency)
+
+[Blue/Green Gateway Deployment]
+  Blue cluster (current)  ←── 100% traffic
+  Green cluster (new)     ←── 0% traffic (warm but idle)
+  Traffic controller      ←── shifts traffic 5% increments
+```
+
+**Multi-tenant per-tenant isolation:** Each tenant has an isolated virtual routing table. A request arrives at the gateway with a `tenant_id` (extracted from JWT or API key). The route lookup first narrows to that tenant's route set. Rate limit buckets are per-tenant, preventing one tenant's traffic burst from consuming another tenant's quota. Circuit breakers are per-tenant-upstream pair—if Tenant A's backend degrades, it doesn't open the circuit breaker for Tenant B's backend (even if they use the same upstream service).
+
+**Rate limiting with local-first accuracy:** The local token bucket gives sub-millisecond rate limit decisions. The trade-off: across 20 gateway instances, each has an independent view. If the limit is 1,000 RPS, 20 instances will each allow up to 1,000 RPS = 20,000 actual RPS. This ±10-20x overage is acceptable for most API rate limits (which are set conservatively). For tenants with strict SLA-backed rate limits (e.g., billing-sensitive quotas), we use a "sync on excess" model: the instance tracks its local consumption and syncs with Redis every 100ms. If the Redis aggregate shows the tenant is over quota, the instance switches to Redis-validated mode until the window resets. This adds ~1ms latency only for the over-quota case.
+
+**Blue/green gateway deployment:** The gateway is the most critical piece of infrastructure—every user request flows through it. Blue/green avoids the risk of rolling deploys where some instances run old code and some run new code simultaneously (which can cause inconsistent behavior for stateful connections).
+
+The deployment sequence: bring up the Green cluster with the new gateway version. Run synthetic traffic through Green (our canary test suite: 10,000 representative requests across all registered routes). If error rate < 0.01% and P99 < 105% of Blue's P99, start traffic shift. Shift 1% of traffic to Green. Hold for 5 minutes. If stable: 5%, 10%, 25%, 50%, 100%. Each step has an automatic rollback trigger: if Green's error rate exceeds Blue's by more than 0.1%, traffic reverts to Blue immediately (the traffic controller updates the ALB weights via API). Total rollout: 45 minutes for a healthy deployment.
+
+For WebSocket and long-lived connections: we drain Blue gracefully. The traffic controller stops sending new connections to Blue. Existing WebSocket connections are maintained on Blue until they naturally close or until a 30-minute drain deadline, whichever comes first. After 30 minutes, Blue sends a `Close` frame to remaining connections with a reconnect hint. Clients reconnect to Green.
+
+**mTLS for service-to-service:** The gateway issues mTLS connections to internal services using SPIFFE SVIDs. When a request arrives at the gateway and is routed to `service-A`, the gateway presents its own SVID as the client certificate. Service-A's Envoy sidecar validates the SVID against the SPIRE trust bundle. This means service-A only accepts connections from the gateway (or other authorized services), not from arbitrary clients that bypassed the gateway. The SVID is short-lived (24 hours) and auto-rotated by SPIRE—no manual certificate management.
+
+> **Interviewer:** 100 teams, all registering routes, versioning APIs. How do you prevent the API versioning chaos?
+
+**Candidate:** *(Cross-question: API versioning governance)*
+
+Three policies enforced by the gateway's control plane. First, mandatory versioning: routes must include a version segment in the path (`/v{N}/...`). The gateway rejects route registrations without a version prefix. This is enforced at registration time, not as a convention.
+
+Second, version deprecation lifecycle: when a team wants to retire a version, they set `deprecation_date` on the route. The gateway automatically injects a `Deprecation` header on responses from deprecated routes. 90 days before the deprecation date, it also injects a `Sunset` header per RFC 8594. After the sunset date, the gateway returns 410 Gone. This is automated—no human has to remember to remove old routes.
+
+Third, cross-team contract reviews: route registration for any new major version triggers a 24-hour review window visible to all teams in a shared Slack channel. This is not an approval gate—it's a notification. If another team's SDK will break because of the new API version, they have 24 hours to file an objection. This low-friction process has surfaced more breaking changes than formal API review processes at prior companies.
+
+> **Interviewer:** Your gateway is handling edge compute—running small pieces of auth logic at PoPs. How do you deploy new logic to 20 PoPs atomically?
+
+**Candidate:** *(Cross-question: edge compute deployment)*
+
+We use WebAssembly (WASM) modules deployed via the control plane push channel. Auth logic, request transformation, and routing decisions are compiled to WASM. The control plane stores WASM modules in object storage; when a module is updated, it pushes the new version hash to all PoP data plane processes via the same SSE channel used for route config.
+
+Each PoP data plane pre-fetches and validates the new WASM module before switching. The switch is atomic per-process: a single Lua-level pointer swap (in NGINX+WASM) or a goroutine-safe swap (in Go-based gateways). There's no partial state between old and new module.
+
+Rollout is staged by PoP region: update 2 PoPs in a low-traffic region (e.g., Southeast Asia) first. Monitor for 30 minutes. Then roll to all PoPs. If any PoP reports an error rate spike, the control plane automatically rolls back that PoP to the previous module hash within 60 seconds. The previous module is always kept in object storage for 7 days.
+
+The constraint: WASM modules cannot have external state (no database calls, no HTTP calls from within the module). They receive the request context and return routing decisions. This keeps edge logic fast (<1ms) and stateless.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle cascading failures—one slow upstream service causing the gateway to accumulate threads/connections and eventually fall over?**
+
+Three mechanisms. Circuit breakers per upstream: if error rate exceeds 50% in a 10-second window, open the circuit and return 503 immediately (no connection attempts) for 30 seconds. This prevents thread accumulation. Timeout budgets: every request has a total budget (e.g., 5 seconds). The gateway sets a `Grpc-Timeout` or `X-Request-Deadline` header when proxying to upstreams, and aborts upstream connections that exceed the remaining budget. This prevents "half-open" connections from accumulating. Request queuing with backpressure: the gateway maintains a bounded queue per upstream. When the queue is full (upstream is overloaded), new requests to that upstream receive 429 immediately—the gateway signals overload to callers rather than absorbing it. Callers can retry with exponential backoff.
+
+**Q: A new team joins and wants to add their API to the gateway in 30 minutes. What's the self-service experience?**
+
+They run `gateway-cli register --tenant my-team --upstream https://my-service.internal`. The CLI: validates mTLS certificate for their service identity (from SPIRE), creates a tenant record in the control plane, generates a default rate limit configuration based on their tier (free tier: 100 RPS; standard: 1,000 RPS; custom: via quota request), deploys the route configuration to the data plane within 5 seconds. The team gets back their API key and a test command to verify routing works. Total time: under 2 minutes. No platform team involvement. The 30-minute estimate was already pessimistic.
+
+**Q: You need to support GraphQL subscriptions (WebSockets) alongside REST. Does the gateway handle both?**
+
+Yes, but with awareness of the operational differences. REST is stateless—any gateway instance handles any request. WebSockets are stateful—a connection persists to one gateway instance for its lifetime. This means WebSocket connections must be pinned: the load balancer uses source IP + port hash to consistently route a client's WebSocket upgrade and subsequent frames to the same gateway instance.
+
+For horizontal scaling, gateway instances that handle WebSocket connections can't be killed mid-connection during deployments. This is why the blue/green drain window (30 minutes) exists. Alternatively, the gateway can proxy WebSocket frames to a dedicated WebSocket handling tier—the gateway terminates HTTP/2 and forwards WebSocket upgrades to stateful connection managers. This separates the scaling model: REST gateway scales aggressively, WebSocket tier scales based on active connection count. For 500K RPS with a small fraction being WebSocket connections, I'd likely do the separate tier from the start.
+

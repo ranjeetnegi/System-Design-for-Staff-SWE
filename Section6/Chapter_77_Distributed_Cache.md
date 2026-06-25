@@ -4327,3 +4327,198 @@ STAFF MINDSET: "I design for stampede, failover, and schema change—not the hap
 # End of Chapter 50
 
 This chapter covered Distributed Caching at Staff Engineer depth—from foundational concepts through production-hardened architectures, failure handling, and evolution. The key insight: caching is powerful but dangerous. Used well, it makes systems fast and resilient. Used poorly, it introduces subtle bugs, inconsistency, and operational complexity. Staff Engineers understand these trade-offs and design accordingly.
+
+## Interview Simulation — Distributed Cache (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** We need a distributed caching layer for our e-commerce platform. Where do you start?
+
+**Candidate:** A few clarifying questions before I draw anything.
+
+Read/write ratio? For e-commerce, product catalog reads dwarf writes—probably 100:1 or higher. That shapes eviction policy and replication strategy.
+
+What are the latency SLOs? Sub-millisecond P99 for in-process caches, single-digit milliseconds for a shared Redis tier? Those are different architectures.
+
+Who are the clients? A single team's service, or is this a shared platform used by 20 teams? Shared caches need namespace governance, quota enforcement, and blast-radius isolation—that's a product in itself.
+
+What's the consistency requirement? Can we serve stale product prices for 5 seconds? What about inventory counts—those have revenue implications.
+
+What's the eviction and invalidation model? TTL-based, explicit invalidation on write, or both?
+
+> **Interviewer:** Shared cache, ~30 teams, 10M products, P99 under 5ms, eventual consistency acceptable for catalog data but inventory needs freshness within 2 seconds.
+
+**Candidate:** That 2-second inventory requirement is the hardest constraint. It rules out long TTLs and requires either write-through or a reliable invalidation bus. The multi-tenant angle means I need to design for cache namespace isolation from the start—I'll return to that in the HLD. Let me scope the data volumes.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** What's your sizing?
+
+**Candidate:** 10M products. Average product record with pricing, attributes, and metadata: roughly 2 KB. That's 20 GB of hot data. With 3x replication, 60 GB RAM across the cluster.
+
+Request volume: 30 teams, average 50 QPS per team's critical paths, peaks at 5x. Call it 7,500 QPS baseline, 37,500 QPS peak. Redis can handle 100K+ ops/sec per node, so a 6-node cluster (3 primary + 3 replica) handles this with headroom.
+
+For inventory: much smaller—maybe 500K SKUs actively purchased. At 200 bytes each, 100 MB. But write rate is higher: every order, every cart add. Maybe 2,000 writes/sec at peak. Write-through to Redis is fine at that volume.
+
+Bandwidth: 37,500 reads × 2 KB average = ~75 MB/s. 10 Gbps NICs, no issue.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the cache API look like for client teams?
+
+**Candidate:** I'd expose a thin SDK rather than raw Redis commands. Three reasons: namespace enforcement, circuit-breaking, and serialization versioning.
+
+```
+// SDK interface (simplified)
+CacheClient get(namespace: string, key: string): CacheResult
+CacheClient set(namespace: string, key: string, value: bytes, ttl: Duration): void
+CacheClient delete(namespace: string, key: string): void
+CacheClient mget(namespace: string, keys: []string): []CacheResult
+
+// Invalidation bus subscription (for inventory team)
+CacheClient subscribe(namespace: string, invalidation_callback: func): void
+```
+
+Namespaces map to Redis key prefixes AND quota buckets. The `catalog` namespace has a 10 GB quota and 5-second default TTL. The `inventory` namespace has a 500 MB quota, 2-second TTL, and triggers invalidation events on write.
+
+Raw Redis access is blocked. Teams file a ticket to get a namespace with agreed SLOs. This is the governance model that prevents one team's KEYS * command from killing everyone else.
+
+> **Interviewer:** What about cache stampede on a cold start?
+
+**Candidate:** Three mitigations: probabilistic early expiration (recompute before TTL expires with increasing probability), distributed lock with a single-fetcher pattern, and pre-warming via an async job before traffic is shifted to a new deployment. I'll detail the warm-up strategy in the HLD.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you model cache entries and their metadata?
+
+**Candidate:** Redis key structure: `{namespace}:{version}:{key}`. The version segment handles schema changes without explicit invalidation—when the product schema changes, bump the version prefix and old entries expire naturally via TTL.
+
+Each entry carries a small header:
+```
+CacheEntry {
+  value:      bytes         // serialized payload (protobuf preferred)
+  etag:       string        // content hash for conditional fetch
+  created_at: unix_ms
+  ttl_ms:     int
+  source_shard: int         // which DB shard this came from (for invalidation routing)
+}
+```
+
+For invalidation tracking, I maintain a separate invalidation log in Redis Streams: `invalidation:{namespace}` stream. Each write to the origin DB publishes an event here. Cache clients consume the stream to proactively drop stale keys. This is how inventory achieves its 2-second freshness—it's not polling, it's event-driven.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Walk me through the full architecture.
+
+**Candidate:** Three-tier caching model with a governance layer:
+
+```
+                    CLIENT SERVICES (30 teams)
+                           |
+                    [Cache SDK / sidecar]
+                    /       |        \
+              L1 Cache    Circuit    Namespace
+           (in-process)   Breaker    Enforcer
+                    \       |        /
+                     [L2 Redis Cluster]
+                    /    |    |    \
+               Shard-0  Shard-1  Shard-2  Shard-3
+               (primary + replica each)
+                           |
+                    [Invalidation Bus]
+                    (Redis Streams)
+                           |
+              ┌────────────┴────────────┐
+         [Catalog DB]            [Inventory DB]
+              |                        |
+         Change Data               Write path
+         Capture (CDC)            publishes events
+              |                        |
+         invalidation              invalidation
+         stream feed               stream feed
+```
+
+**L1 in-process cache:** Each service instance holds a bounded LRU cache (e.g., Caffeine in JVM services, 256 MB max). Hot product data lives here—zero network hops. TTL is short: 10 seconds for catalog, 1 second for inventory. This absorbs 80% of reads.
+
+**L2 Redis cluster:** Shared, namespaced, quota-enforced. Handles L1 misses. Consistent hashing with virtual nodes for even distribution. Redis Cluster mode with 6 nodes (3 primary, 3 replica). Reads can go to replicas for read scaling.
+
+**L3 CDN (optional):** For static product images and rarely-changing catalog attributes, Cloudflare or Fastly with long TTLs. Not in scope for this design but worth mentioning.
+
+**Write-through for inventory:** When inventory service writes a stock update, it writes to DB and Redis atomically (Lua script for atomicity within Redis; DB write is the source of truth on conflict). TTL is 2 seconds as a safety net even if the invalidation event is delayed.
+
+**Warm-up strategy for failover:** When a Redis node fails and a new one joins, it starts cold. Traffic hitting the new node causes stampede to the DB. Mitigation: the new node registers as a "warming" node. The SDK routes 5% of reads to it initially, ramps up as hit rate climbs. Meanwhile, a background job streams the top-10K hot keys from the surviving replica to warm the new node within 60 seconds. This prevents the thundering herd.
+
+> **Interviewer:** How do you handle memory pressure events? A team's runaway query floods the cache.
+
+**Candidate:** *(Cross-question: operational resilience)*
+
+Two layers. At the Redis level: maxmemory-policy is allkeys-lru, so least-recently-used keys evict automatically. But that's reactive and affects all tenants.
+
+Proactively: the governance layer enforces per-namespace memory quotas using Redis keyspace notifications and a quota enforcer sidecar. When namespace `catalog` hits 9 GB (90% of 10 GB quota), the enforcer starts rejecting SET operations for that namespace and emits an alert to the owning team's PagerDuty. Reads still work—existing entries serve fine. The owning team has 30 minutes to either reduce their data size or file a quota increase request.
+
+I've seen this pattern break down when teams share a namespace. Rule: one team, one namespace. No exceptions. That's enforced at SDK initialization via service account → namespace mapping in the config service.
+
+> **Interviewer:** Write-through vs. write-behind vs. cache-aside—when do you use each at org scale?
+
+**Candidate:** *(Cross-question: write strategy trade-offs)*
+
+**Cache-aside** is the default for most teams. The service reads from cache, on miss reads from DB and populates the cache. Simple, no coupling between cache and DB. Downside: cold start lag, and stale reads between write and next TTL expiry. Good for: catalog data, user profiles, any read-heavy data where brief staleness is fine.
+
+**Write-through** is warranted when you need tighter consistency but can tolerate slightly higher write latency. Every DB write also writes to cache. The cache is always warm. Downside: write amplification and coupling—if Redis is down, the write pipeline degrades. I use this for inventory and cart state where I want cache hits immediately after a write.
+
+**Write-behind (write-back)** is dangerous at org scale. The cache accepts the write and returns success; the DB write happens asynchronously. Latency is great. But if the cache node dies before flushing, you lose data. I've seen teams use this for high-frequency counter updates (like view counts) where losing a few counts is acceptable. For anything with financial or inventory implications, I explicitly ban it in our engineering standards doc.
+
+> **Interviewer:** You're migrating from a single Redis instance to a cluster. Zero-downtime migration path?
+
+**Candidate:** *(Cross-question: migration)*
+
+Phase 1 (2 weeks): Deploy the new cluster in shadow mode. All writes go to both old and new. All reads come from old. Use the SDK to dual-write transparently. Monitor for replication lag and key distribution skew.
+
+Phase 2 (1 week): Shift 5% of reads to new cluster by namespace. Compare hit rates. Fix any consistent hashing bugs.
+
+Phase 3 (rollout): Ramp reads namespace-by-namespace, starting with least-critical. Each namespace has a feature flag to flip reads back to old cluster instantly if P99 spikes.
+
+Phase 4 (cutover): Once all namespaces read from new cluster with stable metrics for 48 hours, stop writes to old cluster. Keep old cluster in read-only mode for 1 week as rollback insurance, then decommission.
+
+Key risk: key expiry differences. The old cluster had keys set with `{key}` format; new cluster uses `{namespace}:{version}:{key}`. The SDK handles translation during the migration window.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you govern cache usage across 30 teams without becoming a bottleneck?**
+
+Self-service with guardrails. Teams provision namespaces via a Terraform module that enforces quota limits, required TTL ranges, and naming conventions. The platform team reviews only exceptions—quota increases beyond 5 GB or TTL below 100ms. Everything else is automated. This scales to 30 teams without a ticket queue.
+
+**Q: CDN + Redis + in-process—how do you prevent inconsistency across tiers?**
+
+Shorter TTLs at higher tiers. L1 TTL is 1/10th of L2 TTL. L2 TTL is 1/10th of CDN TTL. On explicit invalidation, the invalidation event propagates to all tiers: Redis key delete triggers a Streams event which the SDK receives and drops the L1 entry. For CDN, we use surrogate keys (cache tags)—a single API call to Cloudflare purges all CDN objects tagged with `product:{id}`. The total propagation time is under 2 seconds end-to-end, which satisfies the inventory SLO.
+
+**Q: Your Redis cluster loses a primary node. What happens in the next 60 seconds?**
+
+T+0: Primary node stops responding. Redis Sentinel (or Redis Cluster's built-in) detects failure after `cluster-node-timeout` (default 15s, we tune to 5s).
+
+T+5s: Replica promotion begins. Promoted replica becomes new primary.
+
+T+7s: SDK's circuit breaker has already opened for that shard. Requests to that key range return cache misses and fall through to DB. DB absorbs ~1/N of total read traffic (where N is shard count). At 4 shards, DB load spikes 25%.
+
+T+60s: New primary is ready. Warm-up job starts streaming hot keys. SDK circuit breaker closes. Hit rate recovers.
+
+Total blast radius: 53 seconds of elevated DB load for 25% of keyspace. This is acceptable if DB is sized for 2x normal load (standard practice). The failure is scoped to one shard, not the entire cache.
+
+**Q: Build vs. buy—why not just use ElastiCache or Upstash?**
+
+For most companies: buy. ElastiCache removes operational overhead. For us at this scale: hybrid. We run Redis OSS on our own nodes for the latency-sensitive shared cluster (ElastiCache adds ~0.3ms per hop vs. same-AZ Redis on bare metal). We use ElastiCache for team-specific caches where the team doesn't want operational responsibility. The platform team owns the shared cluster; teams who want hands-off use ElastiCache with a Terraform module that enforces our naming and quota standards.
+

@@ -4222,3 +4222,262 @@ Before considering this chapter complete, verify:
 ✓ Real Incident table (structured) in Part 9  
 ✓ Staff Mental Models & One-Liners table in Part 16  
 ✓ Interview Calibration: leadership explanation, how to teach, common Senior mistake
+
+## Interview Simulation — Media Upload and Processing Pipeline (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a media upload and processing pipeline — video uploads for a platform like YouTube or TikTok. Walk me through requirements.
+
+**Candidate:** Let me ask the right questions before jumping in.
+
+**Candidate:** What's the upload size range? Are we talking short-form (< 60 seconds, tens of MB) or long-form (2-hour 4K films, tens of GB)?
+
+> **Interviewer:** Both — short clips up to 500 MB, long-form up to 50 GB.
+
+**Candidate:** Scale questions:
+
+- How many uploads per day? Peak upload rate in GB/sec?
+- What's the latency from upload completion to "video playable" — seconds, minutes, hours?
+- What output formats do we need — multiple resolutions (360p through 4K), multiple codecs (H.264, AV1)?
+
+> **Interviewer:** 5 million uploads/day, peak ~50 GB/sec ingest. Time-to-playable: < 5 minutes for short clips, < 30 minutes for long-form. Multiple resolutions (360p, 720p, 1080p, 4K) and codecs (H.264 required, AV1 for modern clients).
+
+**Candidate:** A few more:
+
+- Do we need resumable uploads? (50 GB files over mobile networks — yes?)
+- What content safety requirements exist — virus scanning, CSAM detection, copyright fingerprinting?
+- CDN strategy: do we push to CDN on upload, or pull-on-first-request?
+
+> **Interviewer:** Yes, resumable uploads required. Content scanning required — virus + CSAM before video is publicly available. CDN strategy is your call.
+
+**Candidate:** Summarizing:
+1. Resumable chunked upload up to 50 GB, peak 50 GB/sec ingest
+2. Async transcoding to multiple resolutions and codecs
+3. Content-addressed storage (dedup, integrity)
+4. Content scanning (virus, CSAM, copyright) before availability
+5. CDN delivery with sub-second start time for viewers
+6. Time-to-playable SLA: 5 min short, 30 min long-form
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Size the system.
+
+**Candidate:**
+
+- **Ingest:** 5M uploads/day, average size ~500 MB = 2.5 PB/day raw. Peak 50 GB/sec — need a distributed upload tier, single server is ~10 Gbps.
+- **Transcoding:** for each upload, we produce ~6 variants (3 resolutions × 2 codecs). Transcoding is CPU-heavy: 1 minute of 1080p H.264 takes ~30 CPU-seconds. 5M uploads × avg 5 min duration = 25M minutes of video/day. At 30 CPU-sec per minute: 750M CPU-seconds/day ≈ 8,700 CPU-cores running 24/7. This is a substantial compute fleet — use spot instances for cost.
+- **Storage:** raw input + 6 variants × average 200 MB each = ~1.4 GB per upload. 5M/day × 1.4 GB = 7 PB/day. Long-term storage on S3 with lifecycle policies (move older content to Glacier).
+- **CDN:** 5M videos × average 100 views each × 500 MB/view = 250 PB/day egress. CDN handles this — origin pull model with aggressive caching.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Design the upload API.
+
+**Candidate:**
+
+```
+// Initiate resumable upload
+POST /uploads
+{
+  filename: "my_video.mp4",
+  content_type: "video/mp4",
+  total_size_bytes: 5368709120,  // 5 GB
+  checksum_sha256: "abc123..."   // full-file hash for integrity
+}
+→ 201 {
+  upload_id: "upl_xxx",
+  chunk_urls: [                   // pre-signed S3 URLs, one per chunk
+    { chunk_index: 0, url: "https://s3.../...", byte_range: "0-67108863" },
+    ...
+  ],
+  chunk_size_bytes: 67108864      // 64 MB chunks
+}
+
+// Upload chunk (client calls S3 directly via pre-signed URL)
+PUT https://s3.aws.../...?upload_id=...&part_number=1
+Body: chunk bytes
+→ 200 { ETag: "etag_for_this_chunk" }
+
+// Complete upload (after all chunks uploaded)
+POST /uploads/{upload_id}/complete
+{
+  parts: [{ chunk_index: 0, etag: "..." }, ...]
+}
+→ 202 { video_id, status: "processing" }
+
+// Get processing status
+GET /videos/{video_id}/status
+→ { video_id, status: "scanning"|"transcoding"|"available"|"rejected",
+    progress_pct, available_variants: ["360p", "720p"] }
+
+// Get playback manifest (HLS/DASH)
+GET /videos/{video_id}/manifest.m3u8
+→ HLS manifest listing all available quality variants
+```
+
+*(Cross-question: resumability)* If the client loses connection mid-upload, it calls `GET /uploads/{upload_id}` to ask which chunks are already received (stored in Redis as a bitset). It then resumes from the first missing chunk. The pre-signed S3 URLs are valid for 24 hours. After 24 hours of inactivity, the upload is expired and cleaned up.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What's the data model?
+
+**Candidate:**
+
+```
+uploads  (operational, short-lived)
+  upload_id PK, user_id, filename, total_size_bytes,
+  checksum_sha256, status ENUM(in_progress|completed|expired),
+  chunk_count, chunks_received BITSET (stored in Redis),
+  created_at, expires_at
+
+videos  (permanent record)
+  video_id PK, upload_id FK, user_id,
+  content_address SHA256,           // content-addressable: hash of raw bytes
+  original_filename, duration_sec, file_size_bytes,
+  status ENUM(scanning|transcoding|available|rejected|deleted),
+  scan_result JSONB, created_at, published_at
+
+video_variants  (one row per output format)
+  variant_id PK, video_id FK,
+  resolution ENUM(360p|720p|1080p|4k),
+  codec ENUM(h264|av1),
+  storage_key STRING,               // S3 key: content_address/360p_h264.mp4
+  file_size_bytes, created_at, cdn_status ENUM(pending|pushed|available)
+
+transcoding_jobs  (queue record)
+  job_id PK, video_id FK, variant_id FK,
+  status ENUM(queued|running|done|failed),
+  worker_id, attempt, created_at, started_at, finished_at
+```
+
+**Content-addressed storage:** the `storage_key` is derived from the content hash: `sha256(raw_bytes)/360p_h264.mp4`. If two users upload the same video (duplicate detection), both share the same S3 object. No storage duplication. Integrity is guaranteed by the hash.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:**
+
+```
+  Client (browser/mobile)
+        │
+        │ 1. POST /uploads → get chunk URLs
+        │ 2. PUT chunks directly to S3 (bypasses our servers)
+        │ 3. POST /uploads/{id}/complete
+        ▼
+  ┌─────────────────────────────────────────────────┐
+  │           Upload Service                         │
+  │  - Issues pre-signed S3 multipart upload URLs   │
+  │  - Tracks chunk progress in Redis bitset        │
+  │  - On complete: verifies all chunks received    │
+  │  - Writes video record + enqueues scan job      │
+  └──────────────────────────┬──────────────────────┘
+                             │
+                ┌────────────▼──────────────┐
+                │      S3 (Raw Bucket)       │
+                │  Content-addressed keys    │
+                │  sha256(content)/raw.mp4   │
+                └────────────┬──────────────┘
+                             │ S3 event notification
+                             ▼
+  ┌──────────────────────────────────────────────────┐
+  │              Scan Pipeline                        │
+  │                                                  │
+  │  ┌──────────────┐  ┌────────────┐  ┌──────────┐ │
+  │  │ Virus Scan   │  │ CSAM Hash  │  │Copyright │ │
+  │  │ (ClamAV/    │  │ (PhotoDNA) │  │ Fingerpr.│ │
+  │  │  commercial) │  │            │  │(Content  │ │
+  │  └──────┬───────┘  └─────┬──────┘  │  ID)     │ │
+  │         └────────────────┴────┬────┘          │ │
+  └───────────────────────────────┼───────────────┘
+                                  │ all pass → enqueue transcode
+                                  │ any fail → mark rejected
+                                  ▼
+  ┌───────────────────────────────────────────────────┐
+  │              Transcoding Pipeline                  │
+  │                                                   │
+  │  Job Queue (Kafka topic: transcode-jobs)          │
+  │  Partitioned by video_id                          │
+  │                                                   │
+  │  ┌────────────────────────────────────────────┐  │
+  │  │           Transcoder Worker Pool            │  │
+  │  │  (spot instances, autoscaled by queue depth)│  │
+  │  │                                            │  │
+  │  │  Per job:                                  │  │
+  │  │  1. Download raw from S3                   │  │
+  │  │  2. FFmpeg transcode (e.g., 720p H.264)    │  │
+  │  │  3. Upload variant to S3                   │  │
+  │  │  4. Mark variant ready, update manifest    │  │
+  │  └────────────────────────────────────────────┘  │
+  └───────────────────────────────────────────────────┘
+                         │ variants available
+                         ▼
+  ┌────────────────────────────────────────────────────┐
+  │               CDN Layer                             │
+  │                                                    │
+  │  Pull model: CDN fetches from S3 on first request  │
+  │  Push model: proactively push to CDN PoPs for      │
+  │  viral/trending content                            │
+  │                                                    │
+  │  HLS manifest served from CDN                      │
+  │  Adaptive bitrate: client switches quality         │
+  │  based on network conditions                       │
+  └────────────────────────────────────────────────────┘
+```
+
+> **Interviewer:** Deep-dive into the chunked upload. Why pre-signed S3 URLs and not streaming through your servers?
+
+**Candidate:** Three reasons:
+
+**Throughput:** at 50 GB/sec peak ingest, if every byte flows through our upload servers, we need 50 GB/sec worth of network capacity on our fleet — roughly 5,000 10-Gbps servers just for ingress. By using pre-signed S3 URLs, clients upload directly to S3. S3 scales to essentially unlimited throughput natively. Our upload service only handles the control plane (issuing URLs, tracking progress), which is orders of magnitude less load.
+
+**Resumability:** S3 Multipart Upload natively supports resuming from individual parts. Each part gets an ETag on upload. If the client fails on part 17, it only re-uploads part 17. We track which parts are done in a Redis bitset (one bit per chunk). Cheap, fast, atomic.
+
+**Cost:** data transfer through our servers costs ~$0.09/GB (EC2 egress + ingress). Direct S3 upload costs ~$0.005/GB (S3 PUT requests). 2.5 PB/day × $0.085 difference = ~$212K/day saved. Pre-signed URLs are not an optimization — they're the economically mandatory choice at this scale.
+
+> **Interviewer:** How does the content-addressed storage work? And what if someone uploads a slightly different version of the same video?
+
+**Candidate:** Content addressing uses the SHA-256 hash of the raw bytes as the storage key. Two byte-identical files hash to the same key — we store one copy, two references. This is exact deduplication.
+
+For "almost the same" videos (re-encoded, watermark added, slight crop), the hashes differ and we store two copies. Perceptual deduplication (comparing video fingerprints, not bytes) is a separate system — used for copyright detection (Content ID), not storage optimization.
+
+The hash also provides integrity verification. When a transcoder downloads the raw file from S3, it recomputes SHA-256 and compares to the stored `content_address`. If they differ, the download is corrupted — the worker retries from a different S3 region.
+
+> **Interviewer:** Walk me through the CDN strategy decision — push vs pull.
+
+**Candidate:** This is a genuine trade-off with real cost implications.
+
+**Pull model:** CDN fetches from S3 origin on first request per PoP. Zero pre-work. First viewer in each region pays a latency penalty (~500ms extra for CDN miss + S3 fetch). For long-tail content (most videos, rarely watched), this is the right choice — no wasted CDN capacity.
+
+**Push model:** after transcoding completes, we proactively push variants to CDN PoPs. Zero-latency first view. But we're pushing to ~40+ PoPs even for videos that may only be watched in one region. Costs: ~40× storage on CDN, plus push bandwidth.
+
+**Hybrid (correct answer):** default to pull. For videos we predict will be viral (trending page, creator with >1M followers, scheduled content drops, sports events), use the platform's trending signals to proactively push 1080p and 720p variants to the top 10 PoPs for the creator's primary audience. Lower resolutions stay pull-only.
+
+The push trigger is an event from the trending service: `video.trending` Kafka topic → CDN push worker → CloudFront/Fastly API to warm specific PoPs.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: virus scanning integration)* The scan pipeline is a blocker — video is not available until scan passes. Virus scanning (ClamAV or commercial) and CSAM hash matching (PhotoDNA) are fast (<1 minute for a 500 MB file). Copyright fingerprinting (Content ID) is slower (minutes to hours). Solution: two-phase availability. Phase 1: virus + CSAM clear → video available to uploader only (private). Phase 2: copyright fingerprint completes → video available publicly (or monetization blocked if match found). This gives <5 min SLA for private availability while copyright review continues async.
+
+*(Cross-question: transcoding job failures)* Transcoding workers run on spot instances — they get preempted. The job queue (Kafka) tracks acknowledgment: a job is not marked done until the worker commits the offset after successfully uploading the variant to S3. If a worker dies mid-transcode, the job re-queues automatically when the Kafka consumer group detects the dead consumer. The next worker downloads the raw file fresh and starts over. We don't checkpoint partial transcoding — it's simpler to restart. For very long videos (2h 4K), we shard the video into 10-minute segments, transcode segments in parallel, then concatenate. This reduces the cost of a worker failure (restart one 10-min segment, not the whole 2-hour file).
+
+*(Cross-question: adaptive bitrate at the player)* The HLS manifest lists all available variants with their bandwidths. The player starts at a conservative quality, measures actual download speed, and switches to higher quality if bandwidth allows (or lower if bandwidth drops). The CDN serves each quality segment independently — the player switches seamlessly at segment boundaries (~6 seconds). This is all handled by the player SDK (HLS.js, ExoPlayer, AVPlayer) — we just need to produce valid HLS/DASH manifests pointing to correctly-named segment files in S3/CDN.
+
+*(Cross-question: storage cost at scale)* 7 PB/day × 365 days = 2.5 EB/year. At $0.023/GB S3 Standard that's prohibitive. Tiered storage: recently uploaded content (hot, <30 days) stays on S3 Standard. Content >30 days moves to S3-IA (Infrequent Access, 45% cheaper). Content >1 year with <100 views/month moves to S3 Glacier (80% cheaper). Content with zero views for 3 years gets a deletion review workflow — legal hold check, then delete. Lifecycle policies automate the transitions. The biggest savings come from deleting low-value content aggressively — a Staff-level answer includes the organizational process for content retention policy, not just the technical lifecycle rules.
+
+*(Cross-question: common Senior mistake)* The most common Senior-level mistake is designing the upload flow to stream through application servers. They think "I'll accept the multipart upload in my Go server, validate each chunk, then forward to S3." This works at 100 uploads/day. At 5M uploads/day, the math above shows it requires thousands of servers just for ingress bandwidth. Pre-signed URLs are not a fancy optimization — they're the architecturally correct design for large-scale media ingestion. Recognizing this immediately is a Staff signal.

@@ -1998,3 +1998,142 @@ Read this chapter again two days before the interview. The numbers in the quick-
 *Pairs with Chapter 100 (Video Streaming) for CDN usage in video delivery, Chapter 55 (Search System) for CDN-cached search result pages, and Chapter 93 (Bonus Advanced Topics) for cache invalidation patterns.*
 
 `Chapter 107 | Section 6: Staff/L6 Systems | CDN Architecture`
+
+---
+
+## Interview Simulation — CDN Architecture (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a CDN from scratch. Where do you start?
+
+**Candidate:** Before I draw a single box, let me ask some clarifying questions. First — are we designing a general-purpose CDN (like Cloudflare or Akamai) or a CDN optimized for a specific workload, like video streaming or API responses? The cache strategy differs significantly. Second — what's the target global latency SLA — < 20 ms to 95% of users, < 50 ms to 99%? Third — do we need to support dynamic content (which can't be cached) in addition to static assets? Fourth — cache invalidation: do we need near-instant purge (< 1 s globally) or is eventual invalidation (1–5 min) acceptable?
+
+> **Interviewer:** General-purpose CDN. < 50 ms p99 latency globally. Support both static and dynamic content. Cache invalidation must propagate to all PoPs within 30 seconds for static, pass-through for dynamic.
+
+**Candidate:** Functional requirements: (1) Cache and serve static assets (images, JS, CSS, video segments) from the nearest PoP. (2) Pass dynamic requests through to origin with connection reuse optimization. (3) Propagate cache invalidations to all PoPs within 30 s. (4) Provide origin shield to reduce origin load. Non-functional: < 50 ms p99 globally, 99.99% availability, support 10 Tbps peak egress bandwidth, anycast routing to direct users to nearest PoP automatically.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 10 Tbps peak egress. At 1 Mbps average bitrate per user connection, that's 10 million concurrent users. To achieve < 50 ms globally, we need PoPs within 3,000 km of every significant user population — that's roughly 50 PoPs covering NA, EU, APAC, LATAM, MEA. Each PoP handles 10 Tbps / 50 = 200 Gbps average. A 200 Gbps PoP requires roughly 50 servers at 10 Gbps NIC each (with bonding). Cache storage: 10 Tbps egress, assume average object is 100 KB, 70% cache hit rate → 3 Tbps served from cache. Cache working set: if the hot 20% of objects serve 80% of requests (Zipf), and we can hold 10 TB per PoP → we cover the top ~100 million objects per PoP. Object metadata index: 100M objects × 128 bytes per metadata record = 12.8 GB in RAM per PoP — fits in a single server with 64 GB RAM.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Three APIs. Cache purge: `POST /v1/purge` body `{urls: [...], surrogate_keys: [...]}` — URL-level and surrogate key purge. Returns `{purge_id, estimated_propagation_ms}`. Cache status: `GET /v1/cache/status?url=...` returns hit/miss state at each PoP region. Origin configuration: `PUT /v1/origins/{hostname}` body `{shield_region, cache_rules: [{path_pattern, ttl, cache_control_override}], dynamic_rules: [{path_pattern, bypass_cache: true}]}`. The cache_rules allow the customer to override Cache-Control headers from origin — critical when origins return `Cache-Control: no-cache` on assets that are actually static. Content negotiation: the CDN must respect `Vary` headers — if origin returns `Vary: Accept-Encoding`, the CDN caches separate copies for gzip and brotli.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Two layers of metadata. In-memory at each PoP (LRU hash map): `{cache_key → {stored_at, ttl, size_bytes, storage_location, headers_blob}}`. Cache key is typically SHA256 of (hostname + path + normalized query string). This is the hot path for every cache lookup — must be sub-millisecond. On-disk at each PoP (RocksDB): the actual object bytes, keyed by the same SHA256. We use a log-structured merge tree (RocksDB) because it optimizes for write throughput (new cached objects) while supporting fast point lookups for cache hits. For invalidation, we maintain a `purge_log` table in a globally consistent store (CockroachDB or Spanner): `{purge_id, url_pattern, surrogate_key, issued_at, propagated_to_regions}`. Each PoP subscribes to this log and applies purges.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+```
+CDN ARCHITECTURE
+=================
+
+USER REQUEST (anycast routing)
+  │
+  │  DNS: user's resolver queries for cdn.example.com
+  │  Anycast IP: all PoPs announce the same IP via BGP
+  │  IP routing: user's packet routed to topologically nearest PoP
+  │
+  ▼
+EDGE PoP (50 locations globally)
+  │
+  ├─ Cache Lookup (in-memory LRU, < 1ms)
+  │   │
+  │   ├─ HIT (70-99% for static assets):
+  │   │   serve from RocksDB on-disk cache
+  │   │   update LRU metadata
+  │   │   return to user with cache headers (X-Cache: HIT)
+  │   │
+  │   └─ MISS: forward to Origin Shield
+  │
+  ▼
+ORIGIN SHIELD (1-3 regional mid-tier nodes per continent)
+  │  request coalescing: collapse 1000 simultaneous misses
+  │  for same object into ONE upstream request
+  │
+  ├─ HIT (shield cache): return to edge, edge caches it
+  │
+  └─ MISS: fetch from Customer Origin
+  │
+  ▼
+CUSTOMER ORIGIN (customer's web server / S3 / etc.)
+  │  single connection reuse (HTTP/2 multiplexing)
+  │  response cached at shield, then at edge
+  │
+  ▼  (reverse path, object cached at each layer)
+  └─► Edge PoP → User
+
+CACHE INVALIDATION PROPAGATION
+================================
+Customer calls POST /v1/purge
+  │
+  ▼
+Purge Coordinator (global, Spanner-backed)
+  │ writes purge record: {purge_id, pattern, timestamp}
+  │
+  ▼
+Pub/Sub Fan-out (Google Cloud Pub/Sub, per-region topics)
+  │ one message per PoP region
+  │
+  ▼
+PoP Purge Worker (running at each PoP)
+  │ receives purge message, matches in-memory index
+  │ marks matching objects as STALE (zero TTL)
+  │ acknowledges back to Purge Coordinator
+  │
+  ▼
+Purge Coordinator tracks propagation
+  │ SLA: all PoPs acknowledge within 30s
+  │ if any PoP misses ack in 25s → retry
+  └─► Customer can query /v1/cache/status for confirmation
+```
+
+**Deep Dive 1: Anycast Routing and PoP Placement.**
+
+Anycast is the foundation of CDN low-latency routing. We announce the same IP address block (e.g., 203.0.113.0/24) from all PoP locations via BGP. When a user anywhere in the world sends a packet to that IP, the internet's routing protocols forward it to the topologically nearest PoP that announces that prefix. No DNS-based geographic routing needed — the network itself does the routing. The placement constraint: a PoP must be in an IXP (Internet Exchange Point) or colocation facility with good peering to the local ISPs. Akamai and Cloudflare have PoPs in 300+ IXPs globally — that's the moat. For a new CDN, the minimum viable global coverage is: Ashburn VA (covers US East), Los Angeles (US West), Frankfurt (EU), Singapore (APAC), São Paulo (LATAM), Johannesburg (MEA). Six PoPs get you < 100 ms to 80% of global internet users. Fifty PoPs get you < 50 ms to 95%.
+
+> **Interviewer:** How does origin shield protect the origin during a cache miss storm?
+
+**Candidate:** *(Cross-question: thundering herd at origin shield)* Request coalescing is the key mechanism. When 10,000 edge nodes simultaneously miss on a popular new object, without a shield each would send an independent request to origin — 10,000 simultaneous origin requests, likely overwhelming it. The shield is a regional proxy layer (1 per continent). All 10,000 edge misses route to the nearest shield node. The shield checks its own cache: if already cached, it serves all 10,000 requests without touching origin. If not cached, it holds all 10,000 requests in a queue and sends exactly ONE request to origin. When origin responds, the shield caches the object and fans out the response to all 10,000 waiting edge nodes simultaneously. The implementation detail: the shield uses a "request deduplication map" — a hash map of in-flight requests keyed by cache_key. Subsequent requests for the same key join the wait queue rather than triggering a new origin fetch.
+
+**Deep Dive 2: Cache Invalidation Propagation.**
+
+The 30-second SLA for full propagation requires a reliable fan-out with delivery guarantees. Our design uses Pub/Sub per region (50 topics for 50 PoPs). The Purge Coordinator writes the purge record to Spanner (durable) then publishes to all 50 topics. Each PoP's Purge Worker subscribes to its regional topic, receives the message, and applies the purge locally. The worker acknowledges to the Purge Coordinator (via a write to a `purge_acks` table in Spanner). The Coordinator has a 25-second SLA monitoring job: if any PoP hasn't acknowledged by 25 s, it re-publishes the purge message to that PoP's topic. The reason for 25 s (not 30 s) is to leave a 5-second retry window. Failure mode: a PoP is partitioned from Pub/Sub. In this case, the PoP continues to serve stale content until it reconnects and processes the queued purge. We expose this state to the customer via the `/v1/cache/status` API — "PoP us-east-1: PENDING purge." For emergency purges (security incidents), we support a hard TTL override: the Purge Worker sets the in-memory TTL to -1, forcing every subsequent request to re-validate with origin until the purge propagates.
+
+**Deep Dive 3: Cache-Control Strategy for Different Content Types.**
+
+This is where most teams get it wrong at scale. Static versioned assets (JS/CSS with content hash in filename, `main.a3f7b2.js`): `Cache-Control: public, max-age=31536000, immutable`. One year TTL, `immutable` tells the browser never to revalidate. Changing the content means changing the filename — no CDN invalidation ever needed. This is the ideal case. HTML pages: `Cache-Control: public, max-age=60, stale-while-revalidate=3600`. 60-second TTL ensures freshness for most users; `stale-while-revalidate` means the CDN can serve stale content for up to an hour while asynchronously fetching a fresh copy — eliminates the latency spike on cache expiry. Dynamic API responses: `Cache-Control: no-store`. CDN passes through to origin. But we still benefit from connection reuse and protocol optimization (HTTP/2 over TCP vs HTTP/1.1 from user to CDN edge). User-specific content: never cache on the CDN without a `Vary: Cookie` or `Vary: Authorization` header, and even then, each user's cached copy is separate — the cache hit rate is near zero, so CDN is just a transport optimization here, not a cache.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle a large file (10 GB video) that nobody has requested yet — the first user gets slow download while the CDN fetches from origin?**
+A: Range request support and segmented caching. The CDN fetches the file from origin in 1 MB chunks as the user requests bytes. The first user pays the origin latency for each chunk; subsequent users for the same chunk get it from cache. For predictive prefetch: if we know a video is about to be released (a scheduled content release), we push-prefetch the first 3 MB of each segment to all PoPs 5 minutes before go-live. For large live event content (Super Bowl), we proactively warm all edge caches before the event using a CDN-internal prefetch API.
+
+**Q: A customer reports that their cache purge worked in NA but not in APAC 45 seconds later. How do you debug this?**
+A: Check the `purge_acks` table in Spanner: is there an acknowledgment from the APAC PoPs? If no ack from ap-southeast-1, the Pub/Sub message was not received or the Purge Worker failed to process it. Check Purge Worker logs at the APAC PoP: did it receive the message? Did the pattern match fail (URL encoding mismatch between the purge request and the cached URL)? URL normalization bugs are the most common cause — the cache key stored `%20` but the purge request used spaces. Our canonical cache key generation normalizes URLs before storage and before matching, but encoding inconsistencies in customer-supplied URLs slip through. Fix: add a URL normalization step in the Purge Coordinator before writing the purge record.
+
+**Q: How do you handle TLS certificate management across 50 PoPs for thousands of customer domains?**
+A: We use a centralized certificate store (HashiCorp Vault or AWS ACM Private CA) for our own wildcard certificate (`*.cdn-provider.com`). For customer custom domains (CNAME to our CDN), we provision certificates via ACME (Let's Encrypt or ZeroSSL) per domain, stored in the certificate store and pushed to all PoPs via a certificate distribution service. Certificate push is triggered on new domain creation and 30 days before expiry. The PoP's TLS terminator (Nginx or Envoy) hot-reloads certificates without dropping connections. At 50,000 customer domains × 50 PoPs, the certificate store holds 2.5 million certificate objects — manageable with a well-indexed KV store. The operational risk is certificate expiry: our monitoring alerts at 45 days remaining, and the renewal job runs at 30 days remaining with a 3-retry policy.
+
+---
+
+*Pairs with Chapter 100 (Video Streaming) for CDN usage in video delivery, Chapter 55 (Search System) for CDN-cached search result pages, and Chapter 93 (Bonus Advanced Topics) for cache invalidation patterns.*
+
+`Chapter 107 | Section 6: Staff/L6 Systems | CDN Architecture`

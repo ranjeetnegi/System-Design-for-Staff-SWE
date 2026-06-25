@@ -2534,3 +2534,151 @@ The interview win is not memorizing these facts — it is understanding the cons
 ---
 
 *This chapter pairs with Chapter 71 (Media Upload Pipeline), Chapter 56 (Distributed Cache), Chapter 33 (Event-Driven Architecture with Kafka), and Chapter 64 (Recommendation Systems).*
+
+---
+
+## Interview Simulation — Video Streaming Staff (YouTube / Netflix) (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a video streaming platform. Where do you want to start?
+
+**Candidate:** Before I draw anything, let me nail down what we're building. A few questions.
+
+> **Interviewer:** Go ahead.
+
+**Candidate:** First — is this a user-generated content platform like YouTube, or a licensed-content platform like Netflix? The difference matters because Netflix does offline DRM download flows and YouTube has a contributor upload SLA. Second — are we targeting global reach or a single region? Third — what's the read/write ratio we're optimizing for: I'd expect roughly 10,000:1 views to uploads, but I want to confirm. Fourth — do we need live streaming, or VOD only?
+
+> **Interviewer:** Let's say YouTube-scale VOD with global reach. 2 billion users, 500 hours of video uploaded per minute, live streaming is a future concern but not today. DRM is required for premium content.
+
+**Candidate:** Good. Then my functional requirements: (1) Upload video and get a watch-ready URL within 5 minutes. (2) Serve video with adaptive bitrate to any device on any network. (3) DRM-protect premium content. (4) Recommendations are out of scope for today — I'll treat that as a downstream consumer of our event stream. Non-functional: p99 start latency under 200 ms for first segment, 99.99% availability, global reach means CDN-first architecture.
+
+> **Interviewer:** Sounds right. What's your rough estimation for storage?
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 500 hours per minute uploaded. Each hour of raw 4K is about 7 GB. But we transcode to multiple renditions — say 8 renditions from 240p to 4K. Total storage per raw hour is roughly 7 GB raw plus about 5 GB of lower renditions — call it 12 GB per raw hour. 500 hours × 60 min × 12 GB = 360 TB per hour ingested into long-term storage. For bandwidth: 2 billion daily active users, assume 40 min/day average at 2 Mbps average bitrate → 2B × 40 × 60 × 2 Mbps / 8 = roughly 1.2 exabytes per day egress across the CDN. That justifies a multi-CDN strategy; no single CDN can absorb 14 GB/s sustained globally. For transcoding fleet: 500 hours raw per minute at roughly 50× real-time transcode cost means we need 25,000 CPU-hours of transcode capacity per minute — that maps to ~400 m5.4xlarge instances running continuously, or an equivalent GPU fleet with hardware encoders.
+
+> **Interviewer:** Good. Let's move to API.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Three surfaces. Upload: `POST /v1/videos` returns an `upload_id` and a resumable upload URL (TUS protocol for resumability). Separate `POST /v1/videos/{id}/publish` once processing is complete. Watch: `GET /v1/videos/{id}/manifest` returns the HLS or DASH manifest URL — this is the entry point for the player. The manifest itself is served by the CDN, not the API server. DRM: `POST /v1/licenses/widevine` and `POST /v1/licenses/fairplay` — player sends an encrypted license request, our license proxy authenticates the user, forwards to a Widevine/FairPlay license server, returns the content decryption key. The key is encrypted with the device's public key — we never see the decryption key in plaintext on our servers.
+
+> **Interviewer:** How do you handle resumable uploads for a 20 GB raw file?
+
+**Candidate:** TUS protocol over HTTPS. The client gets a pre-signed upload URL pointing directly to an S3 multipart upload target. The client sends 5 MB chunks with a byte-range header. If the connection drops, the client calls `HEAD` on the upload URL, gets back the current offset, and resumes from there. S3 multipart handles the server-side assembly. The API server only tracks the upload state — it never proxies the bytes.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three main entities. `videos` table in Spanner (globally consistent for metadata): `video_id`, `owner_id`, `title`, `state` (UPLOADING → PROCESSING → READY → DELETED), `raw_storage_uri`, `created_at`. `renditions` table: `video_id`, `resolution`, `codec`, `bitrate`, `storage_uri`, `manifest_uri`. `drm_keys` table is NOT in the application database — it lives in a dedicated KMS-adjacent system (Google Widevine or Apple FairPlay infrastructure), with only an opaque `key_id` stored in `renditions`. For analytics events (play start, buffering, quality switch): append-only to Kafka → BigQuery. Never join analytics into the OLTP path.
+
+> **Interviewer:** Why Spanner for metadata rather than Postgres?
+
+**Candidate:** Video metadata reads are global — a video uploaded in Mumbai gets watched in São Paulo. Postgres with async replication gives you stale reads or complicated read routing. Spanner gives you consistent reads anywhere at the cost of ~10 ms higher write latency, which is fine for upload flows. If the team is Postgres-native, we could use Postgres with Citus sharding and accept eventual consistency for metadata, but Spanner is the cleaner choice at YouTube scale.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Let me draw the end-to-end flow.
+
+```
+UPLOAD PATH
+===========
+Client
+  │
+  ├─► Upload Service (TUS coordinator)
+  │       │ issues presigned S3 multipart URL
+  │       ▼
+  │   S3 Raw Storage (us-east-1)
+  │       │ S3 event → SQS
+  │       ▼
+  │   Transcode Orchestrator (Step Functions)
+  │       │
+  │       ├─► Transcode Workers (EC2 fleet, ffmpeg)
+  │       │       │ 8 renditions per video
+  │       │       ▼
+  │       │   S3 Processed Storage (multi-region replicated)
+  │       │
+  │       ├─► DRM Packager (Shaka Packager)
+  │       │       │ encrypts segments, wraps in CENC
+  │       │       ▼
+  │       │   S3 Encrypted Segments
+  │       │
+  │       └─► Metadata Writer → Spanner (state = READY)
+  │
+  └─► CDN Prefetch (top-N predicted popular videos)
+
+WATCH PATH
+==========
+Client Player
+  │
+  ├─1► CDN Edge (PoP nearest to user)
+  │       │ HIT: return manifest/segment directly
+  │       │ MISS: forward to Origin Shield
+  │       ▼
+  │   Origin Shield (mid-tier, per-region)
+  │       │ HIT: collapse concurrent misses, return
+  │       │ MISS: fetch from S3
+  │       ▼
+  │   S3 Processed Storage
+  │
+  ├─2► License Server (DRM decrypt key)
+  │       │ Auth Service validates JWT
+  │       │ Widevine/FairPlay proxy issues key
+  │       ▼
+  │   Player decrypts and renders
+  │
+  └─3► Telemetry Ingest (play events → Kafka → BigQuery)
+```
+
+**Candidate:** Let me go deep on three staff-level areas.
+
+**Adaptive Bitrate at CDN Edge.** The HLS manifest lists all renditions. The player's ABR algorithm (e.g., BOLA or throughput-based) selects segments based on buffer fill and measured bandwidth. The critical insight: the CDN must cache segments per rendition, not per video. We use URL paths like `/v/{video_id}/{resolution}/{segment_id}.ts`. Cache TTL is infinite for segments (they're immutable) but short (60 s) for manifests, because the manifest changes when we add or remove a rendition. Cache key must NOT include query string for segments — that's a common bug that fragments the cache.
+
+> **Interviewer:** How do you handle a popular video that just became available — the thundering herd of first requests?
+
+**Candidate:** *(Cross-question: cache stampede on new popular content)* Three defenses. First, predictive prefetch: when the Transcode Orchestrator marks a video READY, it pushes a prefetch request to all edge PoPs for the first 3 segments of the top renditions. Second, origin shield request coalescing: the shield layer holds duplicate requests for the same segment and fans out only one upstream fetch. Akamai and Cloudflare both implement this natively. Third, staggered availability: we don't mark the video READY in the API until at least one edge region reports a successful warm cache — we confirm by a synthetic fetch from each region.
+
+**DRM Key Delivery.** The content is encrypted with a Content Encryption Key (CEK) during packaging. The CEK is wrapped with Widevine's RSA key and stored in the DRM metadata in the MP4 container. At play time, the player extracts the key ID from the init segment and sends a license request to our license proxy. The proxy validates the user's JWT, checks the entitlement service (has the user purchased/subscribed?), and forwards the request to Google's Widevine license server. The Widevine server returns the CEK encrypted with the device's hardware key. We never store the CEK — only the key ID. This means even a full database breach cannot decrypt content.
+
+> **Interviewer:** What about FairPlay for Apple devices?
+
+**Candidate:** *(Cross-question: multi-DRM support)* FairPlay uses a different key exchange (HLS Sample AES, SPC/CKC envelope). We run a FairPlay Key Security Module on our own infrastructure — Apple does not offer a hosted license server the way Google does. The architecture is the same from the application's perspective: player sends a license request, we validate entitlement, we call the KSM, we return the encrypted key. The complexity is operational: we must store the FairPlay private keys in HSMs and handle key rotation without breaking existing downloads. Our KMS stores the wrapping keys; the CEKs themselves are re-encrypted at rotation time as a background job.
+
+**Multi-CDN Failover and Cost Optimization.** We use an anycast-based traffic manager (e.g., NS1 with real-time health checks) to split traffic across two CDNs — say Akamai for NA/EU and CloudFront for APAC. When Akamai reports elevated error rates (> 0.5% 5xx), the traffic manager shifts 100% of that region's DNS to CloudFront within one TTL (30 s). The cost insight: CDN egress is our largest line item. Old content (> 18 months, < 1000 views/day) moves from S3 Standard to S3 Glacier Instant Retrieval — $0.023/GB → $0.004/GB. For these cold-tier videos, the CDN TTL is set to 7 days: once warmed, they stay warm. The real saving is not cold-tiering the 99th percentile of views (those are on hot storage) but cold-tiering the 99% of the video catalog that is never watched again.
+
+> **Interviewer:** How would you add live streaming without redesigning this?
+
+**Candidate:** *(Cross-question: extending VOD to live)* Live is an ingest problem, not a delivery problem. The delivery path (CDN → player) is identical — HLS/DASH works for live with a short manifest window (3 segments, ~9 s latency for standard HLS). The ingest change: RTMP ingest servers (Wowza or a custom Go service) accept the broadcaster's stream, segment it into ~2 s chunks in real time, and write them to S3. The Transcode Orchestrator is replaced by a real-time transcoder (Elemental MediaLive or a custom ffmpeg pipeline with `-hls_time 2`). Latency target determines architecture: standard HLS gives 10–30 s, LL-HLS gives 2–4 s (requires partial segments + preload hints), WebRTC gives < 1 s but breaks CDN caching. For a sports platform, LL-HLS is the right trade-off.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you enforce regional content licensing (e.g., a show only licensed in the US)?**
+A: Geo-restriction at two layers. The DRM license proxy checks the user's IP-derived country against the content's allowed_regions list before issuing a key — even if the manifest is cached on a CDN, the player cannot decrypt without a valid license. Additionally, the CDN can enforce geo-blocking at the edge using Cloudflare Workers or Akamai EdgeWorkers, returning 451 (Unavailable For Legal Reasons) before serving the manifest. Defense in depth: CDN blocks the byte delivery; DRM blocks the decryption even if bytes leak.
+
+**Q: A transcoding job has been running for 2 hours on a 1-hour video. What's wrong and how do you detect it?**
+A: Transcode SLA is roughly 4× real-time for 4K — so a 1-hour video should finish in under 15 minutes. A 2-hour runtime signals either worker OOM (EC2 killed the process), a stuck segment (rare codec edge case), or a runaway loop in the orchestrator. Detection: Step Functions has a heartbeat timeout per task — if the worker doesn't send a heartbeat every 5 minutes, the task is marked failed. We then trigger a retry on a fresh worker with a different instance type. Alerting: CloudWatch metric `TranscodeJobDurationP99` with alarm at 3× expected duration. Post-mortem pattern: 90% of long-running jobs are caused by corrupt input — we add a pre-flight `ffprobe` validation step before queuing to transcode.
+
+**Q: How do you measure video quality in production?**
+A: Player-side telemetry emits events: `play_start`, `buffer_start`, `buffer_end`, `quality_change`, `error`, `heartbeat` (every 10 s with current bitrate). These flow to Kafka → Flink → real-time dashboards. Key metrics: buffering ratio (buffering_time / total_watch_time, target < 0.5%), startup time (time from play intent to first frame, target < 1 s p95), average bitrate (proxy for perceived quality). We correlate these metrics with CDN PoP, ISP, device type, and video ID to identify whether a quality degradation is content-specific (bad transcode), CDN-specific (PoP issue), or ISP-specific (peering problem).
+
+**Q: How do you handle copyright content ID (detecting duplicate uploads)?**
+A: Perceptual hashing (pHash) at upload time: extract one frame per second, compute DCT-based hash, store in a hash index. On new upload, compute pHash for each frame and run a nearest-neighbor search (LSH index) against the existing corpus. Match threshold is tuned to allow cover songs and remixes (high pHash similarity) while catching direct re-uploads. This runs as an async post-processing step — it does not block video availability. For audio, Chromaprint fingerprinting runs separately. False positive rate: reviewed by human reviewers when confidence is in the gray zone (0.7–0.9 similarity score).
+
+---
+
+*This chapter pairs with Chapter 71 (Media Upload Pipeline), Chapter 56 (Distributed Cache), Chapter 33 (Event-Driven Architecture with Kafka), and Chapter 64 (Recommendation Systems).*

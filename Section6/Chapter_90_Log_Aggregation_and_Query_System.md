@@ -3604,3 +3604,240 @@ DEEP DIVES (30-45 min):
   → When asked about cost: Tiered storage (SSD vs HDD vs object), compression ratio
   → When asked about incidents: Cache hit rate, auto-scaling, priority-based search
 ```
+
+## Interview Simulation — Log Aggregation and Query (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a log aggregation and query system — think internal observability infra. Walk me through requirements.
+
+**Candidate:** A few clarifying questions before I sketch anything.
+
+**Candidate:** What's the primary use case — real-time alerting, interactive query for on-call debugging, or batch analytics? And who are the main users: engineers debugging incidents, or analysts running reports?
+
+> **Interviewer:** Both — engineers need sub-second query latency for incident debugging (keyword search, filter by service/time), analysts run slower queries. Think something like Splunk or Datadog Logs internally.
+
+**Candidate:** Scale questions:
+
+- How many services / log producers? What's the ingest rate — GB/sec?
+- How long do we retain logs? Is tiered retention acceptable (fast/cheap trade-off)?
+- What's the query SLA — p99 for interactive queries? And can we have separate SLAs for batch vs interactive?
+
+> **Interviewer:** 10,000 services, ingest rate ~5 GB/sec uncompressed. Retention: 7 days hot, 30 days warm, 1 year cold. Interactive queries: p99 < 5 seconds. Batch can be minutes.
+
+**Candidate:** Last question: what query capabilities are required? Full-text search? Regex? Structured field filtering (JSON fields)? Aggregations (count, top-N)?
+
+> **Interviewer:** Full-text search, structured field filters, aggregations. No regex at query time — too slow at this scale.
+
+**Candidate:** Summarizing:
+1. Ingest 5 GB/sec uncompressed from 10,000 services
+2. Full-text search + field filters + aggregations
+3. Interactive p99 < 5 sec; batch queries minutes
+4. Tiered retention: 7d hot → 30d warm → 1y cold
+5. Multi-tenant: per-service isolation, cardinality governance
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Do the math.
+
+**Candidate:**
+
+- **Ingest:** 5 GB/sec uncompressed. With 5:1 compression (gzip on structured logs), ~1 GB/sec to disk. Per day: ~86 TB compressed.
+- **Hot tier (7 days):** 86 TB/day × 7 = ~600 TB. Must be on NVMe SSD or high-IOPS storage for fast query.
+- **Warm tier (30 days):** another ~2.5 PB on HDD or cold SSD.
+- **Cold tier (1 year):** ~31 PB on object storage (S3). Queried rarely, high latency acceptable.
+- **Index size:** full-text inverted index is typically 30–60% of raw data size. Hot-tier index: ~200–350 TB. This must fit on SSD too.
+- **Query fanout:** at 5 GB/sec, data is spread across many indexer shards. A query hitting 7-day hot tier fans out to all shards — scatter-gather pattern. At 100 shards, each shard searches 6 TB. With indexing, this completes in < 5 seconds.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** What does the API look like?
+
+**Candidate:**
+
+```
+// Ingest (from log agents — not user-facing)
+POST /ingest
+{ service_id, logs: [{ timestamp, level, message, fields: {k:v} }] }
+→ 202 Accepted { batch_id }
+
+// Interactive search
+POST /query
+{
+  query: "ERROR payment timeout",     // full-text
+  filters: { service: "checkout", level: "ERROR", env: "prod" },
+  time_range: { start: "now-1h", end: "now" },
+  limit: 200,
+  cursor: string                      // pagination
+}
+→ { logs: [...], total_hits: int, next_cursor: string, query_id }
+
+// Aggregation
+POST /aggregate
+{
+  query: "payment failed",
+  group_by: ["service", "error_code"],
+  metric: "count",
+  time_range: { start: "now-24h", end: "now" },
+  bucket_size: "5m"
+}
+→ { buckets: [{ time, service, error_code, count }] }
+
+// Saved queries / alerts
+POST /alerts
+{ name, query, threshold: { metric: "count", op: ">", value: 100 }, window: "5m" }
+```
+
+*(Cross-question: priority routing)* The `POST /query` request can include `priority: "interactive" | "batch"`. Interactive queries go to a dedicated query router with SLA guarantees; batch queries are queued and throttled when the cluster is under load.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** How do you structure the data?
+
+**Candidate:** Logs are semi-structured — they have a `message` string for full-text search, plus `fields` map for structured filters. The storage format must support both.
+
+```
+// On-disk schema (Parquet columns per segment):
+log_entry:
+  timestamp     INT64 (nanoseconds, sorted)
+  service_id    INT32 (dictionary-encoded)
+  level         ENUM(DEBUG|INFO|WARN|ERROR|FATAL)
+  trace_id      STRING
+  message       STRING  → tokenized into inverted index
+  fields        MAP<STRING, STRING>  → separate column per high-cardinality field
+  raw_bytes     BYTES   → original log line, compressed
+```
+
+**Segment structure:** logs are batched into immutable segments of ~512 MB raw. Each segment has:
+- A Parquet file (columnar, compressed)
+- An inverted index (term → list of (offset, position) pairs)
+- A bloom filter per segment for fast "does this term appear here?" checks
+- Min/max timestamp metadata for time-range pruning
+
+**Cardinality governance:** dynamic fields like `user_id` or `request_id` are high-cardinality and would explode the inverted index size. We enforce a `max_unique_values_per_field` limit at ingest time. Fields exceeding this limit are stored in the raw_bytes column only — queryable via slow scan, not indexed.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+> **Interviewer:** Draw the architecture.
+
+**Candidate:**
+
+```
+  Services (10,000)
+      │ stdout/stderr or structured log SDK
+      ▼
+  ┌─────────────────────────────────────────────────────┐
+  │              Log Agents (sidecar / daemon)           │
+  │  - tail log files, parse, buffer to local disk      │
+  │  - batch + compress, forward to Kafka               │
+  │  - WAL ensures no loss on agent crash               │
+  └──────────────────────┬──────────────────────────────┘
+                         │ compressed batches
+                         ▼
+              ┌──────────────────────┐
+              │        Kafka          │
+              │  partitioned by       │
+              │  service_id % 256     │
+              └──────┬───────────────┘
+                     │
+          ┌──────────┴────────────────────────┐
+          │         Indexer Pool               │
+          │  (N shards, each owns K partitions) │
+          │                                    │
+          │  For each batch:                   │
+          │  1. Parse + validate               │
+          │  2. Write to Parquet segment        │
+          │  3. Build inverted index            │
+          │  4. Flush segment to hot-tier store │
+          └──────────┬────────────────────────┘
+                     │
+          ┌──────────▼────────────────────────┐
+          │     Tiered Storage                  │
+          │                                    │
+          │  Hot (0-7d):  NVMe SSD cluster     │
+          │               indexed + queryable   │
+          │                                    │
+          │  Warm (7-30d): HDD + SSD cache     │
+          │                re-indexed on access │
+          │                                    │
+          │  Cold (30d-1y): S3 (Parquet only)  │
+          │                 no index, slow scan │
+          └──────────┬────────────────────────┘
+                     │
+          ┌──────────▼────────────────────────┐
+          │       Query Router                  │
+          │                                    │
+          │  Interactive queue → SLA: 5s p99   │
+          │  Batch queue → best-effort          │
+          │                                    │
+          │  Scatter-gather:                   │
+          │  1. Parse query                    │
+          │  2. Time-range prune (skip segments)│
+          │  3. Fan out to relevant shards      │
+          │  4. Merge + rank results            │
+          └────────────────────────────────────┘
+```
+
+> **Interviewer:** How does the full-text search work at 5 GB/sec ingest, 600 TB hot-tier?
+
+**Candidate:** The key insight is that we never query the raw bytes — we query the inverted index.
+
+At ingest, the indexer tokenizes the `message` field: lowercase, split on whitespace and punctuation, strip stop words. For each token, we maintain a posting list: `token → [(segment_id, offset_within_segment)]`.
+
+At query time for "ERROR payment timeout":
+1. Tokenize the query: ["error", "payment", "timeout"]
+2. Look up each token's posting list — O(1) per token with a hash index
+3. Intersect the posting lists (AND semantics) or union them (OR) — this is a sorted-merge intersection
+4. For each matching (segment_id, offset), fetch the raw log line from Parquet
+
+The bloom filter is crucial for pruning: before touching a segment's index, we check `bloom_filter.contains("payment")`. If false, skip the segment entirely. This eliminates 90%+ of segment I/O for selective queries.
+
+Scatter-gather across 100 shards means 100 parallel index lookups. Each lookup returns a small posting list (usually thousands of entries). The query router merges results sorted by timestamp and returns the top N. Total wall time: index lookup (~50ms) + top-N merge (~100ms) = well within 5-second SLA.
+
+> **Interviewer:** How does tiered storage work? Specifically, what happens when someone queries 30-day-old logs?
+
+**Candidate:** Warm-tier queries hit HDD, which has 10× higher latency than NVMe. The index might not be preloaded in the OS page cache.
+
+Two strategies:
+
+**Proactive re-indexing on tier transition:** when segments move from hot to warm (day 7), we keep a compact index alongside them on HDD. The index is smaller than the hot-tier index (we prune low-frequency terms) but covers the common case. Query latency increases from ~500ms to ~2–3 seconds — still within our 5-second SLA for warm queries.
+
+**Lazy cache warming:** the query router caches recently-queried warm-tier segment indexes in a Redis cluster. A 30-day query for a specific service (a common incident retrospective pattern) warms the cache on first hit. Subsequent queries for the same service/time range are fast.
+
+Cold-tier (S3) queries don't have an index. They scan Parquet files with column pruning (filter pushdown on `service_id`, `timestamp`, `level`). Expected latency: minutes. We route these to the batch queue automatically based on time range.
+
+> **Interviewer:** What's cardinality governance and why does it matter at Staff level?
+
+**Candidate:** High-cardinality fields like `user_id`, `request_id`, or `trace_id` each have millions of unique values. If we index them, the posting lists are enormous — millions of entries per term — and the index size balloons to 10× the raw data size. Worse, writes become slow because we're updating millions of posting list entries per second.
+
+The governance layer enforces a cardinality budget: during ingest, we track unique values per field per service per hour using a HyperLogLog sketch (~12 KB per field). If a field's estimated cardinality exceeds the threshold (e.g., 10K unique values per hour), we drop it from the inverted index and store it only in the Parquet raw column.
+
+The UI surfaces this to users: "field `user_id` is not indexed — filter queries on this field will be slow." Teams can request a cardinality budget increase, which triggers a capacity review.
+
+At Staff level, this is an organizational design problem as much as a technical one. You need an approval workflow, a cost model (indexed field = X GB/day index overhead), and a team whose job is to enforce the budget across 10,000 services.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: agent disk buffer and no-loss guarantee)* Log agents write to a local WAL before forwarding to Kafka. If Kafka is unavailable, logs buffer on local disk (configured max: 2 GB per agent). If the host crashes, on restart the agent replays the WAL. The only loss scenario is host disk corruption — which we accept as a known gap for non-critical logs. For audit logs, we use a separate high-durability pipeline with synchronous writes to two replicas before acknowledging.
+
+*(Cross-question: compression ratio)* Structured JSON logs compress at 8:1 to 12:1 with zstd. Our estimate of 5:1 is conservative. In practice, 5 GB/sec uncompressed → ~500 MB/sec to disk. This changes the storage math: 7-day hot tier is ~300 TB, not 600 TB. Always present conservative estimates in interviews and note where you're being conservative.
+
+*(Cross-question: priority-based query routing)* Incident response queries at 3am should never compete with a data analyst's 30-day trend query. The priority queue approach: interactive queries get a dedicated pool of query workers. Batch queries get a separate pool with a lower budget. When the cluster is under load, we shed batch queries first (return 503 with Retry-After header), never interactive queries. At Staff level, you also need admission control at the API layer — rate-limit per-team query budgets so one team can't monopolize the query cluster.
+
+*(Cross-question: auto-scaling)* Ingest is bursty — deploy events, incident storms, traffic spikes all cause log rate spikes. The indexer pool autoscales based on Kafka consumer lag. If lag exceeds 30 seconds, add indexer nodes. If lag is near-zero, scale in. New indexer nodes pick up Kafka partitions from the coordinator (similar to Kafka consumer group rebalancing). The hot-tier storage scales independently — we add NVMe nodes and rebalance segments across the pool using consistent hashing.
+
+*(Cross-question: making the system reliable during incidents)* This is meta — the observability system must be available exactly when it's most needed. Mitigation: (1) the log ingest pipeline is separate from the query pipeline; ingest continues even if query nodes are down, (2) agents buffer locally so ingest survives Kafka downtime up to the buffer limit, (3) we maintain a minimal "emergency query" path that bypasses the indexer and does a raw Parquet scan for critical services — slow but always available, (4) the observability system has its own oncall and is treated as tier-0 infrastructure.

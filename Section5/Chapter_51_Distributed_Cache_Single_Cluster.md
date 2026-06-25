@@ -3876,3 +3876,177 @@ The application must treat any per-node failure as a cache miss for keys on that
 
 **This chapter now meets Google Staff Engineer (L6) expectations.**
 
+
+---
+
+## Interview Simulation — Distributed Cache (Single Cluster)
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a distributed cache for a large e-commerce platform. Where would you like to start?
+
+**Candidate:** I'd like to clarify scope before diving in. A few questions: Are we building the cache infrastructure itself, or designing how the application uses an existing cache like Redis? Are we caching across multiple regions or within a single cluster? What's the approximate scale — DAUs, QPS to backend services?
+
+> **Interviewer:** Good. You're designing the cache infrastructure within a single cluster. Assume 50 million DAUs, significant read-heavy workload on a product catalog and user profile service. What else do you need?
+
+**Candidate:** What consistency guarantees do stakeholders require? For a product catalog, I'd assume eventual consistency is acceptable — brief stale price or inventory is tolerable. For user sessions or account data, I'd want to confirm whether reads need to be strongly consistent. Also: should the cache be shared across all services, or is this service-specific? And do we have a preference for write strategy — write-through, cache-aside, or write-behind?
+
+> **Interviewer:** Eventual consistency is fine. Shared cache. Cache-aside is the current pattern. What are your non-goals?
+
+**Candidate:** I'll explicitly exclude: multi-region replication, strong consistency guarantees, persistent storage (cache is ephemeral), and complex query caching. The cache will hold key-value pairs only, keyed by entity primary key. The database is always the source of truth — if the cache fails, we fall back gracefully.
+
+*(Cross-question: probing scope clarity)*
+
+> **Interviewer:** What if the product team asks for a feature where cache writes are immediately visible globally across all shards?
+
+**Candidate:** That would require strong consistency, which defeats the purpose of caching — you'd need distributed locking adding 20–50ms per write. I'd push back and ask what problem they're actually solving. If they need read-after-write consistency for a specific write path (e.g., price update), I'd suggest write-through with TTL-based expiry on affected keys rather than strong consistency across the whole cache. Strong consistency + caching is a contradiction in most workloads.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Let me work through sizing. 50M DAUs, average 20 API calls per day = 1 billion API calls/day = ~11,500 QPS average. Cache handles 95% of reads → ~10,900 cache ops/sec average, peak 3× = ~33,000 ops/sec.
+
+For memory: product catalog has ~5M products, average record size ~2KB serialized = 10 GB. User profiles for 50M users at 1KB each = 50 GB. Total working set ~60 GB. With Redis overhead (~50%) and headroom = ~100 GB raw memory needed.
+
+Cluster sizing: Redis node with 25 GB usable memory, 100K ops/sec capacity. Need 4 nodes for memory (100 GB / 25 GB), 3 nodes for throughput (33K / 100K per node). Choose 4 primary + 4 replica = 8-node Redis Cluster.
+
+> **Interviewer:** You said 50 GB for user profiles, but in practice most users won't have cache entries simultaneously. How does this affect your sizing?
+
+**Candidate:** Good catch. The working set is not all 50M users — it's the active users within the TTL window. If TTL is 1 hour and DAU is 50M, roughly 50M/24 ≈ 2M users active per hour. At 1KB each = 2 GB for user profiles. That dramatically changes the picture. Combined with the product catalog, realistic working set is more like 12–15 GB, fitting comfortably in 2–3 nodes. I'd still provision 4 nodes for throughput and fault tolerance.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** The cache exposes five core operations:
+
+```
+GET(key: string) → value: bytes | null
+SET(key: string, value: bytes, ttl_seconds: int) → success: bool
+DELETE(key: string) → success: bool
+MGET(keys: string[]) → values: (bytes | null)[]
+SET_NX(key: string, value: bytes, ttl_seconds: int) → acquired: bool  // For stampede prevention
+```
+
+Key naming convention: `{service}:{entity_type}:{entity_id}`, e.g., `catalog:product:12345`. This enables namespace-based monitoring and debugging.
+
+*(Cross-question: API contract)*
+
+> **Interviewer:** Why do you need SET_NX? Couldn't you handle that in application code?
+
+**Candidate:** SET_NX — "set if not exists" — must be atomic at the cache level. If you implement the check-and-set in application code, you have a TOCTOU race: two threads both check, both see the key is absent, both set it. This is the exact race that causes cache stampede. SET_NX with a TTL is how you implement the "only one thread fetches from DB on a miss" pattern atomically. Redis supports this natively as `SET key value NX EX ttl`. Without this atomic primitive, stampede prevention either doesn't work or requires a distributed lock, which is more complex.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** The cache stores key-value pairs where values are serialized bytes. I'll version the serialization format to handle schema evolution:
+
+```
+Value envelope: {
+  "v": 2,                     // schema version
+  "t": "product",             // type tag for deserialization
+  "d": { ...entity fields },  // actual data
+  "cached_at": 1706745600     // Unix timestamp for staleness debugging
+}
+```
+
+Keys follow the `service:type:id` convention. TTLs are set per entity type: product details 30 minutes, user profiles 1 hour, inventory 2 minutes (changes frequently), sessions 15 minutes.
+
+I'd add ±10% random jitter to all TTLs to prevent thundering herd on expiry.
+
+*(Cross-question: data model decision)*
+
+> **Interviewer:** Why store `cached_at` in the value? That wastes bytes on every record.
+
+**Candidate:** The overhead is ~12 bytes per record, which at 1KB average values is about 1.2% overhead — acceptable. The benefit is operational: when debugging a stale data complaint, you can immediately see how old the cached value is without cross-referencing logs. It also helps detect cases where cache warming loaded very old data. In high-traffic caches where every byte matters, I'd strip it. Here, the debuggability is worth the cost. If memory becomes tight at 10× scale, it's the first thing I'd remove.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:** Here's the architecture:
+
+```
+  ┌─────────────────────────────────────────────────────┐
+  │               APPLICATION TIER                      │
+  │  ┌──────────┐   ┌──────────┐   ┌──────────┐         │
+  │  │App Server│   │App Server│   │App Server│         │
+  │  │+L1 Cache │   │+L1 Cache │   │+L1 Cache │  ←in-proc
+  │  └────┬─────┘   └────┬─────┘   └────┬─────┘         │
+  └───────┼──────────────┼──────────────┼───────────────┘
+          └──────────────┼──────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────┐
+  │              REDIS CLUSTER (L2)                     │
+  │  ┌──────────────┐ ┌──────────────┐ ┌─────────────┐  │
+  │  │ Shard 1      │ │ Shard 2      │ │ Shard 3     │  │
+  │  │ (Primary +   │ │ (Primary +   │ │ (Primary +  │  │
+  │  │  Replica)    │ │  Replica)    │ │  Replica)   │  │
+  │  └──────────────┘ └──────────────┘ └─────────────┘  │
+  └─────────────────────────────────────────────────────┘
+                         │  (on miss)
+                         ▼
+  ┌─────────────────────────────────────────────────────┐
+  │              DATABASE (source of truth)             │
+  └─────────────────────────────────────────────────────┘
+```
+
+Two-tier caching: L1 is a small in-process LRU cache on each app server (~500 entries, 10ms TTL) for ultra-hot keys. L2 is the shared Redis Cluster. Consistent hashing routes each key to the correct shard. Cache-aside pattern: check L1 → check L2 → query DB → populate both.
+
+*(Cross-question: hot key problem)*
+
+> **Interviewer:** A celebrity product goes viral and gets 100,000 requests per second to a single key. How does your design handle this?
+
+**Candidate:** This is the hot key problem. Three mitigations, applied in layers:
+
+First, local L1 cache on each app server absorbs most of the load — 10ms TTL means 100K RPS across 50 app servers = only 50K/10ms = 5M lookups/sec to Redis, but each server's L1 absorbs its own traffic. More precisely: if L1 TTL is 10ms and a server gets 2,000 RPS, it only misses L1 every 10ms, generating 100 Redis lookups/second per server.
+
+Second, if L1 isn't enough, key replication: write the hot key to N copies with a random suffix (`product:viral:12345:replica_0`, `_1`, ... `_N-1`). Reads randomly select a replica. This spreads one key across N Redis slots and N shards.
+
+Third, for extreme cases, drop the key into a read-only local copy with a longer TTL — essentially promoting L1 TTL from 10ms to 1s for specifically flagged hot keys. The cost is 1-second staleness for that specific product, which is acceptable for a viral product page.
+
+*(Cross-question: cache stampede)*
+
+> **Interviewer:** The viral product's cache entry expires. What exactly happens and how do you prevent database overload?
+
+**Candidate:** Classic stampede: all 100K concurrent requests see a miss simultaneously, all attempt DB queries in parallel. The DB goes from ~5K QPS to 100K QPS in milliseconds and falls over.
+
+Prevention uses probabilistic early expiration (XFetch algorithm): instead of waiting for hard expiry, each requester probabilistically decides to refresh early based on `remaining_ttl < beta * delta * log(random)`, where `delta` is the time to recompute. This staggers refreshes naturally without coordination.
+
+For explicit locking: use `SET lock:product:12345 1 NX EX 5`. One requester acquires the lock, fetches from DB, populates cache. Others either wait with a short sleep and retry (adding jitter to avoid synchronized retries), or serve a slightly stale value if one exists. The stale-while-revalidate pattern is cleaner: return the old expired value immediately while one background thread refreshes it. This is what most CDNs do.
+
+*(Cross-question: shard failure)*
+
+> **Interviewer:** A Redis primary shard fails. Walk me through exactly what happens to traffic.
+
+**Candidate:** The Redis Cluster detects the failure via gossip protocol within 1–5 seconds. During detection: all requests to that shard get connection errors. The cache client falls open — treats errors as misses — so 1/N of all traffic (N = number of shards, here 1/3) suddenly hits the database. If the shard held 33% of keys, database QPS spikes from ~500 (5% miss rate × 10K ops/sec) to ~3,800 (5% normal misses + 33% from dead shard × 10K). That's manageable if the DB was sized for cold-cache load.
+
+After 1–5 seconds, the replica is promoted to primary. Traffic resumes but the new primary has either empty state (if failover was clean) or warm state (if replication was current). If warm, hit rate recovers immediately. If cold, we have a mini-stampede for 1/3 of keys. The fix: size the database for at minimum 2× cold-cache load (assume any one shard can go cold at any time). Monitor hit rate per shard separately so you see the degradation immediately.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q1: Why consistent hashing over modular hashing?**
+
+**A:** Modular hashing (`hash(key) % N`) remaps nearly all keys when you add or remove a node. If you go from 3 to 4 shards, roughly 75% of keys move to new shards — a cache wipeout. Consistent hashing with a ring remaps only `1/N` of keys on average when a node is added or removed. At 3 shards, adding a 4th moves about 25% of keys, not 75%. This is critical for live resharding — you can add capacity without a thundering herd. Virtual nodes (150 per physical node) additionally smooth the distribution so no shard is disproportionately loaded.
+
+**Q2: LRU vs LFU — when does the choice matter in production?**
+
+**A:** LRU (least recently used) is the right default for most caches: it evicts items that haven't been accessed recently, which handles temporal locality well. LFU (least frequently used) is better when access patterns are stable and frequency matters more than recency — for example, a config object accessed 10,000 times per second that wasn't touched in the last 100ms should not be evicted over a rarely-accessed item that happened to be touched 2 seconds ago. The failure case for LFU is "frequency counter staleness" — an item that was very popular six months ago (high counter) can block eviction of fresher, currently-hot items. Redis LFU uses a logarithmic counter with decay to address this. In practice: use LRU unless you have evidence that LFU would produce higher hit rates for your specific workload.
+
+**Q3: How do you safely invalidate a cache entry when the underlying data changes?**
+
+**A:** Three strategies, each with trade-offs. Delete-on-write (cache-aside invalidation): after updating the DB, delete the cache key. Simple and safe — no stale data propagates. The risk is a brief window where concurrent reads between the DB write and the cache delete see old data. Write-through: update cache and DB atomically. Reduces stale reads but adds write latency and wastes cache space for write-only paths. TTL-only: rely on expiry for eventual consistency. Simplest but worst-case staleness is the full TTL. In production I use delete-on-write for entities with low write frequency and clear ownership (one service writes). I avoid write-through unless strong consistency is required on reads. The subtle bug to avoid: updating the cache value (not deleting) can introduce a race where two concurrent writes apply out of order, leaving stale data permanently. Delete is safer than update.
+
+**Q4: The database is sized for 10% miss rate but you're seeing 40% misses in production. What do you check first?**
+
+**A:** Four most likely causes, checked in order. First, working set overflow: the hot working set exceeds cache size. Check eviction rate metrics — if Redis is evicting frequently, the cache is too small. Fix: either increase memory or narrow what you cache. Second, TTL too short: data expires before it can be reused. Check cache age distribution — if most items expire before a second hit, TTLs need extending. Third, cache invalidation storm: a deployment or schema change invalidated large numbers of keys simultaneously. Check for a correlation between deployment time and miss rate spike. Fourth, key namespace collision or bug: a code change introduced a different key format for the same data, creating duplicate keys or misses on valid data. Check key distribution across the namespace. Secondary question: is the 40% uniformly distributed or concentrated in specific key prefixes? Prefix-level hit rate monitoring is essential for diagnosing this quickly.
+

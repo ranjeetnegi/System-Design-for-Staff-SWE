@@ -1998,3 +1998,169 @@ Regulatory:
 *Fraud monitoring dashboards: real-time fraud rate, FP rate by merchant, model score distribution histogram.*
 *Shadow mode is non-negotiable: never deploy a new rule or model directly to 100% production traffic.*
 *Last updated: 2026-06-25. System Design for L6: The Complete Guide.*
+
+---
+
+## Interview Simulation — Fraud Detection (Stripe / PayPal) (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design the fraud detection system for a payment platform at Stripe scale. Where do you start?
+
+**Candidate:** A few questions. First — what types of fraud are we targeting: card-not-present fraud (stolen card used online), account takeover, chargeback fraud (friendly fraud), or all three? Each has different feature sets. Second — what's the latency budget? For a payment authorization, we're inside a < 300 ms total window — how much can fraud detection use? Third — what's the current fraud rate baseline, and what's the acceptable false positive rate? Blocking a legitimate transaction is costly (customer friction, potential churn). Fourth — do we need to be explainable — can we give a reason for a decline, or is a black-box ML model acceptable?
+
+> **Interviewer:** All three fraud types. Latency budget: < 50 ms for fraud decision. False positive rate < 0.2% (premium users expect near-zero friction). Explainability required for regulatory compliance (GDPR Article 22).
+
+**Candidate:** Functional requirements: (1) Real-time fraud scoring for every transaction within 50 ms. (2) Velocity checks: rate of transactions per user, card, IP, device. (3) Two-stage pipeline: rule engine for obvious fraud, ML model for nuanced patterns. (4) Chargeback feedback loop to retrain models. (5) Shadow mode deployment for new models. Non-functional: < 50 ms p99 for fraud decision, 99.99% availability (downtime = revenue loss), < 0.2% false positive rate, model decisions explainable via SHAP values.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Stripe processes ~1 billion transactions per day → ~11,500 transactions/s average, ~50,000 transactions/s peak. Each transaction triggers one fraud evaluation. Feature store lookups: each evaluation reads ~40 features — user velocity (last 1h, 24h), device fingerprint history, merchant category, card BIN risk score, geographic anomaly score. Each feature lookup is a Redis read: 40 lookups × 11,500/s = 460,000 Redis reads/s. At 100K ops/s per Redis node, we need ~5 nodes (plus replicas). ML model inference: a 1,000-tree XGBoost model on 40 features takes ~2 ms on CPU. At 50,000 transactions/s, we need ~100 CPU cores dedicated to inference. Model storage: 1,000 trees × ~10 KB per tree = 10 MB per model — loads entirely in L3 cache, very fast inference.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Internal API only — fraud detection is not exposed externally. `POST /v1/fraud/evaluate` body `{transaction_id, user_id, card_token, amount, merchant_id, device_fingerprint, ip_address, billing_address}` returns `{fraud_score: 0.0-1.0, decision: ALLOW/REVIEW/BLOCK, rule_triggers: [...], shap_values: {...}, evaluation_id}`. The response includes both the decision and the explainability artifacts (SHAP values and which rules triggered) — needed for regulatory compliance and for the customer service team to explain a decline. `POST /v1/fraud/feedback` body `{transaction_id, outcome: CHARGEBACK|LEGITIMATE|MANUAL_REVIEW_APPROVED}` — triggers the feedback loop. `GET /v1/fraud/velocity/{user_id}?window=1h` — internal query for the customer service dashboard.
+
+> **Interviewer:** Why return SHAP values in the real-time response rather than computing them asynchronously?
+
+**Candidate:** GDPR Article 22 requires that automated decision-making be explainable to the affected person on request. If a customer calls to dispute a declined transaction, the support team needs the explanation immediately — not after an async job runs. We precompute SHAP values inline because XGBoost TreeSHAP runs in O(T×D) where T is number of trees and D is tree depth — for our 1,000-tree model, this adds ~1 ms to inference time. Acceptable given the 50 ms budget. The alternative (async SHAP computation stored in a database) creates a race condition if the customer calls before the async job completes.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three stores. Feature store (Redis): `velocity:{user_id}:1h` → sorted set of transaction timestamps (ZRANGEBYSCORE with time window gives count), `velocity:{card_token}:24h` → same pattern, `device:{fingerprint}:risk_score` → float. Keys have TTL matching their window size + 10%. Each transaction writes to these keys atomically in a pipeline. Transaction log (Kafka + Iceberg on S3): every evaluation result stored with all features and model output. Schema: `{transaction_id, timestamp, user_id, features_json, fraud_score, decision, rule_triggers, shap_values_json, final_outcome (updated via feedback)}`. This is the training dataset for the next model version. Chargeback table (PostgreSQL): `{transaction_id, chargeback_filed_at, amount, dispute_reason, outcome}`. Joined with the Iceberg transaction log to compute model performance metrics and generate training labels.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** The two-stage pipeline:
+
+```
+TRANSACTION FRAUD EVALUATION (< 50ms)
+======================================
+
+Payment Service
+  │ transaction arrives
+  ▼
+Fraud Gateway (synchronous, on payment auth critical path)
+  │
+  ├─1► Feature Fetch (Redis, parallel, 5ms)
+  │       user velocity (1h, 24h, 7d)
+  │       card velocity (1h, 24h)
+  │       device fingerprint risk score
+  │       IP reputation (Spamhaus + internal)
+  │       merchant category risk
+  │       billing/shipping address mismatch flag
+  │       → 40 features total, all from Redis
+  │
+  ├─2► Rule Engine (in-process, 2ms)
+  │       Rules (examples):
+  │       - card used in 3+ countries in 1 hour → BLOCK
+  │       - transaction amount > 10× user's 30-day avg → REVIEW
+  │       - device fingerprint seen on 5+ accounts → BLOCK
+  │       - merchant in high-risk MCC + card < 7 days old → REVIEW
+  │       → if any BLOCK rule: short-circuit, skip ML
+  │       → if any REVIEW rule: ML runs but score thresholds lower
+  │
+  ├─3► ML Inference (XGBoost, CPU, 3ms)
+  │       40 features → fraud_score [0.0, 1.0]
+  │       TreeSHAP → shap_values per feature
+  │       decision thresholds:
+  │         score < 0.3 → ALLOW
+  │         0.3-0.7 → REVIEW (manual review queue)
+  │         score > 0.7 → BLOCK
+  │
+  ├─4► Decision + Response Assembly (1ms)
+  │       merge rule triggers + ML decision
+  │       write to Kafka (async, non-blocking on response path)
+  │       update velocity counters in Redis (async pipeline)
+  │
+  └─► Return {fraud_score, decision, rule_triggers, shap_values}
+      to Payment Service (total: ~11ms, well within 50ms budget)
+
+FEEDBACK + RETRAINING LOOP
+============================
+Chargeback events
+  │ (filed 30-90 days after transaction)
+  ▼
+Chargeback Processor
+  │ joins with Iceberg transaction log on transaction_id
+  │ labels transaction as FRAUD
+  │
+  ▼
+Training Pipeline (weekly)
+  │ pull 90-day window from Iceberg
+  │ feature engineering (same as production features)
+  │ train XGBoost on fraud/legitimate labels
+  │ evaluate: AUC, precision at 0.2% FP rate
+  │
+  ├─► Shadow Mode: new model runs in parallel (SHADOW flag)
+  │       predictions logged but NOT used for decisions
+  │       compare shadow predictions to production outcomes
+  │       A/B test: does shadow model improve AUC?
+  │
+  └─► Canary Deploy (if shadow AUC > production AUC + 0.5%):
+          route 1% of traffic to new model
+          monitor fraud rate + FP rate in real time
+          gradual rollout: 1% → 5% → 20% → 100%
+
+VELOCITY COUNTER ARCHITECTURE
+===============================
+Redis Sorted Set per velocity dimension:
+  Key: vel:{user_id}:{window}
+  Value: ZADD with score=timestamp, member=transaction_id
+  Query: ZCOUNT vel:{user_id}:1h (now-3600) now
+  Write: ZADD + EXPIRE (async, after response returned)
+
+Pros: exact counts, O(log N) write and read
+Cons: memory proportional to transaction count per window
+Scale: 50K TPS × 3600s = 180M members per user-hour key
+  → impractical for high-velocity users
+Solution: sliding window approximation using two fixed
+  buckets (current + previous 1h), weighted average:
+  approx_count = count(current_bucket) +
+    count(prev_bucket) × (1 - elapsed_fraction)
+  Memory: 2 counters per dimension vs O(TPS×window) members
+```
+
+**Deep Dive 1: Rule Engine + ML Two-Stage Architecture.**
+
+The rule engine handles the obvious cases at near-zero cost: a card used in three countries in one hour is fraud — no ML needed. Rules are fast (2 ms), fully explainable (the rule that triggered is the explanation), and easily maintained by the fraud operations team without engineering involvement. Rules are stored in a YAML config file, hot-reloaded without deployment, and versioned in Git for audit. The ML model handles the gray zone: a transaction that looks slightly unusual but doesn't trigger any rule. The model captures complex feature interactions (a $200 transaction is suspicious for a user who always spends < $50, but not for a user who spends $500/day) that would require exponentially many rules to capture explicitly. The two-stage architecture is also a latency optimization: ~30% of transactions are blocked by rules without reaching the ML model, saving inference compute.
+
+> **Interviewer:** How do you handle training-serving skew — features computed differently at training time vs inference time?
+
+**Candidate:** *(Cross-question: training-serving skew)* This is the most common failure mode in production ML. Training-serving skew happens when training computes features from the offline transaction log differently from how the production feature store computes them. Two defenses. First, use the same feature computation code for both: the feature store's Redis population logic is the same Python function as the training pipeline's feature engineering. We enforce this via a shared library — the features module is imported in both the production service and the Spark training job. Changes to the library require updating both and running a drift test. Second, log all features at inference time in the Iceberg transaction log. Training uses these logged features (not recomputed from raw data), which are guaranteed to match what the model saw in production. The exception: for the first model training, we must use historically computed features — we document this as the "cold start skew window" and accept that the first model version has slightly degraded performance.
+
+**Deep Dive 2: Shadow Mode Deployment.**
+
+The rule: never deploy a new fraud model or rule directly to 100% production traffic. A new model that increases the fraud block rate from 0.5% to 1.0% might be catching more fraud — or might be over-blocking legitimate transactions. Shadow mode separates these. The new model runs in parallel with the production model: it receives the same transaction data and produces a fraud_score, but the score is logged and NOT used for the decision. We compare shadow scores against production outcomes over 2 weeks: if transactions the shadow model flagged (score > 0.7) but the production model allowed subsequently result in chargebacks at a higher rate, the shadow model is better. If they chargeback at the same rate as production-allowed transactions, the shadow model is over-triggering. Canary deploy follows shadow validation: 1% of traffic, real decisions, monitor FP rate hourly. A FP rate spike at canary stage stops the rollout automatically.
+
+> **Interviewer:** How do you handle velocity checks for a business that legitimately processes thousands of transactions per hour?
+
+**Candidate:** *(Cross-question: high-velocity legitimate accounts)* Merchant context is a feature, not an override. A business account (merchant_type = B2B_PLATFORM) processes 10,000 transactions/hour legitimately. The velocity feature for this account should not trigger fraud rules. We handle this by segmenting velocity thresholds by account tier: consumer accounts use tight velocity limits (50 transactions/day), marketplace accounts use looser limits (1,000/day), and enterprise accounts have custom velocity profiles (stored in account metadata, fetched as part of the feature set). The ML model also learns these patterns: a high-velocity account that has processed transactions consistently for 2 years with zero chargebacks has very different feature distributions than a newly created high-velocity account.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you handle the cold start problem — a brand new user with no history?**
+A: New users have no velocity features, no device history, no behavioral baseline. We use four signals. First, device fingerprint: if the device has been seen before (even on a different account), we inherit the risk score of that device's prior activity. Second, email domain risk: disposable email addresses (mailinator.com, guerrillamail.com) are high-risk signals for new accounts. Third, card BIN data: the first 6-8 digits of a card number identify the issuing bank and card type — a prepaid virtual card from a high-risk country is a stronger signal than a Visa credit card from Chase. Fourth, behavioral biometrics during signup: typing speed, mouse movement patterns, and form fill speed are distinct for bots vs humans. New user risk scores are therefore higher than established users, and thresholds are adjusted — we accept slightly higher FP rates for new users until they build history.
+
+**Q: A new fraud pattern emerges that your model and rules have never seen. How do you detect it?**
+A: Monitoring for distribution shift. We run daily checks on feature distributions: if the mean transaction amount for a user segment shifts by > 2σ from its 30-day baseline, that's an anomaly. We also monitor model confidence calibration: if the model is suddenly making many predictions in the 0.4–0.6 range (uncertain territory) for a class of transactions it previously scored confidently, the underlying data distribution has changed. Operational signal: a spike in chargebacks 30–60 days after a new fraud pattern starts is the lagging indicator. We address this with a rapid response loop: fraud operations analysts can create new rules within hours (YAML config, no engineering required), providing coverage while the model retrains on the new pattern.
+
+**Q: How do you prevent internal fraud — an employee with database access modifying fraud scores?**
+A: Defense in depth. First, the fraud score is written to Kafka as an immutable event — appending, never updating. Any modification requires deleting and re-creating an event, which is logged. Second, the fraud evaluation service runs with a service account that has write-only access to Kafka and read-only access to the feature store — it cannot read or modify past decisions. Third, the Iceberg transaction log on S3 uses S3 Object Lock (WORM compliance) — files cannot be deleted or modified for a configurable retention period. Fourth, all model deployment actions require a two-person approval in the CI/CD pipeline. Fifth, we run a quarterly audit: randomly sample 1,000 ALLOW decisions and verify they match the model's documented prediction for those features — any discrepancy is investigated.
+
+*Shadow mode is non-negotiable: never deploy a new rule or model directly to 100% production traffic.*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*

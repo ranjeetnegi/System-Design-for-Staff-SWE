@@ -5294,3 +5294,237 @@ All code examples in this chapter use language-agnostic pseudo-code:
 5. Use the brainstorming questions to anticipate follow-ups
 6. Practice the full design exercises to build end-to-end fluency
 7. Study the common L5 mistakes section to avoid interview pitfalls
+---
+
+## Interview Simulation — Messaging Platform (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive. Staff-level cross-questions probe organizational complexity, multi-region trade-offs, failure blast radius, and build-vs-buy decisions.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a messaging platform like WhatsApp or Slack. Before you dive in, tell me what you need to know.
+
+**Candidate:** A few clarifying questions. First, scope: are we building 1-on-1 messaging only, or do we include group chats? And what's the group size ceiling — Slack channels can have 100k+ members, while WhatsApp groups cap at 1,024. That fan-out strategy is completely different at each end.
+
+> **Interviewer:** Include groups. Let's say up to 10,000 members per group.
+
+**Candidate:** Second: end-to-end encryption. WhatsApp uses the Signal protocol; Slack doesn't encrypt end-to-end by default. That changes how we store and index messages. E2EE means the server never sees plaintext, which kills server-side full-text search.
+
+> **Interviewer:** Assume E2EE is required, like WhatsApp.
+
+**Candidate:** Third: message retention. Do messages expire (ephemeral, like Snapchat) or persist indefinitely? And deletion — if a sender deletes "for everyone," is that a best-effort soft delete or a hard cryptographic guarantee?
+
+> **Interviewer:** Messages persist. Deletion for sender only; best-effort deletion for recipients.
+
+**Candidate:** Fourth: multi-device. Can a user have 5 active devices, each needing the full message history decryptable? That's the hardest part of the Signal protocol — multi-device key distribution.
+
+> **Interviewer:** Yes, up to 5 devices per user.
+
+**Candidate:** Finally: geographic footprint. Single region, multi-region active-active, or a hub-and-spoke with regional relays?
+
+> **Interviewer:** Multi-region. Assume users in NA, EU, APAC. Message ordering must be consistent per conversation.
+
+**Candidate:** Got it. To summarize: E2EE required, groups up to 10k, up to 5 devices per user, multi-region with per-conversation ordering guarantees, and best-effort recipient deletion.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+> **Interviewer:** Walk me through the numbers before you draw anything.
+
+**Candidate:** Starting with users: assume 500M monthly active, 100M daily active. Peak concurrency: roughly 10% of DAU online simultaneously — that's 10M concurrent connections. Each connection is a WebSocket, so we need persistent connection infrastructure.
+
+Message volume: if each DAU sends 50 messages per day, that's 5 billion messages per day, or roughly 58,000 messages per second at peak — let's call it 100k/sec with spikes.
+
+Group fan-out is the amplifier. A 1,000-member group multiplies one send into 1,000 deliveries. At 1% of messages going to 1,000-member groups: 1,000 msg/sec × 1,000 fan-out = 1M delivery events/sec from group messages alone.
+
+Storage: average message is 200 bytes ciphertext + 100 bytes metadata = 300 bytes. 5B messages/day × 300 bytes = 1.5 TB/day. Over 5 years of retention: ~2.7 PB. This demands tiered storage — hot (SSDs, recent 90 days), warm (object store, 90 days–2 years), cold (glacial archive, 2 years+).
+
+> **Interviewer:** How many WebSocket servers does that need?
+
+**Candidate:** Each server can hold ~50k persistent WebSocket connections. For 10M concurrent: 10M / 50k = 200 connection servers. With 3× headroom for failures and rolling deploys: ~600 servers. Add regional distribution across NA/EU/APAC: roughly 200 per region.
+
+---
+
+### Phase 3: API Design (4 min)
+
+> **Interviewer:** Define the core API surface.
+
+**Candidate:** I'll focus on four operations. First, sending a message:
+
+```
+POST /v1/conversations/{conversation_id}/messages
+Body: {
+  ciphertext:       bytes,          // E2EE encrypted payload
+  sender_key_id:    string,         // which sender device key encrypted this
+  recipient_keys:   [               // one ciphertext per recipient device
+    { device_id: string, ciphertext: bytes }
+  ],
+  client_msg_id:    string,         // idempotency key (UUID from client)
+  timestamp_client: int64           // client-side logical clock
+}
+Response: { server_msg_id: string, server_timestamp: int64 }
+```
+
+*(Cross-question: Why include per-recipient ciphertext in the request rather than re-encrypting server-side?)*
+
+With E2EE, the server cannot access the plaintext, so it cannot re-encrypt. The sender's device encrypts once per recipient device key. For a 10k group with 3 devices each, that's 30k ciphertexts per message — handled by chunking the upload.
+
+Second, fetching missed messages after reconnect:
+
+```
+GET /v1/conversations/{conversation_id}/messages?after_server_id={id}&limit=50
+```
+
+Third, key bundle fetch — how a sender gets recipient public keys:
+
+```
+GET /v1/keys/{user_id}/prekey-bundle
+Response: { identity_key, signed_prekey, one_time_prekeys: [...] }
+```
+
+Fourth, WebSocket subscription for real-time delivery — no REST polling for live messages.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+> **Interviewer:** What does your data model look like?
+
+**Candidate:** Three primary stores.
+
+**Messages table** — append-only, partitioned by conversation_id:
+
+```
+messages:
+  conversation_id   UUID        -- partition key
+  server_msg_id     ULID        -- sort key (monotonic, encodes timestamp)
+  sender_user_id    UUID
+  client_msg_id     UUID        -- idempotency dedup
+  payload_type      ENUM        -- TEXT, IMAGE, REACTION, DELETION
+  ttl               TIMESTAMP   -- for ephemeral messages
+```
+
+The payload itself is ciphertext blobs stored in object storage; the messages table stores only the reference URL. This keeps the DB row small (~200 bytes) and moves bulk bytes out to cheaper storage.
+
+**Key store** — for Signal protocol pre-keys:
+
+```
+user_keys:
+  user_id           UUID
+  device_id         UUID
+  identity_key      bytes
+  signed_prekey     bytes
+  one_time_prekeys  bytes[]    -- consumed on first use (OPK pool)
+```
+
+*(Cross-question: What happens when the one-time prekey pool runs dry?)*
+
+The server falls back to a "last-resort" signed prekey — loses forward secrecy for that session, but handshake still completes. The client is notified to upload a fresh OPK batch when reconnecting.
+
+**Fan-out inbox** — per-device delivery queue:
+
+```
+device_inbox:
+  device_id         UUID        -- partition key
+  server_msg_id     ULID        -- sort key
+  conversation_id   UUID
+  delivered_at      TIMESTAMP   -- null = pending
+```
+
+For groups, the fan-out service writes one row per recipient device asynchronously. This decouples the sender's write from the delivery latency to 30k devices.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+> **Interviewer:** Draw the high-level design and walk me through a message send.
+
+**Candidate:**
+
+```
+  Client Device (Sender)
+         |
+         | HTTPS POST /messages (E2EE ciphertext bundle)
+         v
+  [ API Gateway / Load Balancer ]
+         |
+         v
+  [ Message Ingestion Service ]
+         |          |
+         |          +---> [ Idempotency Store (Redis) ]
+         |                  (dedupe by client_msg_id, 24h TTL)
+         v
+  [ Message DB (Cassandra, partitioned by conv_id) ]
+         |
+         v
+  [ Fan-out Service ] -----> [ Group Membership Cache (Redis) ]
+         |
+         | (async, per recipient device)
+         v
+  [ Device Inbox Queue (Kafka, partitioned by device_id) ]
+         |
+         v
+  [ Connection Service ]  <---> [ WebSocket servers (stateful) ]
+         |                         (200 per region)
+         |
+         v
+  Client Device (Recipient)
+
+  [ Key Distribution Service ]
+         |
+         +---> [ Key Store (DynamoDB, global tables) ]
+
+  [ Media Service ]
+         |
+         +---> [ Object Store (S3, CDN-fronted) ]
+         +---> [ Encryption proxy: client encrypts before upload ]
+```
+
+**Message send flow:**
+
+1. Sender device encrypts message once per recipient device using Signal's Double Ratchet. Uploads ciphertext bundle to Message Ingestion Service.
+2. Ingestion Service writes to Cassandra with ULID as sort key — guarantees per-conversation ordering without a distributed lock.
+3. Fan-out Service reads group membership from cache. For 10k-member groups it uses a tiered fan-out: direct WebSocket push for online devices, Kafka enqueue for offline devices.
+4. Connection Service holds a routing table: device_id → WebSocket server ID. Stored in Redis with 30-second TTL (refreshed by heartbeat). Fan-out looks up routing and either pushes directly or routes through the target connection server.
+5. Offline devices receive messages on next reconnect by draining their Device Inbox.
+
+> **Interviewer:** How do you handle cross-datacenter message ordering? A user on an EU server sends to a user on a US server — what prevents reordering?
+
+**Candidate:** This is where ULID as the sort key matters. ULIDs are monotonic within a single writer but can collide across regions. The solution: use server_msg_id as a composite of `{region_prefix}{timestamp_ms}{random}`. The canonical ordering authority is the conversation's home region — each conversation is "pinned" to a region based on the majority of participants. The home region's Cassandra partition is the source of truth for ordering.
+
+For cross-region delivery: the ingestion node in any region writes to the home region's Cassandra synchronously (via cross-region replication with quorum write). This adds ~50-100ms of latency for cross-region messages, which is acceptable for chat. The trade-off versus eventual consistency: we avoid the case where two users see messages in opposite orders, which breaks conversation coherence.
+
+> **Interviewer:** What's the blast radius if the fan-out service goes down?
+
+**Candidate:** Fan-out failure is a delivery failure, not a data loss failure. Messages are durably written to Cassandra before fan-out is attempted. When the fan-out service recovers, it replays from Cassandra using the server_msg_id cursor. The Device Inbox Kafka topic has a 7-day retention — any message not delivered within 7 days is considered stale and the client falls back to polling.
+
+The blast radius: online users stop receiving push notifications. They can still send (ingestion is independent) and can still receive by polling. Polling adds ~5s of perceived latency. SLA degradation: P1 incident, but not a data loss event.
+
+> **Interviewer:** Build vs. buy: would you use an existing messaging infrastructure like Firebase Cloud Messaging or build your own WebSocket layer?
+
+**Candidate:** Split decision based on device type. For mobile push notifications to offline devices — mandatory buy: FCM (Android) and APNs (iOS) are the only reliable way to wake a sleeping app. Building a replacement is technically impossible on iOS (Apple enforces APNs).
+
+For the real-time online delivery layer — build. FCM/APNs introduce a dependency on Google/Apple infrastructure for latency-sensitive operations, don't support E2EE message bodies (FCM sees payload), and don't give us the connection routing metadata we need for read receipts and typing indicators. The WebSocket connection servers are not complex infrastructure — the hard part is the routing table in Redis, not the socket management.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: How does message search work with E2EE?)*
+
+**Candidate:** It doesn't — not server-side. With true E2EE, the server stores only ciphertext and cannot build a search index. There are three approaches: (1) Client-side search index, built on device from the local plaintext message store — fast, private, but works only on the device where messages are stored; (2) Homomorphic encryption search — theoretically possible but 1000× too slow for production at any scale today; (3) Opt-in plaintext search with explicit user consent, where the user allows the server to hold a search key — this is what Slack does (no true E2EE). At WhatsApp-like security requirements, we go with client-side index only and accept the limitation.
+
+*(Cross-question: How do you handle the Signal protocol Double Ratchet state diverging across a user's 5 devices?)*
+
+**Candidate:** Each device maintains independent ratchet state per conversation partner. There is no "sync" of ratchet state — each device generates its own session from the initial X3DH key agreement. When device A sends a message, it encrypts independently using its ratchet state; device B does the same from its own state. The recipient also maintains N separate ratchets, one per sender device. The cost: message history is not automatically available on a new device. New devices can only decrypt messages sent after their registration, which is a deliberate design choice for forward secrecy. WhatsApp's backup solution (Google Drive/iCloud encrypted backup) is a separate, opt-in mechanism outside the E2EE boundary.
+
+*(Cross-question: Walk me through the migration strategy if you need to move from one encryption protocol version to another — say, Signal v1 to v2.)*
+
+**Candidate:** Protocol migrations in E2EE are uniquely hard because the server cannot inspect messages to determine protocol version. The migration needs four steps: (1) Version negotiation baked into the prekey bundle — the server records which protocol versions a device supports; (2) Gradual rollout where both versions coexist — sender checks recipient's supported versions before choosing encryption scheme; (3) Tombstone old sessions after 90-day overlap — any device not upgraded in 90 days falls back to a degraded "basic encryption" mode with user-visible warning; (4) Server-side enforcement of minimum version after 6 months — devices on old protocol versions are blocked and prompted to update. The org complexity: coordinating the client release timeline across Android, iOS, and Web with the server-side protocol flag is the hardest part, not the cryptography.
+
+*(Cross-question: How do you design deletion guarantees when messages are already delivered to 10k devices?)*
+
+**Candidate:** Cryptographic deletion guarantees against a delivered message are impossible — a recipient could screenshot or intercept the plaintext before the deletion request arrives. "Delete for everyone" is therefore a best-effort UI suppression, not a cryptographic guarantee. The design: sender sends a `DELETION` control message (also E2EE) containing the `client_msg_id` of the deleted message. Each recipient device, on receiving this control message, removes the message from its local display and storage. Compliance guarantee: we can prove the deletion signal was sent and delivered to online devices; we cannot prove message destruction on the receiving device. This is disclosed in the privacy policy. For regulatory requirements (e.g., right to erasure under GDPR), the server-side ciphertext and metadata are deleted — we cannot control client-side copies.

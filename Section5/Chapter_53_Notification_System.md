@@ -4013,3 +4013,215 @@ Quiet hours are stored in the user's preference record: {"global": {"quiet_hours
 ---
 
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.
+
+---
+
+## Interview Simulation — Notification System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a notification system for a large consumer app. Where do you want to start?
+
+**Candidate:** A few scoping questions. What channels do we need to support? Push, email, SMS, in-app — or a subset? What's the scale — roughly how many users and what notification volume per day? And are we building the notification infrastructure itself or including the channel integrations with APNs, FCM, email providers?
+
+> **Interviewer:** All four channels. 100 million users, roughly 300 million notifications per day. Build the whole system including channel integrations. What else do you need to know?
+
+**Candidate:** What are the delivery guarantees we're promising? At-least-once delivery is typical — exactly-once requires distributed transactions which are expensive. Are there user preference requirements — opt-in/opt-out, quiet hours, per-type channel preferences? What's the latency expectation for transactional vs. marketing notifications? And is this a new system or replacing something existing?
+
+> **Interviewer:** At-least-once delivery. Full user preferences including quiet hours. Push must deliver within 5 seconds for transactional notifications. Marketing is best-effort with no SLA. What are your non-goals?
+
+**Candidate:** Non-goals for V1: two-way messaging (this is one-directional), rich media in notifications (images, video), A/B testing framework, real-time delivery analytics (batch is fine), and scheduling beyond 7 days. I'll also explicitly note: this system is responsible for delivery routing but not for deciding who to notify — the calling services determine target users. We manage preferences, deduplication, and delivery.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 300M notifications/day = 3,470/sec average. Peak is typically 10% of daily volume in 1 hour = 30M notifications/hour = 8,333/sec. Channel breakdown: 60% push = 5,000/sec push at peak, 30% email = 2,500/sec, 1% SMS = 85/sec.
+
+Storage: per notification ~600 bytes in DB. 300M × 600 bytes = 180GB/day. 90-day retention = 16TB. User preferences: 100M × 2KB = 200GB. Device tokens: 200M devices × 150 bytes = 30GB. Notification center (last 100 per user): 100M × 100 × 500 bytes = 5TB.
+
+Queue: need to buffer burst traffic. Message size ~1KB, 8,333 messages/sec × 1KB = 8.3 MB/sec into Kafka. With 3× replication = 25 MB/sec Kafka write throughput — easily within Kafka's capacity.
+
+> **Interviewer:** You said push at peak is 5,000/sec. APNs limits connections to 1,000 requests per second per connection. How many APNs connections do you need?
+
+**Candidate:** 5,000/sec ÷ 1,000/sec per connection = 5 APNs HTTP/2 connections minimum. Add headroom for burst and connection setup time: provision 10 connections. APNs uses HTTP/2 with persistent connections, so these are maintained connections from the push worker pool. In practice each worker process maintains its own connection pool — with 5 workers each holding 2 APNs connections, you hit 10 connections total. FCM has different limits but same principle applies. SMS rate limits are more about cost control than throughput.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** The primary internal API (called by other services):
+
+```
+POST /v1/notifications
+Body: {
+  user_id: UUID,
+  type: string,            -- "payment_confirmed", "security_alert", etc.
+  channels: string[],      -- ["push", "email"] or omitted for defaults
+  priority: "critical" | "high" | "medium" | "low",
+  data: object,            -- template variables
+  idempotency_key: string  -- required, e.g., "payment:txn_123"
+}
+Returns: { notification_id: UUID, status: "queued" | "preference_blocked" | "rate_limited" }
+```
+
+User-facing APIs:
+```
+GET    /v1/users/{id}/notifications?limit=20&cursor=&unread_only=false
+PATCH  /v1/users/{id}/notifications/read  { notification_ids: [] }
+GET    /v1/users/{id}/preferences
+PUT    /v1/users/{id}/preferences
+POST   /v1/devices/tokens  { user_id, token, platform }
+DELETE /v1/devices/tokens/{token}
+```
+
+*(Cross-question: idempotency key requirement)*
+
+> **Interviewer:** You require an idempotency key. What happens if the calling service doesn't provide one — should you reject the request?
+
+**Candidate:** I'd reject it with a 400 Bad Request. Idempotency is not optional for a notification system — without it, any retry by the caller (network timeout, service restart) sends duplicate notifications. A user receiving "Payment confirmed: $150" twice destroys trust. The idempotency key forces the caller to think about deduplication: what is the logical event? Payment confirmation: `payment:{transaction_id}`. Order update: `order:{order_id}:{status}`. If the caller can't construct a meaningful idempotency key, it suggests their event model is ambiguous, which is a caller-side bug. The 24-hour TTL on idempotency records means you're deduplicating within a reasonable window without storing them forever.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:**
+
+```sql
+-- Core notification record
+notifications (
+  id               UUID PRIMARY KEY,
+  user_id          UUID NOT NULL,
+  type             VARCHAR(64) NOT NULL,
+  priority         VARCHAR(16) NOT NULL,
+  channels         VARCHAR(16)[] NOT NULL,
+  data_json        JSONB NOT NULL,
+  idempotency_key  VARCHAR(256) UNIQUE NOT NULL,
+  created_at       TIMESTAMP NOT NULL,
+  scheduled_at     TIMESTAMP NULL,   -- for delayed delivery
+  status           VARCHAR(32) NOT NULL
+  INDEX: (user_id, created_at DESC)  -- for notification center
+  INDEX: (idempotency_key)           -- unique, for dedup
+)
+
+-- Per-channel delivery tracking
+notification_deliveries (
+  notification_id  UUID NOT NULL,
+  channel          VARCHAR(16) NOT NULL,
+  status           VARCHAR(32) NOT NULL,  -- pending/sent/delivered/failed
+  provider_id      VARCHAR(256) NULL,
+  sent_at          TIMESTAMP NULL,
+  retry_count      INT DEFAULT 0,
+  PRIMARY KEY (notification_id, channel)
+)
+
+-- Device push tokens
+device_tokens (
+  user_id    UUID NOT NULL,
+  token      VARCHAR(512) UNIQUE NOT NULL,
+  platform   VARCHAR(16) NOT NULL,  -- ios/android/web
+  last_seen  TIMESTAMP NOT NULL,
+  INDEX: (user_id), (last_seen)  -- for cleanup
+)
+```
+
+Redis: `pref:{user_id}` → serialized preferences JSON, 60s TTL. `idempotency:{key}` → notification_id, 24h TTL. Rate limit keys: `ratelimit:{user_id}:{window}` → counter.
+
+*(Cross-question: fanout pattern)*
+
+> **Interviewer:** Marketing wants to send a campaign to 50 million users. How does that interact with your data model?
+
+**Candidate:** Batch insert 50M rows into `notifications` is a problem — it takes too long and creates a hotspot. Instead, campaigns are executed fan-out style: a campaign record holds the template and segment definition. The campaign executor service queries users in batches of 10,000, and for each batch, bulk-inserts into the notifications queue (Kafka directly, not the DB first). Workers consume from Kafka, check preferences per user in real time (via Redis cache), and deliver. The notification is written to the DB only after delivery — or only the notification center entry is written, not the full delivery record. This avoids the 50M upfront DB write. The trade-off: you lose the ability to query "all pending campaign notifications" from the DB, but campaigns are fire-and-forget so that's acceptable.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+  ┌─────────────────────────────────────────────────┐
+  │         INTERNAL SERVICES (callers)             │
+  │   Payment   Order   Security   Marketing        │
+  └─────────────────┬───────────────────────────────┘
+                    │ POST /v1/notifications
+                    ▼
+  ┌─────────────────────────────────────────────────┐
+  │           NOTIFICATION API SERVERS              │
+  │  Validate → Idempotency → Prefs → Rate Limit    │
+  │  → Enqueue to Kafka → Return 202               │
+  └──────────┬──────────────────────────────────────┘
+             │                   │ (Redis: prefs cache,
+             │                   │  idempotency store)
+             ▼
+  ┌──────────────────────────────┐
+  │     KAFKA (durable queue)    │
+  │  Partitioned by user_id hash │
+  │  Separate topics by priority │
+  └──────────┬───────────────────┘
+             │
+    ┌────────┼───────────┐
+    ▼        ▼           ▼
+  ┌─────┐ ┌──────┐ ┌──────┐
+  │Push │ │Email │ │ SMS  │
+  │Work-│ │Work- │ │Work- │
+  │ers  │ │ers   │ │ers   │
+  └──┬──┘ └──┬───┘ └──┬───┘
+     │        │        │
+     ▼        ▼        ▼
+  APNs/FCM  SendGrid  Twilio
+```
+
+Three separate Kafka topics: `notifications.critical`, `notifications.high`, `notifications.standard`. Workers for each channel are independent processes — push workers scale separately from email workers. Workers consume in priority order (critical topic first, then high, then standard). Each worker checks preferences at consume time (Redis cache), then delivers to the external provider.
+
+*(Cross-question: fan-out write vs read)*
+
+> **Interviewer:** When a user logs in to the app, they expect to see their notification center with all missed notifications. Should you fan-out on write (store to notification center at send time) or on read (query delivery records at read time)?
+
+**Candidate:** Fan-out on write for the notification center. When a notification is sent, we simultaneously write a row to the `notification_center` table indexed by `(user_id, created_at DESC)`. This makes reads instant — a simple paginated query on that index. Fan-out on read would require joining `notifications` + `notification_deliveries` + applying preference filters at read time, which is slow and complex. The trade-off: notification_center storage grows with every send, and we need a cleanup policy (keep last 100 per user, drop older ones). At 100M users × 100 entries × 500 bytes = 5TB — manageable. The write cost is one extra DB row per notification sent, which is acceptable. Fan-out on read would only win if users had very large notification histories that they rarely read, but 100 entries is a small working set.
+
+*(Cross-question: at-least-once delivery duplication)*
+
+> **Interviewer:** A push worker crashes after sending to APNs but before acknowledging the Kafka message. The message gets redelivered and sent again. How do you prevent the user from seeing duplicate notifications?
+
+**Candidate:** Two layers. First, provider-side deduplication: when sending to FCM or APNs, include a deterministic message ID derived from `notification_id + channel`. FCM deduplicates by `collapse_key` or `message_id` within a short window (typically 4–8 hours). This handles the most common crash-after-send scenario. Second, delivery state tracking: before sending, write a `notification_deliveries` row with `status = "sending"`. On retry, check this row first — if `status IN ("sent", "delivered")`, skip the send and ack the Kafka message. This requires the check and the send to be idempotent together. The weakness: if the worker crashes between writing "sending" and the actual send, the row shows "sending" but nothing was delivered. We need a stuck-detection cron job: any delivery stuck in "sending" for > 5 minutes is retried. This handles the edge case cleanly.
+
+*(Cross-question: quiet hours)*
+
+> **Interviewer:** A security alert fires at 3am for a user with quiet hours set 10pm–8am. What happens?
+
+**Candidate:** Security alerts have `bypass_quiet_hours: true` — they skip the quiet hours check entirely and deliver immediately. This is a deliberate product decision: security alerts (suspicious login, fraud detection, OTP) are critical enough that waking the user is appropriate. The quiet hours check in the API layer is:
+
+```
+IF is_quiet_hours(user_id) AND notification.priority != "critical":
+    notification.scheduled_at = end_of_quiet_hours(user_id)  # 8am local time
+    store with status = "scheduled"
+    RETURN 202 (queued for later)
+```
+
+A scheduler job runs every 60 seconds: `SELECT * FROM notifications WHERE scheduled_at <= NOW() AND status = 'scheduled'`. It picks up due notifications and enqueues them to Kafka. The edge case to handle carefully: if the user's timezone changes between when we schedule it and when it fires (they traveled), we should re-evaluate quiet hours at delivery time, not just at scheduling time.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q1: How do you handle a push token that APNs reports as invalid?**
+
+**A:** When APNs returns error code `BadDeviceToken` or `Unregistered`, we immediately delete that token from the `device_tokens` table. These errors mean the app was uninstalled or the token was refreshed — retrying to this token is wasteful and can hurt our APNs sender reputation. For the current notification, we fall back to the next channel in the fallback chain (e.g., email). For future notifications, the token is gone so they go directly to the fallback. Token cleanup is also run proactively: any token not used in 90 days is pruned. We cap tokens per user at 10 to prevent accumulation from device upgrades. The critical point is that invalid token handling must be synchronous with the push attempt — don't queue it for later cleanup, delete it immediately so the very next notification doesn't waste a round-trip to APNs.
+
+**Q2: How do you handle backpressure when APNs or FCM is slow or rate-limiting you?**
+
+**A:** The Kafka queue provides natural buffering — notifications pile up in the queue while workers slow their consumption. Workers use exponential backoff when providers return 429 or 5xx: first retry after 1s, then 5s, 30s, 5min, 1hr. Workers nack the Kafka message with a delay (Kafka's `pause/resume` consumer approach or a delay queue via a separate topic). For sustained provider outages, a circuit breaker trips after 5 consecutive failures: for 30 seconds, the worker stops attempting to deliver to that provider and all messages for that channel route to the DLQ (dead letter queue) for later replay. The SLA implication: push delivery SLA degrades from 5 seconds to potentially minutes during a provider incident. This should be surfaced in a status page. Marketing notifications (low priority) get deprioritized further — critical and transactional are served first from their higher-priority Kafka topics.
+
+**Q3: Describe the end-to-end deduplication guarantee for a marketing campaign that fires twice due to a bug.**
+
+**A:** The idempotency key for campaign notifications should be `"campaign:{campaign_id}:{user_id}"`. If the campaign service fires twice, the second batch of sends hits the idempotency check on the notification API: `SET NX idempotency:{key}` in Redis fails because the key already exists. The API returns `status: "duplicate"` and no second notification is enqueued. The 24-hour TTL means this protection covers the same-day resend scenario. If the campaign fires again after 24 hours (e.g., a scheduled retry the next day), it would go through — which is likely correct behavior, since a day-later resend is a different send event. For stricter protection, campaigns could use a longer TTL or store idempotency in the DB rather than Redis. The key design principle: idempotency responsibility lies with the notification system, not the caller — callers should never have to implement their own deduplication.
+
+**Q4: A user changes their email notification preference from "enabled" to "disabled". An email is already in the Kafka queue. Does it get sent?**
+
+**A:** It depends on timing, and this is explicitly a known trade-off. Preferences are cached in Redis for 60 seconds. The delivery worker checks preferences at consume time, not at enqueue time. So: if the preference change happened more than 60 seconds before the worker processes the message, the worker sees the updated preference and suppresses the email. If the worker processes within 60 seconds, it may use the cached "enabled" preference and send the email. This is the eventual consistency window for preferences — documented as "up to 60 seconds for preference changes to take effect." For legal compliance (unsubscribe under CAN-SPAM), we set a shorter TTL (5 seconds) for preference changes that affect marketing emails specifically, and we also do a synchronous preference check at enqueue time for marketing. For transactional and security notifications, the 60-second window is acceptable. The alternative — no caching, always query DB — adds 5–20ms to every notification and creates a DB bottleneck at 8,000 sends/sec.
+

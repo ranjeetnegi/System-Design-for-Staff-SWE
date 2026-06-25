@@ -2499,6 +2499,124 @@ preemption policy is auditable (you can always answer "who preempted my task and
 
 ---
 
+## Interview Simulation — Borg (Google's Cluster Manager)
+
+*45-minute deep-dive interview on Google's Borg paper (Verma et al., EuroSys 2015). Interviewers expect you to understand the desired-state reconciliation loop, two-level scheduling, resource compressibility, and how Kubernetes inherited and diverged from Borg's design.*
+
+### Phase 1: System Overview and Motivation (10 min)
+
+> **Interviewer:** What is Borg and what problem was Google solving in the early 2000s?
+
+**Candidate:** Borg is Google's internal cluster management system — it runs all of Google's workloads across hundreds of thousands of machines in multiple datacenters. Before Borg, Google ran two separate management systems: one for long-running services (like web serving) and one for batch jobs (like MapReduce). The problem was cluster fragmentation: the service cluster was over-provisioned to handle peak traffic, sitting mostly idle at night; the batch cluster was a separate pool that couldn't use the unused service capacity. Borg unified these two workload types into one system, letting batch jobs use the slack capacity in service machines. This is the "utilization win" the paper reports: mixing latency-sensitive production workloads with best-effort batch workloads on the same machines raises average utilization from ~40% to ~60%+ while keeping service tail latency acceptable.
+
+The key design insight: not all resources are equal. CPU is compressible — if a batch job uses too much CPU, you can throttle it without killing it. Memory is non-compressible — if a process uses too much memory, there's no graceful throttle; you must kill it. This distinction drives Borg's entire resource management philosophy.
+
+> **Interviewer:** Explain the desired-state reconciliation loop at the heart of Borg.
+
+**Candidate:** Borg is a control loop system. The desired state — "run 10 replicas of this service with these resource requirements" — is stored in BorgMaster's in-memory state (backed by Paxos). The actual state — what's actually running on Borglets — is observed continuously. The reconciliation loop continuously computes the delta between desired and actual and takes actions to close it: scheduling new tasks, restarting failed tasks, preempting low-priority tasks to make room for high-priority ones.
+
+This is fundamentally different from imperative scheduling ("deploy task X to machine Y"). With desired-state reconciliation, you never need to track what commands you sent — you only track the goal state. If a machine crashes and three tasks die, the loop automatically schedules three replacements. If a network partition causes the master to lose contact with some tasks, the loop reconciles when contact is restored. Kubernetes inherited this exact architecture — the controller manager runs reconciliation loops for Deployments, ReplicaSets, Services, etc.
+
+---
+
+### Phase 2: Key Design Decisions (15 min)
+
+> **Interviewer:** Describe the two-level scheduling in Borg.
+
+**Candidate:** Borg uses a two-level architecture: BorgMaster handles job and task state, while Borglets handle local resource management on each machine.
+
+```
+Borg Two-Level Scheduling Architecture
+========================================
+
+                    [BorgMaster]
+                   /      |      \
+            [Scheduler]  [State]  [Paxos replicas x5]
+                  |
+    [Feasibility check: which machines can run this task?]
+    [Scoring: which of those machines is best?]
+                  |
+    Assigns task → specific machine
+                  |
+           [Borglet] on each machine
+                  |
+    Accepts/rejects task assignment
+    Reports actual resource usage to BorgMaster every ~5s
+    Can kill tasks that exceed non-compressible resource limits
+    Manages cgroups for CPU/memory enforcement
+
+Score components:
+  - E-PVM (spreading tasks across failure domains)
+  - Minimizing stranded resources (don't leave machines with tiny unusable slices)
+  - Pack to empty machines when possible (save spread-out machines for large tasks)
+```
+
+The scoring function is where most of Borg's operational complexity lives. "Best fit" (pack tasks densely) minimizes the number of active machines but leaves machines with small resource fragments that can't fit any new task. "Worst fit" (spread tasks evenly) wastes more machines but keeps resource fragmentation low. Borg uses a hybrid: pack small tasks, spread large ones. The paper reports that the scoring function accounts for most of the system's engineering iteration over a decade.
+
+*(Cross-question: what is the difference between BorgMaster and Borglet?)* BorgMaster is the cluster-level brain: it stores desired state, runs the scheduler, and exposes the API. Borglet is the per-machine agent: it runs on every machine, receives task assignments from BorgMaster, manages actual process lifecycle, and reports resource usage back. Borglet has limited intelligence — it follows orders and reports status. BorgMaster has the full picture and makes all scheduling decisions.
+
+> **Interviewer:** How does Borg handle priority and preemption?
+
+**Candidate:** Borg uses a global priority scale from 0 to ~450. Production workloads (serving traffic) typically run at priority 330+. Batch jobs run at 0-115. Monitoring infrastructure runs at 360+. A task can only preempt tasks with strictly lower priority — never same or higher.
+
+Preemption mechanics: when BorgMaster needs to schedule a high-priority task and no machine has sufficient free resources, it identifies machines where evicting low-priority tasks would create enough space. It sends SIGTERM to the low-priority tasks (giving them time to checkpoint if they support it), waits for graceful shutdown, then assigns the machine to the high-priority task. The evicted tasks are re-queued and will be scheduled elsewhere when capacity is available.
+
+The non-compressible resource protection: if a production task and a batch task are co-located and the production task's memory usage spikes, Borglet kills the batch task immediately (SIGKILL) to free memory for production. Memory over-limit kills are instantaneous — there's no negotiation. CPU over-limit just throttles the task (compressible). This is exactly why Kubernetes has separate CPU limits (throttled) and memory limits (OOM-killed) with these different behaviors.
+
+---
+
+### Phase 3: Trade-offs and Alternatives (10 min)
+
+> **Interviewer:** The Borg paper reports high machine utilization. What's the catch?
+
+**Candidate:** The utilization numbers are real but come with several hidden costs. First, tail latency interference: batch jobs running on service machines can cause cache pollution and memory bandwidth contention, increasing p99 latency for production services. Borg mitigates this with CPU throttling and memory limits, but co-location interference is real and hard to fully eliminate. Google invested heavily in hardware (cache partitioning, NUMA-aware scheduling) and software (resource isolation via cgroups) to make co-location practical. At other companies without that investment, co-location risks are higher.
+
+Second, the "credits" problem: high utilization means low slack. When a large batch job (e.g., a model training run) submits thousands of tasks simultaneously, there may not be enough idle capacity to schedule them without preempting other batch work. Borg uses gang scheduling for tasks with hard co-scheduling requirements (all-or-nothing placement) which can reduce effective utilization when the cluster is nearly full.
+
+Third, operational complexity: running production services and batch jobs on the same machines requires extremely tight resource enforcement. A bug in Borglet's cgroup enforcement has caused production incidents at Google where a batch job ate production service memory.
+
+> **Interviewer:** How does Kubernetes differ from Borg, and what was deliberately left out of Kubernetes?
+
+**Candidate:** Kubernetes was designed by ex-Googlers who knew what they'd do differently. Key differences: Kubernetes uses Pods (groups of co-scheduled containers sharing a network namespace) as the scheduling unit; Borg uses Tasks (single binaries). Kubernetes externalizes everything as API resources — Deployments, Services, ConfigMaps — making it extensible via the API server; Borg's API is internal and monolithic. Kubernetes uses etcd (open-source Raft-based storage) instead of a custom Paxos implementation.
+
+What was deliberately left out of Kubernetes v1: the sophisticated scoring function (Borg has 10+ years of tuning; Kubernetes started simple and added the scheduler framework over time), gang scheduling for tightly-coupled jobs (Kubernetes initially had no concept of "schedule all of these pods together or not at all" — added later via gang plugins), and resource over-commitment (Kubernetes requests/limits exist but the sophisticated batch-vs-service mixing with preemption took years to mature). The design philosophy shift: Kubernetes prioritized extensibility and open-source adoption over replicating every Borg optimization on day one.
+
+---
+
+### Phase 4: Modern Application (10 min)
+
+> **Interviewer:** Your company is migrating from a bespoke deployment system to Kubernetes. What Borg concepts should you map explicitly, and where will the migration be hardest?
+
+**Candidate:** The easy mappings: Jobs → Deployments or StatefulSets. Task priority → Kubernetes PriorityClasses. Borglet → kubelet. BorgMaster → kube-apiserver + kube-scheduler + controller-manager. Alloc sets (resource reservations) → ResourceQuotas and LimitRanges.
+
+The hard mappings: Borg's gang scheduling (required for distributed training jobs) → Kubernetes doesn't support this natively; you need a scheduler plugin like Volcano or the Coscheduler. Borg's resource reclamation (lending unused reserved resources to batch jobs) → Kubernetes has this via VPA (Vertical Pod Autoscaler) and the resource over-commitment via requests vs. limits, but it requires careful tuning to avoid OOM cascades. Borg's cell architecture (cells of ~10,000 machines) → Kubernetes clusters of this size are operationally complex; many companies run multiple smaller clusters with federation rather than one Borg-sized cluster.
+
+The hardest migration: operational muscle memory. Borg teams debug issues using Borg-specific tools (borgcfg, dremel queries on Borg logs). Kubernetes tooling (kubectl, Prometheus, Grafana) is different enough that the operational team needs retraining, and institutional knowledge about "why did task X get preempted at 3am" is rebuilt from scratch.
+
+> **Interviewer:** If you had to add one feature from Borg to Kubernetes today, what would it be and why?
+
+**Candidate:** Resource reclamation. Borg can observe that a task requested 8GB of memory but is actually using 3GB, and lend the unused 5GB to batch jobs — reclaiming it immediately if the production task's usage rises. Kubernetes has a weaker version (requests vs. limits), but it doesn't do dynamic reclamation based on observed usage. The result: Kubernetes clusters are typically run at 60-70% reservation utilization (not actual utilization) to leave headroom for bursts, because there's no safe way to temporarily use the slack.
+
+Adding proper reclamation (with guaranteed eviction of batch tasks the moment production needs the resources) would let Kubernetes clusters operate at Borg-like utilization ratios. This would meaningfully reduce cloud costs for large deployments. The Kubernetes SIG-Node has open proposals for this ("in-place resource resize" and "memory-backed batch scheduling") but they're incomplete as of 2026. The engineering challenge is getting the eviction latency low enough that production services don't notice the resource take-back.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q: What is a Borg "alloc" and how does it relate to Kubernetes namespaces?**
+
+A: An alloc (allocation) in Borg is a reserved set of resources on a machine — a slice of that machine's CPU and memory that tasks can be placed into. Allocs were used to reserve capacity for future tasks or to group related tasks together. They don't map directly to Kubernetes namespaces; namespaces are organizational (multi-tenancy, RBAC boundaries) not resource reservations. The closer Kubernetes analog is a ResourceQuota (limits total resources within a namespace) combined with a Pod requesting specific resources. The concept of "reserved capacity" in Kubernetes is handled at the node level via allocatable resources and at the cluster level via resource pools and node affinity.
+
+**Q: How does BorgMaster achieve high availability?**
+
+A: BorgMaster runs as five Paxos-replicated replicas. One replica is elected master (using the Paxos leader election); all writes go to the master, which replicates them to a majority of replicas before acknowledging. If the master crashes, a new leader is elected (Paxos leader election takes ~10 seconds). During those 10 seconds, Borglets continue running their assigned tasks without interruption — the cluster doesn't stop because the master is unavailable. New task scheduling and preemption decisions pause. This "fail local, not global" property is critical: a BorgMaster failure is invisible to end users of the services Borg is running.
+
+**Q: What is the difference between a Borg Job and a Borg Task?**
+
+A: A Job is the unit of submission — it contains a task specification and a count (e.g., "run 100 copies of this binary with these resource requirements"). A Task is one instantiation of that specification — one process on one machine. Jobs represent the desired state; Tasks are the actual running instances. The scheduler's job is to map Tasks to Borglets. When a Task fails (machine crash, OOM kill), BorgMaster creates a replacement Task from the Job specification and schedules it on an available machine. Kubernetes's equivalent: a Deployment (Job) and a Pod (Task). The ReplicaSet controller continuously reconciles the Deployment's replica count against the number of running Pods — exactly the Borg reconciliation loop.
+
+---
+
 <!-- END OF CHAPTER 99 -->
 <!-- Additions over base 2,125 lines: Parts 12-15 (Omega evolution, gang scheduling,
      interview one-liners, pre-interview drill), fixed chapter number in KEY TAKEAWAYS,

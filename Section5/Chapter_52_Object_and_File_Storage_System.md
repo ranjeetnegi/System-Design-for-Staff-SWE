@@ -3973,3 +3973,178 @@ Lifecycle rules are stored per bucket in the metadata store (a JSON field on the
 ---
 
 **This chapter meets Google Staff Engineer (L6) expectations.** All 18 parts addressed, with Staff vs Senior contrast, structured incident, L6 probes, leadership explanation, teaching guidance, and Master Review Check complete.
+
+---
+
+## Interview Simulation — Object and File Storage System
+
+*45-minute system design interview. Phases follow the Section 2 framework: Requirements → Estimation → API → Data Model → HLD + Deep Dive.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design an object storage system similar to Amazon S3. Start wherever you'd like.
+
+**Candidate:** Before designing I want to align on scope. A few questions: Are we building this from scratch or on top of existing commodity hardware? What's the primary use case — user-generated content like photos and videos, or more like application backups and data pipeline artifacts? Any durability or availability targets I should hit?
+
+> **Interviewer:** Assume commodity hardware in a single datacenter. Primary use case is user-uploaded content: photos, videos, documents. Target durability is 99.999999999% (11 nines). What else?
+
+**Candidate:** Two more questions: Should the system support object versioning? And what about access control — public vs. private objects, per-object ACLs? I'll also clarify non-goals upfront: no multi-region replication (single cluster), no POSIX filesystem interface, no real-time streaming append, no in-place partial updates (objects are write-once, overwrite = delete + put).
+
+> **Interviewer:** No versioning for V1. Access control at the bucket level — public-read or private. What's the most important correctness requirement in your view?
+
+**Candidate:** Data integrity. An object storage system that silently corrupts data or loses objects destroys trust permanently — there's no recovery from "we lost your photos." I'd prioritize durability and integrity verification (checksums on write, verify on read, background scrubbing) over performance. The second critical correctness property is atomicity on PUT — the object is either fully stored or not visible at all. No partial writes should ever be readable.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** Starting with storage: assume 100M users, 500 photos average at 2MB each = 100 PB total. With 3× replication = 300 PB raw. That's large — let me scope down to a starting cluster handling 1 PB of user data = 3 PB raw.
+
+Traffic: 10M daily active users, 5 uploads per day per active user = 50M uploads/day ≈ 580 writes/sec. Reads: 10× writes = 5,800 reads/sec. Peak 3×: ~1,750 writes/sec, ~17,500 reads/sec.
+
+Storage nodes: if each node holds 12 × 16TB HDDs = 192TB raw, usable 80% = 150TB. For 3 PB raw: 3,000TB / 150TB = 20 nodes, add 50% headroom = 30 storage nodes.
+
+Metadata: 1B objects × 750 bytes per metadata record = 750GB, ×3 replicas = 2.25TB. Fits in a modest 5-node KV cluster.
+
+> **Interviewer:** Your metadata estimate is 750 bytes per object. Break that down — what's in it?
+
+**Candidate:** Bucket name: ~32 bytes average. Object key: ~200 bytes average (paths like `users/123/photos/vacation.jpg`). ETag (SHA-256 hash): 32 bytes. Size: 8 bytes. Created_at timestamp: 8 bytes. Storage class: 10 bytes. Replica locations (3 nodes × ~50 bytes each for node ID + chunk ID + rack): 150 bytes. Content-type: ~30 bytes. Custom metadata: ~100 bytes average. Overhead for indexes and padding: ~80 bytes. Total: ~650–750 bytes. Ballpark is correct.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** The five core operations:
+
+```
+PUT   /buckets/{bucket}/objects/{key}
+      Body: file bytes
+      Headers: Content-Type, Content-MD5 (optional client-side checksum)
+      Returns: 200 OK, ETag (SHA-256 of content)
+
+GET   /buckets/{bucket}/objects/{key}
+      Headers: Range (optional, for partial reads)
+      Returns: 200 OK with bytes, or 206 Partial Content for range requests
+
+HEAD  /buckets/{bucket}/objects/{key}
+      Returns: 200 OK with metadata only (no body)
+
+DELETE /buckets/{bucket}/objects/{key}
+      Returns: 204 No Content
+
+LIST  /buckets/{bucket}/objects?prefix=&marker=&max_keys=1000
+      Returns: JSON list of object keys + metadata, is_truncated, next_marker
+```
+
+For files > 5GB: Multipart upload API — `POST /uploads` (initiate), `PUT /uploads/{id}/parts/{n}` (upload part), `POST /uploads/{id}/complete` (assemble), `DELETE /uploads/{id}` (abort).
+
+*(Cross-question: presigned URLs)*
+
+> **Interviewer:** How would you support letting a mobile client upload directly to storage without routing through your application servers?
+
+**Candidate:** Presigned URLs. The application server generates a time-limited URL signed with a secret key: `PUT https://storage.example.com/bucket/key?X-Auth-Signature=abc&X-Expires=1706749200`. The storage service verifies the signature and expiry without calling back to the app. This removes the app server from the upload path entirely — the client streams directly to storage. The signature covers bucket, key, expiry, and allowed HTTP method so it can't be repurposed. TTL is typically 15 minutes for uploads. This is how S3 presigned URLs work and it's essential for mobile upload performance — avoiding a double-hop through the app server for large files.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Two separate storage systems: a metadata store and chunk storage on disk.
+
+Metadata store (KV database like FoundationDB or Cassandra):
+```
+Primary key: "{bucket}/{key}"  →  {
+  size: BIGINT,
+  etag: VARCHAR(64),           -- SHA-256 hex
+  created_at: TIMESTAMP,
+  storage_class: VARCHAR(20),
+  replica_locations: JSON,     -- [{node_id, rack, chunk_id}, ...]
+  content_type: VARCHAR(256),
+  custom_metadata: JSON
+}
+```
+
+Chunk storage on disk: each chunk file has a 64-byte header (magic bytes, checksum algorithm, SHA-256 checksum, data length), followed by raw data bytes. The file is written atomically via a temp file + rename.
+
+Supporting tables: `buckets` (name, owner, ACL, lifecycle rules), `multipart_uploads` (upload_id, bucket, key, parts JSON, expires_at).
+
+*(Cross-question: metadata store choice)*
+
+> **Interviewer:** Why a separate metadata store instead of just storing metadata in the same chunk files?
+
+**Candidate:** Metadata and data have completely different access patterns. Metadata is accessed on every operation — every GET requires a metadata lookup to find where the chunks are. It needs sub-millisecond random reads, strong consistency (you can't serve a GET before the metadata is committed), and range scans for LIST. Chunk data is large, sequential, and mostly append-only. Mixing them means you can't optimize storage for either. A dedicated KV store (like FoundationDB or CockroachDB) gives you strong consistency, range queries, and billion-key scale for the metadata. Chunk storage can be simple flat files on spinning disks optimized for throughput. Separating them also lets each scale independently — metadata grows with object count, chunks grow with data volume.
+
+---
+
+### Phase 5: HLD + Deep Dive (15 min)
+
+**Candidate:**
+
+```
+  ┌────────────────────────────────────────────────────┐
+  │                   CLIENTS                          │
+  └──────────────────────┬─────────────────────────────┘
+                         │
+                         ▼
+  ┌────────────────────────────────────────────────────┐
+  │              API GATEWAY / FRONTEND                │
+  │         (Auth, routing, TLS termination)           │
+  └──────────────────────┬─────────────────────────────┘
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐
+  │  METADATA    │ │   STORAGE    │ │   BACKGROUND     │
+  │  SERVICE     │ │   SERVICE    │ │   WORKERS        │
+  │              │ │              │ │                  │
+  │  KV Store    │ │  Node 1..N   │ │  Repair Worker   │
+  │  (consistent)│ │  (chunk disk)│ │  GC Worker       │
+  └──────────────┘ └──────────────┘ │  Scrub Worker    │
+                                    └──────────────────┘
+```
+
+On PUT: frontend validates request, calls metadata service to check bucket exists and get placement, frontend writes data in parallel to 3 storage nodes (rack-aware placement), waits for quorum acknowledgment (2 of 3), then commits metadata record. Returns success only after both data and metadata are written.
+
+On GET: metadata lookup (finds 3 node locations), frontend reads from nearest healthy node, verifies SHA-256 checksum matches etag, returns data. If checksum fails, tries next replica.
+
+Background: Repair worker scans metadata for objects with fewer than 3 healthy replicas and recreates missing copies. Scrubber reads every chunk, recomputes checksum, marks corrupted chunks for repair. GC worker reclaims space from deleted objects after a 24-hour delay.
+
+*(Cross-question: quorum consistency)*
+
+> **Interviewer:** You write to quorum (2 of 3 nodes) on PUT. What happens if the 3rd write succeeds after your PUT already returned to the client?
+
+**Candidate:** Nothing problematic. The 3rd write completing late just gives us a 3rd replica — more durability. The key invariant is that the metadata record points to only the confirmed nodes. When we write metadata, we record which nodes acknowledged. If node 3 acknowledged late (after metadata was committed), the repair worker will eventually notice it has the chunk and update the replica list. If node 3 never acknowledges at all, the repair worker detects under-replication via background scan and creates a new copy on a different node. The system is self-healing. The durability guarantee to the client — "your data survived 2 failure domains" — is met at the moment PUT returns.
+
+*(Cross-question: content-addressed storage)*
+
+> **Interviewer:** Two users upload identical 10MB files. How can you avoid storing the data twice?
+
+**Candidate:** Content-addressed storage (CAS): use the SHA-256 hash of the content as the chunk identifier. On PUT, compute the hash before writing. Check if a chunk with that hash already exists on any storage node. If yes, skip the write and point the new metadata record to the existing chunk. This is deduplication at the chunk level. The tradeoff: you need reference counting on chunks — a chunk can only be physically deleted when all metadata records pointing to it are deleted. This complicates GC. You also need to handle the case where two concurrent PUTs of the same content race on chunk creation. CAS with reference counting is how systems like git-annex and many backup systems work. For a generic object store, I'd implement it as V2 after basic storage is proven — it adds meaningful complexity to GC and requires chunk fingerprinting as part of the write path.
+
+*(Cross-question: lifecycle policies)*
+
+> **Interviewer:** A customer sets a lifecycle rule: delete objects in the temp/ prefix after 7 days. How do you implement this without scanning the entire object namespace?
+
+**Candidate:** Two approaches. Index-based: maintain a secondary index keyed by `(bucket, lifecycle_rule_id, eligible_at)` where `eligible_at = created_at + rule.age_threshold`. The lifecycle worker queries this index for entries where `eligible_at <= now()`, deletes them in batches. This is O(deletions) not O(all objects). Time-to-live at storage layer: some KV stores support native TTL on rows — set `expires_at` on the metadata record and let the store handle it. The problem is KV TTL expiry is not always transactional with our GC pipeline. I'd use the secondary index approach: on every object PUT, if the bucket has applicable lifecycle rules, compute `eligible_at` and insert a row in a `lifecycle_events` table. The worker processes this table on a schedule. The critical constraint is idempotency: the worker must be safe to run multiple times — check that the object still exists before deleting, don't fail if it was already deleted.
+
+---
+
+### Common Cross-Questions and Strong Answers
+
+**Q1: How do you guarantee 11 nines of durability with only 3× replication?**
+
+**A:** Durability comes from placement, not replication count alone. Three replicas on one rack gives you single-failure-domain durability — a rack power failure loses all three. Our placement algorithm enforces rack-diverse placement: each of the 3 replicas goes to a different rack. With disk failure rates of ~1–3% per year and rack failure rates of ~0.1% per year, the probability of losing all 3 rack-diverse replicas in the same year is astronomically small. We stack on top of that: continuous integrity scrubbing (detect silent corruption before it propagates), automatic repair (recreate missing replicas within minutes of detection), and checksums on every write and read. 11 nines is ~0.001% chance of losing any object per year. With proper placement and self-healing, 3× replication achieves this. S3 uses erasure coding (not 3× replication) for even greater efficiency — that's a V2 optimization for us.
+
+**Q2: What's the difference between eventual and read-after-write consistency, and which does your system provide for GET after PUT?**
+
+**A:** Eventual consistency means a write will eventually be visible to all readers, but there's no bound on when. Read-after-write consistency means: if client A writes, then client A immediately reads the same key, they will see their own write. Our system provides read-after-write for individual objects because metadata is written to a strongly consistent KV store. After PUT returns, the metadata record exists and is immediately visible to any GET. We provide eventual consistency for LIST operations — because the LIST index may lag the primary metadata store by up to 60 seconds. This is the same model S3 uses. The practical implication: if you PUT an object and immediately LIST the prefix, it may not appear yet. Use HEAD on the specific key for authoritative existence checks.
+
+**Q3: A storage node has silent bit rot — data on disk is corrupted but the node is still responding. How does your system detect and recover this?**
+
+**A:** Three layers of defense. Checksum on write: every chunk has a SHA-256 hash stored in its header. On every read, the storage node recomputes the hash and compares. If they differ, it returns an error instead of corrupted data — the frontend tries another replica. Background scrubber: independent of reads, the scrubber periodically reads every chunk on every node and verifies checksums. It catches corruption that hasn't been triggered by a read request yet. This scrubs the entire corpus every 30 days. Repair pipeline: when the scrubber or a read detects corruption, the chunk is marked as corrupt in the node's local index and the repair worker is notified. The repair worker reads a healthy replica and writes a new copy on a different node, then updates the metadata record. This is defense in depth: detection happens at read time, at scrub time, and is automatically repaired without human intervention.
+
+**Q4: How would you implement multipart upload resumability — the client can close the connection mid-upload and resume days later?**
+
+**A:** The multipart upload state (upload_id, completed parts, part ETags) is persisted in the metadata store with a 7-day TTL. On resume, the client calls `LIST /uploads/{upload_id}/parts` to see which parts are already uploaded and their ETags. The client re-uploads only missing parts. Each part is idempotent: uploading part N twice with the same data produces the same ETag and the second write is a no-op (or safely overwrites with identical content). When the client calls COMPLETE, the server assembles parts in order by part number, verifies all ETags match, and writes the final object. The temp part storage is cleaned up. If the upload is never completed within 7 days, a cleanup job aborts it and reclaims storage. This is exactly how S3 multipart upload works. The key invariant: until COMPLETE is called, the partial upload is invisible to GET/LIST — no half-written object is ever served.
+

@@ -2527,6 +2527,160 @@ Ch33 (Caching/Redis internals), Ch35 (Kafka/streaming). Autocomplete is the laye
 the user and the query: it shapes what queries get asked, before search executes them.*
 *Last updated: 2026-06-25*
 
+---
+
+## Interview Simulation — Typeahead / Autocomplete (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design the typeahead autocomplete system for a search engine at Google scale. Where do you start?
+
+**Candidate:** A few questions to scope this. First — are we completing web search queries (like Google's search box), or completing within a product domain (like a music app completing song names)? The data size and personalization model differ. Second — what's the latency SLA? Autocomplete is uniquely latency-sensitive because it fires on every keystroke — even 150 ms feels sluggish. Third — do we need per-user personalization, or are suggestions the same for all users typing the same prefix? Fourth — content safety: can we show any query, or do we need to filter harmful suggestions?
+
+> **Interviewer:** Google-scale web search autocomplete. Latency < 100 ms p99. Per-user personalization required. Content safety required — no harmful or illegal suggestions.
+
+**Candidate:** Functional requirements: (1) Return top-10 query completions for any prefix within 100 ms. (2) Rank suggestions by a blend of global popularity and user's personal history. (3) Surface trending queries (rising in last 1 hour) without over-indexing on viral but harmful content. (4) Filter suggestions through a three-layer content safety pipeline. Non-functional: 100 ms p99, 99.99% availability (users notice immediately if autocomplete disappears), handle 1 billion prefix queries per day globally.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 1 billion queries/day ÷ 86,400 s ≈ 11,500 queries/s average. Peak is ~5× → 57,500 queries/s. Each query is a prefix string (avg 5 characters at time of first suggestion) and returns 10 suggestions (~200 bytes total). Storage for the prefix index: Google processes ~8.5 billion searches/day. The prefix trie of all queries with > 10 occurrences/day would cover the top ~100 million distinct queries. A trie node is ~50 bytes → 5 GB for the complete trie — fits in memory on a single large node, but we shard for redundancy. Trending computation: we need to count query velocity over a 1-hour window. With Count-Min Sketch at 1% error, each sketch is ~10 MB. We run one sketch per 5-minute bucket → 12 buckets/hour → 120 MB total for trending state.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:** Single endpoint: `GET /v1/autocomplete?q={prefix}&user_id={uid}&limit=10&locale=en-US`. Returns `{suggestions: [{text, score, type}], request_id}`. Type field values: `POPULAR` (globally trending), `PERSONAL` (from user history), `TRENDING` (velocity-based). The `request_id` enables feedback: when the user clicks a suggestion, `POST /v1/feedback` body `{request_id, selected_index, selected_text}` feeds into both the personalization model and the ranking signal. We do NOT pass the full user search history in the request — the user_id is a key into the personalization store, looked up server-side. This keeps the request payload small and prevents client-side exposure of browsing history.
+
+> **Interviewer:** Why return `type` on each suggestion?
+
+**Candidate:** The UI team needs it to render different affordances: a trending query gets a fire icon, a personal history item gets a clock icon. More importantly, for A/B testing and ranking analysis, we need to know which source generated each suggestion. If a user always clicks PERSONAL suggestions and never POPULAR ones, that's a signal to up-weight personal history in the ranking blend. The type field makes the ranking pipeline observable.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three data stores. Global prefix index: a serialized trie stored in Redis (prefix → list of top-100 completions sorted by global score). Key: `ac:prefix:us`, value: sorted list. We precompute top-100 at index build time — at query time we just fetch and re-rank. The trie is rebuilt nightly from the query log. Personalization store: Apache Cassandra, key = user_id, value = serialized `{recent_queries: [...last 100], topic_affinities: {sports: 0.8, finance: 0.3}}`. Topic affinities are updated by a nightly ML job. Trending state: Count-Min Sketch per 5-minute bucket in Redis, plus a pre-computed `trending_queries` sorted set updated every 60 s by the Trend Aggregation Service.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** Here's the architecture:
+
+```
+QUERY PATH (per-keystroke, < 100ms budget)
+==========================================
+
+User Keystroke
+  │
+  ▼
+CDN Edge (Cloudflare Workers)
+  │ prefix cache: last 2 chars typed → popular prefixes cached
+  │ HIT for top-1000 prefixes (80% of traffic): return immediately
+  │ MISS: forward to Autocomplete Service
+  │
+  ▼
+Autocomplete Service (stateless, 200 pods)
+  │
+  ├─1► Global Prefix Lookup (Redis, 5ms)
+  │       GET ac:{prefix}:{locale}
+  │       → top-100 global completions
+  │
+  ├─2► Personalization Fetch (Cassandra, 10ms, parallel)
+  │       GET user:{user_id}:recent_queries
+  │       GET user:{user_id}:topic_affinities
+  │
+  ├─3► Trending Injection (Redis sorted set, 2ms)
+  │       ZREVRANGE trending:{locale} 0 9
+  │       → top-10 trending queries right now
+  │
+  ├─4► Re-ranking (in-process, 5ms)
+  │       blend_score = 0.6*global + 0.3*personal_affinity
+  │                   + 0.1*trending_boost
+  │       filter personal history matches to top
+  │       → ranked list of 20 candidates
+  │
+  ├─5► Content Safety Filter (parallel async, 10ms)
+  │       L1: blocklist lookup (Redis hash, <1ms)
+  │       L2: ML classifier (distilBERT, 8ms, GPU sidecar)
+  │       L3: human review queue (async, NOT on critical path)
+  │       → drop any suggestion scoring > 0.7 harmful
+  │
+  └─► Return top-10 clean, ranked suggestions
+
+TRENDING PIPELINE (near-real-time)
+====================================
+User Queries → Kafka (query-events topic)
+  │
+  ▼
+Flink Job (sliding 1-hour window, 5-min slide)
+  │ Count-Min Sketch per 5-min bucket
+  │ velocity = count(last 1hr) / count(prev 1hr)
+  │ flag queries where velocity > 3× baseline
+  │
+  ▼
+Trending Aggregator Service
+  │ merges velocity signals, applies content safety pre-filter
+  │ writes to Redis: ZADD trending:{locale} {score} {query}
+  │ update interval: every 60s
+  │
+  └─► Autocomplete Service reads trending on every request
+
+INDEX BUILD (nightly batch)
+============================
+BigQuery (query log, 90-day window)
+  │ COUNT queries, filter < 10/day, normalize
+  ▼
+Trie Builder (Spark job)
+  │ builds prefix → top-100 completions per locale
+  │ scores: log10(count) * freshness_decay
+  ▼
+Redis Cluster (atomic swap: new index replaces old)
+  └─► zero-downtime deploy via key rename + TTL flip
+```
+
+**Deep Dive 1: Personalization Without Per-User Index (Re-ranking, Not Separate Index).**
+
+The naive approach — build a separate autocomplete trie per user — is untenable at Google scale (1 billion users × 5 GB trie = 5 exabytes). The staff insight: we don't need a per-user index. We need per-user re-ranking of the global index results. The global index returns 100 candidates per prefix. The re-ranking step fetches the user's topic affinities and recent query history (from Cassandra, 10 ms) and computes a personal score adjustment. If the user frequently searches for "python programming," the topic affinity for `technology.programming` is 0.9. When they type "py," the global candidate "python download" gets a 0.9 × 0.3 = 0.27 affinity boost added to its global score, surfacing it above "pyrite mineral" even if the latter is globally more popular. The recent queries are handled separately: if the user typed "python decorators" 3 days ago, that exact query appears as a PERSONAL suggestion regardless of global rank. This architecture means the index is O(1) per user (no per-user storage for the index), and personalization is an O(1) lookup per request.
+
+> **Interviewer:** How do you handle a prefix with no suggestions in the index — a very rare or new query?
+
+**Candidate:** *(Cross-question: cold-start for rare prefixes)* Three fallbacks. First, backoff to a shorter prefix: if `ac:pytho` has no completions, check `ac:pyth`. We do this recursively up to 3 chars of backoff. Second, spell-correction: run a fast edit-distance check (BK-tree, max distance 1) against the top-100K queries. If "pythn" is 1 edit from "python," surface "python" completions. Third, the index is rebuilt nightly, but we have a real-time index update for breakout new queries: if a query appears > 1000 times in a 5-minute window and is not in the current index, the Trending Service creates a temporary index entry that expires in 24 hours. This handles "Super Bowl 2027 halftime show" the morning after the event.
+
+**Deep Dive 2: Trending via Velocity (Count-Min Sketch).**
+
+The key staff-level distinction: trending is velocity, not frequency. "Taylor Swift" has millions of queries per day but is not trending (it's always popular). "Taylor Swift Coachella" has 50,000 queries in the last hour versus 200 in the same hour last week — that's 250× velocity, clearly trending. We compute velocity = count(last 1 hour) / count(baseline 1 hour 1 week ago). The Zipf distribution of queries means the top 1,000 queries account for ~30% of traffic — exact counters for these are fine. For the long tail (100 million+ distinct queries), exact counting is infeasible. Count-Min Sketch with width 100,000 and depth 5 gives < 1% error with > 99% probability. The sketch is additive: we maintain 12 five-minute sketches, sum them for the 1-hour window, and compare to the same window from last week. Memory: 12 sketches × 100,000 counters × 4 bytes = 4.8 MB — trivially small.
+
+**Deep Dive 3: Content Safety in 3 Layers.**
+
+Layer 1 (< 1 ms): Deterministic blocklist — a Redis hash set of ~500,000 exact-match banned queries. This catches known harmful queries instantly with zero false positives. Updated hourly by the Trust & Safety team. Layer 2 (8 ms): ML classifier (DistilBERT fine-tuned on a human-labeled dataset of 10M queries) running on a GPU sidecar per pod. Returns a harm_score in [0, 1] for each candidate suggestion. Threshold 0.7 → block. This layer catches novel harmful queries not in the blocklist. False positive rate: ~0.5% (occasional legitimate queries incorrectly blocked). Layer 3 (async, NOT on the critical path): suggestions with harm_score in [0.4, 0.7] are queued for human review. Reviewers add confirmed harmful queries to the Layer 1 blocklist, improving future precision. The key architecture decision: Layer 3 does NOT block the suggestion in real time — it has a 24-hour SLA. Blocking on human review would add unbounded latency to the response.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+**Q: How do you size the LRU cache for prefix suggestions?**
+A: The Zipf distribution does the work here. The top 10,000 most-queried prefixes receive ~50% of all autocomplete requests. Each prefix result set is ~200 bytes → 2 MB for the top-10K prefix cache. Storing the top 1 million prefixes (covering ~95% of traffic) requires 200 MB — easily fits in a CDN edge node's memory. Cache eviction: pure LRU. TTL: 5 minutes for trending-sensitive content (so trending queries propagate within 5 min), 1 hour for stable popular queries. The CDN Cloudflare Worker cache uses this LRU: the top-1M prefix cache means 80%+ of requests never reach the Autocomplete Service origin — significant cost and latency savings.
+
+**Q: How would you handle an autocomplete request that takes 150 ms — above your SLA?**
+A: First, check where the time is spent: CDN miss? Redis latency? Cassandra latency? Content safety classifier? The most common culprit is a slow Cassandra read for personalization (cross-datacenter read). Fix: serve the global (non-personalized) result immediately if Cassandra hasn't responded within 15 ms, then update the UI with personalized results when Cassandra responds — a progressive enhancement pattern. The user sees autocomplete at 20 ms (global) and sees it subtly re-rank at 30 ms (personalized). Imperceptible to the user, within SLA.
+
+**Q: A new viral trend generates a harmful query (e.g., drug combination that causes deaths). How quickly can you suppress it?**
+A: Layer 1 blocklist update latency is 60 minutes (hourly batch push). To go faster: the Trust & Safety team has an emergency push API that bypasses the batch — blocklist update propagates to all Redis nodes in < 30 s. The ML classifier (Layer 2) already scores new harmful queries in real time, so as long as the harm_score > 0.7, the query is blocked even before the blocklist update. The Layer 3 human review queue has a P0 escalation path: if a human reviewer marks a query as critical, it bypasses the batch and triggers the emergency push immediately. End-to-end: a new harmful query is blocked by the ML classifier within minutes of appearing at volume, and added to the deterministic blocklist within 30 minutes of human confirmation.
+
+---
+
+*Chapter 102 of Section 6. Pairs with Ch75 (Autocomplete L5), Ch55 (Search System),
+Ch33 (Caching/Redis internals), Ch35 (Kafka/streaming). Autocomplete is the layer between
+the user and the query: it shapes what queries get asked, before search executes them.*
+*Last updated: 2026-06-25*
+
 <!-- END OF CHAPTER 102 -->
 <!-- Additions: Parts 11-13 (semantic autocomplete, monitoring/observability, pre-interview drill),
      fixed footer chapter numbers, added What to Read Next section. -->

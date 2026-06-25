@@ -4790,3 +4790,188 @@ DEEP DIVES (30-45 min):
 ✓ Staff One-Liners & Mental Models table
 ✓ Interview Calibration: leadership explanation, how to teach
 ```
+
+## Interview Simulation — Notification Delivery System Fan-out at Scale (Staff / L6)
+
+*45-minute Staff-level system design interview. Phases follow the Section 2 framework. Staff cross-questions probe org complexity, multi-region trade-offs, migration paths, build-vs-buy.*
+
+---
+
+### Phase 1: Requirements (8 min)
+
+> **Interviewer:** Design a notification delivery system for a social platform with 500M users, some accounts with 100M+ followers. Notifications include: new post by followed account, mentions, direct messages, likes, comments.
+
+**Candidate:** Before designing, I need to understand the trade-offs you're prioritizing. A few questions: First — delivery latency SLA. Is there a tiered model, or is everything treated equally? Second — for mega-accounts with 100M followers, do all followers get notified on every post? Third — what channels are in scope — push (iOS/Android), email, SMS, in-app?
+
+> **Interviewer:** Tiered: DMs and mentions within 5 seconds P99, likes/follows within 60 seconds, marketing within 1 hour. For mega-accounts, assume a subset of followers opted into notifications — but that subset could still be 10M users. Push + in-app; email is a stretch goal.
+
+**Candidate:** Good. So the core design challenge is fan-out at scale for high-follower accounts. The other challenge is cross-channel dedup — a user should not get a push notification AND an in-app badge for the same event if they're already looking at the app. Non-goals: email rendering, SMS (stretch), notification analytics beyond delivery confirmation.
+
+*(Cross-question: scope)*
+> **Interviewer:** How does knowing the tiering affect your architecture?
+
+**Candidate:** Fundamentally. If everything is 5-second SLA, I need a pure push model with no async batching, which is expensive. With tiering, I can use fast paths for high-priority events (dedicated low-latency queue, direct APNs/FCM call) and slow paths for low-priority events (batch aggregation — "You have 47 new likes" rather than 47 individual notifications). The slow path also enables user fatigue management — I can suppress the 48th like notification if the user has already seen 10 today. That's architecturally impossible on a pure push model.
+
+---
+
+### Phase 2: Estimation (4 min)
+
+**Candidate:** 500M users, assume 20% have push enabled → 100M devices registered. At peak (e.g., World Cup final tweet), a single post by a 100M-follower account with 10% notification opt-in → 10M push notifications to dispatch within 5 seconds (if it's a mention) or 60 seconds (if it's a new post). That's 10M / 60 = ~167K pushes/second for the fan-out burst. APNs and FCM can handle ~1M requests/second per connection pool, so we need roughly 200 push worker instances at peak. Steady-state across all accounts: assume 1B notification events/day → ~11K events/second. The fan-out multiplier is what makes this hard — not the total volume, but the burst from a single event.
+
+*(Cross-question: estimation)*
+> **Interviewer:** You said 167K pushes/second. How do you handle that burst without provisioning for it at all times?
+
+**Candidate:** Auto-scaling + queue buffering. The fan-out workers write notification tasks to a priority queue (Kafka with tiered topics). Push delivery workers pull from the queue and call APNs/FCM. During the burst, the queue absorbs the spike — delivery may take 30–45 seconds instead of 5, but for the "new post" tier (60-second SLA) that's acceptable. For the 5-second tier (DMs, mentions), we use a separate queue with dedicated workers that are always provisioned — those events don't compete with fan-out bursts. This is the tiering architecture's operational payoff.
+
+---
+
+### Phase 3: API Design (4 min)
+
+**Candidate:**
+
+```
+// Internal event ingestion (called by upstream services)
+POST /internal/v1/events
+  body: {
+    event_type: new_post | mention | dm | like | comment | follow,
+    actor_id: <user_id>,
+    target_id: <user_id>,          // recipient (for DM/mention)
+    object_id: <post_id|comment_id>,
+    timestamp,
+    priority: HIGH | MEDIUM | LOW  // determined by event_type
+  }
+  → { event_id, accepted: true }
+
+// Device registration (called by mobile clients)
+POST /v1/devices/register
+  body: { user_id, device_token, platform: ios|android, app_version }
+  → { device_id }
+
+// User notification preferences
+PUT /v1/users/{user_id}/notification_prefs
+  body: { [event_type]: { enabled: bool, channels: [push, email, sms], budget_per_day: int } }
+  → { updated: true }
+
+// Notification history (for in-app notification center)
+GET /v1/users/{user_id}/notifications
+  ?after_ts=<timestamp>&limit=50
+  → { notifications: [{id, type, actor, object, read, ts}], unread_count }
+```
+
+> **Interviewer:** What's `budget_per_day` in the preferences?
+
+**Candidate:** That's the notification budget — a per-user daily cap on a given event type. Example: user sets `like` budget to 5/day — they get the first 5 like notifications, then silence until midnight. This is the technical implementation of user fatigue management. At Staff level, I want to make this configurable rather than hardcoded, because the right budget varies by user engagement pattern. Power users want more; casual users want fewer.
+
+---
+
+### Phase 4: Data Model (4 min)
+
+**Candidate:** Three primary stores:
+
+**Device Registry**
+```
+device_tokens: { device_id → {user_id, token, platform, last_active_ts, valid: bool} }
+user_devices:  { user_id → [device_id] }   // typically 1–3 devices per user
+```
+Cassandra — high write throughput for token refresh, fast lookup by user_id.
+
+**Notification Budget Tracker**
+```
+budget_usage: { (user_id, event_type, date) → count }
+```
+Redis with TTL = 48h (daily key expires naturally). Atomic INCR operation checks and increments atomically — no race conditions on concurrent notifications for the same user.
+
+**Notification Log (for in-app center + dedup)**
+```
+notifications: {
+  notification_id (UUID),
+  user_id,
+  event_type,
+  actor_id,
+  object_id,
+  channels_sent: [push, inapp],
+  status: delivered | failed | suppressed,
+  created_ts,
+  read_ts
+}
+```
+Cassandra, partitioned by `(user_id, month)` for efficient recent-notifications queries. Also doubles as the dedup store — before sending, check if a notification for `(user_id, event_type, object_id)` was sent in the last N minutes.
+
+---
+
+### Phase 5: HLD + Deep Dive (20 min)
+
+**Candidate:** The architecture separates fan-out from delivery:
+
+```
+  Upstream Services (Post Service, Comment Service, etc.)
+          |
+          v
+  [Event Ingestion API]  (validates, enriches, assigns priority)
+          |
+          v
+  [Event Router]
+    HIGH priority → [Fast Queue]  (Kafka, dedicated partition)
+    MED/LOW priority → [Standard Queue]  (Kafka, shared)
+          |                              |
+          v                              v
+  [Fan-Out Workers]               [Fan-Out Workers]
+  (dedicated, always-on)          (auto-scaled, bursty)
+          |
+    For each event:
+    1. Lookup follower_notification_list (who opted in)
+       → For mega-accounts: pre-computed list in Redis (updated async)
+       → For normal accounts: query follow graph DB
+    2. For each recipient:
+       a. Check notification budget (Redis INCR)
+       b. Check user online status (in-app → suppress push if active)
+       c. Enqueue delivery task
+          |
+          v
+  [Delivery Queue]  (per-channel: push_queue, email_queue, inapp_queue)
+          |
+  ┌───────┼──────────┐
+  v       v          v
+[Push   [In-App   [Email
+Workers] Workers]  Workers]
+  |          |
+APNs/FCM  WebSocket / long-poll
+          notification store
+
+
+  CROSS-CHANNEL DEDUP:
+  Before any channel send:
+  CHECK notification_log for (user_id, event_type, object_id) within dedup window
+  IF exists AND user is active in-app → skip push, update in-app badge only
+  IF exists AND already sent on any channel → skip (idempotency key)
+```
+
+**Fan-out strategy — pre-computed vs lazy:**
+For accounts with >100K followers (mega-accounts), we maintain a pre-computed `follower_notification_list` in Redis, updated asynchronously when follow/unfollow events happen. When the mega-account posts, fan-out reads directly from this list — no DB query needed. For accounts with <100K followers, we query the follow graph at fan-out time (acceptable latency since it's a small query). The threshold of 100K is configurable and tuned based on follow-graph DB query latency.
+
+**Cross-team notification contract governance:**
+Any team that wants to send a notification must register an event type in the Notification Schema Registry. The registry enforces: event name, payload schema, default priority, default budget (max per-user per day), and owner team. No team can call the notification API with an unregistered event type. Schema changes require a review from the notification platform team. This prevents the "notification spam" failure mode where a new team ships a feature that floods users with 50 notifications/day. Real incident pattern: a growth team A/B test that sent re-engagement push notifications to 10M users without budget enforcement, causing a 40% uninstall spike in the test cohort.
+
+---
+
+### Common Cross-Questions and Strong Answers (Staff Level)
+
+*(Cross-question: delivery SLA tiering)*
+> **Interviewer:** A critical system alert (account compromise detected) needs delivery in under 2 seconds. How does that fit your tiered model?
+
+**Candidate:** That's a fourth tier — CRITICAL — outside the normal notification budget and dedup logic. Critical notifications bypass all rate limiting, ignore user budget preferences (you can't opt out of security alerts), and use a dedicated delivery path that calls APNs/FCM synchronously (not via queue) with a 2-second timeout. If APNs/FCM fails, we fall back to SMS immediately. This is implemented as a separate code path, not a configuration flag on the existing tiered system — you don't want a bug in the rate-limiter to accidentally suppress a security alert. Separation of concerns is a safety property here.
+
+*(Cross-question: multi-region)*
+> **Interviewer:** You're running in three regions. A user in Tokyo follows an account in New York. The new post event fires in us-east-1. How does the Tokyo user get notified?
+
+**Candidate:** The fan-out worker in us-east-1 generates delivery tasks for all recipients globally. For the Tokyo user, the delivery task is routed to the ap-northeast-1 push delivery cluster, which holds the APNs/FCM connection pool for that region. We maintain a `user_home_region` mapping in a global routing table (DynamoDB Global Tables or similar). The fan-out worker looks up the home region for each recipient and enqueues the delivery task on the appropriate regional queue. This reduces APNs/FCM call latency by ~150ms for Asian users (calling APNs from Tokyo vs from Virginia). The trade-off is cross-region queue latency (~30ms), which is well within the 60-second SLA.
+
+*(Cross-question: user fatigue / notification contract)*
+> **Interviewer:** A product manager wants to send a promotional push to all 500M users at 9am local time. How do you handle this?
+
+**Candidate:** This is a scheduled mass notification, which is architecturally different from event-driven notifications. I'd reject a direct API call for 500M simultaneous sends — APNs/FCM would rate-limit us. Instead: the campaign is scheduled in a Campaign Service. At execution time, a batch fan-out job reads user segments (all 500M, but filtered by opt-in status and timezone), and enqueues tasks spread over a 30-minute window per timezone — not all at 9am UTC, but 9am in each user's local timezone. This naturally distributes the load. Within the notification platform, campaign traffic goes on a separate low-priority queue that doesn't compete with real-time notification delivery. Critically: the PM must register this campaign in the Notification Schema Registry with approval — preventing surprise mass sends that cause uninstall spikes.
+
+*(Cross-question: org complexity)*
+> **Interviewer:** Four teams each own a different notification type (social, marketplace, security, growth). They each want a different retry policy. How do you manage this?
+
+**Candidate:** Per-event-type delivery policy configuration in the registry. Each event type registration includes: `retry_count`, `retry_backoff`, `fallback_channel`, and `expiry_ttl` (after which an undelivered notification is dropped rather than retried). The notification platform enforces boundaries: security team gets up to 5 retries with immediate backoff; growth team gets 2 retries with exponential backoff and a 1-hour TTL (a promotional notification that couldn't be delivered in 1 hour is irrelevant). The platform team reviews policy configurations for reasonableness — a team can't set retry_count=100 without review. This moves the governance question from "which team controls the notification platform" to "what policies are registered and who approved them" — a much healthier model.
