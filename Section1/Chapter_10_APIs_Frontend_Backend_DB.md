@@ -2377,3 +2377,124 @@ Implement a simple payment endpoint that accepts `POST /payments` with an `Idemp
 For any web API you can access (your own project or a public API), add latency instrumentation at three points: (a) total request duration from the client's perspective, (b) time spent in the application layer (business logic), (c) time spent waiting on the database. Run 1,000 requests and compute p50, p95, and p99 latency for each tier. Answer: Which tier dominates the latency? Is the database the bottleneck, or is it the application logic? What would you optimize first based on this data, and why? What does the p99 versus p50 gap tell you about the tail latency characteristics of your system?
 
 ---
+
+## 16. Quick Reference: REST vs GraphQL vs gRPC
+
+| Dimension              | REST                                   | GraphQL                                | gRPC                                   |
+|------------------------|----------------------------------------|----------------------------------------|----------------------------------------|
+| **Protocol**           | HTTP/1.1 or HTTP/2, JSON               | HTTP/1.1 or HTTP/2, JSON               | HTTP/2, Protocol Buffers (binary)      |
+| **Payload size**       | Moderate — often over-fetches fields   | Exact — client specifies fields        | Small — binary encoding ~10× smaller  |
+| **Type safety**        | Optional (OpenAPI spec)                | Strong (schema introspection)          | Strong (proto file is the contract)    |
+| **Versioning**         | URL or header based (`/v1/`, `Accept:`)| Schema evolves; deprecation in schema  | Proto fields are numbered; additive OK |
+| **Streaming**          | Server-Sent Events or WebSocket        | Subscriptions (WebSocket under hood)   | Bidirectional streaming native         |
+| **N+1 problem**        | Yes, if not careful                    | Yes — solved with DataLoader batching  | N/A (procedural calls)                 |
+| **Best for**           | Public APIs, simple CRUD, browsers     | Mobile/web with varied data needs      | Internal service-to-service (low lat)  |
+| **Tooling maturity**   | Highest (every language, every tool)   | High (Apollo, Relay, Hasura)           | High for backend; browser needs grpc-web|
+| **Real-world examples**| Stripe, Twilio, GitHub public API      | GitHub v4, Shopify, Facebook Graph API | Google internal, etcd, Kubernetes API  |
+
+**When to pick gRPC for internal services:** when you need < 5ms P99 between services, when you need streaming (e.g., log tailing), or when you're already proto-first. The binary encoding and HTTP/2 multiplexing reduce CPU and connection overhead measurably at high throughput.
+
+**When to stick with REST for internal services:** when teams use different languages with uneven proto support, when you need curl-debuggability, or when the endpoints are simple CRUD with no streaming needs.
+
+---
+
+## 17. API Versioning Strategies
+
+Every API eventually needs to change. The question is how to change it without breaking existing clients.
+
+**URL versioning** (`/api/v1/users`, `/api/v2/users`) is the most common and most visible approach. It makes the version explicit in every URL, easy to route in a load balancer, and easy for clients to pin to a version. Drawback: you end up running two full versions in parallel until old clients migrate.
+
+**Header versioning** (`Accept: application/vnd.myapi.v2+json`) keeps URLs clean but requires clients to set a non-obvious header. API gateways and proxies may not understand it without custom logic. Mostly used in APIs that follow strict REST principles (GitHub, Stripe use custom Accept headers for minor versions).
+
+**Query parameter versioning** (`/users?version=2`) is easy but pollutes every URL and is easy to forget. Rarely the best choice for public APIs.
+
+**Additive-only evolution** (no versioning) works when you can guarantee backwards compatibility: only add fields, never remove or rename them. JSON ignores unknown fields by default, so adding fields is safe. This is the GraphQL philosophy (deprecate fields, never remove) and the proto philosophy (field numbers are forever). Requires discipline — one breaking change forces a full version bump.
+
+**Sunset policy:** always announce deprecation timelines. Give clients at least 6–12 months to migrate. Use the `Sunset` HTTP header (RFC 8594) to programmatically communicate the deadline. Remove the old version on schedule — letting dead versions linger indefinitely creates operational and security debt.
+
+---
+
+## 18. The N+1 Query Problem
+
+The N+1 problem is one of the most common performance bugs in server-side applications. It happens when an application issues 1 query to fetch a list of N items, then issues N additional queries to fetch a related record for each item — N+1 queries total.
+
+```sql
+-- 1 query: fetch 100 posts
+SELECT id, title, author_id FROM posts LIMIT 100;
+
+-- N queries: fetch each author individually
+SELECT name FROM users WHERE id = 42;
+SELECT name FROM users WHERE id = 17;
+-- ... repeated 98 more times
+```
+
+**Detection:** Enable slow query logging and look for bursts of identical queries that differ only by a primary key value. An ORM like Hibernate or ActiveRecord will print a warning in debug mode. Some APM tools (Datadog, New Relic) flag N+1 automatically.
+
+**Fix 1 — JOIN:** Retrieve the data in a single query.
+```sql
+SELECT p.id, p.title, u.name
+FROM posts p
+JOIN users u ON u.id = p.author_id
+LIMIT 100;
+```
+
+**Fix 2 — Batch load (DataLoader pattern):** Collect all required IDs during a request, then issue one `WHERE id IN (...)` query at the end. This is the pattern that Facebook's DataLoader library implements for GraphQL resolvers. It works even across resolver boundaries because the batching happens asynchronously at the end of the event loop tick.
+
+**Fix 3 — Eager loading (ORM):** Most ORMs support `include` / `preload` / `joinedload` directives that tell the ORM to fetch associations in bulk rather than lazily.
+
+The N+1 problem gets worse at scale: fetching a page of 20 items may be fine, but fetching 1,000 items in a batch job will issue 1,000 extra queries. Always test with realistic data volumes.
+
+---
+
+## 19. Database Connection Pooling
+
+Every database connection consumes memory on the database server — PostgreSQL uses about 5–10 MB per connection for its per-process model. A fleet of 100 app servers each holding 20 persistent connections = 2,000 connections and ~10–20 GB of overhead on the database, before it serves a single query.
+
+**Connection pooling** reuses a small pool of long-lived connections. The application checks out a connection, uses it for one query or transaction, then returns it to the pool. Common pool sizes: 10–50 connections per app server instance, depending on database and query mix.
+
+**PgBouncer** is the de-facto connection pooler for PostgreSQL. It sits between app servers and Postgres and multiplexes thousands of client connections onto a small number of real database connections. In transaction-mode pooling, a connection is held only for the duration of one transaction, then returned — enabling aggressive oversubscription (10,000 client connections → 100 real database connections).
+
+**Pool sizing rule of thumb:** start at `cores × 2` connections per database node. A 32-core Postgres instance works well with ~64–100 connections. Going higher increases contention and context switching without improving throughput. This is the "pool size calculator" rule from HikariCP documentation and is well-validated empirically.
+
+**Connection pool exhaustion** is a production emergency. When all connections are in use and a new request arrives, it either blocks waiting for a connection (timeout) or fails immediately. Symptoms: latency spike, error rate jump, connection pool "full" alerts. Fix: reduce query duration, add read replicas to spread load, or increase pool size cautiously.
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                         KEY TAKEAWAYS                                ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  REST vs GraphQL vs gRPC: REST for public APIs, GraphQL for          ║
+║  flexible client queries, gRPC for internal low-latency services.    ║
+║                                                                      ║
+║  API versioning: URL versioning for major breaking changes;          ║
+║  additive-only evolution for minor changes. Announce sunset dates.   ║
+║                                                                      ║
+║  N+1 query: 1 list query + N per-item queries = performance trap.    ║
+║  Fix with JOIN, batch load (DataLoader), or ORM eager loading.       ║
+║                                                                      ║
+║  Connection pooling: ~10–50 connections per app server instance.     ║
+║  Use PgBouncer for PostgreSQL. Pool exhaustion = production outage.  ║
+║                                                                      ║
+║  Read/write ratio: most systems are 80–99% reads. Design caches      ║
+║  and replicas accordingly. Measure before assuming.                  ║
+║                                                                      ║
+║  Idempotency keys: every mutation that might be retried needs one.   ║
+║  Store key + response atomically. Unique constraint prevents races.  ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+*Pairs with Chapter 11 (OS Fundamentals) for deeper networking context, Chapter 21 (5-Phase Framework) for applying API design in interviews, and Chapter 46 (Databases Deep Dive) for the storage layer beneath the API.*
+
+---
+
+**One-liners for the interview room:**
+- "REST for external, gRPC for internal" — default split at most large tech companies.
+- "N+1 queries are the tax on lazy loading — always profile with realistic data."
+- "Connection pool exhaustion is silent until it isn't — alert before it happens."
+- "API versioning is a promise to clients; the hard part is keeping it."
+- "GraphQL pushes field selection responsibility to the client — great for mobile, dangerous without query depth limits."
+
+`Chapter 10 | Section 1: Foundations | APIs, Frontend, Backend, DB`

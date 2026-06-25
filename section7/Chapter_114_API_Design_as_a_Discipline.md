@@ -2347,4 +2347,181 @@ Start with a simple `.proto` file (3-4 messages, one service). Make ten proposed
 
 ---
 
-*Chapter 100 complete. Next: Chapter 101 — Security Mindset.*
+---
+
+## Part 12: API Evolution — The Long Game
+
+### 12.1 How APIs Age
+
+An API published today will be called by clients that were built yesterday, will run
+tomorrow, and will not be updated for months. This is the fundamental constraint of API
+evolution: you are always supporting multiple generations of client simultaneously.
+
+The three phases of API evolution:
+```
+PHASE 1: EXPANSION (add without breaking)
+  - Add new optional fields to responses
+  - Add new optional query parameters with defaults
+  - Add new endpoints
+  - Add new values to existing enum fields (risky — some clients switch-exhaust)
+  Cost: zero for existing clients; they ignore what they don't know
+
+PHASE 2: COEXISTENCE (old and new both work)
+  - New field replaces old field; both fields populated simultaneously
+  - New endpoint replaces old endpoint; both available
+  - Old behavior preserved behind a flag; new behavior behind a different flag
+  Duration: typically 6-18 months for internal APIs, 1-2 years for external APIs
+  Cost: code complexity; must maintain both paths
+
+PHASE 3: CONTRACTION (remove old)
+  - Remove old field (only safe when all clients have migrated)
+  - Remove old endpoint (only safe when usage is zero or clients have been notified)
+  - Remove old behavior
+  Prerequisite: proof that no client still calls the old path
+  Mechanism: traffic logs showing zero calls to deprecated path for 30+ days
+```
+
+### 12.2 Deprecation Lifecycle
+
+A complete API deprecation has defined gates, not just a timeline:
+
+```
+DEPRECATION TIMELINE:
+  Day 0:   New API version released with equivalent functionality
+  Day 0:   Old API documented as "deprecated" in API docs
+  Day 30:  Email / changelog notification to all known API consumers
+  Day 30:  Deprecation warnings added to old API responses:
+             Deprecation: Sat, 01 Jan 2027 00:00:00 GMT
+             Link: <https://api.example.com/docs/migration>; rel="deprecation"
+  Day 90:  First usage audit — confirm client migration progress
+           If major clients haven't migrated: extend timeline
+  Day 180: Final warning to remaining users (email, in-API warning, account notice)
+  Day 365: Sunset — old endpoint removed
+  
+  GATE: The old endpoint is not removed until traffic is < 0.1% of baseline.
+  Non-negotiable. A sunset date is a goal, not a hard deadline if clients haven't migrated.
+```
+
+### 12.3 Additive-Only API Design
+
+The most durable API design principle: **make every change additive**. Design APIs so that
+any future change can be expressed as "add something new" rather than "change something old."
+
+Techniques:
+- **Use maps/dicts for extensible attributes**: instead of `{ "color": "red" }`, use
+  `{ "attributes": { "color": "red" } }`. Future attributes can be added without changing
+  the schema.
+- **Never remove enum values**: only add new ones. Clients that parse enums with exhaustive
+  matching will break if an expected value disappears.
+- **Design error codes additively**: add new error codes; never remove old ones that clients
+  may be handling specifically.
+- **Use optional fields with explicit defaults**: a new optional field with a sensible default
+  doesn't break old clients. A new required field breaks every old client.
+
+### 12.4 The Hyrum's Law Warning
+
+Hyrum's Law: "With a sufficient number of users of an API, it does not matter what you
+promise in the contract: all observable behaviors of your system will be depended on by
+somebody."
+
+This means: even behavior you did NOT intend to be part of the API contract — response
+ordering, error message text, specific latency characteristics, undocumented fields in
+responses — will be depended on by some client. You cannot safely change it.
+
+Practical implications:
+- Document what you intend to be stable vs implementation detail
+- Never change response ordering without a major version bump (some clients depend on order)
+- Never change error message text in programmatic-parsing APIs (some clients parse error
+  message strings for business logic — bad client behavior, but you can't break them)
+- Run a deprecation process even for "obviously internal" behaviors if any external clients
+  might depend on them
+
+### 12.5 Pre-Interview Drill — API Design
+
+**The one-sentence summary of good API design:**
+"A good API is a contract that makes the correct behavior easy and the incorrect behavior
+difficult, versioned so it can evolve without breaking clients, and designed with errors
+as first-class citizens."
+
+**Five questions to answer cold in under 30 seconds each:**
+
+```
+Q: What makes an operation idempotent?
+A: Calling it N times has the same effect as calling it once. PUT and DELETE are
+   idempotent; POST is not (by default). Critical for: payment processing, order
+   placement, any operation that must not be double-executed on retry.
+
+Q: What is the difference between REST, gRPC, and GraphQL, and when would you use each?
+A: REST: human-readable, widely supported, HTTP/1.1 compatible, best for public APIs.
+   gRPC: binary protocol, strong typing, streaming, best for internal service-to-service
+   where performance matters. GraphQL: client-driven queries, single endpoint, best for
+   mobile/frontend where clients have varying data needs.
+
+Q: How do you version a REST API?
+A: URL versioning (/v1/, /v2/) is the most explicit and widely used. Header versioning
+   (Accept: application/vnd.api+json;version=2) is cleaner but less visible. Never
+   version through query params (?version=2) — versions belong in routing, not params.
+
+Q: What is pagination cursor vs offset?
+A: Cursor = opaque token representing position in the dataset. Stable under concurrent
+   inserts. O(log N) server-side. Offset = skip N rows. Unstable under concurrent inserts
+   (pages shift). O(N) server-side for large offsets. Use cursor for production APIs.
+
+Q: How do you design for developer experience?
+A: Consistent naming conventions. Predictable error format. Useful error messages with
+   actionable guidance (not just error codes). Pagination with link headers or next_cursor.
+   Sandbox environment. OpenAPI spec published. SDK in major languages.
+```
+
+---
+
+## Part 13: API Design Quick Reference
+
+```
+REST HTTP METHOD SEMANTICS:
+  GET    → read-only, idempotent, cacheable
+  POST   → create or action, not idempotent by default
+  PUT    → full replace, idempotent
+  PATCH  → partial update, not idempotent by default
+  DELETE → delete, idempotent
+
+STATUS CODE TIERS (know 2-3 per tier):
+  2xx: 200 OK, 201 Created, 204 No Content
+  3xx: 301 Permanent Redirect, 302 Temporary Redirect
+  4xx: 400 Bad Request, 401 Unauthorized, 403 Forbidden,
+       404 Not Found, 409 Conflict, 422 Unprocessable Entity,
+       429 Too Many Requests
+  5xx: 500 Internal Error, 502 Bad Gateway, 503 Service Unavailable
+
+PAGINATION PATTERNS:
+  Cursor: { "next_cursor": "opaque_token" } — stable, O(log N)
+  Offset: { "offset": 40, "limit": 20 }     — simple, unstable, O(N)
+  Page:   { "page": 3, "per_page": 20 }     — user-friendly, unstable
+
+IDEMPOTENCY KEY PATTERN:
+  Header: Idempotency-Key: <client-generated-uuid>
+  Server caches result under key for 24 hours
+  Retry with same key → returns cached result, no double execution
+  Used for: payments, order placement, any non-idempotent mutation
+
+GRPC STREAMING MODES:
+  Unary:              client sends 1 request, server returns 1 response
+  Server streaming:   client sends 1 request, server returns N responses
+  Client streaming:   client sends N requests, server returns 1 response
+  Bidirectional:      client and server exchange N messages each direction
+
+API EVOLUTION RULE:
+  Always additive. Never remove. Deprecate with a timeline and a gate.
+  Gate = zero traffic to deprecated endpoint for 30 days before removal.
+```
+
+---
+
+*Chapter 114 — Section 7: Engineering as a Discipline*
+*Core concepts: REST semantics, idempotency, cursor pagination, gRPC streaming modes,*
+*GraphQL trade-offs, API versioning (URL vs header), error design, developer experience,*
+*API evolution (expand → coexist → contract), deprecation lifecycle, Hyrum's Law.*
+*Key interview signals: can you explain why cursor > offset? Can you design for idempotency?*
+*Can you describe the three phases of API evolution? Can you name the HTTP status codes?*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*
+*Chapter 114 — API Design as a Discipline. Added Parts 12-13 for API evolution.*

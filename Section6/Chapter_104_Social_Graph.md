@@ -1229,3 +1229,1272 @@ KEY TRADEOFFS:
 ```
 
 The social graph is the infrastructure that everything else in a social product depends on: feed, notifications, recommendations, and privacy controls all query the graph constantly. Getting this layer right — fast, consistent, and scalable — is what separates a product that survives hyper-growth from one that falls over at 100M users.
+
+---
+
+## Part 9: Privacy, Blocking, and Access Control
+
+### The Privacy Graph Sits on Top of the Social Graph
+
+Every social product has a privacy model: users can control who sees their posts, who can follow them, and who can contact them. The privacy graph is a second set of edges layered on top of the social graph:
+
+```
+SOCIAL GRAPH EDGES:           Alice -> follows -> Bob
+PRIVACY GRAPH EDGES:          Alice -> blocks -> Charlie
+                               Bob  -> restricts_follower -> Dave
+                               Alice -> private_account (flag, not edge)
+```
+
+Privacy checks must happen on EVERY graph query. "Give me the follower list for user X" must filter out users that X has blocked. "Is Alice allowed to see Bob's post?" requires checking multiple conditions simultaneously.
+
+### Block Graph
+
+When Alice blocks Charlie:
+
+1. Alice can no longer see Charlie's content in any context.
+2. Charlie can no longer see Alice's profile, posts, or follower list.
+3. If Alice was following Charlie or Charlie was following Alice, those follow edges are effectively severed for all access decisions.
+4. Charlie cannot search for, DM, or @-mention Alice.
+
+The block relationship must be checked on EVERY content access decision. This is a performance challenge because blocks can be checked millions of times per second across all product surfaces.
+
+```sql
+CREATE TABLE blocks (
+    blocker_id  BIGINT NOT NULL,
+    blocked_id  BIGINT NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (blocker_id, blocked_id),
+    INDEX       idx_blocked_by (blocked_id, blocker_id)
+);
+```
+
+**Bidirectional enforcement:** Most platforms enforce blocks in both directions. If Alice blocks Charlie, not only can Alice not see Charlie — Charlie also cannot see Alice. This is good for user safety but requires checking BOTH directions: "has Alice blocked Charlie?" AND "has Charlie blocked Alice?"
+
+```python
+def can_see(viewer_id, subject_id):
+    # Check both directions of block
+    if is_blocked(viewer_id, subject_id):   # viewer blocked subject
+        return False
+    if is_blocked(subject_id, viewer_id):   # subject blocked viewer
+        return False
+    # Check private account
+    if is_private(subject_id) and not is_following(viewer_id, subject_id):
+        return False
+    return True
+```
+
+**Block caching:** The block table is read far more than it is written (blocks are infrequent, but block checks happen on every page load). Cache the block set for each user in Redis:
+
+```
+Redis key: blocks:{alice_id}    -> set of {charlie_id, dave_id, ...}
+Redis key: blocked_by:{alice_id} -> set of users who blocked alice
+
+On block: SADD blocks:{alice_id} {charlie_id}
+          SADD blocked_by:{charlie_id} {alice_id}
+On check: SISMEMBER blocks:{alice_id} {charlie_id}  -- O(1)
+```
+
+For users with large block lists (e.g., celebrities who might block thousands of trolls), a Bloom filter per user is more memory-efficient: store a per-user Bloom filter of their blocklist. False positives (incorrectly blocking someone) are rare (configurable false positive rate ~0.1%) and are corrected by an exact lookup. False negatives are impossible.
+
+### Private Accounts
+
+On Instagram and Twitter, an account can be set to "private." Only approved followers can see posts and follower list. The privacy check gate:
+
+```
+is_private(subject_id) AND NOT is_following(viewer_id, subject_id)
+→ return 403 or empty response (don't confirm the account exists to deny enumeration)
+```
+
+Private account status is a flag on the user record (`is_private BOOLEAN`), not a graph edge. It is cached in the user profile cache alongside other profile fields.
+
+**Follow requests for private accounts:** When you try to follow a private account, the follow does not immediately create an edge. Instead, a follow request is created:
+
+```
+PENDING state: follow_request{requester: alice, requestee: bob_private}
+bob approves → creates follow edge + deletes follow_request
+bob rejects → deletes follow_request
+```
+
+This requires a `follow_requests` table separate from the `follows` table. The requester sees a "Requested" state in the UI.
+
+### 5-Level Progression: Privacy Controls
+
+**Intern:** "I'd add an `is_private` flag to the user table and a `blocks` table. Check both before serving any content."
+
+**Junior Engineer:** "Block checks must be fast — I'd cache the block set in Redis as a SET per user. Private account checks use the flag from the user profile cache (already cached for every profile view). The expensive part is fan-out: when generating Alice's feed, I need to filter out blocked accounts. I'd filter blocks at feed generation time (not at query time) to avoid per-post block checks."
+
+**Mid-level Engineer:** "At scale, doing a SISMEMBER check for every post in a feed generation is still expensive. I'd take a set-difference approach for feed generation: when computing who to fan out a post to, subtract the set of users who have blocked the post author. Author's blocked-by set is pre-cached in Redis. The set subtraction happens once per post, not once per viewer."
+
+**Senior Engineer:** "Privacy controls are a layer that sits above the social graph, not inside it. The social graph service returns raw edge data; a privacy policy engine applies access control on top. This separation is critical for correctness — you never want privacy logic mixed into low-level graph queries where it might be bypassed. The privacy engine is also where you handle complex cases like 'close friends' (Instagram's restricted sharing), muted accounts (hidden from feed but not unfollowed), and restricted accounts (can interact but not see past posts). These are additional graph edge types on top of the basic follow/block graph."
+
+**Staff Engineer:** "Privacy at Meta/Instagram scale is its own engineering domain. The privacy graph (who can see what) is maintained as a separate service — the Privacy Infrastructure team at Meta manages this. The key insight is that privacy checks must be computed for EVERY read operation, but they are cheap (usually Boolean combinations of precomputed facts: is_following, is_blocked, is_private, is_restricted) and highly cacheable. The expensive part is re-evaluating privacy decisions at scale when privacy settings change: if Alice changes her account from public to private, she must ensure that her existing followers still see her content but non-followers don't — and this state change must propagate to all caches immediately. This is a fan-out write problem: Alice's privacy-change event fans out to every cache that holds any fact about Alice's content visibility. Facebook handles this with a dedicated cache invalidation infrastructure that can push invalidation events to thousands of cache servers in under a second."
+
+---
+
+## Part 10: Social Graph API Design
+
+### REST API for the Social Graph
+
+A well-designed social graph API makes product development fast by providing a clean contract between the graph serving layer and the product teams.
+
+```
+BASE URL: /v1/social
+
+FOLLOW OPERATIONS:
+  POST   /v1/social/follow
+  Body:  { "follower_id": 123, "followee_id": 456 }
+  Response 201: { "created_at": "2024-01-15T10:30:00Z", "state": "FOLLOWING" }
+  Response 200: { "state": "REQUESTED" }  -- for private accounts
+  Response 409: { "error": "already_following" }
+
+  DELETE /v1/social/follow
+  Body:  { "follower_id": 123, "followee_id": 456 }
+  Response 204: no content
+
+FOLLOWER/FOLLOWING LIST:
+  GET    /v1/social/followers/{user_id}
+  Params: cursor (opaque string), limit (int, max 100, default 20)
+  Response:
+    {
+      "items": [
+        { "user_id": 789, "followed_at": "2024-01-10T..." },
+        ...
+      ],
+      "next_cursor": "eyJ...",
+      "has_more": true,
+      "total_count": 82341  // approximate, from Redis counter
+    }
+
+  GET    /v1/social/following/{user_id}
+  (same structure as /followers)
+
+EDGE EXISTENCE CHECK:
+  GET    /v1/social/relationship?from={user_a}&to={user_b}
+  Response:
+    {
+      "from_follows_to": true,
+      "to_follows_from": false,
+      "from_blocks_to": false,
+      "to_blocks_from": false,
+      "relationship": "FOLLOWER"  // NONE | FOLLOWER | FOLLOWING | MUTUAL | BLOCKED
+    }
+
+MUTUAL CONNECTIONS:
+  GET    /v1/social/mutual?user_a={id}&user_b={id}&limit=5
+  Response:
+    {
+      "count": 47,           // approximate total
+      "sample": [            // up to 5 mutual connections
+        { "user_id": 101, "name": "..." },
+        ...
+      ]
+    }
+
+PYMK:
+  GET    /v1/social/pymk/{user_id}?limit=20
+  Response:
+    {
+      "suggestions": [
+        {
+          "user_id": 555,
+          "mutual_count": 12,
+          "reason": "MUTUAL_CONNECTIONS",  // or CONTACTS, WORKPLACE, SCHOOL
+          "score": 0.89
+        },
+        ...
+      ]
+    }
+```
+
+### Idempotency for Write Operations
+
+Follow/unfollow must be idempotent. Use `Idempotency-Key` header:
+
+```
+POST /v1/social/follow
+Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
+Body: { "follower_id": 123, "followee_id": 456 }
+```
+
+The server caches the result of this request by the Idempotency-Key for 24 hours. If the exact same key is sent again (due to a retry), the server returns the cached result without reprocessing.
+
+### Rate Limiting
+
+```
+FOLLOW RATE LIMITS (per user, sliding window):
+  Max follows per hour:         400
+  Max follows per day:          1,000
+  Max total following:          5,000 (Twitter's original limit; prevents spam)
+  Minimum account age to follow: 24 hours (prevents throwaway spam accounts)
+
+These limits are stored in Redis using the sliding window counter pattern:
+  INCR follow_count:{user_id}:{hour_bucket}
+  EXPIRE follow_count:{user_id}:{hour_bucket} 3600
+```
+
+---
+
+## Part 11: DB Schema Reference
+
+```sql
+-- Core follows table (one per direction)
+CREATE TABLE follows_by_follower (
+    follower_id   BIGINT      NOT NULL,
+    followee_id   BIGINT      NOT NULL,
+    created_at    TIMESTAMP   NOT NULL DEFAULT NOW(),
+    deleted_at    TIMESTAMP   NULL,                   -- soft delete
+    PRIMARY KEY   (follower_id, followee_id),
+    INDEX idx_follower_created (follower_id, created_at DESC)
+) ENGINE=InnoDB ROW_FORMAT=COMPRESSED;
+
+CREATE TABLE follows_by_followee (
+    followee_id   BIGINT      NOT NULL,
+    follower_id   BIGINT      NOT NULL,
+    created_at    TIMESTAMP   NOT NULL DEFAULT NOW(),
+    PRIMARY KEY   (followee_id, follower_id),
+    INDEX idx_followee_created (followee_id, created_at DESC)
+) ENGINE=InnoDB;
+
+-- Counters table (separate from follows for O(1) count reads)
+CREATE TABLE user_graph_counters (
+    user_id          BIGINT   NOT NULL PRIMARY KEY,
+    follower_count   BIGINT   NOT NULL DEFAULT 0,
+    following_count  BIGINT   NOT NULL DEFAULT 0,
+    updated_at       TIMESTAMP NOT NULL
+);
+
+-- Follow requests (for private accounts)
+CREATE TABLE follow_requests (
+    requester_id  BIGINT    NOT NULL,
+    requestee_id  BIGINT    NOT NULL,
+    requested_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    status        ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+    PRIMARY KEY   (requester_id, requestee_id),
+    INDEX idx_requestee (requestee_id, requested_at DESC)
+);
+
+-- Block table
+CREATE TABLE blocks (
+    blocker_id    BIGINT    NOT NULL,
+    blocked_id    BIGINT    NOT NULL,
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY   (blocker_id, blocked_id),
+    INDEX idx_blocked_by (blocked_id, blocker_id)
+);
+
+-- PYMK precomputed results
+-- (Cassandra schema for write-optimized serving)
+-- In Cassandra CQL:
+/*
+CREATE TABLE pymk_recommendations (
+    user_id      bigint,
+    score        float,
+    candidate_id bigint,
+    mutual_count int,
+    reason       text,
+    computed_at  timestamp,
+    PRIMARY KEY  (user_id, score, candidate_id)
+) WITH CLUSTERING ORDER BY (score DESC)
+  AND default_time_to_live = 86400;  -- 24h TTL, refreshed by nightly job
+*/
+```
+
+**Key design decisions:**
+
+- Two physical tables for the follows edge (one per direction) eliminates scatter-gather for both query directions.
+- Soft delete (`deleted_at`) on `follows_by_follower` enables audit, rate control on background purge, and undelete capability.
+- Counters in a separate table avoid `SELECT COUNT(*)` scans.
+- The PYMK Cassandra table uses `score DESC` clustering so the top candidates are always at the front of the partition — efficient `LIMIT` queries.
+
+---
+
+## Part 12: Operational Runbook Signals
+
+### Key Metrics to Monitor
+
+```
+WRITE PATH METRICS:
+  follow_write_latency_p99          < 200ms  (MySQL write + Kafka publish)
+  kafka_lag_follow_events           < 10,000 messages  (consumer health)
+  counter_update_lag_p99            < 2s     (Redis counter freshness)
+  dual_write_consistency_error_rate < 0.001% (follower/followee shard divergence)
+
+READ PATH METRICS:
+  follower_list_cache_hit_rate      > 99%    (in-memory graph or TAO)
+  follower_list_p99_latency         < 10ms   (end-to-end)
+  graph_shard_cpu_utilization       < 70%    (per shard; headroom for celebrity spikes)
+  mysql_fallback_rate               < 1%     (reading from MySQL = cache miss)
+
+PYMK METRICS:
+  pymk_job_duration                 < 4 hours (nightly batch SLA)
+  pymk_coverage                     > 95%    (% of active users with suggestions)
+  pymk_connection_rate              (A/B metric; primary quality signal)
+
+PRIVACY METRICS:
+  block_check_p99_latency           < 1ms    (Redis SISMEMBER)
+  privacy_policy_decision_error_rate 0       (privacy bugs are P0 incidents)
+```
+
+### Failure Scenarios and Responses
+
+```
+SCENARIO: Kafka consumer lag grows beyond 100K messages
+  ROOT CAUSE: Consumer group scaling issue or downstream system slowdown
+  RESPONSE: Scale up consumer group instances; check MySQL write latency;
+            check Redis write latency; alert on-call
+  USER IMPACT: Follower counts drift; feed fan-out delayed
+
+SCENARIO: Graph shard hot spot (celebrity goes viral)
+  ROOT CAUSE: Sudden follower surge on a non-celebrity account crosses threshold
+  RESPONSE: Auto-detect via shard CPU > 90%; promote account to celebrity tier
+            (replicate to all shards, switch to pull fan-out for their posts)
+  USER IMPACT: Brief period of high fan-out latency for their followers' feeds
+
+SCENARIO: PYMK Spark job fails midway
+  ROOT CAUSE: Cluster hardware failure, OOM, or input data corruption
+  RESPONSE: Retry from last Spark checkpoint; if checkpoint unavailable,
+            fall back to serving yesterday's PYMK results (Cassandra TTL extends)
+  USER IMPACT: PYMK suggestions are up to 48 hours stale
+
+SCENARIO: MySQL dual-write divergence (follower/followee shards disagree)
+  ROOT CAUSE: Kafka consumer crash mid-processing; dead-letter queue backup
+  RESPONSE: Run consistency repair job (compare both shards, fill gaps);
+            alert is based on daily audit job comparing row counts per user
+  USER IMPACT: Follower count may appear incorrect briefly; corrected within hours
+```
+
+---
+
+## Part 13: Interview Application — L5 vs L6 Answers
+
+### The Core Interview Questions
+
+**"Design Instagram's follow system."**
+
+```
+L5 ANSWER (30-40 minutes, covers):
+  ✓ Requirements: follows table, follower/following lists, counts, feed fan-out
+  ✓ DB schema: dual follows tables, one per direction
+  ✓ Write path: insert to MySQL, Kafka for async fan-out, update Redis counters
+  ✓ Read path: Redis sorted set for follower lists, cursor pagination
+  ✓ Celebrity problem: hybrid fan-out (push for <1M followers, pull for >1M)
+  ✓ Capacity: ~70B edges, ~2TB for in-memory representation
+
+L6 ANSWER (additional depth):
+  ✓ Privacy layer: block graph, private account follow requests
+  ✓ TAO-style two-tier cache architecture vs. in-memory graph tradeoffs
+  ✓ Consistency model: eventual consistency for counts, near-real-time for follow status
+  ✓ PYMK: offline Spark GraphX job, candidate generation + ML ranking
+  ✓ Operational runbook: what happens when a celebrity goes viral, Kafka lag, shard failures
+  ✓ Graph partitioning challenge: power-law distribution, celebrity hot shards
+  ✓ API design: idempotency, rate limiting, cursor pagination spec
+```
+
+**"How does Facebook compute 'People You May Know'?"**
+
+```
+L5 ANSWER:
+  "Use 2-hop connections as candidates. For each user X, find who X follows,
+  then find who those people follow. That's the candidate pool. Score by
+  mutual connection count. Cache results — can't compute in real time."
+
+L6 ANSWER:
+  "PYMK is a multi-stage offline pipeline. Stage 1: candidate generation via
+  2-hop expansion in Spark GraphX (graph snapshot in HDFS, run nightly).
+  Stage 2: feature engineering — mutual count, recency, workplace/school
+  signals from profile data joined to the graph. Stage 3: ML ranking model
+  (gradient boosted tree trained on historical connection decisions).
+  Stage 4: write top-50 per user to Cassandra with 24h TTL.
+  Cold start: phone contacts import + onboarding interest signals.
+  Freshness: real-time layer that appends 2-hop candidates when a user
+  follows someone new, merged with the batch results at serving time.
+  Evaluation: connection rate A/B, 90-day relationship retention."
+```
+
+**"How many machines do you need for Twitter's social graph?"**
+
+```
+CAPACITY ESTIMATION:
+  Users:                 350M active
+  Average follows/user:  200
+  Total edges:           70B
+  Memory per edge:       16 bytes (two 8-byte user_ids)
+  Raw edge data:         70B x 16 = 1.12 TB
+  With index overhead:   ~2.5 TB
+  With 3x replication:   ~7.5 TB
+
+  High-memory server: 2TB RAM = ~3-4 machines needed
+  With 256 shards and 3x replication: ~768 shard replicas
+  At 1TB RAM per machine: 768 machines (overkill; in practice, use larger machines)
+  
+  Realistic: 50-100 high-memory (512GB-2TB) servers with 256 shards,
+  each machine hosting multiple shard replicas.
+
+  Kafka: 70B edges / 365 days / 86400 sec = ~2,200 edges/sec at rest
+         Peak (viral event): ~100,000 follows/sec
+         Kafka cluster: 10-20 brokers for this throughput
+```
+
+### L5 vs L6 Calibration Table
+
+```
+TOPIC                        L5 EXPECTED                 L6 EXPECTED
+─────────────────────────────────────────────────────────────────────
+Storage model                Dual MySQL shards           TAO + MySQL; why each layer exists
+Cache layer                  Redis sorted set            Two-tier TAO vs in-memory; tradeoffs
+Celebrity handling           Hybrid fan-out concept      Threshold detection, dynamic reclassification
+PYMK                         2-hop + batch               Full pipeline: candidate gen → ML → serving
+Graph traversal              BFS explained               Bidirectional BFS math; PageRank iteration
+Privacy                      Blocks table + flag         Block caching, bidirectional enforcement, fan-out on privacy change
+API design                   Basic REST endpoints        Idempotency, rate limiting, cursor spec
+Capacity                     Back-of-envelope            Specific numbers: 70B edges, 2.5TB, Kafka throughput
+Failure modes                Cache miss handling         Kafka lag runbook, shard failover, dual-write repair
+Consistency model            Eventual consistency        Which operations are CP, which are AP, and why
+```
+
+---
+
+## Part 14: Pre-Interview Drill
+
+### Questions to Answer Cold (No Notes)
+
+```
+GRAPH FUNDAMENTALS:
+Q: What is the difference between a directed and undirected social graph?
+A: Directed = follow (A→B ≠ B→A, e.g., Twitter); Undirected = friend (A-B = mutual, e.g., Facebook)
+
+Q: Why can't you shard follows by user_id and answer both directions efficiently?
+A: A follow edge has two endpoints on different shards. Shard by follower_id = fast "who does X follow"
+   but scatter-gather for "who follows X". Solution: dual-write to two clusters, each sharded differently.
+
+Q: What is the celebrity problem in fan-out?
+A: Celebrity with 80M followers → 80M writes per post on fan-out-on-write.
+   Solution: hybrid fan-out — push for <1M followers, pull-merge at read time for celebrities.
+
+STORAGE:
+Q: Why is cursor pagination better than offset for follower lists?
+A: Offset scans and discards N rows to get page N+1 — O(N) cost. Cursor seeks directly to
+   the last-seen row in the index — O(log N) cost, equally fast for any page.
+
+Q: How do you store follower counts at scale?
+A: Separate Redis counter (INCR/DECR on each follow/unfollow). Never SELECT COUNT(*).
+   Backed by a MySQL counters table. Brief eventual inconsistency is acceptable.
+
+SERVING:
+Q: What is TAO?
+A: Facebook's social graph serving layer. Two-tier Memcache (Follower pools + Leader per shard)
+   in front of MySQL. Narrow API: assoc_get, assoc_range, assoc_count, obj_get.
+   Leader handles writes + cache invalidation; Follower pools serve reads.
+
+Q: What is the in-memory graph approach?
+A: Twitter loaded the entire social graph into RAM (~2.5TB for 350M users).
+   Memory access = 100ns vs MySQL = 10ms. Sharded by user_id % N.
+   Rebuilt from checkpoint + Kafka replay on crash.
+
+ALGORITHMS:
+Q: How is PYMK computed?
+A: Offline Spark GraphX job nightly. 2-hop expansion → candidate set. ML ranking.
+   Results in Cassandra with 24h TTL.
+
+Q: Why is bidirectional BFS better than standard BFS for degree-of-separation?
+A: Standard BFS from source: O(b^d) nodes explored. Bidirectional: O(2 × b^(d/2)) = O(b^(d/2)).
+   For b=200, d=4: standard = 200^4 = 1.6B nodes; bidirectional = 2 × 200^2 = 80K nodes. ~20,000× fewer.
+```
+
+### Self-Check Before the Interview
+
+```
+[ ] Can explain directed vs undirected graph and which products use each?
+[ ] Can describe dual-write sharding (why needed, consistency tradeoffs)?
+[ ] Can describe fan-out on write vs read, and the hybrid approach?
+[ ] Knows cursor pagination vs offset, and why cursor wins?
+[ ] Can describe Redis sorted set for follower lists (commands, O() for each)?
+[ ] Understands TAO (two-tier, Leader/Follower, narrow API)?
+[ ] Can explain PYMK pipeline (offline Spark, Cassandra, cold start)?
+[ ] Can describe bidirectional BFS and why it's faster?
+[ ] Knows block graph design (bidirectional enforcement, Redis cache)?
+[ ] Can give capacity numbers (70B edges, 2.5TB, Kafka throughput)?
+[ ] Understands consistency model (which ops are strong, which are eventual)?
+[ ] Can answer "what happens when a celebrity goes viral?" end-to-end?
+```
+
+---
+
+## Common Interview Mistakes
+
+**Mistake 1: Forgetting the second direction**
+"I'll store follows with an index on follower_id" — the interviewer will ask "how do you query who follows user X?" If you only have one table/shard, you've built a scatter-gather. Always start by saying "follows are dual-written."
+
+**Mistake 2: SELECT COUNT(*) for follower count**
+Mentioning `SELECT COUNT(*) FROM follows WHERE followee_id = ?` is an automatic red flag. The answer is always a pre-maintained counter in Redis.
+
+**Mistake 3: Ignoring the celebrity problem**
+Describing fan-out-on-write without acknowledging that celebrities break it shows you haven't thought about scale. Name the threshold (1M followers, configurable) and the solution (fan-out on read for celebrities, merge at serving).
+
+**Mistake 4: Offset pagination**
+Using `LIMIT 50 OFFSET {page*50}` in any answer about paginating large lists suggests unfamiliarity with production pagination. Always use cursor-based pagination.
+
+**Mistake 5: Storing PYMK in MySQL**
+PYMK results are precomputed per-user and accessed by user_id with a short TTL. This is a Cassandra use case (wide row per user_id, ordered by score). MySQL would require a separate table scan per user.
+
+**Mistake 6: Treating graph traversal as a real-time operation**
+Saying "I'd run BFS from the user to compute PYMK" in real time shows you haven't internalized the cost. Even bidirectional BFS exploring 80K nodes at milliseconds per lookup = seconds of latency. PYMK is always offline batch.
+
+**Mistake 7: Forgetting privacy on every read**
+Designing the serving layer without mentioning block checks and private account gates. In a production system, privacy is a first-class gate on every social graph read. Name it explicitly: "every follower-list response filters out blocked users."
+
+**Mistake 8: Single point of failure in the graph serving layer**
+Describing a single Redis instance or a single graph server without replication. Any stateful serving layer needs at least 3 replicas and a leader election mechanism.
+
+---
+
+## Exercises
+
+**Exercise 1:** Design the MySQL schema for a mutual follow ("friendship") graph (Facebook model) rather than a directed follow graph. How does the schema differ? How does the PYMK query change?
+
+**Exercise 2:** Calculate the memory required for a Redis sorted set holding the follower list for a user with 10 million followers. Each entry is a 64-bit user ID + 64-bit timestamp score. Redis sorted set overhead is approximately 64 bytes per entry.
+
+**Exercise 3:** Draw the complete write path for an unfollow event, from the HTTP request through all async consumers, to the final state in all storage systems (MySQL, Redis, in-memory graph). Include error handling for the case where the Kafka publish fails after the MySQL write succeeds.
+
+**Exercise 4:** The PYMK Spark job currently takes 4 hours for 3 billion users. The product team wants to cut staleness to 2 hours. Propose three distinct optimizations (algorithmic, infrastructure, data model) that would each independently reduce job duration.
+
+**Exercise 5:** A user with 500K followers changes their account from public to private. Describe the cache invalidation cascade: which caches need to be invalidated, in what order, and how do you ensure correctness during the transition window?
+
+**Exercise 6:** Design a rate limiter that enforces "no more than 400 follows per hour per user" using Redis. Show the data structure, the increment operation, and how to check the rate limit before each follow write.
+
+---
+
+## Homework
+
+**Task 1:** Read Facebook's TAO paper (2013). Identify: (a) why they chose two tiers instead of one, (b) how they handle the "critical read" case (reads that must be consistent with a just-completed write), and (c) what happens to TAO during a data center failover.
+
+**Task 2:** Implement bidirectional BFS in Python. Use a dictionary as the "graph" (adjacency list, up to 10K nodes). Generate a random scale-free graph using the Barabási–Albert model (Python networkx library). Measure how many nodes are explored in standard BFS vs bidirectional BFS for 1000 random pairs. Plot the distribution of explored node counts.
+
+**Task 3:** Write the Kafka consumer logic for the follow-event stream in pseudocode. The consumer must: (1) update the reverse-direction MySQL shard, (2) increment the Redis follower and following counters, (3) update the Redis sorted set for the follower list, (4) handle duplicates (idempotent processing). Include error handling for each step.
+
+**Task 4:** Design the API and data model for "close friends" (Instagram feature: share a story with a subset of your followers). How do you extend the social graph to support this? What new tables/Redis structures are needed? How does this affect feed fan-out?
+
+---
+
+## KEY TAKEAWAYS
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                     SOCIAL GRAPH — KEY TAKEAWAYS                     │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  STORAGE                                                             │
+│  • Dual-write to two MySQL clusters (one per edge direction)         │
+│  • TAO (Facebook) = object+association API over 2-tier Memcache      │
+│  • In-memory graph (Twitter) = ~2.5TB for 350M users, fits in RAM    │
+│  • Counts in Redis, not SELECT COUNT(*)                              │
+│                                                                      │
+│  WRITE PATH                                                          │
+│  • Synchronous MySQL write, async Kafka fan-out                      │
+│  • Celebrity threshold: push fan-out for <1M followers               │
+│  • Pull-merge for celebrities at read time (hybrid fan-out)          │
+│  • Idempotent writes: ON DUPLICATE KEY + idempotency-key cache       │
+│                                                                      │
+│  READ PATH                                                           │
+│  • Cursor pagination (O(log N)), never offset pagination (O(N))      │
+│  • Follower list: Redis ZSET sorted by follow timestamp              │
+│  • Celebrity list: MySQL covering-index scan (too big for Redis)     │
+│  • Edge existence: SISMEMBER on Redis set, O(1)                      │
+│                                                                      │
+│  ALGORITHMS                                                          │
+│  • PYMK: offline Spark GraphX, 2-hop expansion + ML ranking          │
+│  • Mutual connections: Bloom filter pre-filter + sorted merge join    │
+│  • Bidirectional BFS: reduces nodes from O(b^d) to O(b^(d/2))       │
+│  • PageRank: iterative Spark job; signals feed ranking, spam detect  │
+│                                                                      │
+│  PRIVACY                                                             │
+│  • Block graph: separate table; bidirectional enforcement            │
+│  • Blocks cached in Redis SET per user                               │
+│  • Private accounts: follow-request flow, not direct edge            │
+│  • Privacy checks on every read (not optional, not lazy)             │
+│                                                                      │
+│  CAPACITY (350M user platform)                                       │
+│  • 70B edges × 16 bytes = 1.12TB raw data                           │
+│  • With overhead and replication: ~7.5TB total                       │
+│  • Peak follow rate: ~100K follows/sec during viral events           │
+│  • TAO hit rate: >99% reads from cache; <1% from MySQL               │
+│                                                                      │
+│  KEY NUMBERS                                                         │
+│  • Average follows: ~200/user                                        │
+│  • Celebrity threshold: 1M followers (hybrid fan-out switch)         │
+│  • PYMK Spark job: ~2-4 hours for 3B users                          │
+│  • Bidirectional BFS savings: ~20,000× fewer nodes at 4 hops, b=200 │
+│  • Facebook avg separation: 3.57 degrees (2016 study, 1.6B users)    │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Part 15: Notifications and Activity Feed
+
+The social graph drives notifications. When Bob posts and Alice follows Bob, Alice should
+receive a notification. When Charlie follows Alice, Alice gets a "new follower" notification.
+
+### Notification Fan-Out from the Social Graph
+
+```
+NOTIFICATION TYPES TRIGGERED BY GRAPH EVENTS:
+  Follow event (A→B):
+    → Notify B: "Alice started following you"
+    → (Optionally) Notify A's mutual friends: "Alice is now following Bob"
+
+  Post event (B publishes a post):
+    → Notify all followers of B: "Bob posted a new photo"
+    → This IS the feed fan-out problem from Ch73
+
+  Mutual connection crossed (A follows B back):
+    → Notify both A and B: "You and Bob are now mutual followers"
+
+  PYMK interaction (A dismisses B):
+    → Signal to PYMK model: negative label for this pair
+    → No user-visible notification
+```
+
+**Notification fan-out** is identical to feed fan-out. For a celebrity post, fan-out is
+expensive. The solution is the same: push for normal accounts, pull-and-merge for celebrities.
+The notification system must also handle:
+
+- **De-duplication**: Don't send "Alice liked 47 of your photos" as 47 separate notifications.
+  Batch: "Alice and 3 others liked your photo in the last hour."
+- **Priority**: DM notifications are higher priority than "someone liked your post."
+- **Delivery**: Push notification (APNs/FCM), in-app badge, email digest, SMS (configurable per user).
+
+### Activity Feed vs News Feed
+
+These are different things that are often confused:
+
+```
+NEWS FEED:           Content from accounts you follow (posts, photos, videos)
+                     High volume, personalized, ranked by relevance
+
+ACTIVITY FEED:       Actions others have taken on YOUR content
+                     "Bob liked your photo", "Charlie commented on your post"
+                     Much lower volume (you produce content; many people react)
+                     Reverse-chronological, not ranked
+```
+
+The activity feed is much cheaper to generate because it is keyed to YOU as the subject
+of actions, not to everyone you follow. A user typically gets 10-100 activity events per
+day; their news feed might have 10,000 candidate posts.
+
+```sql
+CREATE TABLE activity_events (
+    user_id      BIGINT    NOT NULL,  -- the user who receives the notification
+    event_type   VARCHAR(50) NOT NULL, -- LIKE, COMMENT, FOLLOW, MENTION
+    actor_id     BIGINT    NOT NULL,  -- the user who took the action
+    target_id    BIGINT    NOT NULL,  -- the post/photo/comment that was acted on
+    created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+    is_read      BOOLEAN   NOT NULL DEFAULT FALSE,
+    PRIMARY KEY  (user_id, created_at DESC, event_type, actor_id),
+    INDEX idx_unread (user_id, is_read, created_at DESC)
+) ENGINE=InnoDB;
+```
+
+Partition key is `user_id` — all events for a user are on the same shard. Activity events
+are append-only. Periodically purge events older than 90 days.
+
+### Aggregation and Batching
+
+Raw activity events are too granular for display. Aggregate before showing:
+
+```
+Raw events:
+  10:00 Alice liked photo_123
+  10:02 Bob liked photo_123
+  10:05 Charlie liked photo_123
+  10:03 Dave commented "nice shot!" on photo_123
+
+Aggregated notification:
+  "Alice, Bob, Charlie, and 3 others liked your photo"
+  "Dave commented on your photo"
+```
+
+Aggregation runs as a stream processor (Flink or Spark Streaming) that groups events by
+`(user_id, event_type, target_id)` within a sliding 1-hour window and produces one
+aggregated event per group. The aggregated event is what gets stored in the activity feed
+table and what triggers push notifications.
+
+---
+
+## Part 16: Real-World Deep Dives — What Facebook, Twitter, and LinkedIn Actually Built
+
+### Facebook: TAO + Social Timeline
+
+TAO was open-ended in the original paper (2013). Key evolutions since:
+
+- **Thundering herd protection**: TAO introduced "lease tokens" — when a Follower cache misses and asks the Leader, the Leader returns both the data AND a lease token. If many Followers miss the same key simultaneously, only the one with the lease token may read from MySQL; others get a "wait and retry" response. This prevents multiple Followers from all reading MySQL for the same key simultaneously.
+
+- **Read-Your-Own-Writes**: After writing a follow, the user immediately tries to load their following list and expects to see the new follow. TAO handles this by routing read requests from the same HTTP session to the Leader (bypassing the potentially-stale Follower cache) for a brief period after any write in that session. This is called a "sticky read."
+
+- **Temporal edges**: TAO supports time-indexed edges (associations with a timestamp that is the sort key). This enables `assoc_range(id1, type, high_time, low_time, limit)` — get edges in time order. This is how Facebook implements "recent friends," "recent likes," and cursor-based pagination on the social graph.
+
+### Twitter: Gizmoduck + FlockDB → GraphQL + Manhattan
+
+Twitter's social graph infrastructure went through several generations:
+
+- **Generation 1 (2006-2010)**: MySQL with simple indexes. Fell over at scale.
+- **Generation 2 (2010-2014)**: FlockDB — an open-sourced distributed graph database built on MySQL + Gizzard (Twitter's sharding framework). Served the "who follows whom" graph in memory-backed clusters.
+- **Generation 3 (2014-2018)**: Social Graph Service backed by Manhattan (Twitter's distributed key-value store). Each user's follower/following list stored as a sorted list of user IDs in Manhattan. Social graph access went through a service API ("SocialGraph" service) that abstracted the storage.
+- **Current**: GraphQL API layer with backend storage in their distributed KV store. The full social graph still fits in RAM for the active user subset.
+
+### LinkedIn: People Graph + PYMK at Scale
+
+LinkedIn's challenge: professional relationships are undirected (friendship model) and carry
+rich metadata (how you know them, shared employer, shared school). Their approach:
+
+- **People Graph**: LinkedIn's internal name for their social graph infrastructure. Uses Espresso (LinkedIn's distributed document store) as ground truth, with Helix (a Zookeeper-based cluster management system) for shard assignment.
+- **Venice**: LinkedIn's read-optimized store for PYMK candidates. Batch Spark jobs write PYMK results to Venice; Venice serves real-time reads with sub-millisecond latency.
+- **PYMK at 950M members**: The 2-hop candidate explosion is worse for LinkedIn because of denser professional networks. LinkedIn caps 2-hop expansion at 2000 candidates per user and uses a fast ML model (logistic regression, not deep learning, for latency reasons) to rank them.
+
+---
+
+## Part 17: Stress Test Questions
+
+These are questions designed to reveal whether you truly understand the system or are
+pattern-matching to memorized answers.
+
+**Q: "Your follow API is handling 100K follows/sec during a viral event. The Kafka follow-events
+topic is backed up by 2 million messages. What happens to the system, and what do you do?"**
+
+Expected answer breakdown:
+- Identify what is blocked: counter updates are delayed, follower lists are stale, fan-out is delayed
+- Identify what is NOT blocked: the follow write to MySQL succeeds (synchronous path); the 200 OK
+  is returned to users immediately; the social graph edge is durable
+- User-visible impact: follower counts are stale for up to N minutes where N = backlog/consumer throughput
+- Response: scale up Kafka consumer group instances (horizontal scaling); if consumers are
+  at max capacity, add more consumer instances; identify root cause of backlog (slow MySQL writes?
+  slow Redis writes? downstream fan-out service overloaded?)
+- Long-term: add a circuit breaker — if Kafka lag exceeds 1M messages, temporarily disable
+  non-critical consumers (fan-out notifications) to protect critical consumers (counter updates)
+
+**Q: "A user reports that their follower count shows 1,000,000 on their profile but they can
+only see 800,000 followers when they scroll through the list. What could cause this?"**
+
+Expected answer: counter and list are stored separately and can diverge.
+- Redis counter: updated by Kafka consumer when follow events arrive
+- Redis ZSET: also updated by a separate Kafka consumer
+- If one consumer is faster than the other, they drift temporarily
+- Also: soft-deleted follows (unfollowed) may have incremented the counter but the background
+  purge job hasn't decremented it yet
+- Also: the ZSET may only be populated with the N most recent follows if the list was too
+  large to fully materialize in Redis; older follows serve from MySQL which may have timing lag
+- Resolution: daily reconciliation job compares counter vs COUNT(*) vs ZCARD; corrects discrepancies
+
+**Q: "You're designing the social graph for a platform that has both public and private accounts,
+and where users can also create 'lists' (groups of accounts they curate, like Twitter lists).
+How does the list feature interact with your social graph design?"**
+
+Expected answer:
+- A list is a new edge type: `(user_id, list_id)` for "this user owns this list" and
+  `(list_id, member_id)` for "this account is in this list"
+- Lists must respect privacy: adding a private account to a list doesn't grant list viewers
+  access to that account's private posts
+- Feed from a list = fan-out from list members, not from your follows
+- This is a separate feed pipeline seeded from a different source set (list members vs. followees)
+- Storage: lists are small (tens to hundreds of members typically); store in MySQL with
+  Redis cache; don't need in-memory graph treatment
+- The TAO model handles this naturally: lists are objects, memberships are associations —
+  the same API (`assoc_range(list_id, MEMBER_OF, ...)`) handles list member enumeration
+
+**Q: "Product asks: 'Show each user the top 3 people in their network who have commented
+most on their posts in the last 30 days.' How do you build this?"**
+
+Expected answer: this is NOT a social graph query — it's a content interaction query.
+- Data source: the comment events table (or interaction events stream from Kafka)
+- Compute: for each user U, aggregate comment counts by commenter over rolling 30 days
+- Approach: streaming aggregation in Flink or Spark Streaming; sink to a small table or Redis hash
+- Storage: `top_commenters:{user_id}` Redis sorted set with commenter_id as member, comment_count as score
+- Update: on every comment event, `ZINCRBY top_commenters:{post_owner_id} 1 {commenter_id}`
+- Serve: `ZREVRANGE top_commenters:{user_id} 0 2 WITHSCORES` — top 3 in O(log N)
+- Expiry: use a sliding window — either decay scores daily or rebuild the ZSET daily from an aggregation job
+
+**Q: "How does the social graph change when you add a 'mutual follow' notification? I.e., when A
+follows B AND B follows A (creating a mutual follow), both users should be notified immediately.
+What new race condition does this introduce?"**
+
+Expected answer:
+- Without the feature: A follows B (one atomic write). B follows A (one atomic write). Independent.
+- With the feature: you need to detect when both follow edges exist and generate a notification
+- Race condition: A and B simultaneously follow each other. Two concurrent transactions both
+  check "does the reverse follow exist?" at the same moment, before either write commits.
+  Both transactions see "no mutual follow yet." Both writes commit. Now a mutual follow exists
+  but neither transaction generated the notification.
+- Solutions:
+  1. Post-write check: after each follow write commits, re-check if the reverse follow exists.
+     If yes, generate a mutual-follow notification. This may fire the notification twice
+     (both A and B's write may each detect the mutual state). De-duplicate notifications by
+     using a Redis SET with a key like `mutual_notified:{min(a,b)}:{max(a,b)}` with a 24h TTL.
+  2. Application-level locking: acquire a distributed lock on `pair:{min(a,b)}:{max(a,b)}`
+     before checking. Slower but prevents double notification.
+  3. Offline detection: run a daily job that finds all mutual follow pairs created in the last
+     24 hours and generates notifications in batch. Slightly delayed but simple and correct.
+
+---
+
+*This chapter pairs with:*
+- *Ch73: News Feed — feed fan-out depends directly on the social graph*
+- *Ch62: Messaging Systems — DM eligibility checks use the social graph*
+- *Ch31: Caching at Scale — TAO is a specialized caching system*
+- *Ch48: Consensus Deep Dive — graph server leader election uses Raft*
+- *Ch47: Kubernetes Internals — the Spark GraphX cluster runs on Kubernetes*
+
+---
+
+## Part 18: SSE Brainstorming — Social Graph Edge Cases
+
+Staff-level interviewers often probe edge cases to test whether candidates have internalized
+the design at a production depth, not just memorized the happy path.
+
+### Graph Consistency During Network Partition
+
+**Scenario:** The MySQL shard holding "follows by follower_id 12345" goes down for 90 seconds.
+
+```
+WHAT HAPPENS:
+  Writes (follow/unfollow by user 12345): fail with 503 until shard recovers
+  Reads ("who does user 12345 follow?"): served from Redis sorted set cache —
+    the cache has the last-known state, which is consistent as of 90 seconds ago
+    
+  If the Redis cache also expired (TTL eviction) during the outage:
+    → Cache miss → fallback to MySQL → MySQL down → return error
+    → Option A: serve stale data from a read replica (eventual consistency)
+    → Option B: return empty list with a "temporarily unavailable" flag
+    → Option C: serve from the secondary MySQL shard (sharded by followee_id)
+      which is on a different shard and is available — but it only answers
+      "who follows user 12345," not "who does 12345 follow"
+
+  After recovery:
+    → MySQL replays WAL; any writes that failed during the outage are lost
+      unless they were written to a durable queue first
+    → Correct approach: writes go to Kafka first (durable), then to MySQL
+      from a Kafka consumer — MySQL outage just causes a backlog, not data loss
+
+INTERVIEW SIGNAL:
+  L5: "I'd return an error and the user would need to refresh."
+  L6: "The write path must decouple from MySQL availability. Writes go to
+       a durable log (Kafka) first. MySQL is a consumer. The 90-second
+       outage causes a backlog but no data loss. During the outage, reads
+       serve from Redis with a staleness flag if the cache is warm; return
+       graceful degradation (empty list + 'loading') if cache is cold."
+```
+
+### Account Deletion Cascade
+
+When a user deletes their account, the social graph must be cleaned up:
+
+```
+DELETING ACCOUNT bob_id = 456:
+  1. Immediate (synchronous, before 200 OK):
+     - Set users.deleted_at = NOW() for user 456
+     - This makes bob invisible in search, profile lookup, feed
+     - No graph edges deleted yet
+
+  2. Async cleanup (Kafka event → background workers):
+     - Delete all "bob follows X" edges from follows_by_follower shard
+       (bob's following list — affects bob's feed, no longer needed)
+     - Delete all "X follows bob" edges from follows_by_followee shard
+       (bob's follower list — affects X's feed fan-out target list)
+     - Decrement following_count for each X that bob was following
+     - Decrement follower_count for each X that was following bob
+     - Delete bob's PYMK results from Cassandra
+     - Delete bob's activity feed events
+     - Remove bob from all block lists (blocked_by:{bob_id} set in Redis)
+
+  3. Scale consideration:
+     If bob had 1M followers: deleting 1M "follows bob" edges from the
+     followee shard requires 1M deletes. Do this in batches of 1000/sec
+     over ~17 minutes. Don't do it all at once.
+
+  4. Feed fan-out implication:
+     After account deletion, bob's posts should no longer appear in
+     any follower's feed. This requires the feed service to filter
+     posts from deleted accounts on read — a much cheaper option than
+     retroactively removing bob's posts from 1M followers' feed caches.
+```
+
+### Circular Follow Chains and Graph Analytics
+
+In a directed social graph, cycles are common and benign:
+- Alice follows Bob, Bob follows Alice (mutual follow — very common)
+- Alice follows Bob follows Charlie follows Alice (3-cycle)
+
+These are handled naturally by the graph data model. However, they create challenges for
+certain graph algorithms:
+
+```
+PAGERANK WITH CYCLES:
+  Standard PageRank: start with uniform scores, apply formula iteratively.
+  Cycles can cause scores to oscillate without converging.
+  Solution: the damping factor (0.85) ensures convergence. Each iteration,
+  15% of score "leaks" to the random-jump baseline, preventing oscillation.
+  Convergence typically in 20-50 iterations.
+
+PYMK WITH CYCLES:
+  If Alice → Bob → Alice (mutual follow), Alice appears in her own
+  2-hop neighborhood through Bob. Filter: PYMK candidates must be
+  users NOT currently followed by the requester. The follow-existence
+  check filters Alice from her own PYMK list.
+
+SPAM DETECTION VIA GRAPH TOPOLOGY:
+  Spam networks form recognizable graph patterns:
+  - Hub-and-spoke: one spam account followed by many bots
+  - Clique: tight cluster of bots all following each other
+  These patterns have very high PageRank within the spam cluster but
+  very low PageRank from legitimate accounts.
+  Signal: (follower count) / (PageRank from verified accounts) → low ratio = suspicious.
+  Spark job computes this ratio nightly; accounts below threshold are flagged for review.
+```
+
+### Consistent Hashing When Adding Shards
+
+When the social graph grows and you need to add a new shard to the consistent hash ring:
+
+```
+BEFORE: 4 shards, ring divided into 4 arcs
+        user_ids → hash → falls in arc → served by that shard
+
+Adding Shard E (5th shard):
+  Shard E is inserted at a point on the ring.
+  It "takes over" part of the arc previously owned by Shard A.
+  ~20% of Shard A's data must migrate to Shard E.
+  Other shards (B, C, D) are unaffected.
+
+Migration steps:
+  1. Start Shard E in "shadow" mode — receives writes but does not serve reads
+  2. Copy affected data from Shard A to Shard E (bulk copy from MySQL)
+  3. Replay Kafka events to catch up on writes that occurred during bulk copy
+  4. Once Shard E's lag is < 1 second, promote to "primary" for its arc
+  5. Update consistent hash ring configuration in ZooKeeper/etcd
+  6. Stop writing the migrated data to Shard A; serve from Shard E
+
+Zero-downtime shard addition requires:
+  - Dual writes during migration (write to both old and new shard)
+  - Traffic cutover at the configuration layer (no code change needed)
+  - Rollback path: if Shard E has problems, revert config to route back to Shard A
+```
+
+---
+
+## Part 19: Quick-Reference Interview Card
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  SOCIAL GRAPH — INTERVIEW QUICK REF                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ALWAYS SAY FIRST:                                                  │
+│  "Follows are dual-written: one MySQL cluster per edge direction."  │
+│                                                                     │
+│  STORAGE                                                            │
+│  follows_by_follower: PK(follower_id, followee_id)                  │
+│  follows_by_followee: PK(followee_id, follower_id)                  │
+│  Redis counters: follower_count:{id}, following_count:{id}          │
+│  Redis ZSET: followers:{id} scored by follow timestamp              │
+│                                                                     │
+│  WRITE PATH                                                         │
+│  POST /follow → MySQL (sync) → Kafka → consumers:                  │
+│    A: update reverse shard  B: update Redis ZSET + counters         │
+│    C: fan-out to feeds       D: send notifications                  │
+│                                                                     │
+│  FAN-OUT                                                            │
+│  < 1M followers → fan-out on write (push to follower feeds)         │
+│  > 1M followers → fan-out on read (pull + merge at serving time)    │
+│                                                                     │
+│  PAGINATION                                                         │
+│  cursor = (created_at, followee_id) — seek in index, no skip        │
+│  NEVER: LIMIT N OFFSET M — O(M) waste                               │
+│                                                                     │
+│  PYMK PIPELINE                                                      │
+│  MySQL → HDFS snapshot → Spark 2-hop expansion → ML ranking         │
+│  → Cassandra (24h TTL) → PYMK API                                   │
+│                                                                     │
+│  BIDIRECTIONAL BFS                                                  │
+│  Standard: O(b^d)     Bidirectional: O(b^(d/2))                     │
+│  At b=200, d=4: 1.6B nodes vs. 80K nodes (20,000× better)          │
+│                                                                     │
+│  PRIVACY                                                            │
+│  blocks: PK(blocker_id, blocked_id) — check BOTH directions         │
+│  Redis: blocks:{user_id} SET, SISMEMBER check O(1)                  │
+│  Private accounts: follow_requests table, not direct edge           │
+│                                                                     │
+│  CAPACITY (350M users)                                              │
+│  70B edges × 16 bytes = 1.12TB raw                                  │
+│  With overhead + replication: ~7.5TB                                │
+│  In-memory graph: 3-4 servers at 2TB RAM each                       │
+│  TAO hit rate: >99% from cache                                      │
+│                                                                     │
+│  CONSISTENCY                                                        │
+│  Edge existence: near-real-time (< 1s via TAO Leader)               │
+│  Follower count: eventual (< 5s via Kafka consumer)                 │
+│  PYMK: batch (< 24h via nightly Spark job)                          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+*Chapter 104 — Section 6: Google/Meta System Design (Staff-Level Depth).*
+*Core concepts: dual-write sharding, TAO two-tier cache, in-memory graph, hybrid fan-out,*
+*cursor pagination, PYMK offline pipeline, bidirectional BFS, privacy/block graph.*
+*Key numbers: 70B edges, 2.5TB for 350M users, 200 avg follows, 1M celebrity threshold.*
+*TAO key ops: assoc_get, assoc_range, assoc_count, obj_get. Leader per shard for consistency.*
+*Bidirectional BFS: O(b^(d/2)) vs O(b^d) — 20,000× savings at b=200, d=4 hops.*
+*PYMK pipeline: 2-hop expansion (Spark) → ML ranking → Cassandra → serve. Nightly batch.*
+*Notification fan-out = feed fan-out: same celebrity threshold, same hybrid push/pull model.*
+*Consistent hashing for shard addition: dual-write during migration, config cutover, rollback.*
+---
+
+## Part 20: Comparative Summary — Instagram vs Twitter vs LinkedIn
+
+Understanding which decisions are product-driven vs. technology-driven helps you answer
+"why did they build it this way?" questions in interviews.
+
+```
+FEATURE            INSTAGRAM         TWITTER           LINKEDIN
+─────────────────────────────────────────────────────────────────────────────
+Graph type         Directed follow   Directed follow   Undirected friendship
+Max connections    No hard limit     No hard limit     30,000 (deliberate cap)
+Feed model         Ranked/ML         Ranked (2023+)    Ranked/ML
+Fan-out model      Hybrid            Hybrid            Hybrid
+Storage            MySQL+TAO         MySQL+Manhattan   MySQL+Espresso
+Serving            TAO Memcache      In-memory graph   Helix+Venice
+PYMK name          "Suggested"       "Who to Follow"   "People You May Know"
+Privacy model      Public/Private    Public/Protected  1st-2nd-3rd degree
+Block enforcement  Bidirectional     Bidirectional     Bidirectional
+Follow request     Private accounts  Protected accts   Connection request
+Celebrity thresh.  ~1M followers     ~1M followers     ~100K connections
+Mutual algorithm   Set intersection  Set intersection  Set intersection
+Graph DB used?     No (MySQL+TAO)    No (custom)       No (Espresso)
+In-memory graph?   No (TAO)          Yes (~2.5TB)      Partial (hot users)
+```
+
+**Key insight from this comparison:** all three platforms independently converged on the
+same fundamental architecture: sharded MySQL for ground truth, custom in-memory or
+Memcache-based serving layer, offline Spark for graph analytics, hybrid fan-out for
+celebrities. This convergence is evidence that these are the correct architectural choices
+for social graphs at web scale — not arbitrary company preferences.
+
+---
+
+## Part 21: Additional Brainstorming — Graph Data Modeling Edge Cases
+
+### What if users have multiple relationship types?
+
+LinkedIn has multiple relationship types: connections (mutual), followers (one-way),
+premium subscribers. Instagram has followers + close friends (a curated subset). Facebook
+has friends + followers (you can follow someone without being their friend).
+
+This requires the TAO association type model:
+- Association type FRIEND: undirected, stored as two directed edges
+- Association type FOLLOWS: directed, single edge
+- Association type CLOSE_FRIEND: directed, stored as a subset marker on follow edge
+
+```sql
+-- TAO-style associations table
+CREATE TABLE associations (
+    id1          BIGINT      NOT NULL,  -- source node
+    atype        SMALLINT    NOT NULL,  -- 1=FRIEND, 2=FOLLOWS, 3=CLOSE_FRIEND, 4=BLOCKS
+    id2          BIGINT      NOT NULL,  -- target node
+    ts           BIGINT      NOT NULL,  -- Unix timestamp (sort key for assoc_range)
+    data         BLOB        NULL,       -- optional metadata (e.g., connection message)
+    PRIMARY KEY  (id1, atype, ts DESC, id2),
+    INDEX        idx_reverse (id2, atype, ts DESC, id1)
+) ENGINE=InnoDB;
+-- The composite PK enables assoc_range(id1, atype, high_ts, low_ts, limit) as an index scan
+```
+
+### What if the graph has weighted edges?
+
+Some platforms weight edges (how "close" are these two users, based on interaction
+frequency). This weight affects PYMK ranking and feed ranking.
+
+```
+WEIGHT COMPUTATION:
+  weight(A, B) = f(
+    recency_of_follow,        -- more recent = higher weight
+    comment_frequency,         -- A comments on B's posts often = high weight
+    like_frequency,            -- A likes B's content = weight signal
+    DM_frequency,              -- direct messaging = strong tie
+    profile_view_frequency     -- A views B's profile = implicit interest
+  )
+
+STORAGE:
+  Don't store weight in the follows table (changes too often, expensive to update).
+  Store as a separate edge weight table, updated by a daily batch job.
+  Serve from Redis hash: edge_weight:{a_id}:{b_id} -> float score
+
+LIMITATION:
+  For 70B edges, computing pairwise weights for ALL pairs is infeasible.
+  In practice: compute weights only for "active pairs" (users who have
+  interacted in the last 90 days). This covers the edges that matter for
+  ranking while avoiding the long tail of dormant connections.
+```
+
+### What about "muting" vs. "blocking"?
+
+Mute = hide from feed, but the relationship still exists. Block = sever entirely.
+
+```
+MUTE vs BLOCK:
+  Block: removes from feed, removes from search, prevents interaction
+         → treated as no-edge for all product purposes
+         → stored in blocks table; checked on every content access
+  
+  Mute: removes from feed, but the muted user still sees your content,
+         can still DM you, appears in search
+         → stored as a separate mutes table
+         → checked ONLY in feed generation (not on content access)
+  
+CREATE TABLE mutes (
+    muter_id    BIGINT    NOT NULL,
+    muted_id    BIGINT    NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (muter_id, muted_id)
+);
+
+-- Only checked during feed fan-out (not on follower-list reads)
+-- Cached in Redis: mutes:{user_id} SET
+-- Much smaller than block lists; most users mute < 100 accounts
+```
+
+---
+
+## Part 22: Why The Social Graph Is Interesting From a Systems Perspective
+
+### The Core Tension: Graph Structure vs. Horizontal Scalability
+
+The fundamental tension in social graph systems is that graph algorithms and graph storage
+are naturally holistic (the algorithm needs to traverse the whole graph), but horizontal
+scaling requires partitioning the data.
+
+Every architectural decision in this chapter is a response to this tension:
+- **Dual-write sharding** is a compromise: you keep the data in a relational structure but
+  accept write amplification to make both query directions efficient.
+- **In-memory graph** resolves the tension by making the partition boundaries cheap: all
+  data fits on a small cluster, so cross-shard traversal is a network call within a datacenter
+  (~1µs) rather than a database query (~10ms).
+- **Offline Spark computation** fully embraces the tension: graph algorithms (PYMK, PageRank)
+  run on a full graph snapshot, not on the live sharded serving layer.
+- **TAO** sidesteps the tension for simple access patterns: if you only need "give me the N
+  most recent edges from node X of type Y," you don't need the whole graph — you just need
+  the local neighborhood, which fits in one shard.
+
+### What You Are Really Learning
+
+The social graph chapter is not just about social networks. The same architectural patterns
+appear in other domains:
+
+- **Recommender systems**: the user-item interaction graph (who bought what) has the same
+  structure as the social graph. Collaborative filtering = 2-hop traversal on the interaction graph.
+- **Fraud detection**: the transaction graph (who sent money to whom) uses the same bidirectional
+  BFS and PageRank patterns to detect fraud rings.
+- **Knowledge graphs**: Google's Knowledge Graph, Facebook's Entity Graph, LinkedIn's
+  Economic Graph all use TAO-style object+association storage.
+- **CDN topology**: the network of origin servers and edge caches is a graph; routing
+  decisions use shortest-path algorithms on this graph.
+
+Mastering the social graph pattern gives you a mental model applicable to any large-scale
+graph problem in a systems design interview.
+
+### The Staff Engineer's Mental Model
+
+At the Staff level, the social graph interview is not about reciting the architecture. It is
+about reasoning through tradeoffs:
+
+```
+QUESTION: "Why not just use a graph database?"
+STAFF ANSWER: "Graph DBs are optimized for traversal on a single machine.
+  At 3B nodes and 100B edges, you MUST distribute. Distributed graph traversal
+  loses the pointer-following advantage and becomes a network problem.
+  MySQL + custom cache layer outperforms graph DBs at this scale."
+
+QUESTION: "Why not just use Redis for everything?"
+STAFF ANSWER: "Redis is single-threaded (for atomic ops), max 100GB-ish per
+  node, and persistence is more complex than MySQL. At 70B edges, Redis would
+  need 50+ shards. MySQL gives you richer query semantics, better durability,
+  and proven operational tooling. Redis is the cache; MySQL is the truth."
+
+QUESTION: "Should you use Cassandra instead of MySQL?"
+STAFF ANSWER: "Cassandra excels at wide-row access patterns and high write
+  throughput with low latency. For the follows table, access is narrower
+  (give me followers of user X, ordered by time) — MySQL with a covering index
+  handles this well. Cassandra makes more sense for the PYMK results store
+  (one row per user, ordered by score, high write throughput from the nightly job)
+  — which is exactly where we use it."
+```
+
+---
+
+## Part 23: Final Numbers Reference
+
+```
+SOCIAL GRAPH NUMBERS — MEMORIZE THESE FOR INTERVIEWS
+
+SCALE (Meta/Instagram):
+  Users:          3 billion monthly active
+  Edges:          100 billion+ follow/friend relationships
+  Average degree: ~200 follows per user
+  Celebrity max:  ~100M+ followers (Cristiano Ronaldo, 635M on Instagram 2024)
+
+SCALE (Twitter/X):
+  Users:          350M active
+  Edges:          70B follow relationships
+  In-memory size: ~2.5TB for the full edge set
+  Servers needed: 3-4 servers at 1-2TB RAM each
+
+LATENCY TARGETS:
+  Follow write (MySQL + Kafka publish):  < 200ms p99
+  Follower list read (Redis ZSET):       < 5ms p99
+  Follower list read (MySQL fallback):   < 50ms p99
+  Edge existence check (Redis SISMEMBER): < 1ms p99
+  PYMK serve (Cassandra read):           < 10ms p99
+
+THROUGHPUT:
+  Peak follows/sec (viral event):        ~100,000/sec
+  Kafka follow-event throughput needed:  ~100,000 messages/sec
+  Fan-out writes for normal post (200 followers): 200 writes
+  Fan-out writes for celebrity post (80M followers): 80M writes → use pull model
+
+STORAGE SIZES:
+  Single follow edge:        16 bytes (two 8-byte IDs)
+  With created_at:           24 bytes
+  Redis ZSET entry:          ~100 bytes (member + score + skip-list overhead)
+  10M-follower Redis ZSET:   ~1GB per user
+  MySQL follows table at 70B rows: ~1.7TB raw + index overhead
+
+PYMK JOB:
+  Input graph:         100B edges as Parquet in HDFS (~800GB compressed)
+  Spark cluster:       200-500 cores for 3B users
+  Job duration:        2-4 hours
+  Output:              top-50 candidates per user, written to Cassandra
+  Result table size:   3B users × 50 candidates × ~40 bytes = ~6TB
+
+CONSISTENCY:
+  Follow edge appears in serving layer:  < 1 second (via TAO Leader invalidation)
+  Follower count updates:                < 5 seconds (via Kafka consumer)
+  PYMK freshness:                        < 24 hours (nightly batch)
+  BFS degree-of-separation query:        < 200ms (bidirectional BFS, in-memory graph)
+```
+
+*This chapter pairs with:*
+- *Ch73: News Feed — feed fan-out depends directly on the social graph*
+- *Ch62: Messaging Systems — DM eligibility checks use the social graph*
+- *Ch31: Caching at Scale — TAO is a specialized caching system*
+- *Ch48: Consensus Deep Dive — graph server leader election uses Raft*
+- *Ch47: Kubernetes Internals — the Spark GraphX cluster runs on Kubernetes*
+
+*Chapter 104 — Section 6: Google/Meta System Design (Staff-Level Depth).*
+*Core concepts: dual-write sharding, TAO two-tier cache, in-memory graph, hybrid fan-out,*
+*cursor pagination, PYMK offline pipeline, bidirectional BFS, privacy/block graph.*
+*Key numbers: 70B edges, 2.5TB for 350M users, 200 avg follows, 1M celebrity threshold.*
+*TAO key ops: assoc_get, assoc_range, assoc_count, obj_get. Leader per shard for consistency.*
+*Bidirectional BFS: O(b^(d/2)) vs O(b^d) — 20,000× savings at b=200, d=4 hops.*
+*PYMK pipeline: 2-hop expansion (Spark) → ML ranking → Cassandra → serve. Nightly batch.*
+*Notification fan-out = feed fan-out: same celebrity threshold, same hybrid push/pull model.*
+*Consistent hashing for shard addition: dual-write during migration, config cutover, rollback.*
+*Platform comparison: Instagram (TAO), Twitter (in-memory), LinkedIn (Espresso+Venice).*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*

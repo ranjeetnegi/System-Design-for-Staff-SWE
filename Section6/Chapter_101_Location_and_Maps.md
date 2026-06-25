@@ -2204,6 +2204,227 @@ based on what you learned in this chapter? Write a 1-page critical analysis.
 
 ---
 
+## Part 12: H3 — Uber's Hexagonal Spatial Index
+
+### 12.1 Why Uber Replaced Geohash with Hexagons
+
+Uber open-sourced H3 in 2018, their production spatial indexing library. It replaced
+geohash for most internal use cases. The reason is a geometric property of rectangular
+vs. hexagonal grids.
+
+**The distance problem with rectangular cells**:
+In a geohash grid, a cell has 8 neighbors. But the 4 edge neighbors are at distance
+*d*, while the 4 corner neighbors are at distance *d√2 ≈ 1.41d*. This asymmetry
+creates artifacts: a driver at the corner of a cell is "just as close" as one at
+the edge, but their geohash distance is 41% farther in Euclidean space.
+
+**Hexagonal cells have uniform neighbor distance**:
+A hexagon has 6 neighbors. Every neighbor center is equidistant from the current cell
+center. This means "ring 1" (immediate neighbors) is a true circle, not an octagon
+with stretched corners. For proximity calculations, this gives more accurate results
+without post-filtering.
+
+```
+RECTANGULAR GRID vs. HEXAGONAL GRID
+=====================================
+
+  Geohash (rectangular):          H3 (hexagonal):
+  
+  ┌───┬───┬───┐                  / \ / \ / \
+  │ N │ N │ N │                 │ N │ N │ N │
+  ├───┼───┼───┤                  \ / \ / \ /
+  │ N │ X │ N │                   │ N │ X │ N │
+  ├───┼───┼───┤                  / \ / \ / \
+  │ N │ N │ N │                 │ N │ N │ N │
+  └───┴───┴───┘                  \ / \ / \ /
+  
+  Corner neighbors:               All neighbors:
+  distance = d√2                  distance = d (uniform!)
+  
+  Problem: geohash "ring-1"       Advantage: true circular coverage
+  search is actually an octagon   with no corner artifacts
+```
+
+### 12.2 H3 Resolution Levels
+
+H3 defines 16 resolution levels (0–15). The levels most relevant to Uber:
+
+| H3 Level | Cell Edge Length | Cells Worldwide | Use Case |
+|----------|-----------------|-----------------|----------|
+| 7        | 1.2 km          | 98M             | Coarse proximity search |
+| 9        | 174 m           | 8.1B            | Surge pricing zones |
+| 11       | 25 m            | 580B            | Street-level driver tracking |
+| 13       | 3.6 m           | 41T             | Parking spot precision |
+
+For driver proximity search at Uber, resolution 9 (~174m cells) is typical: fine
+enough for accurate matching, coarse enough for manageable index cardinality.
+
+### 12.3 H3 vs. Geohash Trade-offs
+
+| Property | Geohash | H3 |
+|----------|---------|-----|
+| Cell shape | Rectangle | Hexagon |
+| Neighbor distance | Non-uniform (√2 for corners) | Uniform |
+| Parent/child hierarchy | Yes (prefix = parent) | Yes (but not prefix-based) |
+| Library availability | Ubiquitous (everywhere) | Good (open-source, many languages) |
+| Redis native support | Yes (Redis GeoSets use geohash internally) | No (must encode hex ID as sorted set score) |
+| Learning curve | Low | Moderate |
+| Production users | Most companies | Uber, Grab, others |
+
+**When to mention H3 in an interview**: If the interviewer is from Uber or Lyft, or
+if they explicitly ask about hexagonal indexing or Uber's approach, mention H3.
+For most "design Uber" questions, geohash is the simpler and equally correct answer.
+H3 signals extra depth; geohash signals solid fundamentals.
+
+---
+
+## Part 13: Driver-Rider Matching — From Proximity to Assignment
+
+### 13.1 Proximity Search ≠ Matching
+
+Finding nearby drivers (Part 4) and choosing which driver to dispatch are two different
+problems. Proximity search answers "who is within 2 km?" — it returns a list. Matching
+answers "which of those drivers should I assign to this rider?" — it picks one.
+
+The naive approach: just pick the closest driver. This is wrong for two reasons:
+1. The closest driver might already be being considered for another rider.
+2. Global optimality: it might be better to assign a slightly farther driver to Rider A
+   so that the closest driver is available for the even-more-urgent Rider B.
+
+### 13.2 Uber's Batch Matching Approach
+
+Uber runs a matching cycle every 5 seconds. Within each cycle:
+
+1. **Collect**: gather all unmatched riders and all available drivers in the region.
+2. **Build cost matrix**: for each (driver, rider) pair, compute a cost — primarily
+   ETA from driver's current location to rider's pickup point (in seconds).
+3. **Solve assignment**: find the assignment of drivers to riders that minimizes total
+   cost. This is the classic **Assignment Problem** (bipartite matching).
+4. **Dispatch**: send match notification to driver app and rider app simultaneously.
+
+```
+BATCH MATCHING CYCLE (every 5 seconds)
+=========================================
+
+  Unmatched riders: [R1, R2, R3]
+  Available drivers: [D1, D2, D3, D4]
+  
+  Cost matrix (ETA in seconds):
+  
+           D1   D2   D3   D4
+  R1:      30   90   45   120
+  R2:      60   40   80   35
+  R3:      20   55   15   70
+  
+  Optimal assignment (minimize total ETA):
+  R1 → D3 (45s), R2 → D4 (35s), R3 → D1 (20s)
+  Total cost: 100s
+  
+  Naive "closest first":
+  R3 → D3 (15s), R1 → D1 (30s), R2 → D2 (40s)
+  Total cost: 85s  ← cheaper! But only if all three happen simultaneously
+  
+  The difference: batch matching considers all assignments globally;
+  "closest first" greedily picks best local choice at the moment it runs.
+```
+
+### 13.3 The Hungarian Algorithm vs. Heuristics at Scale
+
+The classic solution to the assignment problem is the **Hungarian algorithm** —
+O(n³) time where n is the number of riders (or drivers, whichever is larger). For
+small n, this is fine. For Uber's peak load in a dense city (1,000+ riders + 5,000+
+drivers in one region), O(n³) is too slow for a 5-second cycle.
+
+Production approximations:
+1. **Geographically limit candidates**: only consider drivers within X km — reduces n
+   from thousands to dozens.
+2. **Greedy with shuffle**: process riders in random order, assign each the best
+   available driver. Fast but suboptimal.
+3. **Auction algorithms**: each rider "bids" on drivers; drivers pick the highest
+   bidder. Converges to near-optimal in O(n log n) iterations.
+
+Uber has published that they use a combination of geographic pre-filtering (H3 cells)
+and a greedy/auction hybrid for production matching, falling back to exact Hungarian
+for small subproblems where it fits in budget.
+
+### 13.4 When to Mention Matching in an Interview
+
+For an L5 answer: "After finding nearby drivers via geohash/GeoSets, I'd assign the
+closest available driver."
+
+For an L6 answer: "Finding nearby drivers gives me a candidate set. The actual
+assignment is an optimization problem — minimize total ETA across all unmatched
+pairs in the region. Uber runs a batch matching cycle every 5 seconds using
+geographically-filtered assignment. For small regions, the Hungarian algorithm works
+directly; for dense cities, they use approximations like greedy assignment with
+geographic pre-filtering."
+
+---
+
+## Part 14: Interview One-Liners
+
+### 14.1 The Sentences That Signal Mastery
+
+**Defining the core trade-off in one breath:**
+> "Geo systems split into four sub-problems — driver tracking (write-heavy stream),
+> proximity search (real-time spatial index), routing (offline-preprocessed graph),
+> and ETA (ML on historical + probe data). Each has a different dominant technology."
+
+**Explaining geohash boundary correction:**
+> "Geohash proximity search must check the target cell AND its 8 neighbors, then
+> post-filter with Haversine distance. Without the 8-neighbor check, drivers near
+> a cell boundary are missed. Without the Haversine filter, you return false positives
+> from the corner cells."
+
+**Explaining why Dijkstra fails for planet-scale routing:**
+> "Dijkstra on 100M nodes explores ~50M nodes for a long-distance query — that takes
+> 27 seconds. Contraction Hierarchies preprocess the graph offline (1–3 days),
+> reducing a long query to exploring ~thousands of nodes with bidirectional search — < 1ms."
+
+**Explaining the 1.25M writes/second bottleneck:**
+> "5 million active drivers sending one GPS update every 4 seconds = 1.25M writes/sec.
+> This rules out a single Postgres instance and most off-the-shelf databases. Redis
+> GeoSets sharded by geographic region handle this because each GEOADD is O(log N)
+> at sub-millisecond latency, and geographic sharding means each shard handles only
+> the drivers in its region."
+
+**On Redis GeoSets vs. geohash strings:**
+> "Redis GeoSets use geohash internally as the score in a sorted set, so GEOADD is just
+> ZADD with a geohash-derived score. GEOSEARCH does a sorted-set range scan over the
+> geohash space, then applies Haversine to filter. It's geohash at O(log N) with
+> server-side filtering — the client never sees geohash strings."
+
+### 14.2 The Decision Tree: Geo Questions in the Interview
+
+```
+  IS THE CORE PROBLEM FINDING NEARBY THINGS?
+  ─────────────────────────────────────────────────────
+  Yes → Geohash (simpler) or H3 (hexagonal, Uber-style)
+        with Redis GeoSets. Always check 9 cells.
+  
+  IS THE CORE PROBLEM ROUTING ON A ROAD NETWORK?
+  ─────────────────────────────────────────────────────
+  Yes → Contraction Hierarchies (not Dijkstra, not A*).
+        Offline preprocessing. Live traffic = edge weight overlay.
+  
+  IS THE WRITE THROUGHPUT > 100K/SECOND?
+  ─────────────────────────────────────────────────────
+  Yes → Kafka ingestion buffer + Redis GeoSets.
+        Never write directly to Postgres for real-time location.
+  
+  DO YOU NEED TO SERVE MAP TILES?
+  ─────────────────────────────────────────────────────
+  Yes → Vector tiles (not raster). CDN-first.
+        99%+ cache hit rate. Origin only for tile updates.
+  
+  DO YOU NEED TO MATCH DRIVERS TO RIDERS (NOT JUST FIND)?
+  ─────────────────────────────────────────────────────
+  Yes → Batch matching every 5 seconds. Assignment problem.
+        Geographic pre-filter → greedy/Hungarian for the subproblem.
+```
+
+---
+
 ## KEY TAKEAWAYS
 
 ```

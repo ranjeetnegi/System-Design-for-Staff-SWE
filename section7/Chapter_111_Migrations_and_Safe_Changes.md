@@ -2475,4 +2475,26 @@ Present this plan to a colleague and defend it under questioning. The ability to
 
 ---
 
-*Next chapter: Chapter 98 — Technical Writing for Engineers*
+*Chapter 111 — Section 7: Engineering as a Discipline*
+*Core framework: Expand → Migrate → Contract (3-phase zero-downtime migration pattern).*
+*Key concepts: backwards compatibility windows, feature flags as migration gates, dual-write*
+*period, dark reads for verification, fanout cutover, 1% → 10% → 100% rollout sequence.*
+*Migration types: database schema, service extraction (strangler fig), infrastructure,*
+*configuration, data-plane changes with backward compatibility requirements.*
+*Interview signals: quantify phases with time estimates; name monitoring metrics per phase;*
+*design rollback triggers before starting; name organizational coordination requirements;*
+*know when to stop vs push through a migration mid-flight.*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*
+*Anti-patterns covered (11 total): incomplete rollback plan, big-bang migration,*
+*skipping dark reads, no monitoring, premature contract phase, phase coupling, no dry run,*
+*over-migration, missing data dictionary, single-engineer execution, cache/store ordering.*
+*The single most important migration lesson: you must be able to roll back each phase*
+*independently — a migration with no rollback path is not a migration, it is a bet.*
+*Expand = add new capability alongside old. Migrate = shift traffic from old to new.*
+*Contract = remove old. This sequence can be applied to any migration: schema, service,*
+*infrastructure, configuration, protocol, or data format.*
+*For Google L5+: know the dark reads technique, the feature flag gate approach, and how*
+*to monitor parity between old and new systems before cutting over. Written for:*
+*Ranjeet Singh Negi's Google L5 / Senior SWE interview preparation, 2026-06-25. Chapter 111.*
+*Next chapter: Chapter 112 — Technical Writing for Engineers.*
+<!-- End of Chapter 111. Migrations and Safe Changes. 2,500 lines. -->

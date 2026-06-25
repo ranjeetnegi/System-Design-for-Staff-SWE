@@ -2926,3 +2926,82 @@ This is a tiered retention policy implemented through background compaction. Raw
 A dead man's switch (also called an absence alert or heartbeat alert) fires when a signal stops arriving rather than when a value exceeds a threshold. It solves the problem where the metrics system itself goes down and all your normal alerts silently stop evaluating. Implementation: a monitored system continuously emits a heartbeat metric, for example monitoring_heartbeat{job="metrics-system"} = 1, on every evaluation cycle. An external watchdog -- outside the primary metrics system -- checks for this heartbeat. If the heartbeat metric is absent for more than two minutes (the absence condition), the watchdog fires an alert through a separate channel (email, a secondary PagerDuty integration, or SMS). This is the "who watches the watchmen" solution: the primary system cannot alert on its own failure, so you need an independent external check.
 
 ---
+
+## Part 19: Push vs Pull Architecture
+
+**Pull (Prometheus model):** Prometheus scrapes HTTP `/metrics` endpoints on a configured interval. Prometheus knows immediately if a target is down (scrape fails). Works best for internal services in a controlled network. Does not work through NAT without a Pushgateway.
+
+**Push (Datadog, StatsD, Graphite):** Service agents push metrics to a central collector. Works in any network topology. Does not inherently know if a target is down — you need heartbeat metrics for absence detection. Fully-managed SaaS solutions (Datadog, New Relic) use push.
+
+**Pushgateway (batch jobs):** Batch jobs cannot be scraped because they exit after completion. They push final metrics to the Pushgateway, which Prometheus scrapes. Clean up metrics after the job completes — the Pushgateway is a cache, not a long-term store.
+
+---
+
+## Part 20: Cardinality Explosion
+
+Every unique label value combination creates a new time series. `{service, region, status_code}` with 50 × 10 × 10 values = 5,000 series — fine. Adding `user_id` (1M users) multiplies to 5 billion series — kills Prometheus.
+
+**Rule:** Labels must be low-cardinality (< 10,000 values). Never use user_id, request_id, session_token, or raw URLs as labels. For per-user analytics, use logs or a columnar store (BigQuery, Redshift), not a TSDB.
+
+**Detection:** Monitor `prometheus_tsdb_head_series`. Alert if it grows >20% week-over-week. `topk(10, count by (__name__)({__name__=~".+"}))` finds the high-cardinality offenders.
+
+---
+
+## Part 21: Downsampling and Retention Tiers
+
+| Tier    | Resolution | Retention | Use case                               |
+|---------|------------|-----------|----------------------------------------|
+| Raw     | 15 seconds | 7–15 days | Incident debugging, current oncall     |
+| Medium  | 1 minute   | 30–90 days| Week-over-week comparison, trend graphs|
+| Coarse  | 1 hour     | 1–2 years | Capacity planning, long-term trends    |
+
+Downsampling stores min, max, sum, and count — never just the average. Storing only averages loses the ability to reconstruct percentiles from aggregated data.
+
+**Recording rules** (Prometheus): pre-compute expensive queries and write results as new time series. Dashboards read recording rules instead of running expensive range queries on-demand. Dramatically reduces dashboard load time.
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║               METRICS COLLECTION SYSTEM KEY TAKEAWAYS               ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Pull (Prometheus) for internal; push (Datadog agent) for multi-     ║
+║  cloud or firewall-behind services.                                  ║
+║                                                                      ║
+║  Cardinality: never use high-cardinality labels (user_id, req_id).   ║
+║  Monitor prometheus_tsdb_head_series; alert on fast growth.          ║
+║                                                                      ║
+║  Retention tiers: 15s/15d → 1m/90d → 1h/2yr. Store min+max+        ║
+║  sum+count at every tier — needed for correct percentile rollups.    ║
+║                                                                      ║
+║  Dead man's switch: external watchdog alerts on absent heartbeat.    ║
+║  The monitoring system cannot alert on its own failure.              ║
+║                                                                      ║
+║  Recording rules: pre-compute expensive PromQL; dashboards query     ║
+║  them instead of raw time series. Required at scale.                 ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## Quick Reference Numbers
+
+| Metric                                         | Value                              |
+|------------------------------------------------|------------------------------------|
+| Prometheus scrape interval (default)           | 15 seconds                         |
+| Prometheus head block memory per series        | ~4–8 KB                            |
+| Time-series DB compression ratio               | ~12 bytes/sample (Gorilla encoding)|
+| Recommended max series per Prometheus instance | ~10–20M                            |
+| Thanos/Cortex horizontal scaling               | Unlimited (shared object storage)  |
+| Alert evaluation interval (default)            | 1 minute                           |
+| Typical recording rule evaluation overhead     | <1% CPU for pre-aggregation        |
+
+**One-liners for the interview room:**
+- "Cardinality is the enemy of Prometheus — always ask 'how many unique values does this label have?'"
+- "Pull knows when targets are down; push needs heartbeat alerts to know the same."
+- "Never store only the average — you can't reconstruct P99 from it later."
+- "Recording rules are the performance optimization that every large Prometheus deployment eventually needs."
+
+*Pairs with Chapter 55 (Search System) for instrumentation patterns, and Chapter 121 (Observability) for logs/traces to complete the three-pillar picture.*
+
+`Chapter 56 | Section 5: Advanced L5 Systems | Metrics Collection System`

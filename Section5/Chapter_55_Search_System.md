@@ -2914,3 +2914,91 @@ Personalization means using signals specific to the user to re-rank results. The
 **Q18: What is the difference between full-text search and a relational database LIKE query?**
 
 A SQL LIKE query such as `WHERE description LIKE '%running shoes%'` does a full table scan -- it reads every row and checks if the string appears anywhere in the text. This is O(N x L) where N is the number of rows and L is the average text length. There is no index, no ranking, no typo tolerance, and latency degrades linearly with table size. Full-text search uses an inverted index: query time is O(result set size), not O(corpus size). It also provides relevance ranking via BM25, synonym expansion, stemming, typo tolerance via fuzzy matching, and faceted aggregations. The tradeoff is that the inverted index is a derived, eventually consistent data store that requires a separate infrastructure. Use LIKE queries only for small tables or when you need ACID consistency on the search result; use a dedicated search system for anything at scale or requiring relevance.
+
+---
+
+## Part 19: Vector Search and Semantic Search
+
+Traditional keyword search (BM25) matches exact tokens and their stems. It fails when the user's intent differs from their literal words. **Semantic search** uses dense vector embeddings to capture meaning — two queries with different words but the same intent will have similar vectors.
+
+**How embeddings work:** A transformer model (BERT, sentence-transformers, OpenAI Ada) converts a text string into a dense vector of 768 or 1,536 floats. Semantically similar texts have high cosine similarity. Embed every document at index time; embed the query at query time, then find nearest document vectors.
+
+**ANN algorithms:**
+- **HNSW (Hierarchical Navigable Small World):** Graph-based; each vector connected to nearby vectors at multiple levels. O(log N) query time. Used by Weaviate, Qdrant, pgvector.
+- **FAISS IVF:** Cluster vectors into Voronoi cells; search only nearby clusters. Supports GPU. Used by Meta in production for 100B+ vector indices.
+
+**Hybrid search:** BM25 retrieval → top 1,000 candidates → vector re-ranking → blend scores (0.7 × BM25 + 0.3 × cosine). Better than either alone. Used in Elasticsearch `knn` + `match` queries.
+
+**Numbers:** HNSW index for 10M vectors at 768-dim ≈ 30 GB RAM. HNSW query time ≈ 2–10 ms. Recall@10 with ef=200 ≈ 97–99%.
+
+---
+
+## Part 20: Search Quality Metrics
+
+**MRR (Mean Reciprocal Rank):** 1/rank of first relevant result, averaged across queries. MRR = 1.0 means top result is always relevant. Best for single-answer queries ("capital of France").
+
+**NDCG@10 (Normalized Discounted Cumulative Gain):** Grades relevance at each position with a log discount. NDCG@10 ≥ 0.7 is good; ≥ 0.9 is excellent. Standard metric for e-commerce and web search.
+
+**Precision@K:** Fraction of top-K results that are relevant. **Recall@K:** Fraction of all relevant docs appearing in top K. Use recall for discovery use cases.
+
+**Collecting labels:** Human raters or click logs. Clicks are noisy (position bias). Correct with inverse propensity scoring or interleaving A/B experiments.
+
+---
+
+## Part 21: Query Understanding Pipeline
+
+1. **Spell correction:** ~15% of queries have typos. Symmetric delete + noisy channel model; neural model for highest quality.
+2. **Query expansion:** "laptop bag" → also "laptop sleeve", "laptop backpack". From query logs or taxonomy.
+3. **Entity NER:** "Steve Jobs" is a person entity → boost `creator` field, not just full-text body.
+4. **Intent classification:** Navigational (go to page) vs informational (learn) vs transactional (buy) → different result types per intent.
+5. **Operator parsing:** site:, filetype:, quoted phrases, negative terms, date/price ranges.
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                  SEARCH SYSTEM KEY TAKEAWAYS                         ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Inverted index: O(result set) query time vs O(corpus) for LIKE.     ║
+║  BM25 is the baseline ranker. Start here, tune from click logs.      ║
+║                                                                      ║
+║  Vector search: HNSW O(log N) ANN, ~30 GB per 10M vectors (768-dim).║
+║  Hybrid BM25 + vector beats either alone in production ranking.      ║
+║                                                                      ║
+║  Quality: NDCG@10 for ranking, MRR for single-answer queries.        ║
+║  Collect implicit signals from clicks; correct for position bias.    ║
+║                                                                      ║
+║  Query pipeline: spell-correct → expand → NER → intent → retrieve   ║
+║  → re-rank (ML) → serve. Each stage adds latency; budget carefully.  ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## Quick Reference Numbers
+
+| Metric                                    | Typical Value                       |
+|-------------------------------------------|-------------------------------------|
+| Elasticsearch shard size (recommended)    | 10–50 GB per shard                  |
+| Lucene segment merge overhead             | ~10–30% write amplification         |
+| BM25 retrieval latency (10M docs)         | 5–20 ms                             |
+| HNSW vector query (10M vectors, 768-dim)  | 2–10 ms                             |
+| Query spell-correction (noisy channel)    | <1 ms                               |
+| Neural spell-correction (BERT)            | 15–25 ms                            |
+| Inverted index size vs corpus             | ~10–30% of raw text size            |
+| Typical search read/write ratio           | 100:1 to 1000:1                     |
+| Zero-result rate (healthy system)         | <5%                                 |
+| Click-through rate on position 1          | 20–40% (varies by query type)       |
+
+---
+
+**One-liners for the interview room:**
+- "BM25 is the unbeaten baseline — start there and measure everything against it."
+- "HNSW gives you 97%+ recall at O(log N) — the standard for production vector search."
+- "Hybrid search wins: keyword handles precision, vectors handle recall on paraphrases."
+- "Query understanding runs before retrieval — spell, expand, NER, intent, then match."
+- "NDCG@10 is the north star metric for a ranked retrieval system."
+
+*Pairs with Chapter 56 (Metrics Collection) for instrumentation of the search pipeline, and Chapter 85 (Recommendation System) for the two-stage retrieve-then-rank pattern.*
+
+`Chapter 55 | Section 5: Advanced L5 Systems | Search System`

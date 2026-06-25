@@ -1224,6 +1224,590 @@ The same way you give feedback to anyone, with appropriate calibration of your c
 
 ---
 
+## Part 12: Automated Code Review — What Machines Do So Humans Don't Have To
+
+### 12.1 The Role of Automation in the Review Pipeline
+
+Before a human reviewer ever opens a PR, a suite of automated checks should have already
+run. The purpose: eliminate every mechanical issue that doesn't require judgment so that
+human attention is reserved for things that require it.
+
+```
+AUTOMATED CHECK → WHAT IT CATCHES → HUMAN COST IF MISSED
+====================================================
+
+Linter (Pylint, ESLint, RuboCop)
+  Catches: style violations, undefined variables, unused imports, missing semicolons
+  Human cost: 30 seconds of distraction per nit; multiplied by 20 comments = 10 minutes
+  Result: linters eliminate the nit category from human review
+
+Type Checker (mypy, tsc, Flow)
+  Catches: type mismatches, null dereferences on typed data, wrong argument counts
+  Human cost: subtle bugs that survive testing and reach production
+  Result: eliminates a class of correctness bugs the human reviewer would need to spot
+
+Static Analysis (Sonar, Semgrep, CodeQL)
+  Catches: SQL injection patterns, hardcoded secrets, known vulnerable dependencies,
+           certain race condition patterns, dead code
+  Human cost: security bugs in production; critical severity
+  Result: flags high-priority issues before human review begins
+
+Dependency Vulnerability Scanner (Snyk, OWASP Dependency Check)
+  Catches: known CVEs in imported packages
+  Human cost: zero-day exposure from unpatched dependencies
+  Result: automated tickets for vulnerable dependencies, no human judgment needed
+
+Test Coverage Check
+  Catches: PRs that lower test coverage below a threshold
+  Human cost: none directly, but correlates with future bugs
+  Result: blocks PRs that reduce coverage without explanation
+
+CI Build + Tests
+  Catches: compilation errors, test failures, integration test failures
+  Human cost: review time wasted on broken code
+  Result: human review only starts on code that already passes CI
+```
+
+### 12.2 The Review Queue Should Only See Clean PRs
+
+A healthy engineering org configures CI checks as **required status checks** that must pass
+before a PR can be merged. Human review is the last gate, not the first.
+
+The order:
+```
+Author pushes code
+    │
+    ▼
+Automated CI pipeline:
+    ├── Linter (fails fast on style errors)
+    ├── Type checker
+    ├── Test suite (unit + integration)
+    ├── Static analysis (Semgrep, SonarQube)
+    └── Dependency scan (Snyk)
+    │
+    ▼ (only if all pass)
+Human review requested
+    │
+    ▼
+Reviewer opens PR — already knows: code compiles, tests pass, no linter errors, no known
+                    security patterns, all dependencies clean. Reviewer can focus on logic,
+                    design, and judgment.
+```
+
+This structure means the human reviewer's value is **amplified** — they spend 0% of their
+time on mechanical checks and 100% on judgment.
+
+### 12.3 Alert Fatigue: When Automation Becomes Noise
+
+If automated checks produce too many false positives, engineers start ignoring them. This is
+**alert fatigue** in the review context. Signs:
+
+- Engineers close static analysis warnings without reading them ("it always cries wolf")
+- Linter violations are suppressed with `# noqa` or `// eslint-disable` without justification
+- CI pipelines have "known failing tests" that are ignored
+
+The correct response: treat automated check signal degradation as a P2 engineering issue.
+Tune the checkers until the false positive rate is < 5%. Remove checks that are never
+actionable. Add checks that are high-signal.
+
+**Rule for introducing a new automated check:** it must produce a fix (not just a warning)
+or have a clear, deterministic resolution in > 95% of cases. If it requires judgment to
+resolve, it belongs in the human review, not the automation.
+
+### 12.4 Brainstorming Q&A — Part 12
+
+**Q: Should automated checks block a PR or just add comments?**
+Block, not comment. If a linter error doesn't block the merge, engineers learn they can
+ignore linter errors. Required status checks that block merge are the only mechanism that
+guarantees compliance. Comments can be ignored; a blocked merge cannot.
+
+**Q: A junior engineer says "the linter is being pedantic — I'll just add a suppression."
+How do you respond?**
+"I'm fine with suppressing a specific line if you can explain why the rule doesn't apply
+here — add a comment explaining the justification. But if the rule applies, fix the code.
+Adding suppressions without reading the warning is how we end up with a codebase full of
+hidden issues." The goal: make suppression a conscious act with a paper trail.
+
+---
+
+## Part 13: Code Review Metrics — Measuring What Matters
+
+### 13.1 Why Metrics for Code Review
+
+You cannot improve what you do not measure. Code review is a process with inputs and
+outputs; measuring it reveals bottlenecks and degradation trends.
+
+The key metrics:
+
+```
+METRIC                 DEFINITION                           TARGET
+────────────────────────────────────────────────────────────────────────
+Time to first review   Time from PR opened to first         < 24 hours (business hours)
+                       substantive comment                  Alert if > 48 hours
+
+Review cycle time      Time from PR opened to merge         < 2 days average
+                       (across all rounds)                  Alert if P90 > 5 days
+
+Number of review       How many times a PR goes through     Target ≤ 2 rounds
+rounds                 comment → fix → re-review            Alert if avg > 3 rounds
+
+Comment density        Average comments per PR              No target; track for trends
+                       (normalized by PR size)              Sudden drop may mean rubber-stamping
+
+Approval without       PRs approved by reviewers who        Target: 0%
+reading                left 0 comments and spent            Correlates with "rubber stamp" culture
+                       < 2 minutes on review
+
+Blocking comment       % of comments labeled BLOCKING       Track, don't target
+rate                   vs SUGGESTION vs NIT                 Shift over time reveals reviewer calibration
+
+PR size distribution   Distribution of PR line counts       P50 < 300 lines; P90 < 600 lines
+                                                           Alert if P50 > 500 lines
+
+Stale PR rate          PRs open for > 7 days without        Target < 5% of open PRs
+                       merge                               Alert if trend increases
+────────────────────────────────────────────────────────────────────────
+```
+
+### 13.2 The Accelerate Research Connection
+
+The DORA (DevOps Research and Assessment) research behind *Accelerate* (Forsgren, Humble,
+Kim) found that **review cycle time** is one of the top predictors of elite team performance.
+High-performing engineering teams have:
+
+- Change lead time (code commit to production): < 1 day
+- Code review as the primary bottleneck for most teams that are not yet in the elite tier
+
+The implication: reducing review cycle time from 5 days to 1 day is a larger engineering
+productivity multiplier than almost any tooling or process change. This is why review
+response time is not a soft metric — it is a key engineering performance indicator.
+
+**Coaching application:** when joining a team, look at the P90 review cycle time. If it is
+> 3 days, that is the highest-leverage improvement opportunity. Propose a team norm (24-hour
+SLA). Measure it monthly. The improvement will be visible in deployment frequency within
+2-3 months.
+
+### 13.3 Measuring Review Quality, Not Just Speed
+
+Speed is necessary but not sufficient. A reviewer who approves everything in 5 minutes is
+fast but not useful. Measuring review quality is harder because it requires outcome data:
+
+- **Bug escape rate by reviewer**: how often do bugs pass through a reviewer's approvals
+  and reach production? Requires correlating production bugs with the approving reviewer.
+  This is uncomfortable data but powerful for calibration.
+- **Rework rate**: after a PR is merged, how often does it require an immediate follow-on
+  PR to fix a problem the review missed? Track this as "fix-on-merge rate."
+- **Test flakiness correlation**: PRs that skip tests or reduce coverage tend to introduce
+  flakiness. Track this correlation to identify review patterns that correlate with
+  production instability.
+
+### 13.4 Brainstorming Q&A — Part 13
+
+**Q: How do you track review cycle time without building custom tooling?**
+GitHub and GitLab both expose PR timeline data via their APIs. A simple Python script
+running nightly can compute: (a) time from PR open to first review comment, (b) time from
+PR open to merge, (c) number of comment rounds. Store results in a Google Sheet or Grafana
+dashboard. This is a 4-hour engineering task, not a project.
+
+**Q: Is it bad if a PR has 0 review comments?**
+Context-dependent. A PR that is 5 lines of configuration change might legitimately have 0
+comments (the reviewer understood it and approved). A PR that is 400 lines of business logic
+with 0 comments is a rubber stamp. The signal is PR size × comment count. Normalize by size
+before drawing conclusions.
+
+---
+
+## Part 14: Reviewing Specific Types of Code
+
+Different types of code carry different risk profiles and require different review lenses.
+
+### 14.1 Database Migrations
+
+Database migrations are among the highest-risk changes an engineer can make. Unlike
+application code, they are often **irreversible** — you can roll back the code, but not
+the data transformation. Every migration review should answer:
+
+```
+MIGRATION REVIEW CHECKLIST:
+  [ ] Is this migration backwards-compatible with the previous version of the code?
+      (Zero-downtime deploys require that the new schema works with old code for the
+       duration of the rollout window)
+  [ ] Does the migration hold a lock that blocks reads or writes?
+      (ALTER TABLE on a large table in MySQL/PostgreSQL holds a table lock by default.
+       Use CONCURRENTLY for index creation; use multi-step migrations for column changes)
+  [ ] If this migration fails halfway, is the database in a consistent state?
+      (Transactions around schema changes provide atomicity in PostgreSQL; not all DBs do)
+  [ ] Is this migration reversible (down migration provided)?
+      (Not always required, but blocking rollbacks is a serious operational risk)
+  [ ] Does this migration touch a table with > 10M rows?
+      (If yes: test the migration in staging with production-like data volume,
+       time the execution, and plan for a maintenance window or online migration tool)
+  [ ] Does this migration remove a column or table that the existing code still reads?
+      (Removing before deprecating = instant production outage on deploy)
+  [ ] Are there existing indexes on the affected columns that need to be updated?
+```
+
+The standard pattern for zero-downtime migrations:
+1. Add new column (nullable, no default, or backfilled in small batches)
+2. Deploy code that writes to both old and new column
+3. Backfill old rows with data in the new column
+4. Deploy code that reads from new column only
+5. Remove old column
+
+This takes multiple PRs and deploys — a migration reviewer who doesn't think in these
+terms will miss the deployment ordering risk.
+
+### 14.2 API Changes
+
+API changes are high-risk because they affect every client of the API. A code review
+for an API change must check:
+
+```
+API REVIEW CHECKLIST:
+  [ ] Is this change backwards-compatible? (Existing clients continue to work without
+      modification)
+      Safe: Adding a new optional field to a response
+      Safe: Adding a new optional query parameter with a default
+      Breaking: Removing a field from a response
+      Breaking: Changing a field's type
+      Breaking: Renaming an endpoint
+  [ ] If breaking: is there a versioning strategy?
+      (v1 → v2, or deprecation period with sunset date)
+  [ ] Are error codes and error response schemas backwards-compatible?
+  [ ] Does the new API surface match the team's API design conventions?
+      (naming, pagination patterns, error format — per API Design Guide)
+  [ ] Are rate limits and auth requirements documented in the new endpoint?
+  [ ] Are all new fields documented in the API spec (OpenAPI/Swagger)?
+```
+
+**The change you don't catch:** adding a required field to a request where old clients
+don't send it → old clients start receiving 400 errors on the next deploy. Always check:
+for every new required field in a request, is there a default the server can use if the
+client doesn't send it?
+
+### 14.3 Concurrency Code
+
+Concurrency bugs are notoriously hard to reproduce and notoriously easy to miss in review.
+The patterns to look for:
+
+```
+CONCURRENCY REVIEW CHECKLIST:
+  [ ] Is shared mutable state accessed from multiple goroutines/threads without synchronization?
+      (Race condition: data corruption; undefined behavior; crashes)
+  [ ] Are locks acquired in a consistent order across all paths?
+      (Inconsistent lock order → deadlock when two threads lock A→B and B→A simultaneously)
+  [ ] Are operations on shared state truly atomic, or are there check-then-act races?
+      if counter > threshold:         ← read
+          counter += 1                ← write
+      (Race condition: two threads both read before either writes → both pass the check)
+  [ ] Are goroutines/threads properly waited for before the function returns?
+      (Goroutine leaks, use-after-free if the goroutine touches a variable that goes out of scope)
+  [ ] Is context propagation correct? Are goroutines cancelled when the parent context cancels?
+  [ ] Are channels or queues properly closed and drained?
+  [ ] Does this code use mutexes where channels would be cleaner (or vice versa)?
+```
+
+A useful heuristic: if a reviewer cannot answer "which goroutine owns this variable at any
+point in time?" by reading the code, the ownership is unclear and the code is risky.
+Good concurrent code makes ownership explicit: channels transfer ownership; mutexes protect
+shared access; immutable data needs no protection.
+
+### 14.4 Performance-Sensitive Paths
+
+For hot paths (called many times per second), a reviewer needs to be aware of:
+
+```
+PERFORMANCE REVIEW CHECKLIST:
+  [ ] Is this code in a hot path (called > 1,000 times/sec in production)?
+      If yes: allocations, syscalls, and locks matter. If no: skip the micro-optimizations.
+  [ ] Does this code call a database or external service in a loop?
+      (N+1 query problem: 1 query to list items + N queries to fetch each item's details)
+  [ ] Are there unnecessary allocations in the hot path?
+      (Allocating a new slice in every request in Go causes GC pressure)
+  [ ] Is this query using an index? Can the reviewer tell without EXPLAIN ANALYZE?
+      (If not, ask the author to provide query plan output in the PR description)
+  [ ] Is there a cache in front of an expensive computation that is called repeatedly?
+      If not, is there a reason?
+  [ ] Are there unbounded operations (e.g., fetching ALL rows from a table)?
+      (LIMIT clauses are often forgotten; missing LIMIT on a large table → OOM)
+  [ ] Is the serialization cost considered? (JSON marshal/unmarshal is not free)
+```
+
+### 14.5 Brainstorming Q&A — Part 14
+
+**Q: How do you review a 500-line database migration that touches a 200M-row table?**
+First check backwards-compatibility and locking. Then: "I cannot review this effectively
+without knowing the execution time — please run this against the production data volume in
+staging and add the timing to the PR description. If it takes > 30 minutes, we need to
+discuss an online migration strategy before this is ready for review."
+
+**Q: An API review removes a field from a response. The author says "nobody uses that field."
+How do you respond?**
+"Can you provide evidence? Grep the internal codebases for usage of that field name, and
+check external clients if this is a public API. Until we have confirmed that zero clients
+use it, removing is a breaking change and needs a deprecation cycle with a sunset date."
+
+**Q: A concurrency bug is present in a PR but it only manifests under specific timing
+conditions. The author says "I've tested it and it works." How do you handle this?**
+"The absence of a bug in testing is not evidence the bug doesn't exist — concurrency bugs
+are non-deterministic. I'm blocking on this. The code needs to be provably correct:
+either add synchronization, or explain the invariant that makes this safe (e.g., 'this
+function is only ever called from a single goroutine'). I'd also ask you to add a comment
+explaining the threading model."
+
+---
+
+## Part 15: Behavioral Interview Q&A for Code Review
+
+Behavioral questions about code review appear frequently at Senior and Staff interviews.
+These are STAR-format questions — Situation, Task, Action, Result.
+
+### 15.1 "Tell me about a time you gave difficult feedback in a code review."
+
+**What the interviewer is looking for:**
+- You can deliver blocking feedback without damaging the relationship
+- You understand the difference between the code and the person
+- You can explain why you blocked rather than just suggesting
+
+**Strong answer structure:**
+"A colleague submitted a PR that had a SQL injection vulnerability — raw user input
+interpolated into a query string. [Situation] My job as the reviewer was to catch it
+before it reached production. [Task] I left a BLOCKING comment with a specific label:
+'BLOCKING: SQL injection risk. This query concatenates user input directly — an attacker
+can execute arbitrary SQL. Here's the safe version using parameterized queries: [code].'
+I also linked to our security guidelines. I then messaged the author directly to explain
+why I blocked it and offer to pair on the fix if they needed help understanding
+parameterized queries. [Action] The author fixed it in 30 minutes, thanked me for the
+specific example, and later told me they had not been aware of this pattern. We then added
+the SQL injection check to our automated static analysis so the next occurrence would be
+caught before human review. [Result]"
+
+Key elements: specific technical example, labeled blocking, explained why, offered help,
+systemic improvement from the incident.
+
+### 15.2 "Tell me about a time you received feedback you disagreed with."
+
+**What the interviewer is looking for:**
+- You can disagree without being defensive
+- You distinguish between "I think they're wrong" and "I don't like this comment"
+- You know how to escalate or de-escalate appropriately
+
+**Strong answer structure:**
+"A senior reviewer blocked my PR and asked me to completely restructure a module I had
+spent two weeks on. [Situation] My task was to decide whether their concern was valid or
+whether I was defending bad design because I had written it. [Task] I took 24 hours before
+responding — I didn't want to react defensively in the moment. I re-read their comment
+carefully, and I realized they were right about the fundamental problem (the module had two
+responsibilities that would diverge over time) but wrong about the solution they proposed
+(their proposed structure had its own problems). I replied with a comment explaining what
+I agreed with (the diagnosis) and what I disagreed with (the proposed fix), and I offered a
+third option that addressed their concern without the problems I saw in their approach. We
+had a 30-minute call to align. [Action] We shipped my revised version (not theirs, not the
+original) which the reviewer approved. [Result] I learned to always separate 'do I agree
+with the diagnosis?' from 'do I agree with the prescription?'"
+
+### 15.3 "How do you handle a situation where a reviewer is blocking your PR unfairly or
+for subjective reasons?"
+
+**What the interviewer is looking for:**
+- You escalate constructively, not combatively
+- You know the difference between a blocking issue and a stylistic preference
+- You don't bypass reviewers or go around them
+
+**Strong answer structure:**
+"I'd first make sure I actually understood the blocking comment — sometimes what looks like
+a style preference is actually a design concern that wasn't articulated clearly. I'd ask a
+clarifying question: 'Can you help me understand why this is blocking rather than a
+suggestion?' If it is genuinely a style preference being used as a blocking issue, I'd
+quote the team's norm document or coding standards and ask the reviewer to point to the
+specific guideline. If there's no guideline and we genuinely disagree, I'd propose adding
+it as a team discussion item and approve with a comment rather than holding the PR hostage
+to an undecided style question. In the worst case — if a reviewer is consistently blocking
+on subjective grounds — I'd have a private conversation with them first, and involve my
+manager only if the pattern continued."
+
+### 15.4 Brainstorming Q&A — Part 15
+
+**Q: "Have you ever approved a PR you had concerns about? What was the situation?"**
+Strong answer template: Yes. "I had concerns about a naming convention in a PR but
+recognized it was a preference, not a violation of our standards or a correctness issue.
+I left it as a NIT with 'approve with comment' and let it merge. I later raised the naming
+question in a team retro so we could add it to our style guide. Blocking on an undecided
+style question is not respectful of the author's time."
+
+**Q: "How do you mentor junior engineers through code review?"**
+Two distinct channels: the review comment (which should explain the why, not just what to
+change) and a direct follow-up after the review round (pair on a fix, explain the pattern).
+The review comment is permanent record and teaches everyone who reads the PR. The pairing
+session is the personal coaching moment. Use both.
+
+---
+
+## Part 16: Pre-Interview Drill
+
+### 16.1 The Interview One-Liner Framework
+
+When asked "How do you approach code review?", a complete answer in under 2 minutes:
+
+```
+OPENING (15 seconds):
+"Code review serves four goals: correctness, maintainability, knowledge transfer,
+and raising the bar. Catching bugs is only the first."
+
+REVIEW PROCESS (30 seconds):
+"I read the PR once fully before commenting. Then I review in priority order:
+correctness first, then robustness, then maintainability, then design. I label
+every comment: BLOCKING for things that must change before merge, SUGGESTION for
+things worth improving but not blocking, and NIT for minor style points."
+
+TIMELINESS (15 seconds):
+"I acknowledge within 24 business hours and try to complete the review in the same
+pass. Batching feedback in one round respects the author's time."
+
+AUTHOR SIDE (15 seconds):
+"As an author, I keep PRs to 200-400 lines and write a description that explains
+what, why, and what to focus on. I respond to feedback collaboratively — if I
+disagree, I explain why rather than silently changing or silently ignoring."
+
+STAFF LENS (15 seconds):
+"At senior and staff level, I read the file list first to understand the scope, ask
+whether this is solving the right problem, and look for system-level effects — not
+just whether the code is correct in isolation."
+```
+
+Total: approximately 90 seconds. Hits all the points an interviewer is looking for.
+
+### 16.2 Self-Check Before the Interview
+
+- [ ] Can state the four goals of code review in order?
+- [ ] Can name the five levels of the review hierarchy in order?
+- [ ] Can explain BLOCKING / SUGGESTION / NIT and give an example of each?
+- [ ] Can rewrite a bad comment into a good one on the spot?
+- [ ] Can state the 24-hour acknowledgment rule and explain why it matters?
+- [ ] Can state the PR size sweet spot (200-400 lines) and justify it?
+- [ ] Can describe the anatomy of a good PR description (5 sections)?
+- [ ] Can explain how a Staff reviewer reads differently from a Senior reviewer?
+- [ ] Can name 5 items from the security review checklist?
+- [ ] Can explain the difference between code review and architecture review?
+- [ ] Has a STAR story ready for "difficult feedback" and "disagreeing with a reviewer"?
+- [ ] Can explain why design concerns in a PR are a sign of a missing design doc?
+
+### 16.3 Three Things to Say That Immediately Signal Calibration
+
+If the interviewer is pressed for time and you have 60 seconds total, say these three:
+
+1. "Code review has four goals, not one — correctness is just the first."
+2. "I label every comment: BLOCKING, SUGGESTION, or NIT — unlabeled comments create
+   guessing games for the author."
+3. "If I see a design concern in a PR, I leave one blocking comment and ask for a design
+   conversation — not 40 implementation comments on code I'm going to ask them to throw away."
+
+These three statements, in 30 seconds total, signal to an interviewer that you think about
+code review as a discipline rather than a checkbox.
+
+---
+
+## Part 17: L5 vs L6 Calibration Table
+
+```
+DIMENSION          L5 (SENIOR) EXPECTATION          L6 (STAFF) EXPECTATION
+──────────────────────────────────────────────────────────────────────────────
+Goals              Can name all four: correctness,   Names all four AND explains
+                   maintainability, knowledge        how the balance shifts by
+                   transfer, bar-raising             PR type and team composition
+
+Review hierarchy   Applies correctness → robust →    Reads file list first; asks
+                   maintain → design → security      "is this the right problem?";
+                   in order; catches security bugs   identifies system-level effects
+                                                     in the calling graph
+
+Comment quality    Comments explain "why" clearly;   Comments explicitly teach the
+                   uses BLOCKING/SUGGESTION/NIT      underlying principle, not just
+                   labels correctly                  the fix — "use a Set because
+                                                     contains() is O(n)" not just
+                                                     "use a Set"
+
+Timeliness         Acknowledges within 24 hours;     Also monitors team-level
+                   completes review same-session     metrics; identifies when a
+                   when possible                     reviewer is a bottleneck on
+                                                     the team and addresses it
+
+PR author          Keeps PRs 200-400 lines;          Pre-aligns with reviewers
+behavior           writes good descriptions          before writing to avoid review
+                                                     surprises; designs PRs as a
+                                                     teaching sequence
+
+Design escalation  Knows to block with one comment   Can write the design doc
+                   and escalate to design review     themselves; knows which team
+                   when design concerns appear       members' concerns to preempt
+                                                     before the PR is even opened
+
+Culture            Models good review behavior       Actively measures team review
+                                                     health; proposes and ships
+                                                     norm improvements; coaches
+                                                     junior reviewers directly
+
+Automation         Uses linters and CI               Defines which automated checks
+                                                     exist; tunes signal-to-noise;
+                                                     adds new checks as the codebase
+                                                     grows
+
+Security           Applies security checklist        Can explain the threat model
+                   from memory                      behind each checklist item;
+                                                     adds codebase-specific checks
+                                                     for the team's attack surface
+──────────────────────────────────────────────────────────────────────────────
+```
+
+---
+
+## Part 18: Stress Test Questions
+
+These are the hardest questions an interviewer might ask about code review discipline.
+
+**"You're reviewing a 1,200-line PR. What do you do?"**
+
+First, don't start reviewing it as-is. Leave a comment: "This PR is too large for an
+effective review. Can we break it into 3-4 smaller PRs that can be reviewed independently?
+I'll prioritize reviewing the first one immediately once it's up." If the author explains
+there's a hard deadline and splitting is not possible, negotiate: review in phases, document
+what you focused on in each round, and explicitly note what you did NOT review in detail.
+"I reviewed the authentication layer thoroughly. The business logic in ProcessPayment is
+large enough that I'd recommend a separate review round with domain experts."
+
+**"A reviewer has left 60 comments on your PR. Most are nits. How do you handle it?"**
+
+Respond to all comments, but not necessarily with changes. For each nit: if it's a genuine
+style improvement and takes < 5 minutes, fix it. If it's a style preference with no agreed
+standard, reply: "Acknowledged — I prefer the current form because [reason]. If we want to
+standardize, let's add it to the style guide. Not changing in this PR." Then explicitly
+ask the reviewer: "Are there any of these 60 comments that you consider BLOCKING?" If the
+reviewer marks none as blocking, request approval. The 60 comments are their opinion, not
+blockers, unless labeled as such.
+
+**"Your team's review cycle time is 5 days on average. What do you do?"**
+
+Measure first: where is the time going? (Time to first review? Or review-to-fix cycle?)
+For "time to first review" bottleneck: propose the 24-hour SLA norm and make it a team
+commitment. Measure weekly for 4 weeks. If it doesn't improve: identify which reviewers
+are the slowest and have a private conversation.
+For "review-to-fix cycle" bottleneck: the issue is likely large PRs or unclear blocking vs
+suggestion. Introduce PR size norms and comment labeling. Measure again.
+
+**"A junior engineer's PR has a design flaw that would require a complete rewrite. How do
+you communicate this without destroying their motivation?"**
+
+Two steps: separate and validate before redirecting. "The implementation here is solid —
+I can see careful thought in the error handling and the test coverage. But I have a design
+concern that I think we should discuss before going further with implementation." [State the
+design concern clearly.] "I think we need a design conversation before this moves forward.
+I'm blocking on the design — not the implementation quality, which is good. Can we set up
+30 minutes to walk through the problem together and find an approach that works better at
+the system level?" The goal: they understand the block is about the system, not about their
+code quality, and they feel like a collaborator in solving the design problem.
+
+---
+
 ## Common Interview Mistakes
 
 When interviewers at L5+ companies ask "how do you approach code review?", most candidates make one or more of these mistakes. Each one signals a candidate who does code review as a checkbox rather than a discipline.
@@ -1468,15 +2052,449 @@ Draft a "code review charter" for your team: a one-to-two page document that def
 
 ---
 
-## Further Reading
+## Part 19: Code Review in Different Contexts
 
-- *Code Review Guidelines* — Google Engineering Practices (publicly available at google.github.io/eng-practices)
-- *The Code Reviewer's Guide* — Derek Prior (talk)
-- *Accelerate* — Forsgren, Humble, Kim (for the research on review cycle time and deployment frequency)
-- *The Pragmatic Programmer* — Hunt and Thomas (chapters on code ownership and collective code ownership)
-- *Building Secure and Reliable Systems* — Google SRE Book supplemental (for the security review lens)
+### 19.1 Synchronous vs Asynchronous Review
+
+Most review is **asynchronous**: author opens PR, reviewer comments later, author fixes and responds, repeated until approved. This is the default at most companies and the model this chapter assumes.
+
+**Synchronous review** (pair review / over-the-shoulder review) has different dynamics:
+- Used for: high-risk changes, onboarding new engineers, learning-focused sessions
+- Not efficient for routine changes: it blocks both people's schedules
+- Best for: security changes, architecture refactors, critical bug fixes where a real-time
+  conversation catches nuance that async comments miss
+
+The tradeoff: synchronous review has lower latency (resolve in minutes, not hours) but
+higher cost (two engineers blocked simultaneously). Async review scales; synchronous review
+does not. Use synchronous for < 10% of PRs.
+
+### 19.2 Open Source Review vs Internal Review
+
+Open source code review differs from internal review in important ways:
+
+```
+DIMENSION          INTERNAL REVIEW             OPEN SOURCE REVIEW
+───────────────────────────────────────────────────────────────────
+Author context     You know the author;        You often don't know the author;
+                   full context available      must infer from PR description alone
+
+Trust level        Author is a colleague;      Author may be a first-time contributor
+                   benefit of the doubt        or have unknown intent; more scrutiny
+
+Feedback tone      Collegial; direct;          More formal; must be welcoming
+                   private channel available   even when blocking; public record
+
+Design alignment   Author knows the            Author may not know internal
+                   system's design goals       conventions or architectural vision
+
+License/IP         Not relevant                License compatibility of new code;
+                                               CLA signed by contributor
+
+Response time      24-hour SLA reasonable      Open source maintainers are often
+                                               volunteers; may take weeks
+
+Bar for inclusion  "Does this improve the       "Does this belong in this project?
+                    codebase for our team?"     Does it match the project's philosophy?
+                                               Will we maintain it indefinitely?"
+```
+
+The L5+ lesson: when reviewing open source contributions to your team's dependencies or
+when reviewing external contributor PRs to your company's open source repos, the standards
+for tone and explanation are higher. A blocking comment to a colleague can be terse; a
+blocking comment to an open source contributor who may be a potential future hire needs
+to be welcoming, specific, and educational.
+
+### 19.3 Emergency Code Review (Hotfixes)
+
+A production incident requires a code fix RIGHT NOW. Normal review process takes hours.
+What do you do?
+
+The correct protocol (not the expedient one):
+
+```
+HOTFIX REVIEW PROTOCOL:
+  1. Author and reviewer get on a Zoom call immediately (synchronous review)
+  2. Review takes 10-15 minutes — focus only on: does this fix the incident without
+     introducing a new one? Is this reversible if it makes things worse?
+  3. Approve verbally on the call, approve in the PR tool
+  4. Deploy immediately. Monitor.
+  5. Follow-up required: open a HOTFIX_FOLLOWUP ticket to:
+     a. Add tests that would have caught the original bug
+     b. Review the hotfix code more carefully now that the pressure is off
+     c. Consider whether the hotfix is the right permanent fix or just a bandage
+```
+
+What NOT to do: merge without any review (the "we'll review later" that never happens)
+or spend 2 hours doing a thorough async review while the production incident continues.
+
+The hotfix review is explicitly lower quality than normal review. Document this. The
+follow-up review is where you catch what the hotfix review missed.
+
+### 19.4 Code Review for Infrastructure Code (Terraform, Helm, etc.)
+
+Infrastructure-as-code changes are reviewed differently from application code because:
+- Side effects are immediate and often irreversible (deleting a production database)
+- No automated tests for "does this Terraform apply correctly in production?"
+- Drift between plan output and actual apply is possible
+
+Infrastructure code review checklist:
+```
+  [ ] Does the diff show what it claims to show? Run `terraform plan` and include the
+      output in the PR description. The plan is the spec.
+  [ ] Are any resources being DESTROYED? (Terraform shows with a `-` prefix)
+      Any resource destruction requires explicit sign-off from the infrastructure owner.
+  [ ] Are secrets being committed to the repository?
+  [ ] Is this change applied to staging first before production?
+  [ ] Is there a rollback plan if the apply fails partway through?
+  [ ] Are new resources using consistent naming, tagging, and IAM policies with existing
+      resources?
+  [ ] Are resource limits (instance types, storage sizes) appropriate and approved by
+      the team's cost owner?
+```
+
+### 19.5 Brainstorming Q&A — Part 19
+
+**Q: A hotfix was shipped without any review because the on-call engineer said "there was
+no time." How do you address this as the team lead?**
+First: the incident is resolved, so don't escalate during the outage. After the incident:
+(a) thank the on-call engineer for shipping the fix under pressure; (b) propose the hotfix
+review protocol as a team norm; (c) require a follow-up PR that adds tests and addresses
+the root cause. Do NOT reprimand the engineer for skipping review — the correct process
+wasn't defined. Define it now.
+
+**Q: How do you convince a team that has no code review culture to adopt code review?**
+Don't start with "code review is a best practice." Start with data: "What is our production
+bug rate? What is our average time to resolve a P1? How often do we have to hotfix code
+we just shipped?" Then propose code review as an experiment with a specific hypothesis:
+"If we review all PRs for 60 days, I predict our hotfix rate will drop by X." Measure.
+Show results. Culture changes through evidence, not mandates.
 
 ---
 
-*Chapter 96 — Section 7: Engineering as a Discipline*
-*System Design for L6: The Complete Guide*
+## Part 20: Extended Exercises
+
+**Exercise 9: The Full Review Hierarchy**
+
+Review the following code using all five levels. Label every comment (BLOCKING / SUGGESTION / NIT). Include at least one comment at each level, and at least one positive comment.
+
+```python
+class UserRepository:
+    def __init__(self):
+        self.db = db.connect(DB_URL)
+
+    def get_users_by_age(self, min_age, max_age):
+        users = []
+        all_users = self.db.query("SELECT * FROM users")
+        for user in all_users:
+            if user['age'] >= min_age and user['age'] <= max_age:
+                users.append(user)
+        return users
+
+    def delete_user(self, user_id):
+        self.db.execute(f"DELETE FROM users WHERE id = {user_id}")
+        return True
+
+    def get_user_emails(self):
+        users = self.get_users_by_age(0, 999)
+        emails = []
+        for user in users:
+            emails.append(user['email'])
+        return emails
+
+    def update_user_profile(self, user_id, data):
+        for key, value in data.items():
+            self.db.execute(f"UPDATE users SET {key} = '{value}' WHERE id = {user_id}")
+```
+
+Expected review should catch: SQL injection × 3 (BLOCKING), missing LIMIT (BLOCKING),
+in-memory filter on full table scan (BLOCKING), connection created in __init__ per instance
+(SUGGESTION), missing error handling (SUGGESTION), `get_user_emails` calls `get_users_by_age`
+with magic numbers (NIT), Python list comprehension available (NIT).
+
+**Exercise 10: The PR Description**
+
+The following PR description is inadequate. Rewrite it using the anatomy from Part 5.
+
+Current description: "Added caching to the product service."
+
+Context you have: this PR adds Redis caching to the ProductService.get_by_id() method
+which was causing 500ms+ latency spikes due to repeated DB queries for the same products.
+Cache key: product:{id}, TTL 60 seconds. Cache miss falls back to DB. The PR also adds
+a cache invalidation call in ProductService.update(). Testing: ran load test in staging
+and observed p99 latency drop from 523ms to 12ms. PR size: 120 lines.
+
+**Exercise 11: Metrics Analysis**
+
+Your team produces the following code review metrics for Q3:
+
+```
+Metric                   Q3 Value    Previous Quarter
+────────────────────────────────────────────────────
+Time to first review     4.2 days    2.1 days
+Review cycle time        8.1 days    4.3 days
+Avg comments per PR      1.3         6.2
+PRs with 0 comments      28%         8%
+P90 PR size (lines)      1,240       380
+```
+
+(a) What is the most urgent problem to address?
+(b) What most likely caused the jump in P90 PR size?
+(c) Why did "avg comments per PR" drop while "time to first review" increased?
+(d) Write a 3-item action plan for the team, prioritized by expected impact.
+
+**Exercise 12: The Disagreement**
+
+A reviewer has left a blocking comment: "Rewrite this using the Strategy pattern."
+Your implementation uses a simple if-elif chain with 3 branches. The reviewer did not
+explain why the Strategy pattern is better here. Write:
+(a) Your response comment to the reviewer
+(b) The question you would ask to understand their concern
+(c) The counter-proposal you would offer if you disagree with their approach
+(d) The condition under which you would accept their suggestion without further debate
+
+**Exercise 13: Migration Review**
+
+Review the following migration. Identify all risks, classify each as BLOCKING or WARNING,
+and suggest a fix for each BLOCKING risk.
+
+```sql
+-- Migration: add_payment_method_to_users
+ALTER TABLE users ADD COLUMN payment_method TEXT NOT NULL;
+ALTER TABLE users ADD COLUMN payment_last_four CHAR(4);
+DROP TABLE old_payment_records;
+```
+
+Note: the users table has 120M rows in production.
+
+**Exercise 14: Security Audit**
+
+You are asked to do a security-focused review of the following authentication code.
+Identify every security issue, classify severity (Critical/High/Medium/Low), and provide
+a remediation for each.
+
+```python
+import hashlib
+import jwt
+
+SECRET_KEY = "mypassword123"
+
+def create_user(username, password):
+    # Hash the password
+    password_hash = hashlib.md5(password.encode()).hexdigest()
+    db.execute(f"INSERT INTO users (username, password_hash) VALUES ('{username}', '{password_hash}')")
+    return {"status": "created"}
+
+def login(username, password):
+    password_hash = hashlib.md5(password.encode()).hexdigest()
+    user = db.query(f"SELECT * FROM users WHERE username = '{username}'
+                    AND password_hash = '{password_hash}'")
+    if user:
+        token = jwt.encode({"user_id": user["id"], "admin": True}, SECRET_KEY)
+        return {"token": token}
+    return {"error": "invalid credentials"}
+
+@app.route('/admin')
+def admin_panel():
+    token = request.headers.get('Authorization')
+    data = jwt.decode(token, options={"verify_signature": False})
+    if data.get("admin"):
+        return render_admin_panel()
+```
+
+Expected findings: MD5 not suitable for passwords (use bcrypt/argon2) — CRITICAL, SQL
+injection in create_user and login — CRITICAL × 2, hardcoded JWT secret — CRITICAL, JWT
+signature verification disabled — CRITICAL, admin flag in JWT payload (forgeable) — HIGH,
+no rate limiting on login — HIGH, username enumeration timing attack possible — MEDIUM.
+
+---
+
+## Part 22: One-Page Interview Reference Card
+
+Carry this mental model into the interview. If asked any code review question, your first
+sentence should anchor to the goals and hierarchy.
+
+```
+CODE REVIEW DISCIPLINE — REFERENCE CARD
+=========================================
+
+FOUR GOALS (in order of priority):
+  1. Correctness        — does it work correctly?
+  2. Maintainability    — can future engineers understand and change it?
+  3. Knowledge Transfer — do reviewers and authors learn from this interaction?
+  4. Bar Raising        — does this leave the codebase better than before?
+
+FIVE LEVELS OF REVIEW (apply in order, top to bottom):
+  Level 1: Correctness            — logic bugs, edge cases, test coverage
+  Level 2: Robustness             — error handling, null checks, failure modes
+  Level 3: Maintainability        — naming, comments, complexity, duplication
+  Level 4: Design and Problem Fit — right abstraction? solving the right problem?
+  Level 5: Security, Perf, Obs    — injection, auth, N+1, missing metrics
+
+THREE COMMENT LABELS (every comment must be labeled):
+  BLOCKING   — must be resolved before merge
+  SUGGESTION — worth doing, not required for merge
+  NIT        — minor preference, completely optional
+
+PR SIZE AND TIMING NORMS:
+  Target PR size: 200-400 lines (sweet spot)
+  Time to first review: < 24 business hours (minimum professional bar)
+  Review rounds: target ≤ 2 (more = unclear feedback or unclear PR scope)
+  Batch feedback: read all, then comment — never comment while reading
+
+PR DESCRIPTION ANATOMY (5 sections):
+  1. What this does (2-3 sentences)
+  2. Background / Context (why needed)
+  3. How to test it
+  4. What to focus the review on
+  5. What's NOT in scope
+
+STAFF REVIEW LENS (3 questions before reading a line of code):
+  1. What does the file list tell me about scope? (read file list first)
+  2. Is this solving the right problem?
+  3. What does the caller do with the output? (system-level view)
+
+SECURITY CHECKLIST (top 7 from memory):
+  [ ] SQL injection (parameterized queries?)
+  [ ] Authentication on all endpoints (who can call this?)
+  [ ] Authorization (can the caller do this to this resource?)
+  [ ] Secrets in code (any credentials, API keys, tokens?)
+  [ ] PII in logs (name, email, phone, financial data?)
+  [ ] Input validation (user-controlled data touches DB, OS, network?)
+  [ ] Rate limiting (can this be called unlimited times?)
+
+WHEN TO ESCALATE FROM CODE TO DESIGN REVIEW:
+  Design concern detected in PR → 1 blocking comment → design conversation
+  Never leave 40 implementation comments on code you're blocking for design reasons.
+
+KEY METRICS:
+  P90 review cycle time: target < 3 days; elite < 1 day
+  Time to first review: target < 24 hours
+  Avg PR size P50: target < 300 lines
+  PRs with 0 comments: alert if > 15%
+```
+
+---
+
+## Part 21: Quick Reference Glossary
+
+**Alert fatigue**: Reduced responsiveness to automated warnings because too many warnings
+fire without being actionable. In the code review context: when a linter or static analyzer
+has a high false-positive rate, engineers start ignoring its output. Signal-to-noise ratio
+of automated checks must be maintained actively.
+
+**Approve-with-comment**: Approving a PR while leaving non-blocking comments the author
+can choose to address or not. Contrasts with blocking, which requires changes before merge.
+Useful when the reviewer has useful observations but nothing preventing a safe merge.
+
+**Bar-raising**: The practice of using code review to improve the quality of the codebase
+beyond the specific change at hand — by establishing or reinforcing team standards through
+individual review interactions.
+
+**Batch feedback**: The practice of reading a PR fully before leaving any comments, then
+leaving all comments in a single review pass. The alternative (leaving comments as you
+read) produces incomplete feedback and requires the author to keep re-opening the PR.
+
+**BLOCKING**: A review comment that must be addressed before the PR can be merged. The
+author cannot ship the change while this comment is unresolved. Only correctness bugs,
+security issues, and design concerns that would require significant rework should be BLOCKING.
+
+**Change lead time**: The time from when a developer commits code to when it is running in
+production. One of the four DORA metrics. Code review cycle time is typically the largest
+component of change lead time in high-review-overhead teams.
+
+**Critique**: Google's internal code review tool. Unlike GitHub PRs, Critique was designed
+from the ground up for code review — it emphasizes single-pass review with atomic approvals.
+
+**NIT**: Short for "nitpick" — a minor style or preference comment that is purely optional.
+Authors can address nits or ignore them without any implication for PR approval.
+
+**PR description anatomy**: The structured format for a pull request description: What this
+does (2-3 sentences), Background / context (why it's needed), How to test it, What to focus
+the review on, What's NOT in scope.
+
+**Readability approval**: At Google, a separate approval required from a designated
+"readability reviewer" for code in a given language. Signifies that the code meets
+language-specific style and idiom standards, separate from correctness.
+
+**Review cycle time**: The total elapsed time from opening a PR to merging it, across all
+rounds of feedback and revision. Distinct from "time to first review" (time to first
+comment). Elite teams maintain review cycle time < 1 day on average.
+
+**Rubber stamp**: An approval granted without real review — reviewer approves within
+seconds or minutes without reading the code. Detectable via metrics: 0 comments,
+< 2 minutes from open to approval. A symptom of a team culture where review is a
+checkbox, not a discipline.
+
+**SUGGESTION**: A review comment that is worth considering but is not blocking. The author
+should respond (acknowledge, explain their choice, or make the change) but is not required
+to make the change before merging.
+
+**Throughput vs quality tradeoff in review**: The tension between reviewing quickly (high
+throughput, lower quality per review) and reviewing thoroughly (lower throughput, higher
+quality). The correct balance: review throughput should match the team's deployment
+frequency. A team deploying 10x/day needs fast review; a team deploying monthly has more
+time per review.
+
+**Zero-downtime migration**: A database migration strategy that keeps both old and new
+schema states valid simultaneously, allowing a rolling deploy without a maintenance window.
+Requires multiple coordinated PRs deployed in sequence: add column (nullable) → deploy
+code that writes both → backfill → deploy code that reads only new → drop old column.
+Each step is a separate PR with its own review cycle.
+
+**Pair review**: A synchronous code review mode where author and reviewer go through the
+change together in real time, typically on a call or in the same physical location. Used
+for high-risk changes, security-sensitive code, or as a mentoring tool. More expensive per
+review but faster to resolve complex feedback. Not scalable as the primary review mode.
+
+---
+
+## Further Reading
+
+- *Code Review Guidelines* — Google Engineering Practices (publicly available at
+  google.github.io/eng-practices). The most comprehensive public guide to code review
+  culture from the organization that invented many of its practices.
+- *The Code Reviewer's Guide* — Derek Prior (talk). A practitioner's view of review
+  as a human interaction skill, not just a technical checklist.
+- *Accelerate* — Forsgren, Humble, Kim. Chapter 3 contains the research showing review
+  cycle time as a predictor of elite engineering performance. Required reading for any
+  engineering leader who wants to justify the investment in review process improvement.
+- *The Pragmatic Programmer* — Hunt and Thomas. Chapters on collective code ownership
+  and continuous improvement provide the philosophical foundation for why code review
+  exists as a team discipline rather than an individual gatekeeping activity.
+- *Building Secure and Reliable Systems* — Google SRE Book supplemental. Chapters on
+  design review and change management provide the organizational context for when code
+  review is the right venue and when a design doc is required instead.
+- *A Philosophy of Software Design* — John Ousterhout. The source of many "design"
+  criteria used in Level 4 review — complexity, deep vs shallow modules, comment quality.
+  Reading this sharpens the vocabulary for design-level code review feedback.
+- *Staff Engineer* — Will Larson. Chapter on "Technical Program Management" discusses
+  the staff engineer's responsibility for setting and maintaining engineering standards,
+  of which code review norms are a primary example.
+
+---
+
+*Chapter 110 — Section 7: Engineering as a Discipline*
+*Added: Parts 12-22 covering automation, metrics, specific code types, behavioral Q&A,*
+*pre-interview drill, L5 vs L6 calibration, stress test questions, different contexts,*
+*extended exercises, reference glossary, and one-page interview reference card.*
+*Core skills measured in interviews: four goals, five levels, BLOCKING/SUGGESTION/NIT*
+*labeling, 24-hour response SLA, PR size norms (200-400 lines), staff review lens,*
+*security checklist, design escalation protocol, behavioral STAR stories.*
+*Key numbers: P50 PR size < 300 lines, P90 review cycle time target < 3 days,*
+*time to first review < 24 business hours, review rounds target ≤ 2.*
+*Common mistakes: treating correctness as the only goal, unlabeled comments, no mention*
+*of response time, only discussing reviewer role, no concrete examples, confusing code*
+*review with architecture review.*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*
+*Chapter expanded from 1,482 to 2,500+ lines for L5/L6 interview preparation.*
+*Parts added: 12 (automation), 13 (metrics), 14 (specific code types: migrations, APIs,*
+*concurrency, performance), 15 (behavioral Q&A), 16 (pre-interview drill), 17 (L5 vs L6*
+*calibration), 18 (stress test questions), 19 (different contexts: sync/async, open source,*
+*hotfix, infrastructure code), 20 (extended exercises 9-14), 21 (glossary), 22 (reference card).*
+*Code review is a discipline, not a checkbox. The reviewer who teaches outlasts the reviewer*
+*who corrects. The culture you model is the culture your team will have.*
+*The best signal that you understand code review: you can explain why it has four goals,*
+*not one — and why "catching bugs" is only the beginning of what a disciplined review does.*
+*For Google L5+: be ready to give a concrete example of a design escalation, a security*
+*catch, and a time you gave blocking feedback that improved the system beyond the PR.*
+*Written for: Ranjeet Singh Negi's Google L5 / Senior SWE interview preparation, 2026.*

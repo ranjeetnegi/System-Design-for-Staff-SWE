@@ -1662,7 +1662,77 @@ CONSISTENCY HIERARCHY
    WEAKEST
 ```
 
-### 8.6 When NOT to Use Spanner
+### 8.6 Spanner vs. Bigtable — The Most Confused Google Database Pair
+
+Many candidates who can explain Spanner fluently will still mix up Spanner and Bigtable
+under pressure. They are both Google databases, both globally distributed, both used
+in critical Google systems — but they are fundamentally different tools.
+
+**What Bigtable is**:
+Bigtable (covered in Chapter 29) is Google's wide-column NoSQL store, open-sourced as
+Apache HBase. It stores data as rows indexed by a single string key, with columns
+grouped into column families. Think of it as a massively scalable, distributed
+sorted map: `(row_key, column_family, column, timestamp) → value`.
+
+Bigtable provides:
+- Atomic writes at the **single-row level only** — one row can be written atomically
+- No cross-row transactions — two rows cannot be updated atomically
+- No SQL — you query by row key prefix, column range, or time range
+- No commit-wait, no TrueTime-based consistency
+- Eventual consistency across replicas (though within a cluster, single-master is strongly consistent)
+- Extremely high write throughput (millions of writes/second per cluster)
+- Write latency: ~1-5ms (no commit-wait overhead)
+
+**The fundamental split**:
+
+```
+SPANNER vs. BIGTABLE: WHAT EACH SOLVES
+=========================================
+
+  BIGTABLE: "I need to write 10M sensor readings per second"
+  
+  Row key: "sensor_001/2024-01-15T12:00:00Z"
+  Columns: {temperature: 98.6, humidity: 42, pressure: 1013}
+  
+  → No ACID, no SQL, no cross-row atomicity
+  → Just: write fast, read by key range, never lose a byte
+
+  SPANNER: "I need to transfer $100 from Alice to Bob, globally, atomically"
+  
+  Account(alice, balance=500)   →   Account(alice, balance=400)
+  Account(bob,   balance=300)   →   Account(bob,   balance=400)
+  
+  Both rows change together, or neither does. Across any two datacenters.
+  
+  → Full ACID, SQL, cross-row 2PC, commit-wait, TrueTime
+  → Just: never show an inconsistent state, ever
+```
+
+**Bigtable's storage layer is what Spanner uses underneath**:
+An important nuance: Spanner's storage engine is based on the same concepts as
+Bigtable's — SSTable files, compaction, log-structured storage on Google's Colossus
+file system. Spanner adds the Paxos replication layer, the transaction coordinator,
+and TrueTime on top of Bigtable-like storage primitives. In a sense, Spanner is
+"what if Bigtable had ACID transactions and SQL?"
+
+**When to choose Bigtable over Spanner**:
+1. Write throughput is paramount (10M+ writes/second): Bigtable's leader-per-cluster
+   model avoids per-write commit-wait overhead entirely.
+2. Data is time-series or IoT: single-row atomicity is sufficient; key is compression
+   and scan speed, not cross-row consistency.
+3. Access pattern is always by row key: no JOINs, no complex queries, pure
+   key-value or key-range lookups.
+4. You already have Bigtable operational expertise and don't need SQL.
+
+**Interview rule**: If someone says "Google uses Bigtable for Gmail," that's accurate
+(Gmail stores individual emails as rows). If they say "Google uses Bigtable for
+Google Ads," that's partially true (ad serving reads from Bigtable) but the source of
+truth for ad campaign budgets and advertiser accounts is Spanner. The two systems
+complement each other: Spanner manages correctness, Bigtable handles throughput.
+
+---
+
+### 8.8 When NOT to Use Spanner
 
 Spanner is not the right answer for every problem. Common cases where you should
 choose something else:
@@ -1684,7 +1754,7 @@ choose something else:
 7. **High write throughput on a single key**: Hot spots are Spanner's weakness.
    For time-series or IoT data, use Bigtable or InfluxDB.
 
-### 8.7 Real Story: The F1 Migration to Spanner
+### 8.9 Real Story: The F1 Migration to Spanner
 
 The F1 paper (2013, by Shute et al.) describes Google's migration from a sharded
 MySQL system to Spanner for Google Ads. This is one of the most significant database
@@ -2189,6 +2259,120 @@ performance gap between HLC systems (CockroachDB, YugabyteDB) and TrueTime syste
 (Spanner) much smaller. At that point, the architectural difference between Spanner
 and its open-source alternatives becomes mainly an engineering maturity and feature-set
 question rather than a fundamental capability gap.
+
+---
+
+## Part 11: Interview One-Liners and Quick Decision Guide
+
+### 11.1 The Sentences That Signal You Know Spanner
+
+These are the exact phrasings that distinguish an L5 answer from a generic one.
+Memorize the concept, not the words — then adapt in the interview.
+
+**Defining external consistency in one breath:**
+> "External consistency means: if T1 commits before T2 even starts in real wall-clock
+> time, T2 is guaranteed to see all of T1's writes. It's serializability where the
+> serial order must match real-world time — a stronger guarantee."
+
+**Defining TrueTime in one breath:**
+> "TrueTime is Google's clock API that returns an interval [earliest, latest] rather
+> than a single timestamp. The actual current time is guaranteed to be inside that
+> interval. The interval width — called ε — is 1 to 7ms, backed by GPS receivers and
+> atomic clocks in every Google datacenter."
+
+**Defining commit-wait in one breath:**
+> "Commit-wait is the stall that makes external consistency provable. After choosing
+> commit timestamp s = TT.now().latest, the coordinator waits until TT.now().earliest > s —
+> meaning real time has definitely passed s. Any future transaction then picks a
+> timestamp greater than s. That's the ordering guarantee."
+
+**Distinguishing Spanner from CockroachDB in one breath:**
+> "CockroachDB uses Hybrid Logical Clocks instead of TrueTime — no GPS hardware needed,
+> runs anywhere. But the uncertainty is larger and variable, so instead of commit-wait,
+> it restarts transactions when timestamps might conflict. Same goal, different trade-off:
+> Spanner pays ε ms at commit; CockroachDB occasionally retries."
+
+**Distinguishing Spanner from Bigtable in one breath:**
+> "Bigtable is a wide-column NoSQL store with row-level atomicity only — no SQL, no
+> cross-row transactions. Spanner adds ACID, SQL, and TrueTime-backed external
+> consistency on top of similar storage primitives. They complement each other:
+> Spanner for correctness, Bigtable for throughput."
+
+---
+
+### 11.2 The Decision Tree: When to Say "I'd Use the Spanner Model"
+
+```
+  DO YOU NEED CROSS-ROW ATOMIC TRANSACTIONS?
+  ─────────────────────────────────────────────
+  No  → Use Bigtable, DynamoDB, or Cassandra
+  Yes ↓
+
+  DO YOU NEED CROSS-REGION CONSISTENCY?
+  ─────────────────────────────────────────────
+  No  → Single-region Postgres or MySQL (simpler, faster, cheaper)
+  Yes ↓
+
+  CAN YOU TOLERATE 30-80ms WRITE LATENCY?
+  ─────────────────────────────────────────────
+  No  → You cannot use Spanner. Re-examine the requirement.
+  Yes ↓
+
+  ARE YOU ON GOOGLE CLOUD?
+  ─────────────────────────────────────────────
+  No  → CockroachDB (serializable, HLC, open-source)
+         or YugabyteDB (Cassandra + PostgreSQL APIs)
+  Yes ↓
+
+  → USE CLOUD SPANNER
+    (External consistency, SQL, interleaved tables,
+     automatic sharding, no operational overhead)
+```
+
+---
+
+### 11.3 When NOT to Drop the "Spanner" Name
+
+Interviewers at non-Google companies will sometimes view "Spanner" as a crutch answer —
+a name drop without understanding. These situations call for caution:
+
+**Don't say Spanner when:**
+- The system is a single-region internal service. An L5 saying "I'd use Spanner for
+  our internal config store" sounds over-engineered. Say "Postgres, with logical
+  replication if we later need a read replica."
+- Write latency below 10ms is a real requirement. Saying "Spanner" when you need
+  sub-10ms commits shows you don't understand Spanner's commit-wait overhead.
+- The interviewer works at AWS or Azure, and you haven't qualified cloud portability.
+  Say "CockroachDB if we need multi-cloud, or Cloud Spanner if we're committed to GCP."
+- The access pattern is key-value with high write throughput. Say "DynamoDB" or
+  "Bigtable" — Spanner's overhead is unnecessary.
+
+**Do say Spanner (or "the Spanner model") when:**
+- The question involves global financial transactions, ledgers, or payments.
+- The phrase "external consistency" or "cross-region ACID" appears anywhere.
+- The interviewer asks "what does Google use for this?" — Spanner is the correct answer
+  for critical transactional data at Google.
+- You're designing the source-of-truth store for a system that uses Bigtable or Redis
+  as a cache — Spanner is the write-through target.
+
+---
+
+### 11.4 The One Calibration Signal Interviewers Look For
+
+When a candidate says "I'd use Spanner," most L6 interviewers at companies that use
+distributed databases will probe with one of two questions:
+
+1. **"How does Spanner ensure global consistency?"** — They want: TrueTime, commit-wait,
+   the timestamp ordering proof. If you can explain commit-wait in two sentences, you
+   pass this signal.
+
+2. **"What's the latency cost?"** — They want: 30-80ms for cross-region writes, 1-15ms
+   for snapshot reads, ε (~5ms) for commit-wait. If you can give order-of-magnitude
+   numbers, you pass this signal.
+
+If you can answer both in under 60 seconds, you have demonstrated L5-level Spanner
+fluency. The difference between L5 and L6 is whether you also proactively mention
+when Spanner is the wrong choice and what you'd use instead.
 
 ---
 

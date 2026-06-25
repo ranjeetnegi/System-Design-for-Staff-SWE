@@ -1945,6 +1945,356 @@ unintended ones caused by configuration errors — is addressed by operational t
 
 ---
 
+## Part 12: Borg → Omega → Kubernetes — The Evolution Arc
+
+### 12.1 Why Google Built Three Cluster Managers
+
+Google did not stop at Borg. They built Omega as a research successor, and then
+contributed Kubernetes as the open-source successor. Understanding WHY each system
+was built reveals the genuine limitations of the prior system.
+
+```
+THE EVOLUTION TIMELINE
+=======================
+
+  2003-2004: Borg designed and deployed internally at Google
+    Core insight: cluster-as-computer, desired state, two-phase scheduling
+    Limitation: monolithic BorgMaster, single scheduler, BCL/Protobuf configs
+    
+  2010-2013: Omega research project (Google Research)
+    Problem Omega solved: monolithic scheduler is a bottleneck for very large clusters
+    Approach: shared-state scheduling — multiple schedulers, optimistic concurrency
+    Key paper: "Omega: flexible, scalable schedulers for large compute clusters"
+              (EuroSys 2013, Schwarzkopf et al.)
+    Outcome: research system, informed Kubernetes design; not deployed at Google scale
+    
+  2013-2014: Kubernetes designed (Google engineers, announced 2014)
+    Problem K8s solved: Borg is internal-only, BCL is proprietary, not developer-friendly
+    Key improvements: label selectors (not string names), IP-per-pod, YAML/REST API,
+                     open-source, pluggable components
+    Outcome: became the industry-standard container orchestrator
+```
+
+### 12.2 Omega's Key Idea: Shared-State Scheduling
+
+Borg's BorgMaster is a single scheduler that processes one job at a time. This
+creates a throughput bottleneck for very large clusters (50,000+ machines).
+
+Omega's answer: multiple concurrent schedulers, each with a full replica of cluster
+state (the "cell state"). Each scheduler makes decisions independently, using
+optimistic concurrency to commit placements:
+
+```
+OMEGA SHARED-STATE MODEL
+=========================
+
+  Cell State (full replica in each scheduler):
+  ┌─────────────────────────────────────────────────────┐
+  │  Machine A: 6/8 CPU used, 12/32 GB RAM used         │
+  │  Machine B: 2/8 CPU used, 8/32 GB RAM used          │
+  │  Machine C: 8/8 CPU used, 32/32 GB RAM (full)       │
+  │  ...                                                 │
+  └─────────────────────────────────────────────────────┘
+         │                      │
+         ▼                      ▼
+  Scheduler A              Scheduler B
+  (working on job X)       (working on job Y)
+  "Place task on B"        "Place task on B"
+         │                      │
+         └──────────┬───────────┘
+                    ▼
+              Commit to cell state
+              CONFLICT DETECTED (both chose machine B)
+              One wins, one retries with fresh state
+
+  KEY INSIGHT: conflicts are rare in practice (cluster is rarely so full
+  that multiple schedulers compete for the exact same machine).
+  Optimistic concurrency has low retry rates → high throughput.
+```
+
+**Omega vs Borg scheduling**: Borg = pessimistic (one scheduler at a time, no conflicts).
+Omega = optimistic (multiple schedulers, rare conflicts, retry on conflict).
+
+### 12.3 What Kubernetes Took from Each
+
+| Feature | Origin | Kubernetes Implementation |
+|---------|--------|--------------------------|
+| Desired state + reconciliation | Borg | Controller manager with multiple controllers |
+| Two-phase scheduling | Borg | kube-scheduler: filter + score plugins |
+| IP-per-workload | Kubernetes original (over Borg's port-per-task) | Pod networking |
+| Label selectors | Kubernetes original (over Borg's string names) | Label + selector throughout |
+| Optimistic concurrency | Omega | ResourceVersion in etcd / API server |
+| Pluggable schedulers | Omega | Scheduler framework with extension points |
+| Open-source REST API | Kubernetes original | kubectl / API server |
+
+### 12.4 Brainstorming Q&A — Part 12
+
+**Q: If Borg already solved cluster management, why build Kubernetes?**
+
+Three reasons. First, Borg's BCL configuration language is proprietary — developers
+had to learn Google's internal language. Kubernetes uses YAML over a standard REST API;
+any HTTP client can manage it. Second, Borg gives each task a port on the host machine
+(port-per-task), which requires all application code to accept dynamic port assignments.
+Kubernetes gives each pod its own IP address (IP-per-pod), letting applications listen
+on standard ports. Third, Borg is a monolith — you cannot swap out the scheduler or
+extend it easily. Kubernetes is built from composable, replaceable components. These
+three changes made container orchestration practical for teams outside Google.
+
+---
+
+## Part 13: Gang Scheduling and ML Training Workloads
+
+### 13.1 What Gang Scheduling Is
+
+Gang scheduling: starting all tasks of a job simultaneously, or not at all.
+This is critical for distributed ML training (TensorFlow, PyTorch distributed):
+
+```
+ML TRAINING: WHY ALL-OR-NOTHING MATTERS
+=========================================
+
+  A distributed training job needs:
+  - 64 worker tasks (gradient computation)
+  - 8 parameter server tasks (gradient aggregation)
+  
+  WITHOUT gang scheduling:
+  Workers 1-60 start immediately.
+  Workers 61-64 wait because machines are busy.
+  Workers 1-60 idle, waiting for all workers to reach the first synchronization point.
+  The cluster is paying for 60 idle workers for 10+ minutes.
+  
+  WITH gang scheduling:
+  Schedule all 72 tasks atomically: wait until all 72 can start simultaneously.
+  All tasks begin together, reach sync points together, no idle waiting.
+  
+  TRADE-OFF:
+  Gang scheduling reduces wasted work but increases scheduling delay (must find
+  72 free slots simultaneously, harder than finding them one at a time).
+```
+
+### 13.2 Does Borg Support Gang Scheduling?
+
+Natively: no. Borg was designed for long-running services and MapReduce-style batch
+jobs, where individual task independence is assumed. Gang scheduling was added as an
+operational practice on top of Borg (using quota reservation and careful job submission
+timing) but is not a first-class feature.
+
+This is one reason Google later built dedicated ML infrastructure (Pathways, etc.)
+and why Kubernetes has TFJob and PyTorchJob operators: gang scheduling for ML training
+requires special handling that general-purpose cluster schedulers don't provide.
+
+### 13.3 Interview One-Liner on Gang Scheduling
+
+"Borg does not natively support gang scheduling. For ML training workloads where all
+workers must start simultaneously, you need a higher-level operator (like TFJob) that
+holds quota in reserve and submits all tasks atomically. This is a known gap between
+general cluster schedulers and ML-specific infrastructure."
+
+### 13.4 Checkpointing and Preemption Tolerance
+
+Because Borg can preempt batch tasks at any time, batch jobs must be written to tolerate
+sudden death. The standard technique is checkpointing: periodically write the current
+computation state to durable storage (GFS/Colossus). When the task is rescheduled,
+it reads the latest checkpoint and resumes from there rather than starting from scratch.
+
+For ML training: checkpoint the model weights and optimizer state every N steps.
+If preempted at step 10,000, the next run reads the checkpoint from step 9,500 and
+resumes. Only 500 steps of work are lost.
+
+For MapReduce: each Map and Reduce task is independently idempotent (running it twice
+produces the same output). Preemption just means rerunning the affected task. No
+checkpointing needed — idempotence is the simpler property.
+
+This is why Borg can aggressively preempt batch jobs without requiring complex
+recovery logic at the cluster level: the application itself handles restartability.
+The cluster manager's job is to reschedule; the application's job is to be restartable.
+
+---
+
+## Part 14: Interview One-Liners Quick Reference
+
+A rapid-fire reference for recalling precise Borg concepts in an interview.
+Each statement is calibrated to be exactly right — not oversimplified, not too long.
+
+**On desired state:**
+"Borg's core model: declare what you want (desired state) rather than what to do
+(imperative commands). A reconciliation loop continuously compares actual to desired
+and acts to close the gap. This is why the system is self-healing — no failure-specific
+code needed."
+
+**On two-phase scheduling:**
+"Borg's scheduler runs feasibility filtering first (removes machines that cannot
+physically run the task) and then scoring (ranks feasible machines by bin-packing,
+spreading, data locality). A random subset of feasible machines is scored rather than
+all of them — a scalability optimization from the 2015 paper."
+
+**On CPU vs. RAM:**
+"CPU is compressible: throttle a task's CPU usage and it slows down but stays running.
+RAM is not compressible: if a task needs more RAM than its limit, the OS kills it
+(OOM kill). This is why RAM limits must be set more conservatively than CPU limits."
+
+**On Borg vs. Kubernetes:**
+"Kubernetes is Borg made open-source and developer-friendly. Every core concept maps
+directly. Three genuine improvements: label selectors (more flexible than string job
+names), IP-per-pod (vs. port-per-task — simplifies networking), and pluggable components
+(scheduler, runtime, networking are replaceable)."
+
+**On BorgMaster:**
+"The BorgMaster is a five-replica Paxos group. One replica is the leader and does
+scheduling; the others replicate all state changes. Failover takes about 10 seconds.
+All cluster state is kept in memory for performance; the Paxos log provides durability."
+
+**On utilization:**
+"Borg achieves 60-70% cluster utilization (vs. ~40-50% without it). The key mechanisms:
+mixing serving jobs (diurnal traffic pattern — low at 3 AM) with batch jobs (fill the
+slack at night), and resource reclamation (tasks that consistently use less than their
+reservation get their slack lent to lower-priority tasks)."
+
+**On Borglet:**
+"The Borglet is an agent running on every machine. It starts and stops tasks, manages
+resources, and reports state to BorgMaster. The Borglet polls BorgMaster rather than
+receiving push notifications — pull-based polling means one dead Borglet is a local
+problem, not a broadcast failure."
+
+**Decision tree — when to cite Borg in an interview:**
+"Any time the interviewer asks about: cluster management, container orchestration,
+resource scheduling, self-healing systems, or how Kubernetes works — Borg is the
+historical foundation worth mentioning. Don't just say 'use Kubernetes'; explain which
+Borg/Kubernetes concepts address the specific requirement."
+
+---
+
+## Part 15: Pre-Interview Drill
+
+### 15.1 Five Concepts to Explain in 60 Seconds Each
+
+Practice these until you can say each one clearly, without notes, in under 60 seconds.
+
+**1. Desired state and reconciliation:**
+"Borg uses a desired state model: engineers declare the target configuration (10 replicas
+of service X, each needing 2 CPU and 4 GB RAM). A reconciliation loop continuously
+compares the actual cluster state to the desired state and acts to close any gap. If a
+machine fails and 3 replicas die, the loop sees 'actual=7, desired=10' and schedules 3
+new replicas. If an engineer accidentally sets desired to 0, the loop kills all replicas.
+The loop doesn't know why the states diverged — it just acts. This is why Kubernetes
+is self-healing without explicit failure-handling code."
+
+**2. Two-phase scheduling:**
+"Borg uses two-phase scheduling. Phase 1 (feasibility filtering) removes every machine
+that cannot possibly run the task: not enough CPU, not enough RAM, wrong hardware,
+maintenance mode. Phase 2 (scoring) ranks the remaining feasible machines on multiple
+criteria: bin-packing score (pack tasks tightly to free up full machines), spreading
+score (don't put all tasks on one rack), and data locality (run tasks near their input
+data). A random subset of feasible machines is scored rather than all of them — too
+many feasible machines to score exhaustively at scale."
+
+**3. CPU is compressible, RAM is not:**
+"CPU overuse causes throttling: the kernel limits how much CPU time the container gets.
+The task slows down but keeps running. RAM overuse causes an OOM kill: the kernel
+terminates the process immediately. The operational implication: you can set CPU limits
+aggressively (a task using more CPU than expected just runs slower) but RAM limits must
+be set conservatively (a task hitting the RAM limit dies and loses all in-flight work).
+Always pad RAM limits by 20-30% to account for GC pressure and memory spikes."
+
+**4. BorgMaster Paxos architecture:**
+"The BorgMaster is a five-node Paxos group. One node is the leader and processes all
+scheduling decisions and state changes. Every state change is written to the Paxos log
+before acting on it. The other four replicas replay the log and stay ready to take over.
+All state is kept in memory for speed — the log provides durability. If the leader fails,
+Paxos elects a new leader within ~10 seconds, and the new leader reconstructs in-memory
+state by replaying the log. Borglets (on each machine) poll the BorgMaster for work —
+this pull model means a single dead machine doesn't cause cascading BorgMaster load."
+
+**5. The Borg → Kubernetes mapping:**
+"Every Kubernetes concept has a direct Borg equivalent. Kubernetes Deployment = Borg
+Job. Kubernetes Pod = Borg Task (with a key improvement: one Pod can have multiple
+containers sharing a network namespace — equivalent to Borg's Alloc). kubelet = Borglet.
+The Kubernetes control plane = BorgMaster. YAML spec = BCL config. The three genuine
+Kubernetes improvements over Borg: (1) label selectors replace string name coupling,
+(2) IP-per-pod replaces port-per-task for cleaner networking, (3) open-source with REST
+API replaces internal-only with proprietary BCL."
+
+### 15.1a Interview Self-Check — Borg
+
+Before your interview, run through this checklist cold (without looking at notes):
+
+**Architecture:**
+- [ ] What does BorgMaster do? How many replicas? Why Paxos?
+- [ ] What does a Borglet do? Pull or push communication?
+- [ ] What is the Fauxmaster? Why is it useful?
+- [ ] How does BorgMaster recover from a leader failure?
+
+**Scheduling:**
+- [ ] What are the two phases of Borg scheduling?
+- [ ] What does feasibility filtering check?
+- [ ] What criteria are used in the scoring phase?
+- [ ] Why score a random subset rather than all feasible machines?
+
+**Resources:**
+- [ ] What is a compressible resource? Give an example.
+- [ ] What is a non-compressible resource? What happens when you exceed its limit?
+- [ ] What is the difference between resource request and resource limit?
+- [ ] What is resource reclamation?
+
+**Desired state:**
+- [ ] What does the reconciliation loop do?
+- [ ] Why is desired state better than explicit failure handlers for cluster management?
+- [ ] What is a limitation of the desired state model? How does Borg mitigate it?
+
+**Numbers:**
+- [ ] What utilization does Borg achieve? What was utilization without Borg?
+- [ ] How long does BorgMaster failover take?
+- [ ] How many priority tiers does Borg have (approximately)?
+- [ ] What is the publication date of the Borg paper?
+
+**Kubernetes mapping:**
+- [ ] Borg Job → Kubernetes ___?
+- [ ] Borg Task → Kubernetes ___?
+- [ ] Borglet → Kubernetes ___?
+- [ ] BCL → Kubernetes ___?
+- [ ] Name the three genuine Kubernetes improvements over Borg.
+
+If you can answer all of these without hesitation, you are ready for any Borg question.
+
+### 15.2 Three Questions That Expose Depth
+
+**Q: "Borg uses a reconciliation loop. What are the failure modes of this approach?"**
+
+Answer: Three main failure modes. First, the loop acts on any divergence including
+operator error — accidentally setting desired replicas to 0 immediately kills all
+replicas with no confirmation. Mitigation: change rate limits, Fauxmaster dry-run,
+validation webhooks. Second, the loop is not instantaneous — between a failure and
+the loop's next iteration, the system is diverged. This "reconciliation lag" means
+brief periods where desired ≠ actual. For sub-second SLAs, this lag matters. Third,
+the loop can thrash: if a task consistently fails to start (bad binary, insufficient
+resources), the loop keeps rescheduling it. Exponential backoff (CrashLoopBackOff in
+Kubernetes) prevents thrashing.
+
+**Q: "How does Borg handle a scheduling decision that takes longer than the task's
+startup window?"**
+
+Answer: Borg's scheduler is asynchronous and non-blocking. While the scheduler is
+working on task placement, other tasks continue to be processed. The BorgMaster
+maintains a work queue; the scheduler pulls from it and commits placements as it
+completes them. If a single very large job (10,000 tasks) were processed sequentially,
+it would block all other scheduling. Borg avoids this by processing jobs concurrently
+(multiple scheduling goroutines) and by randomizing the subset of machines scored
+rather than waiting for a full cluster scan.
+
+**Q: "What happens when two resource-intensive batch jobs are submitted simultaneously
+and there isn't enough capacity for both?"**
+
+Answer: Borg uses quota and priority to resolve this. Each job has a declared priority
+and the team has an allocated quota (maximum resource units they can consume). If both
+jobs together exceed the team's quota, one is rejected or queued. If they belong to
+different teams with different priority levels, the higher-priority job's tasks proceed;
+the lower-priority job's tasks wait in the queue (or are preempted if already running).
+If both are the same priority and total within quota, they share the available capacity
+proportionally based on scheduling order. No job is silently starved — the quota and
+priority system makes resource contention explicit and auditable.
+
+---
+
 ## Common Interview Mistakes — Reference Table
 
 | Mistake | What the Candidate Says | What They Should Say |
@@ -2063,7 +2413,7 @@ preemption policy is auditable (you can always answer "who preempted my task and
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                    CHAPTER 85: BORG — KEY TAKEAWAYS                        ║
+║                    CHAPTER 99: BORG — KEY TAKEAWAYS                        ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  1. DESIRED STATE + RECONCILIATION LOOP is the core insight.                ║
@@ -2120,6 +2470,39 @@ preemption policy is auditable (you can always answer "who preempted my task and
 
 ---
 
-*Chapter 85: Borg — Google's Cluster Manager*
+---
+
+## What to Read Next
+
+- **Ch47 — Kubernetes Internals**: The open-source descendant of Borg, covered in depth.
+  Every concept from this chapter maps to a Kubernetes equivalent; Ch47 shows the actual
+  implementation, API design, and operational patterns.
+
+- **Ch100 — Video Streaming (Staff)**: Demonstrates Borg/Kubernetes concepts in context
+  — a real system where transcoder worker pools, auto-scaling, and preemptible spot
+  instances directly apply Borg's resource management principles.
+
+- **Ch45 — Google's Foundational Systems**: Overview of how Borg fits alongside GFS,
+  Bigtable, Chubby, and MapReduce in Google's infrastructure stack. Read to understand
+  the broader ecosystem Borg operates in.
+
+- **Ch48 — Consensus Deep Dive**: The Paxos algorithm that powers BorgMaster's five-replica
+  replicated state machine. Understanding Paxos clarifies why BorgMaster achieves ~10s
+  failover and why it needs exactly 5 replicas (not 3, not 7).
+
+---
+
+*Chapter 99: Borg — Google's Cluster Manager*
 *Primary source: Verma et al., EuroSys 2015 | Section 6: Google Systems Papers*
+*Parts: 1-15 + Common Interview Mistakes + Exercises + Homework + Key Takeaways*
+*Last updated: 2026-06-25*
+
+---
+
+<!-- END OF CHAPTER 99 -->
+<!-- Additions over base 2,125 lines: Parts 12-15 (Omega evolution, gang scheduling,
+     interview one-liners, pre-interview drill), fixed chapter number in KEY TAKEAWAYS,
+     added What to Read Next section, added interview self-check checklist. -->
+<!-- Key concepts: desired state, reconciliation loop, two-phase scheduling,
+     compressible vs non-compressible resources, Paxos BorgMaster, Borg→K8s mapping -->
 *Pairs with: Ch84 (MapReduce), Ch86 (Chubby), Ch87 (GFS), Ch88 (Kubernetes)*

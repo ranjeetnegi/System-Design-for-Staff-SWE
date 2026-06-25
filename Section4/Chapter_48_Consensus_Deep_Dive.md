@@ -2208,9 +2208,293 @@ compare-and-swap? How does it ensure the increment is idempotent across retries?
 
 ---
 
+---
+
+## Part 13: Byzantine Fault Tolerance — Why Raft Is Not Enough for All Settings
+
+### 13.1 CFT vs BFT
+
+Raft (and Paxos) are **crash fault tolerant (CFT)**: they assume nodes fail by stopping.
+A crashed node does not respond. It does not send corrupted messages. It does not lie.
+
+**Byzantine fault tolerant (BFT)** protocols handle a stronger threat model: nodes may
+behave arbitrarily. A byzantine node can send inconsistent messages to different peers,
+lie about its state, or coordinate with other byzantine nodes to subvert the protocol.
+
+```
+CFT MODEL:        Node fails → stops sending messages. Other nodes time out and elect new leader.
+                  Raft handles this correctly. Requires f+1 nodes for f failures: 3 nodes for 1 failure.
+
+BFT MODEL:        Node fails → might send different messages to different peers.
+                  Raft is BROKEN under this model. A byzantine leader can split the cluster.
+                  Requires 3f+1 nodes for f failures: 4 nodes for 1 byzantine node.
+
+WHEN DOES BFT MATTER?
+  - Blockchain consensus (Bitcoin, Ethereum, Hyperledger): nodes are untrusted peers
+  - Cross-organizational coordination where no single organization controls all nodes
+  - Space systems where cosmic ray bit flips can corrupt node behavior
+
+WHEN DOES BFT NOT MATTER (i.e., CFT is sufficient)?
+  - Internal distributed systems where all nodes are owned by one organization
+  - All standard databases: etcd, ZooKeeper, CockroachDB, Spanner
+  - Kafka, HDFS, Redis Cluster
+  Reason: an attacker who controls a node in your internal infrastructure has already
+  won (they have your data). BFT doesn't protect against this threat.
+```
+
+**The key interview point:** "Raft is CFT, not BFT. For internal systems (all nodes owned
+by one org), CFT is the correct and sufficient model. BFT adds 2-3× message overhead
+and is only needed when nodes are untrusted — like in public blockchain networks."
+
+### 13.2 Practical BFT: PBFT, Tendermint, HotStuff
+
+For completeness (L6 awareness, not L5 requirement):
+
+- **PBFT (Practical Byzantine Fault Tolerance)**: O(n²) message complexity, impractical
+  above ~20 nodes. The first practical BFT algorithm (1999).
+- **Tendermint**: Used in Cosmos blockchain. O(n) message complexity per round.
+- **HotStuff**: Used in Diem (Meta's blockchain). O(n) complexity, pipelined rounds.
+
+None of these are used in standard distributed databases. If an interviewer asks "what
+about Byzantine faults in Raft?", the answer is: "Raft doesn't handle byzantine faults —
+it's CFT only. For systems with untrusted nodes (blockchain, cross-org consensus), you'd
+use a BFT protocol like PBFT or HotStuff. For internal systems, CFT is the right model."
+
+---
+
+## Part 14: etcd and Consul in Practice
+
+Consensus is an academic concept; etcd and Consul are where engineers actually encounter
+it in production. Know both.
+
+### 14.1 etcd
+
+etcd is the distributed key-value store at the heart of Kubernetes. It uses Raft.
+
+```
+ETCD FACTS:
+  - Raft consensus with 3 or 5 nodes typical
+  - Stores Kubernetes cluster state: all API objects (Pods, Services, ConfigMaps, etc.)
+  - Linearizable reads by default (reads from leader, guaranteed up-to-date)
+  - Serializable reads (lower consistency, any follower) available with --serializable flag
+  - MVCC: keeps previous versions for a configurable period; compaction needed
+  - Watches: clients subscribe to key changes — etcd streams updates (Raft log notification)
+  - Max recommended DB size: 8GB (larger = slow defragmentation + election pressure)
+  - Performance: ~10,000 writes/second, ~100,000 reads/second on typical hardware
+
+OPERATIONAL CONCERN:
+  etcd is the source of truth for Kubernetes. If etcd loses quorum:
+  - Kubernetes API server returns errors to all API calls
+  - No new Pods scheduled; no existing Pod changes acknowledged
+  - Existing Pods CONTINUE running (kubelet operates autonomously from etcd)
+  - Recovery: restore from etcd backup (snapshot + WAL replay)
+  
+  This is why Kubernetes production setups use 5-node etcd clusters (tolerates 2 failures).
+```
+
+### 14.2 Consul
+
+Consul (HashiCorp) combines: distributed key-value store, service discovery, and health
+checking. Uses Raft for the key-value store. DNS interface for service discovery.
+
+```
+CONSUL vs ETCD:
+  etcd: pure KV store with watches. No service discovery built in.
+  Consul: KV store + service catalog + health checks + DNS + ACLs.
+  
+  Kubernetes uses etcd directly. Traditional microservices often use Consul for
+  service discovery outside of Kubernetes.
+
+CONSUL RAFT CLUSTER:
+  3 or 5 server nodes run Raft. Data centers connected via gossip (WAN federation).
+  Leader handles all writes. Followers serve reads (stale reads) or forward to leader.
+  
+  Common interview question: "How does Consul guarantee consistency for service discovery?"
+  Answer: Service registrations go through Raft. A service is registered only when the
+  registration entry is committed to the Raft log on a quorum of servers. Health check
+  results are stored in Raft but with a shorter propagation path via gossip.
+```
+
+---
+
+## Part 15: Pre-Interview Drill — Consensus
+
+### 15.1 The Four Questions You Must Answer Without Hesitation
+
+**"Explain Raft leader election in 60 seconds."**
+"Raft servers start as followers. If a follower doesn't hear from the leader within the
+election timeout (random 150-300ms), it becomes a candidate, increments its term, and sends
+RequestVote RPCs to all peers. A server grants a vote if: (a) the candidate's term ≥ the
+voter's current term, and (b) the candidate's log is at least as up-to-date as the voter's.
+A candidate that receives votes from a majority becomes leader and immediately sends
+heartbeat AppendEntries to assert authority. The random timeout is what prevents split votes."
+
+**"What happens to Raft during a network partition?"**
+"The partition splits the cluster into two groups. If the leader is in the minority partition:
+it can't commit new entries (no majority ack). The majority partition elects a new leader.
+After healing, the old leader discovers a higher term, steps down, and its uncommitted
+entries are overwritten by the new leader's log. If the leader is in the majority: it
+continues operating normally. The minority partition cannot make progress. Raft is CP
+(consistent, partition-tolerant, not always available)."
+
+**"How many nodes do you need to tolerate f failures in Raft?"**
+"2f+1 nodes. For 1 failure: 3 nodes. For 2 failures: 5 nodes. The majority quorum
+requires ⌊(2f+1)/2⌋ + 1 = f+1 nodes, which is always achievable when at most f nodes fail."
+
+**"What is the difference between Paxos and Raft?"**
+"They solve the same problem (consensus on a value). Paxos defines only the single-value
+case (Single-Decree Paxos); Multi-Paxos (a sequence of Paxos instances for a log) requires
+additional engineering not specified in the original paper. Raft was designed from the start
+as a replicated log with explicit leader election, log matching invariant, and leader
+completeness theorem — it's easier to understand and implement correctly. Google uses
+Multi-Paxos (Spanner, Chubby); etcd/CockroachDB use Raft."
+
+### 15.2 Self-Check Before the Interview
+
+```
+[ ] Can explain the consensus problem in one sentence?
+[ ] Knows the 2f+1 quorum formula?
+[ ] Can describe Raft leader election (random timeout, RequestVote, majority vote)?
+[ ] Can describe log replication (AppendEntries, commit when majority ACK)?
+[ ] Can explain what happens during a network partition (CP, minority unavailable)?
+[ ] Knows the leader completeness theorem (committed entries survive elections)?
+[ ] Can distinguish CFT vs BFT (Raft is CFT)?
+[ ] Can name where Raft is used in production (etcd, CockroachDB, TiKV)?
+[ ] Can name where Paxos is used (Spanner, Chubby, Zookeeper)?
+[ ] Knows the 3-node vs 5-node tradeoff (3 tolerates 1 failure, 5 tolerates 2)?
+[ ] Can explain log compaction / snapshots (needed to prevent log growth)?
+[ ] Knows the CAP position of Raft (CP, not AP)?
+```
+
+### 15.3 Common Interview One-Liners
+
+```
+"Raft requires majority quorum for both leader election and log commitment."
+"The random election timeout prevents split votes by making simultaneous candidacies rare."
+"Committed = majority of servers have the entry in their log."
+"Raft is CP: it sacrifices availability for consistency during partitions."
+"etcd uses Raft; Spanner and Chubby use Paxos."
+"Raft is CFT only — byzantine faults require PBFT or HotStuff."
+"A 5-node Raft cluster tolerates 2 simultaneous failures; 3-node tolerates 1."
+"Log compaction prevents log growth: snapshot = apply all committed entries, discard old log."
+"Joint consensus handles membership changes (add/remove nodes) without split-brain."
+```
+
+---
+
+## Part 16: Key Numbers and Production Reality
+
+Numbers interviewers expect you to know cold.
+
+### 16.1 Consensus Latency Budget
+
+```
+RAFT WRITE LATENCY (typical):
+  Leader receives write request           →  0ms
+  Leader appends to local log             →  ~0.1ms (memory write)
+  Leader sends AppendEntries to followers →  ~0.5ms (serialization)
+  Network RTT to followers                →  0.5-5ms (same DC), 50-150ms (cross-region)
+  Follower appends and ACKs               →  ~0.1ms
+  Leader receives majority ACK            →  = RTT
+  Leader commits, applies, responds       →  ~0.1ms
+  
+  SAME DATACENTER TOTAL: ~2-5ms per write
+  CROSS-REGION (WAN): 100-300ms per write (dominates: RTT)
+
+WHY THIS MATTERS:
+  etcd benchmarks: ~10,000 writes/second on a 3-node cluster in the same DC
+  Spanner (multi-Paxos across DCs): 5-10ms typical (uses TrueTime to minimize wait)
+  ZooKeeper: ~30,000 writes/second on LAN (ZAB protocol, batching helps)
+```
+
+### 16.2 Cluster Size Tradeoffs
+
+```
+NODES   FAILURES TOLERATED   QUORUM SIZE   WRITE LATENCY   USE CASE
+  3           1                   2         Lowest          Dev/small prod, etcd default
+  5           2                   3         +1 RTT          Production standard (Kubernetes)
+  7           3                   4         +2 RTT          Critical data, additional resilience
+  9+          4+                  5+        High            Rarely justified; ZAB does this
+
+RULE: Add nodes for resilience, not performance. More nodes = more latency for writes
+(must wait for larger quorum). Only add beyond 5 nodes if risk model demands it.
+```
+
+### 16.3 Operational Numbers
+
+```
+ETCD:
+  Max DB size:      8GB recommended (compaction/defrag slow above this)
+  Max key size:     1.5MB
+  Max request size: 1.5MB
+  Disk requirement: dedicated SSD, fsync on every commit (NFS will break etcd)
+  Backup:           Snapshot every 30min + WAL retained for at least 1 snapshot interval
+  Recovery RTO:     ~2-5 minutes from snapshot (WAL replay)
+
+ZOOKEEPER:
+  Data stored in memory, flushed to disk; all data must fit in memory
+  Transaction log: append-only, needs dedicated disk to avoid competition with snapshots
+  Leader election after partition healing: ~200-500ms
+
+KAFKA (KRAFT MODE):
+  Replaced ZooKeeper in Kafka 3.3+ (KRaft)
+  Raft metadata quorum: 3 controllers
+  Scales to millions of partitions vs ZooKeeper's ~200,000 limit
+```
+
+### 16.4 The L5 vs L6 Calibration
+
+```
+L5 (Senior SWE) — expected to know:
+  ✓ Raft leader election mechanism
+  ✓ Log replication and commit rule (majority ACK)
+  ✓ CAP theorem: Raft is CP
+  ✓ Network partition behavior
+  ✓ Why you need 2f+1 nodes for f failures
+  ✓ etcd is Raft, ZooKeeper is ZAB, Spanner is Multi-Paxos
+  ✓ Why consensus is needed (split-brain without it)
+
+L6 (Staff SWE) — additional depth:
+  ✓ Log matching invariant and leader completeness theorem
+  ✓ Joint consensus for membership changes
+  ✓ Log compaction / snapshot mechanism
+  ✓ CFT vs BFT distinction and when each is needed
+  ✓ Operational concerns: etcd disk requirements, compaction, defragmentation
+  ✓ Paxos Phase 1/Phase 2 in detail and why Multi-Paxos needs engineering
+  ✓ ZAB vs Raft differences (ZAB uses epoch+counter, Raft uses term+index)
+  ✓ Performance numbers: write latency budget, quorum size tradeoffs
+  ✓ When NOT to use consensus (disaggregate control plane from data plane)
+
+TRAP QUESTION AT L6:
+  "Should every distributed write go through Raft?"
+  WRONG: "Yes, Raft guarantees consistency."
+  CORRECT: "No. Raft is for the control plane (metadata, configuration, leader election).
+  The data plane should be partition-local with consistency enforced at the application
+  layer. Google Spanner uses Paxos per shard but serves reads from followers with
+  external consistency via TrueTime — not all reads go through the leader."
+```
+
+---
+
 *This chapter pairs with:*
 - *Ch22: Leader Election and Coordination — builds directly on Part 5*
 - *Ch31: Caching at Scale — etcd used for cache invalidation coordination*
 - *Ch33: Event-Driven Architectures — Kafka relies on ZooKeeper/KRaft*
 - *Appendix B: Chubby — Paxos in production (Google)*
 - *Appendix C: Spanner — Paxos per shard + TrueTime*
+
+*Chapter 48 — Section 4: Deep Technical Foundations.*
+*Core concepts: Raft (leader election + log replication + safety), Paxos, CFT vs BFT,*
+*network partition behavior (CP), quorum formula (2f+1), log compaction, etcd in production.*
+*Key numbers: election timeout 150-300ms random, majority = ⌊n/2⌋+1, etcd max 8GB,*
+*write latency ~2-5ms (same DC), ~100-300ms (cross-region), 10K writes/sec etcd capacity.*
+*Protocol map: etcd → Raft, ZooKeeper → ZAB, Spanner → Multi-Paxos, Kafka 3.3+ → KRaft.*
+*Safety rule: 2f+1 nodes for f failures (3-node: tolerates 1, 5-node: tolerates 2).*
+*CAP position: CP — Raft always consistent, unavailable during minority partition.*
+*Operational footprint: 3-node for dev/small prod, 5-node standard, 7-node for critical data.*
+*BFT threshold: 3f+1 nodes required (4 nodes to tolerate 1 byzantine fault) vs CFT 2f+1.*
+*Do not use consensus for data plane — use it only for control plane (metadata, leadership).*
+*Disk requirement for etcd: dedicated SSD with fsync on every commit. NFS will corrupt etcd.*
+*Snapshot interval: compact WAL every 10,000 entries or every 5 minutes, whichever comes first.*
+*Follower reads: allowed in etcd with --serializable (stale), linearizable requires leader.*
+*Last updated: 2026-06-25. System Design for L6: The Complete Guide.*

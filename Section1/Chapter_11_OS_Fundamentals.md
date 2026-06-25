@@ -2323,3 +2323,179 @@ Health check:
 **Fix applied:** Enforced a global lock ordering rule: any code that acquires multiple locks must always acquire them in the same order (e.g., always lock X before lock Y, never Y before X). Added deadlock detection monitoring using thread dump analysis. Restarted the affected processes to clear the deadlock immediately.
 
 **Staff lesson:** Deadlocks are invisible to standard health checks. A process can be running, responding to pings, and completely unable to do useful work simultaneously. For any service using multiple locks, establish and document a lock acquisition order. For Java services, thread dumps (jstack) show exactly which thread holds which lock -- this is the fastest way to diagnose a deadlock. Consider using timeout-based lock acquisition (tryLock with timeout) so a thread does not wait forever.
+
+---
+
+## 20. Virtual Memory and Memory-Mapped Files
+
+Virtual memory is the OS abstraction that gives every process the illusion of a large, contiguous address space regardless of physical RAM available. The CPU's Memory Management Unit (MMU) translates virtual addresses to physical addresses using a multi-level page table. The unit of mapping is a **page** — typically 4 KB on x86-64.
+
+**TLB (Translation Lookaside Buffer):** A hardware cache that stores recent virtual-to-physical address translations. A TLB hit costs ~1 ns; a TLB miss forces a page-table walk costing ~100 ns. For applications accessing many small memory regions (hash tables, linked lists), TLB misses become a measurable bottleneck. **Huge pages** (2 MB instead of 4 KB) reduce TLB pressure by covering 512× more memory per TLB entry — Linux databases like PostgreSQL and MongoDB use huge pages in production.
+
+**Page faults:** When a process accesses a page not yet mapped to physical memory, the CPU raises a page fault. The kernel handles it: for an anonymous page (heap, stack), it allocates a physical page and zeros it. For a file-backed page (mmap), it reads the data from disk. Minor fault (~1 µs) = page was already in the page cache. Major fault (~1–10 ms) = required a disk read.
+
+**Memory-mapped files (mmap):** `mmap()` maps a file directly into the process's virtual address space. The OS manages loading pages on demand via page faults and writing back dirty pages via the page cache. This gives database engines "free" buffering through the kernel's page cache without a separate user-space buffer. SQLite uses mmap for its read path. Drawback: the kernel may evict pages at any time, causing unpredictable I/O latency spikes. Production databases like PostgreSQL and InnoDB implement their own buffer pools instead of relying on mmap to control I/O scheduling precisely.
+
+---
+
+## 21. I/O Models: From Blocking to io_uring
+
+Understanding I/O models explains why Node.js and Nginx can handle 10,000 concurrent connections on a single thread, while a naive threaded server struggles at 1,000.
+
+**Blocking I/O:** A `read()` syscall blocks the calling thread until data arrives. One thread per connection is the natural model. Works well up to ~1,000 connections; breaks down beyond that due to thread overhead (8 MB stack per thread by default on Linux = 8 GB for 1,000 threads).
+
+**Non-blocking I/O:** The socket is set to non-blocking mode. `read()` returns immediately with `EAGAIN` if no data is available. The application must poll repeatedly, which wastes CPU.
+
+**I/O multiplexing (epoll):** The `epoll` syscall registers many file descriptors and returns only the ones that are ready. An event loop checks epoll, reads from ready sockets, processes the data, and loops. This is the model behind Nginx, Node.js, Redis, and most high-performance servers. A single thread can manage tens of thousands of connections. The trade-off: callback-based or async/await code required; no blocking calls allowed in the event loop.
+
+**Async I/O (io_uring):** Linux 5.1+ (2019). io_uring uses two shared ring buffers between kernel and user space — a submission queue and a completion queue. Applications batch I/O operations into the SQ, the kernel processes them (possibly in parallel), and results appear in the CQ. No syscall per operation; the kernel can be polled without context switches. Enables high-throughput storage access (databases, proxies) at lower CPU cost than epoll. PostgreSQL 16+ experimentally supports io_uring; ScyllaDB's storage engine uses it natively.
+
+**Rule of thumb:**
+- CPU-bound work → multiple processes or threads (one per core).
+- I/O-bound work with many connections → event loop with epoll (Node.js, Nginx).
+- High-throughput storage (databases) → io_uring for lowest syscall overhead.
+
+---
+
+## 22. Process vs Thread vs Coroutine — Cost Comparison
+
+| Unit        | Creation cost | Memory overhead | Switch cost  | Use case                          |
+|-------------|---------------|-----------------|--------------|-----------------------------------|
+| Process     | ~1–10 ms      | ~8 MB+ (VM)     | ~10 µs       | Isolation, multi-core CPU-bound   |
+| Thread      | ~100 µs       | ~1–8 MB (stack) | ~1–5 µs      | Parallel CPU work, blocking I/O   |
+| OS thread (Go goroutine scheduler basis) | — | — | — | — |
+| Goroutine   | ~2–4 µs       | ~2 KB (grows)   | ~100 ns      | Massive concurrency in Go         |
+| Coroutine (Python asyncio, JS Promise) | ~1 µs | ~few KB | ~100 ns | I/O-bound concurrent tasks |
+
+**Why goroutines are cheap:** Go maintains its own scheduler (M:N threading — N goroutines multiplexed onto M OS threads). Goroutines start with a 2 KB stack that grows dynamically. The Go scheduler parks goroutines waiting on I/O without blocking the underlying OS thread, enabling millions of concurrent goroutines on a few hundred OS threads.
+
+**When threads beat coroutines:** CPU-bound work that needs true parallelism. Python's GIL prevents threads from running Python bytecode in parallel — use multiprocessing or offload to C extensions. Go goroutines use all cores freely.
+
+---
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                         KEY TAKEAWAYS                                ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  Virtual memory: TLB miss costs ~100x a TLB hit. Huge pages (2 MB)  ║
+║  reduce TLB pressure — used in DB servers in production.             ║
+║                                                                      ║
+║  Page fault: minor ~1 µs (page in cache), major ~1–10 ms (disk).    ║
+║  mmap is convenient but gives up I/O scheduling control.             ║
+║                                                                      ║
+║  epoll: single thread → 10k+ connections. The model behind Nginx,    ║
+║  Redis, Node.js. No blocking calls allowed in the event loop.        ║
+║                                                                      ║
+║  io_uring (Linux 5.1+): ring-buffer submission/completion model;     ║
+║  zero-syscall-per-I/O; used by databases for max storage throughput. ║
+║                                                                      ║
+║  Thread cost: ~100 µs creation, ~1–8 MB stack. Goroutine: ~2 µs,    ║
+║  2 KB stack. For high concurrency, language-level coroutines win.    ║
+║                                                                      ║
+║  Lock ordering prevents deadlocks. Health checks won't catch them.   ║
+║  Use jstack/thread dumps to diagnose. tryLock with timeout as hedge. ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+---
+
+## 23. The Linux Scheduler: CFS and What Engineers Need to Know
+
+The Completely Fair Scheduler (CFS) is the default Linux scheduler since kernel 2.6.23. It tracks each task's "virtual runtime" (vruntime) — the amount of CPU time it has received, weighted by priority. The task with the smallest vruntime runs next. This ensures fairness: no runnable task is starved indefinitely.
+
+**nice values:** Range -20 (highest priority) to +19 (lowest). Default is 0. Nice +10 gets roughly half the CPU time of nice 0 at equal contention. Batch jobs (backups, model training) should run at nice +10 to +19 so they don't compete with latency-sensitive services.
+
+**CPU affinity:** Pin a process to specific CPU cores with `taskset` or `sched_setaffinity()`. Useful for latency-sensitive services that benefit from warm L1/L2 caches on a dedicated core. Database servers sometimes pin to a single NUMA node to avoid remote memory accesses.
+
+**NUMA (Non-Uniform Memory Access):** On multi-socket servers, each CPU socket has local RAM. Accessing local RAM is ~60–100 ns; accessing another socket's RAM adds ~40–80 ns latency. The OS NUMA policy defaults to local allocation. For memory-intensive databases and JVMs, binding to one NUMA node with `numactl --membind=0` eliminates NUMA penalties.
+
+**Scheduler latency vs throughput:** CFS is tunable via `/proc/sys/kernel/sched_latency_ns` (default 6–24 ms). This controls how long a task runs before it can be preempted. Shorter = lower latency, higher context-switch overhead. Nginx and latency-sensitive proxies benefit from lower values; batch workloads prefer higher values.
+
+---
+
+## 24. System Calls and Context Switch Cost
+
+Every system call crosses the user/kernel boundary. The CPU saves register state, switches privilege level (ring 3 → ring 0), executes the kernel handler, restores state, and returns. A typical syscall costs **~100–1,000 ns** depending on what it does.
+
+**Context switch cost:** ~1–10 µs for a full thread context switch (save registers, switch page tables, reload). For a service handling 100,000 RPS, if each request causes 10 context switches, that is 1 million context switches per second — at 5 µs each, ~5 seconds of CPU time per second per core just for switching. This is why event-loop servers (Nginx, Node.js) minimize context switches.
+
+**Spectre/Meltdown mitigations (2018):** Kernel page-table isolation (KPTI) forces a page-table switch on every syscall, doubling the cost of user↔kernel transitions. High-syscall-rate workloads (many small reads, many `accept()` calls) saw 5–30% regressions after the patches. io_uring was partly motivated by eliminating per-operation syscalls to recover this overhead.
+
+**vDSO (virtual Dynamic Shared Object):** The kernel maps a small piece of code into every process's address space. Calls to `gettimeofday()`, `clock_gettime()`, and `time()` use vDSO and execute entirely in user space — no kernel boundary crossing, ~5 ns instead of ~200 ns. Always use these instead of manual syscalls for timestamps.
+
+---
+
+## 25. OS Numbers Every Engineer Should Know
+
+| Operation                                | Approximate time   |
+|------------------------------------------|--------------------|
+| L1 cache hit                             | 1 ns               |
+| L2 cache hit                             | 4 ns               |
+| L3 cache hit                             | 10–40 ns           |
+| Main memory (DRAM) access                | 60–100 ns          |
+| TLB hit                                  | ~1 ns              |
+| TLB miss (page table walk)               | ~100 ns            |
+| Syscall (simple, no I/O)                 | 100–500 ns         |
+| Context switch (thread)                  | 1–10 µs            |
+| Minor page fault (page in cache)         | ~1 µs              |
+| Major page fault (disk read, SSD)        | 100 µs – 1 ms      |
+| Disk seek (HDD)                          | 3–10 ms            |
+| SSD random read (NVMe)                   | 100–200 µs         |
+| Network round trip same datacenter       | 0.5–1 ms           |
+| Network round trip cross-region (US-EU)  | 70–100 ms          |
+
+These numbers inform every back-of-envelope calculation in system design. When a candidate says "it's fine, we'll just add a cache," the interviewer is thinking about these numbers to judge whether the answer is grounded in reality.
+
+---
+
+---
+
+## 26. Pre-Interview Drill
+
+Answer these out loud in under 60 seconds each:
+
+1. A server has 32 cores and 256 GB RAM. It's CPU-bound at 80% utilization. You need to double throughput. What are your options?
+2. A Java service is using 100% CPU but serving no requests. What OS tool do you reach for first, and what are you looking for?
+3. Explain what a TLB is and why it matters for a database server.
+4. You see a process that is consuming no CPU but is stuck and not making progress. What two OS conditions could cause this?
+5. Why does Nginx use epoll rather than one-thread-per-connection?
+6. A developer suggests using `mmap()` for a database buffer pool. What are the advantages and the risks?
+7. What is the difference between a minor and major page fault? When does each occur?
+8. Your Go service is handling 500,000 concurrent goroutines. Why is this feasible in Go but not in Java with 500,000 threads?
+9. Explain io_uring in one sentence to a non-expert.
+10. A batch job is competing for CPU with a latency-sensitive API server on the same host. What Linux mechanism do you use to fix this?
+
+**Self-check:** If you struggle on any of these, re-read sections 20–25 above. These are the OS fundamentals that distinguish an engineer who has read about systems from one who has operated them.
+
+---
+
+**One-liners for the interview room:**
+- "Huge pages reduce TLB misses — standard practice for databases at scale."
+- "epoll is O(1) on number of ready fds; select/poll are O(n) on all registered fds."
+- "io_uring eliminates the syscall-per-I/O tax — the biggest Linux I/O improvement in a decade."
+- "Goroutines cost 2 KB each; OS threads cost 1–8 MB each. That is the concurrency scale difference."
+- "Context switch overhead is why you don't want 10,000 OS threads — use an event loop instead."
+- "gettimeofday() via vDSO costs ~5 ns; via syscall it costs ~200 ns — never benchmark with the slow path."
+- "Deadlock is silent: the process is alive, health checks pass, but no work gets done."
+- "NUMA matters on multi-socket servers: remote memory adds 40–80 ns latency per access."
+- "nice +10 for batch jobs: ensures they yield CPU to latency-sensitive services under contention."
+- "The page cache is your friend until memory pressure starts evicting hot pages — then it's your enemy."
+- "CFS fairness is wall-clock fair, not throughput fair: spinning on a lock burns your vruntime share."
+- "Spectre/Meltdown KPTI roughly doubled syscall cost — io_uring was the answer to get it back."
+- "A major page fault pausing a database query is a 1–10 ms random delay — worse than a cache miss."
+
+---
+
+*Pairs with Chapter 10 (APIs, Frontend, Backend, DB) for application-layer context, and Chapter 46 (Databases Deep Dive) for how OS primitives underpin database storage engines.*
+
+---
+
+> **Production truth:** The most dangerous OS bugs are the ones that look like application bugs. A TLB shootdown storm looks like CPU spikes. A kernel bug under NUMA migration looks like random latency. KPTI overhead looks like your service got slower for no reason. Knowing these layers turns "the system is slow and I don't know why" into a directed investigation.
+
+> **Interview truth:** Interviewers at L5+ level expect you to know that "add more servers" is not always the answer — sometimes the answer is huge pages, CPU affinity, or switching from threads to an event loop. Showing you know why these things exist — not just that they exist — is what separates a candidate who has read the textbook from one who has operated systems under pressure.
+
+---
+
+`Chapter 11 | Section 1: Foundations | OS Fundamentals`

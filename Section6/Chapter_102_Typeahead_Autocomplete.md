@@ -2030,6 +2030,258 @@ them.
 
 ---
 
+## Part 11: Query Understanding — Beyond Prefix Matching
+
+### 11.1 The Limitation of Pure Prefix Matching
+
+Exact prefix matching breaks in one common case: the user types a short abbreviation
+that maps to a much longer canonical query. Example:
+
+- User types "nflx" → should suggest "netflix"
+- User types "yt" → should suggest "youtube"
+- User types "amzn" → should suggest "amazon"
+- User types "fb" → should suggest "facebook"
+
+These are not prefix matches — "nflx" does not start with the letters n-e-t-f-l-i-x.
+Pure prefix matching returns nothing. Yet these are extremely common search patterns
+from power users who have learned abbreviations.
+
+A related case: multi-word reordering.
+- User types "pizza delivery" → should also suggest "delivery pizza near me"
+- User types "python tutorial" → should also suggest "learn python for beginners"
+
+### 11.2 Alias Mapping (Simple Fix)
+
+The simplest approach: maintain an alias table.
+
+```sql
+CREATE TABLE query_aliases (
+  alias       VARCHAR(50) NOT NULL PRIMARY KEY,
+  canonical   VARCHAR(200) NOT NULL,
+  priority    INT NOT NULL DEFAULT 100
+);
+
+INSERT INTO query_aliases VALUES ('nflx', 'netflix', 200);
+INSERT INTO query_aliases VALUES ('yt', 'youtube', 200);
+INSERT INTO query_aliases VALUES ('amzn', 'amazon', 200);
+INSERT INTO query_aliases VALUES ('fb', 'facebook', 200);
+INSERT INTO query_aliases VALUES ('goog', 'google', 200);
+```
+
+The serving layer checks the alias table before the prefix store:
+```
+function getSuggestions(prefix):
+  // Step 1: check alias
+  canonical = aliasTable.get(prefix)  // O(1) hash lookup
+  if canonical:
+    return prefixStore.get(canonical[0:prefix.length]) + [canonical]
+  
+  // Step 2: normal prefix lookup
+  return prefixStore.get(prefix)
+```
+
+At L6: the alias table is maintained by a combination of human curation (for major
+brand abbreviations) and automated mining (find short strings with high CTR on specific
+canonical queries in the click log).
+
+### 11.3 N-gram Overlap for Abbreviation Detection
+
+For a more general approach without manual curation, n-gram overlap detects when a
+short query is likely an abbreviation of a longer one:
+
+- "nflx" vs "netflix": 2-gram overlap = {ne, et, tf, fl, li, ix} ∩ {nf, fl, lx} = {fl}
+  Low overlap. But the consonant skeleton of "netflix" = "n-t-f-l-x" matches "nflx" exactly.
+
+**Consonant skeleton matching**: strip vowels from the query and from candidate suggestions.
+"netflix" → "ntflx". "nflx" → "nflx". Edit distance between "ntflx" and "nflx" = 1.
+Close enough to be an alias.
+
+This works best for brand names and product names, not for common words.
+
+### 11.4 Semantic Autocomplete (L6+ Depth)
+
+The most powerful approach: a query embedding model that maps short queries to a
+semantic vector space. Semantically similar queries (like an abbreviation and its
+full form) cluster near each other in the embedding space.
+
+Offline: embed all popular queries. Build a nearest-neighbor index (FAISS or ScaNN).
+Serving: embed the current prefix, find nearest neighbors in the query embedding space,
+merge with prefix-match results.
+
+This is deep L6 territory — worth mentioning as a future direction rather than designing
+in detail at L5/L6 interviews. The right phrase: "Semantic autocomplete using query
+embeddings is a natural extension — it handles abbreviations, synonyms, and cross-language
+queries. The trade-off is serving latency (embedding + ANN search) vs. accuracy."
+
+---
+
+## Part 12: Monitoring and Observability
+
+### 12.1 What to Measure
+
+A healthy autocomplete service should have dashboards for:
+
+```
+AUTOCOMPLETE MONITORING
+========================
+
+  LATENCY:
+  ┌─────────────────────────────────────────────────────┐
+  │  Server p50 / p95 / p99 (target: p99 < 50ms)       │
+  │  Redis lookup p99 (target: < 5ms)                   │
+  │  Offline pipeline completion time (daily)           │
+  │  Trending update lag (Kafka → Redis, target: <5min) │
+  └─────────────────────────────────────────────────────┘
+
+  QUALITY:
+  ┌─────────────────────────────────────────────────────┐
+  │  Click-through rate (CTR): % of suggestions clicked │
+  │    Good baseline: 30-50% of searches accept a       │
+  │    suggestion. Drop below 20% → staleness or        │
+  │    relevance degradation.                           │
+  │  Zero-results rate: % of prefixes with no suggestions│
+  │    Should be < 3%. High rate → pipeline failure or  │
+  │    unusual query patterns.                          │
+  │  Ranking accuracy: % of top-1 suggestions that match│
+  │    the query the user actually completed            │
+  └─────────────────────────────────────────────────────┘
+
+  SAFETY:
+  ┌─────────────────────────────────────────────────────┐
+  │  Harmful suggestion rate (from user reports)        │
+  │  Blocklist update lag (time to remove after report) │
+  │  Trending query review queue depth                  │
+  └─────────────────────────────────────────────────────┘
+
+  INFRASTRUCTURE:
+  ┌─────────────────────────────────────────────────────┐
+  │  Redis memory utilization (alert at > 80%)          │
+  │  Batch pipeline success/failure (daily alert)       │
+  │  Kafka consumer lag for trending pipeline           │
+  └─────────────────────────────────────────────────────┘
+```
+
+### 12.2 Canary Deploys for Ranking Changes
+
+Ranking changes (new scoring model, new CTR weights) are risky — a bad ranking
+degrades CTR for every search. The standard practice: canary rollout.
+
+Route 1% of traffic to the new ranking model. Compare CTR between control (99%)
+and canary (1%) over 24-48 hours. If canary CTR >= control CTR - 2%, full rollout.
+If canary CTR drops 5%+, automatic rollback.
+
+The key metric is CTR, not latency (ranking changes rarely affect latency). CTR is
+measured per-prefix and aggregated — a ranking change might help some prefixes and
+hurt others, so per-prefix CTR reveals regressions the aggregate hides.
+
+### 12.3 SLO Definition
+
+A reasonable SLO for autocomplete at L6:
+
+| SLO | Target | Measurement |
+|-----|--------|-------------|
+| Availability | 99.9% | % of requests returning 200 (empty array is 200, not an error) |
+| Latency p99 | < 50ms server-side | Measured at the load balancer |
+| Freshness | < 26 hours | Time since last successful batch pipeline run |
+| CTR | > 30% | Weekly average |
+| Safety | < 1 harmful suggestion per 10M requests | User reports / automated scanning |
+
+Note: 99.9% availability means 8.7 hours/year of downtime. For autocomplete (non-critical
+feature), this is acceptable. The key is that degraded mode (empty suggestions) is not
+counted as downtime — users can still search without suggestions.
+
+---
+
+## Part 13: Pre-Interview Drill
+
+### 13.1 What L6 Knows That L5 Doesn't
+
+An L5 candidate designs a correct autocomplete system. An L6 candidate designs the same
+system AND demonstrates command over the hard trade-offs, real failure modes, and the
+production concerns that only emerge at scale.
+
+The four L6 differentiators:
+
+**1. Content safety is not optional.**
+L5: "I'd filter offensive queries." L6: "Content filtering happens at three layers:
+offline (blocklist applied during batch build), real-time (trending queries vetted before
+injection), and reactive (user report → blocklist update → cache invalidation). The
+reactive path must complete in < 30 minutes per the policy SLA. Missing any layer
+creates a gap that bad actors exploit."
+
+**2. The Zipf distribution drives your caching strategy.**
+L5: "Use a cache." L6: "The top 10,000 prefixes (0.1% of all keys) account for 70%+ of
+traffic (Zipf). An in-process LRU of 10K entries covering 5 MB fits in L1-adjacent
+memory. This eliminates Redis round-trips for 70% of requests. For the long tail (rare
+prefixes), Redis adds 5-10ms. The blended p99 stays well under budget."
+
+**3. Trending is a separate pipeline, not faster batch.**
+L5: "Run batch more often." L6: "Batch every hour is 24× the cost for marginal gain.
+The right architecture separates concerns: stable base (daily batch, frequency+recency
+ranked) + volatile overlay (Flink sliding window, velocity-based, updated every 5 min).
+Each component is independently testable and replaceable. Trending queries need velocity
+detection, not frequency counting — they're popular because they just became popular,
+not because they've always been popular."
+
+**4. Personalization is a re-ranking problem, not a separate index.**
+L5: "Build a separate personalized index per user." L6: "Per-user indexes are impossible
+at scale (100M users × prefix keys). The correct approach: two-phase. Global ranking
+produces top-100 candidates for the prefix. Per-user re-ranking scores those 100
+candidates using the user's click history, recency, and behavior signals. The re-ranking
+is O(100) scoring operations, not O(all queries matching prefix)."
+
+### 13.2 The Three Diagrams to Draw Cold
+
+**Diagram 1: The two-pipeline architecture**
+```
+  OFFLINE (daily):
+  Query logs → Spark (frequency + CTR + recency) → Prefix hash → Redis
+
+  ONLINE TRENDING (every 5 min):
+  Kafka events → Flink (velocity window) → Trending store → Redis
+
+  SERVING:
+  Client (debounce) → API server (L1 LRU cache) → Redis (L2) → Merge trending + base → Response
+```
+
+**Diagram 2: Two-phase personalization**
+```
+  Prefix "py" →
+  Global lookup → top-100 candidates: [python, python tutorial, pygame, ...]
+                ↓
+  Per-user re-ranking: user clicked "python 3.12" yesterday
+                ↓
+  Re-ranked top-5: [python 3.12, python tutorial, python for beginners, ...]
+```
+
+**Diagram 3: Fuzzy matching path (triggered on cache miss)**
+```
+  User types "pytohn" (typo) →
+  Prefix lookup "pytohn" → MISS (no such prefix in store)
+                ↓
+  Trigram index: {pyt, yto, toh, ohn} → find queries sharing 2+ trigrams
+                ↓
+  Candidates: [python, python 3, python tutorial, ...]
+  Edit distance filter: distance("pytohn", "python") = 2 ← acceptable
+                ↓
+  Return: [python, python 3, ...]
+```
+
+### 13.3 Self-Check — L6 Autocomplete
+
+- [ ] Can you explain prefix hash vs. trie trade-off without notes?
+- [ ] Can you walk through the full offline pipeline from raw logs to Redis?
+- [ ] Do you know what a Count-Min Sketch is and why trending uses it?
+- [ ] Can you design the two-phase personalization without per-user indexes?
+- [ ] Do you know the Zipf distribution implication for cache sizing?
+- [ ] Can you describe trigram-based fuzzy matching and when it fires?
+- [ ] Do you know the three real incidents (Google Instant, Amazon, Twitter)?
+- [ ] Can you state the serving path latency budget at each tier?
+- [ ] Can you explain why content filtering must happen at three layers?
+- [ ] Can you describe what metric catches ranking regressions? (CTR, not latency)
+
+---
+
 ## Common Interview Mistakes
 
 These are the six mistakes that consistently separate candidates who fail a typeahead
@@ -2248,9 +2500,35 @@ constraints" — is what interviewers want to hear.
 
 ---
 
-*Chapter 88 of Section 6. Pairs with Chapter 48 (Search Indexing — how the full-text
-search index is built) and Chapter 63 (Search Ranking — how results are ordered after
-a query is submitted). Autocomplete is the layer between the user and the query:
-it is the system that shapes what queries get asked.*
+---
 
-*Next: Chapter 89 — Notification Systems: Push, Pull, and Fan-Out at Scale*
+## What to Read Next
+
+- **Ch75 — Typeahead / Autocomplete (L5)**: The same system at L5 depth — the foundation
+  to read before or after this chapter. L5 covers trie concept, prefix hash, Redis ZSETs,
+  offline batch, sub-100ms latency, and basic trending. This chapter adds fuzzy matching,
+  multi-language, deep personalization, incident case studies, and semantic autocomplete.
+
+- **Ch33 — Caching at Scale**: Deep dive on Redis internals (ZSET implementation, memory
+  management, eviction policies) and CDN caching patterns relevant to the serving layer.
+
+- **Ch35 — Event-Driven Architectures (Kafka)**: The streaming infrastructure behind
+  real-time trending. Understanding Kafka consumer groups and partition assignment
+  clarifies how the Flink trending pipeline achieves fault tolerance.
+
+- **Ch55 — Search System**: How full-text search works after the query is submitted.
+  Autocomplete shapes the query; the search system executes it. Understanding both
+  systems shows their interaction and the end-to-end user flow.
+
+---
+
+*Chapter 102 of Section 6. Pairs with Ch75 (Autocomplete L5), Ch55 (Search System),
+Ch33 (Caching/Redis internals), Ch35 (Kafka/streaming). Autocomplete is the layer between
+the user and the query: it shapes what queries get asked, before search executes them.*
+*Last updated: 2026-06-25*
+
+<!-- END OF CHAPTER 102 -->
+<!-- Additions: Parts 11-13 (semantic autocomplete, monitoring/observability, pre-interview drill),
+     fixed footer chapter numbers, added What to Read Next section. -->
+<!-- Key Staff differentiators: Zipf + LRU sizing, trending = velocity not frequency,
+     personalization = re-ranking not per-user index, content safety = 3 layers -->

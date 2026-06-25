@@ -2481,3 +2481,23 @@ An L6 interview performance has these hallmarks:
 5. They leave time to discuss evolution. "In year 2, if we expand internationally, here is what changes."
 
 The framework is not a checklist. It is a thinking discipline. Checklists get you to L4. Discipline gets you to L6.
+
+---
+
+## Quick-Reference Interview Checklist
+
+**Phase 1 — Requirements (3–5 min):** ☐ Clarify user scale ☐ Define core vs out-of-scope features ☐ Identify read/write ratio ☐ Ask about consistency needs ☐ Ask about latency SLA
+
+**Phase 2 — Estimation (2–3 min):** ☐ State QPS ☐ State storage/day ☐ State bandwidth ☐ Write numbers on the board — don't hold them in your head
+
+**Phase 3 — High-Level Design (10–15 min):** ☐ Draw client → API gateway → services → storage ☐ Name every component ☐ Show the happy-path data flow ☐ Pick storage types with justification
+
+**Phase 4 — Deep Dive (10–15 min):** ☐ Address the hardest problem (hot partition, celebrity, real-time, consistency) ☐ Back decisions with Phase 2 numbers ☐ State trade-offs explicitly before being asked
+
+**Phase 5 — Trade-offs and Evolution (3–5 min):** ☐ Name what you'd change at 10× scale ☐ Identify the next bottleneck ☐ Mention international expansion or new features if time allows
+
+**Common mistakes:** Not scoping requirements → designing the wrong system. Ignoring Phase 2 numbers → unjustified decisions. Never naming trade-offs → appears unaware of options. Spending >20 min on basics → no time for deep dive. Waiting for hard questions instead of surfacing them proactively.
+
+*Pairs with Chapter 22–26 (per-phase deep dives) and Chapter 100+ (case studies applying this framework).*
+
+`Chapter 21 | Section 2: Framework | End-to-End 5-Phase Framework`
