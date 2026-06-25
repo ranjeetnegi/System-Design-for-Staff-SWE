@@ -8674,3 +8674,31 @@ EU user profile data is cached in a US-East CDN edge node (CloudFront). This is 
 *Total questions: 52 (Q1-Q5 in main chapter, Q6-Q52 here = 47 supplemental questions across 6 sections)*
 
 *Cross-chapter coverage: Ch28 (databases), Ch29 (DB internals), Ch32 (Redis internals), Ch33/34 (Kafka), Ch35 (batch processing), Ch36 (multi-region), Ch37 (compliance), Ch38 (cost)*
+
+---
+
+## Exercises
+
+**Exercise 1 — Cache strategy selection.** Choose a caching strategy for each scenario: (a) user profile reads (10M users, updated rarely, 500KB profile), (b) product inventory (updated frequently, must be accurate for checkout), (c) social feed (100M items, personalized, 5-minute staleness OK), (d) rate limiting counter (must be accurate, fast, durable). Justify each choice.
+
+**Exercise 2 — Cache hit rate calculation.** Your database handles 50K RPS. You add a cache with a 90% hit rate. How many requests reach the database now? If cache hit rate drops to 70%, what happens to database load? At what hit rate does the database become the bottleneck (max 20K RPS)?
+
+**Exercise 3 — Cache invalidation strategy.** You cache user profile data. A user updates their display name. Design 3 invalidation strategies: (a) TTL only (5 minutes), (b) delete-on-write, (c) write-through. For each: max staleness, implementation complexity, failure behavior when cache is unavailable.
+
+**Exercise 4 — CDN configuration design.** You're serving a web app with: HTML pages (change per deploy), CSS/JS (immutable, versioned), user-uploaded images (never change), API responses (vary by user). For each asset type: cache-control header, CDN TTL, purge strategy, and whether to serve from edge or origin.
+
+**Exercise 5 — Redis cluster sizing.** You need to cache 100GB of data with 100K operations/second. Single Redis node can handle 200K ops/second and 25GB memory. Design the Redis cluster: number of nodes, sharding strategy, replication factor, and failover behavior.
+
+**Exercise 6 — Thundering herd prevention.** Your cache warms up after a deploy. For 30 seconds, all cache misses go to the database simultaneously. Your database can handle 10K RPS but receives 200K RPS during warmup. Design three solutions: probabilistic early expiration, request coalescing, and tiered warmup.
+
+---
+
+## Homework
+
+**Assignment 1 — Cache hit rate audit.** Find the cache hit rate for every cache your team uses. For any cache with hit rate below 80%: analyze why (key structure, TTL too short, cold keys, thundering herd) and propose a fix. Document the expected impact.
+
+**Assignment 2 — CDN configuration review.** Pull your CDN access logs. Find: top 10 most-requested URLs, cache hit rate per URL type, and any URLs with unexpectedly low hit rates. Propose TTL changes that would improve hit rate without increasing staleness risk.
+
+**Assignment 3 — Interview practice: caching design.** Practice "design a caching layer for a social media feed" in 20 minutes. Cover: what to cache, where to cache it (client/CDN/app/DB), cache invalidation on updates, failure behavior, and the consistency model you're accepting.
+
+**Assignment 4 — Read the Facebook Memcache paper ("Scaling Memcache at Facebook," 2013).** Write a one-paragraph summary: what was the thundering herd problem they encountered, what was "lease" and how did it solve it, and what does this tell you about cache design at scale?

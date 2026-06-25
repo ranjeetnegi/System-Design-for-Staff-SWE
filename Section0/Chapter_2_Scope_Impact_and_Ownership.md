@@ -3307,3 +3307,31 @@ L6 ROOT CAUSE ANALYSIS:
 **Fix applied:** Dropbox designated a Data Integrity team that owns all file deletion code paths, regardless of which product feature triggers them. Any change to deletion logic requires Data Integrity team review.
 
 **Staff lesson:** "Shared code" means no code if no team owns it. L6 engineers identify shared code that is central to data integrity and ensure it has a designated owner with review authority over all modifications.
+
+---
+
+## Exercises
+
+**Exercise 1 — Scope map your current project.** Draw every team your work touches (directly or indirectly). For each: do you have a clear agreement on what you own vs. what they own? Identify the one boundary that is most ambiguous and write a one-paragraph proposal to clarify it.
+
+**Exercise 2 — Impact framing practice.** Take your last three significant technical decisions. For each, write one sentence connecting it to a user or business outcome (not a technical outcome). If you can't, the decision may have been pure implementation detail — or you haven't found the right framing yet.
+
+**Exercise 3 — Ownership depth test.** Pick a system you own. Answer: (a) Who can modify it without your review? (b) What happens if it goes down at 2am — who gets paged? (c) What's the current debt and when does it get paid? (d) What's the 12-month roadmap? If you can't answer all four fluently, you have an ownership gap.
+
+**Exercise 4 — Influence audit.** Identify the last time you changed a team's technical direction without having authority over them. What did you use — data, demo, narrative, relationship, timing? What would you do differently next time?
+
+**Exercise 5 — The 3-level scope expansion.** Take any feature you are building. Write the scope at three levels: (a) this feature, (b) this feature + its effect on adjacent systems, (c) this feature + adjacent systems + organizational implications. Practice presenting each level in 60 seconds.
+
+**Exercise 6 — Ownership handoff simulation.** Imagine you are leaving your current team in 4 weeks. Write the handoff document: what someone needs to know to own your systems independently. What gaps do you discover? Those gaps are your current ownership debt.
+
+---
+
+## Homework
+
+**Assignment 1 — Scope statement.** Write a one-paragraph scope statement for your current role: what you own, what you influence but don't own, what you deliberately don't own. Share it with your manager. Does it match their view?
+
+**Assignment 2 — Impact measurement.** For each major project you own, identify one metric that would tell you the project is working as intended. If no metric exists, create one and share it with stakeholders.
+
+**Assignment 3 — Interview practice: scope question.** Practice answering "tell me about a system you designed that affected multiple teams" out loud, targeting 4 minutes. Hit: what you owned, how you managed dependencies, what you learned about scope at scale.
+
+**Assignment 4 — Observe an L6 engineer.** Find someone operating at Staff level or above. Spend two weeks deliberately observing how they scope work. What do they take on vs. defer? What do they insist on owning vs. delegate? Write down three specific behaviors you want to adopt.

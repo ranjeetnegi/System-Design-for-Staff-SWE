@@ -2932,3 +2932,31 @@ CASCADE:
 
 **Question 25:** Your system writes 10,000 events/second to Kafka. Each event is 500 bytes. How much disk does Kafka consume per day (before replication)? With 3x replication? With 7-day retention?
 
+---
+
+## Exercises
+
+**Exercise 1 — Twitter-scale estimation.** Twitter has 200M daily active users, each reading 200 tweets/day and posting 1 tweet every 10 days. Estimate: read RPS, write RPS, storage growth per day (tweet = 280 chars + metadata ~500 bytes), and database size after 5 years of retention.
+
+**Exercise 2 — Video platform bandwidth.** YouTube serves 1B video views/day. Average video is 10 minutes at 720p (~3 Mbps). Estimate: total bandwidth served per day in PB, CDN capacity needed at peak (assume 4:1 peak:average), and storage for the video library if average video is 500MB.
+
+**Exercise 3 — Chat message storage.** WhatsApp has 2B users, average 40 messages/day each. Each message is 100 bytes. Estimate: messages per second at peak, storage growth per day, per year, and after 5 years. Now estimate the same for voice messages if 10% of messages are voice (avg 30 seconds, codec 64Kbps).
+
+**Exercise 4 — Database sizing.** You're designing a rides table for Uber. Estimate: number of rows per day (50M rides globally), row size (pickup, dropoff lat/lon, timestamp, driver_id, rider_id, fare ~200 bytes), index size overhead (assume 30% extra), and storage needed per year. At what point does this require partitioning?
+
+**Exercise 5 — Cache hit rate impact.** Your service serves 100,000 RPS. Database can handle 10,000 RPS. You add a Redis cache. What cache hit rate do you need to keep the database under 80% capacity? If the cache holds 1GB and average cached object is 1KB, how many unique objects can you cache?
+
+**Exercise 6 — Notification fanout.** Instagram sends a notification to all followers when a user posts. 10% of users have >10K followers; 0.01% have >1M followers. Estimate: total notifications per post for an average user (1,000 followers), a micro-influencer (100K followers), and a celebrity (10M followers). How does this shape your fanout architecture?
+
+---
+
+## Homework
+
+**Assignment 1 — Estimate before you measure (2-week drill).** For two weeks, before looking at any production metric, estimate it first. Write down your estimate. Then check. Track your estimation accuracy. Identify where you're consistently off — that's the dimension to study.
+
+**Assignment 2 — Monthly cost estimate.** Pick any service you run. Estimate the monthly AWS/GCP cost from first principles: compute (RPS × CPU per request × $/CPU-hour), storage (GB × $/GB-month), network (GB transferred × $/GB). Compare to your actual bill. Where's the gap?
+
+**Assignment 3 — Interview practice: estimation question.** Practice answering "how many servers does Netflix need?" in 10 minutes. Cover: DAU, average streams, bitrate, servers needed per Gbps, total servers, and CDN vs. origin split.
+
+**Assignment 4 — Read the Google SRE book, Chapter 4: "Service Level Objectives."** The connection between estimation (capacity planning) and SLOs is fundamental. Write a one-paragraph summary: how does estimation inform SLO setting for your team's services?
+

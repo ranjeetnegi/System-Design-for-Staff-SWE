@@ -2485,6 +2485,44 @@ The ladder from Intern to Staff in on-call engineering is not about surviving mo
 
 ---
 
+## Exercises
+
+**Exercise 1 — SLO Definition:**
+Pick one real service you work on or know well. Write its SLO from scratch: define the SLI (what metric are you measuring?), the SLO target (99.9%? 99.95%?), the measurement window (28 days?), and the error budget (how many minutes of downtime per month does that allow?). Then: is the SLO too strict for the service's actual reliability? Too loose?
+
+**Exercise 2 — Alert Audit:**
+List 5 alerts that fire in your current on-call rotation (or one you know about). For each alert, answer: Is this symptom-based or cause-based? Would this fire on an SLO burn? Has this alert ever been a false positive? What's the action when it fires, and is that action documented in a runbook? Categorize each alert as: keep, change, or delete.
+
+**Exercise 3 — Post-Mortem Write-Up:**
+Pick a real incident from your experience (or a public one, like the AWS US-EAST-1 2021 outage, or the Cloudflare 2022 network incident). Write a blameless post-mortem for it using the template from Part 8. Include: timeline, contributing factors, what went well, what went wrong, 3 specific actionable items. Then: would the action items from your post-mortem have prevented the incident if they'd been implemented earlier?
+
+**Exercise 4 — Runbook Creation:**
+Write a runbook for one real alert you deal with. Use the structure from Part 10: symptom description → first check → diagnosis steps (each step has a command or link) → mitigation action → escalation path. Then share it with a colleague: can they follow it at 2 AM without asking you any questions?
+
+**Exercise 5 — Toil Measurement:**
+Track your on-call activity for one week. For each thing you did: Was it automatable? Did it scale with user growth? Was it purely manual? Estimate the percentage of your on-call time that was toil vs. actual incident work. Compare to the SRE book target (< 50% toil). What's the single highest-value toil item to automate?
+
+**Exercise 6 — Incident Simulation:**
+Run a game day with your team. Write a scenario (a service returns 500s for 20% of requests, the alert fires). Walk through: who is incident commander? Who communicates to stakeholders? What's the first action after declaring? How long before you have a root cause hypothesis? After the game day: what did you learn about your runbooks, your escalation path, your alert quality?
+
+---
+
+## Homework
+
+**Assignment 1:**
+Read the Google SRE book chapters: "Being On-Call," "Effective Troubleshooting," and "Postmortem Culture." These are available free online at sre.google/sre-book. After reading, compare their on-call escalation framework with your current team's. Write down 3 specific differences and 2 things you'd want to adopt.
+
+**Assignment 2:**
+Find a public post-mortem from a company you respect (Cloudflare, AWS, Stripe, and GitHub publish these regularly). Evaluate it against the criteria in Part 8: Is the language blameless? Are the contributing factors specific? Are the action items ownable and verifiable? What would you have done differently if you were the incident commander?
+
+**Assignment 3:**
+If you're currently on-call: after your next incident (or after reviewing your last one), calculate your MTTD and MTTR for that incident. Are these tracked automatically by your team's tooling? If not, how would you instrument them? What would a 20% reduction in MTTR be worth in customer impact terms?
+
+**Assignment 4:**
+Research one real production incident at a major company and trace it from alert → diagnosis → mitigation → post-mortem → systemic fix. Good candidates: AWS US-EAST-1 S3 outage (2017), Facebook DNS outage (2021), Fastly global CDN outage (2021), Cloudflare network incidents. For the one you pick: what would the on-call engineer have seen first? What was the mitigation? What was the long-term fix? Could better runbooks or alerts have changed the outcome?
+
+---
+
 ## Further Reading
 
 The concepts in this chapter are drawn from or inspired by the following foundational resources. If you want to go deeper on any topic covered here, these are the best starting points:

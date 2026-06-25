@@ -5722,3 +5722,31 @@ L6 MIGRATION AS PROGRAM:
 **Fix applied:** Uber added automated divergence detection: every 5 minutes, a reconciliation job compared a sample of trip records between the monolith and microservice. Any divergence > 0.01% triggered an alert. The strangler fig migration also got a hard deadline: "migration must complete within 90 days, no extensions."
 
 **Staff lesson:** Strangler fig migrations must have a defined end date, not an open-ended "we'll finish eventually." Every day the dual-system state runs is a day something can diverge. Monitor synchronization lag as a production metric (not an internal tool metric), and set a hard deadline for completing the migration.
+
+---
+
+## Exercises
+
+**Exercise 1 — Strangler fig planning.** You need to migrate a 500K-line monolith to microservices over 18 months. The monolith serves 10K RPS. Design the first 3 migration phases: which service to extract first (and why), how you run old and new in parallel, the traffic migration strategy (feature flags, canary), and the rollback plan.
+
+**Exercise 2 — Database migration design.** Migrate from a shared monolith database to per-service databases while keeping 99.9% availability. Design: which service gets its own database first, how you break the shared database relationships, the dual-write period, and how you validate data consistency during migration.
+
+**Exercise 3 — Feature flag rollout strategy.** You're rolling out a rewritten payment processor. Design the feature flag rollout: 0.1% → 1% → 10% → 50% → 100%. For each phase: what metrics validate readiness to proceed, what triggers automatic rollback, and what's the maximum blast radius if the new system fails at each stage?
+
+**Exercise 4 — Risk assessment.** A colleague proposes replacing your primary database with a new one. Write a risk assessment: what could go wrong (data loss, performance regression, unexpected behavior), probability of each (low/medium/high), blast radius (how many users/services affected), and mitigation for each risk.
+
+**Exercise 5 — Migration retrospective.** Find a migration your team completed (or a public post-mortem). Write a structured retrospective: what went well, what went wrong, what you'd do differently, and what process change you'd institutionalize from the experience.
+
+**Exercise 6 — Technical debt prioritization.** List the top 5 pieces of technical debt in a system you maintain. For each: cost of not fixing it (engineering time/month, incident probability, velocity impact), cost of fixing it (engineering time, risk), and your prioritization. Defend your top pick to a skeptical product manager.
+
+---
+
+## Homework
+
+**Assignment 1 — Write a migration plan.** Pick any system evolution your team needs to do in the next 6 months (migration, refactor, extraction). Write the plan: phases, success criteria per phase, rollback procedure, and monitoring. Share with your tech lead for feedback.
+
+**Assignment 2 — Dark launch experiment.** Identify one feature being built where a shadow mode (dark launch) would reduce risk. Design the shadow mode: what traffic to mirror, what to compare between old and new, and what divergence rate is acceptable before promoting.
+
+**Assignment 3 — Interview practice: migration design.** Practice "how would you migrate a payment service from a monolith to a microservice without downtime" in 30 minutes. Cover: migration strategy, dual-write period, traffic cutover, rollback, and monitoring.
+
+**Assignment 4 — Read the Stripe engineering blog post on API versioning.** Write a one-paragraph summary: how does Stripe handle backward compatibility in their API, what's their versioning strategy, and what can you apply to your team's migration approach?

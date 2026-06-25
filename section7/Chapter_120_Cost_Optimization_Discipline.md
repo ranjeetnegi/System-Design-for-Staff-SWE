@@ -1344,6 +1344,48 @@ At companies with $50M+/year cloud spend, a dedicated FinOps team is justified (
 
 ---
 
+### Brainstorming Questions — Part 1: Why Cost Is an Engineering Responsibility
+
+1. A product manager says "don't worry about cost, just ship the feature." When is this the right call? When is it dangerous? What's the threshold where you push back?
+2. Your team has never tracked infrastructure cost by service. What's the first thing you'd change? What data would you collect, and how long before it produces useful insights?
+3. Intern approach to cost: "it's someone else's job." L5 approach: "I care about the cost of my service." L6 approach: what? What does L6 cost thinking look like that L5 doesn't have?
+
+### Brainstorming Questions — Parts 2–3: Attribution and Quarterly Review
+
+1. You have 50 microservices sharing one AWS account. No cost attribution. How do you retrofit tagging without breaking anything? What's the prioritization (tag the expensive stuff first)?
+2. What's the right cadence for a cost review? Weekly? Monthly? Quarterly? What triggers an ad-hoc review outside the regular cadence?
+3. In a quarterly cost review, you find that one team's service costs 10x more than the others. What do you say in the meeting? What's the follow-up?
+
+### Brainstorming Questions — Parts 4–6: Compute, Reserved, Storage
+
+1. You're right-sizing instances and reduce a service from 32-core to 16-core instances. Three weeks later, a P1 incident occurs during a traffic spike. How do you decide whether the right-sizing caused the incident?
+2. Reserved Instances commit you to 1 or 3 years. Your startup might pivot in 6 months. How do you weigh commitment risk against cost savings?
+3. Your S3 storage is growing 10% per month. The data lifecycle policy was "keep everything forever." What's the conversation to have with the business about retention? Who owns the decision?
+
+### Brainstorming Questions — Parts 7–10: Network, Database, Serverless, Pipelines
+
+1. Cross-region data transfer is 10x more expensive than intra-region. Your service makes 100K cross-region calls/day. What architectural changes reduce this, and what's the cost of each change in engineering time?
+2. A serverless function runs 1M times/day at 500ms each. A container running 24/7 would be cheaper at that scale. What's the crossover point? How do you calculate it?
+3. Your data pipeline costs $50K/month. The team wants to reduce it by 30%. What's the first place you look? What's the one lever that typically has the highest impact?
+
+---
+
+## Exercises
+
+**Exercise 1 — Tag audit.** Audit the tagging of your team's cloud resources. What percentage are correctly tagged (team, service, environment)? For any untagged resources: what are they, and why aren't they tagged? Create a one-sprint plan to reach 100% tagging.
+
+**Exercise 2 — Cost dashboard.** Build a cost dashboard for your team's services: cost per service, cost per environment (prod vs. dev), cost trend over the last 3 months, and cost per request for the top 3 services. What's the most surprising number?
+
+**Exercise 3 — Spot instance migration.** Identify one workload in your system that could use spot/preemptible instances (batch jobs, ML training, dev environments). Design the migration: checkpoint strategy, requeue on interruption, and expected savings.
+
+**Exercise 4 — Storage lifecycle policy.** Find your team's largest S3 bucket or object store. What's the access pattern (use access logs or metadata)? Design a lifecycle policy: Standard → Standard-IA → Glacier. Calculate cost before and after.
+
+**Exercise 5 — Database query cost analysis.** Find the top 5 most expensive database queries by CPU time or I/O. For each: is this query necessary? Can it be optimized (index, query rewrite)? Can the result be cached?
+
+**Exercise 6 — Serverless vs. container break-even.** For any function your team runs: calculate the monthly cost on serverless vs. a right-sized container. At what invocation rate does the container become cheaper?
+
+---
+
 ## Homework
 
 **This week:**

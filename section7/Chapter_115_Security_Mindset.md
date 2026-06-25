@@ -473,7 +473,7 @@ This covers the main dimensions and takes about 2 minutes. It signals deep secur
 
 ---
 
-## Part 10: Exercises
+## Exercises
 
 **Exercise 1 (STRIDE):** Apply STRIDE threat modeling to a password reset flow:
 ```

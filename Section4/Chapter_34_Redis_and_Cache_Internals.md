@@ -2903,3 +2903,31 @@ Follow-up: After the optimization, memory drops from 9GB to 3.2GB. Three months 
 ---
 
 *End of Supplemental Brainstorming -- Chapter 32.*
+
+---
+
+## Exercises
+
+**Exercise 1 — Data structure selection.** Choose the right Redis data structure for each use case: (a) top 10 leaderboard (update score, get rank), (b) session storage (get/set by token, TTL 30 min), (c) rate limiting (count requests per user per second), (d) pub/sub for real-time notifications, (e) unique visitor count per day (approximate OK). Justify each with the specific command(s) you'd use.
+
+**Exercise 2 — Memory optimization.** You have a Redis instance with 10M keys. Average key size: 50 bytes. Average value (JSON string): 200 bytes. Total: ~2.5GB. You learn that 90% of keys are small user metadata (5 fields). Design the hash encoding optimization: convert individual string keys to hash fields. Calculate memory before and after.
+
+**Exercise 3 — Replication lag analysis.** Your Redis primary handles 100K writes/second. Replication to secondaries runs async. At 10ms average replication lag, how many operations can a secondary be behind? What's the maximum data loss on a primary failure? How does this change your application's consistency strategy?
+
+**Exercise 4 — Redis Cluster routing.** You have a Redis Cluster with 3 primary shards. Key distribution uses CRC16. You need to store a user session and their shopping cart together (to avoid cross-shard operations). Design the key naming convention using hash tags. What's the trade-off?
+
+**Exercise 5 — Eviction policy selection.** Your Redis instance is at 90% memory capacity. Choose the eviction policy for each workload: (a) session storage (all sessions are equally important), (b) cache layer (recently accessed data is most valuable), (c) rate limiting counters (all counters equally important, but expired keys are useless). Justify each policy choice.
+
+**Exercise 6 — Lua script atomicity.** You need to implement a rate limiter: check if count exceeds limit, if not increment and set TTL. Why can't you do this with separate GET/INCR/EXPIRE commands? Write the Lua script. What does Redis guarantee about Lua script execution?
+
+---
+
+## Homework
+
+**Assignment 1 — Redis memory audit.** Run `redis-cli INFO memory` and `redis-cli --bigkeys` on a production Redis instance. Identify the top memory consumers by key pattern. For any key pattern using >10% of total memory: is the encoding efficient? What optimization would you apply?
+
+**Assignment 2 — Read the Redis documentation on data structures.** Focus on the internal encoding section: when does a list use ziplist vs. linkedlist? When does a hash use ziplist vs. hashtable? Write a one-paragraph summary of how these encoding thresholds affect memory usage for your workloads.
+
+**Assignment 3 — Interview practice: Redis design.** Practice "design a distributed rate limiter using Redis" in 15 minutes. Cover: data structure choice, key naming, TTL strategy, what happens if Redis is unavailable, and how you handle a Redis cluster resharding event while rate limiters are active.
+
+**Assignment 4 — Implement a Redis-backed feature.** Choose a feature your team could add that would benefit from Redis (leaderboard, cache, rate limiter, distributed lock). Implement it with production-quality error handling: what happens when Redis is slow, when it's unavailable, when the connection pool is exhausted?

@@ -4835,3 +4835,31 @@ L6 PLATFORM DESIGN:
 
 **Question 22:** "Shared services create coupling." How do you design a shared service that provides the benefits of sharing without tight coupling between consumers?
 
+---
+
+## Exercises
+
+**Exercise 1 — API contract audit.** Pick any internal API your team publishes. Document: current implicit contract (what callers actually depend on), explicit contract (what's documented), and the gap between them. Propose what to formalize and what to deprecate.
+
+**Exercise 2 — Coupling cost calculation.** Identify the three most tightly coupled systems you own. For each: estimate the coordination cost per sprint (meetings, PRs blocked, on-call cross-team pages). Sum them up. That's your coupling tax — what would you pay to eliminate it?
+
+**Exercise 3 — Cross-team incident tabletop.** Gather two or three teammates. Scenario: service X starts returning errors. Root cause is a schema change by another team. Walk through: how you detect it, how long to identify the correct team, how you coordinate a fix, and what process change prevents recurrence.
+
+**Exercise 4 — Platform API design review.** Design or review an API meant to serve 5+ teams. Evaluate: backward compatibility story, versioning strategy, error contract (what callers can rely on for errors), deprecation timeline. What changes would you make?
+
+**Exercise 5 — SLO negotiation simulation.** You own a shared service. Three downstream teams have different reliability requirements: 99.9%, 99.5%, 99%. Write the SLO document for each consumer. How do you handle the 99% consumer without degrading the 99.9% one?
+
+**Exercise 6 — Growth event planning.** Your platform serves 10 teams. One team is expecting a 5x traffic spike for a product launch. Design the process: how do you get notified in advance, how do you validate the platform will hold, what's the contingency if it doesn't?
+
+---
+
+## Homework
+
+**Assignment 1 — Dependency map.** Create a visual dependency map for your team's systems: what you call, what calls you, and the criticality of each dependency. Share it with your team and identify the one dependency that worries you most.
+
+**Assignment 2 — Strangler Fig plan.** Identify one legacy coupling in your system (a shared database, a synchronous call that should be async, a monolith boundary that should be split). Write a 3-phase strangler fig migration plan with concrete milestones.
+
+**Assignment 3 — Interview practice: cross-team design question.** Practice answering "design a shared rate limiting service for 8 different products" out loud in 45 minutes. Focus on: API design, consumer SLA negotiation, operational ownership model, and failure modes when the shared service is degraded.
+
+**Assignment 4 — Write an ADR.** Pick any significant technical decision your team made in the last 6 months. Write an Architecture Decision Record (ADR): context, options considered, decision made, trade-offs accepted. Share it with the team for review.
+

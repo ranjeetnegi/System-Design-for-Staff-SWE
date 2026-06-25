@@ -1996,6 +1996,35 @@ The frameworks in this chapter scale from a 1-hour decision to a 6-month platfor
 
 Most engineers get better at building systems. The best engineers also get better at choosing which systems to build, which to buy, and which to avoid entirely. That discernment is what separates L5 from L6.
 
+---
+
+## Exercises
+
+**Exercise 1 — Build/buy/OSS decision.** For each scenario, choose build, buy (managed SaaS), or use open-source — and justify: (a) internal analytics dashboard, (b) authentication system for a product with 10M users, (c) distributed tracing, (d) message queue for a startup with 3 engineers. What's the primary criterion for each?
+
+**Exercise 2 — Evaluation criteria definition.** You're evaluating three search engines (Elasticsearch, Typesense, Meilisearch). Before looking at any feature list, write the 6 evaluation criteria that matter for your use case. Rank them by importance. Then evaluate each candidate against your criteria — not theirs.
+
+**Exercise 3 — POC scope definition.** You want to evaluate a new database. Design a POC: what specific questions must the POC answer, how long should it run, what data do you test with, who reviews the results, and what outcome triggers "proceed" vs. "reject"?
+
+**Exercise 4 — Total cost of ownership.** Evaluate managed Kafka (Confluent Cloud at $0.50/GB) vs. self-hosted Kafka (3 brokers, your ops team manages). Model: your current data volume (50GB/day), projected growth (3x/year), engineering hours for self-hosted maintenance (estimate), and ops cost. Which is cheaper at what scale?
+
+**Exercise 5 — Reversibility assessment.** You're choosing a new ORM. Evaluate reversibility: how hard is it to switch in 2 years if you're unhappy? What's the migration path? How much of your codebase would be affected? Use this to adjust your decision weight toward or away from this option.
+
+**Exercise 6 — Reference check design.** You've shortlisted two message queue options. Design the reference check process: who do you talk to (engineers at other companies using these in production), what questions do you ask (failure modes, operational burden, scaling pain points, what they'd do differently), and how you weight anecdotal vs. benchmark evidence.
+
+---
+
+## Homework
+
+**Assignment 1 — Technology decision retrospective.** Pick a technology your team adopted in the last 2 years. Write a retrospective: what criteria drove the decision, what you got right, what you got wrong, and what you'd do differently knowing what you know now.
+
+**Assignment 2 — Current decision POC.** Identify a technology decision your team needs to make in the next quarter. Write the evaluation criteria and POC plan before anyone starts looking at vendor websites. Share for team alignment.
+
+**Assignment 3 — Interview practice: technology choice question.** Practice "which database would you choose for a real-time leaderboard, and why?" in 5 minutes. Cover: your evaluation criteria, two candidates considered, why one wins, and what would change your answer.
+
+**Assignment 4 — Read "Build vs. Buy" (Martin Fowler on bliki).** Write a one-paragraph summary of the core argument and connect it to a technology decision your team is currently facing.
+
+*Pairs with [Chapter 111: Migrations and Safe Changes](Chapter_111_Migrations_and_Safe_Changes.md) and [Chapter 116: Refactoring Large Systems](Chapter_116_Refactoring_Large_Systems.md). Next: [Chapter 124: Technical Roadmapping and Engineering Strategy](Chapter_124_Technical_Roadmapping_and_Engineering_Strategy.md).*
 
 ---
 

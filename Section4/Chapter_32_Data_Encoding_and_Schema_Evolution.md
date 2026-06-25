@@ -3909,3 +3909,31 @@ You are about to deploy a schema change that removes a field. After deployment, 
 
 *End of Supplemental Brainstorming: Chapter 30 -- Data Encoding and Schema Evolution.*
 *Total: 56 questions (Q5-Q60) across 7 sections covering all major topics and cross-chapter connections.*
+
+---
+
+## Exercises
+
+**Exercise 1 — Encoding format selection.** Choose an encoding format for each use case and justify: (a) microservice RPC where clients and servers deploy independently, (b) event log that must be readable in 10 years, (c) browser-to-server API calls, (d) high-frequency real-time telemetry (10M events/second). What's the key constraint that drives each choice?
+
+**Exercise 2 — Avro schema evolution.** You have an Avro schema for a user event: `{id, user_id, event_type, timestamp}`. You need to add a `device_type` field. Write the new schema. What's the reader schema resolution when old writers write to new readers? When new writers write to old readers?
+
+**Exercise 3 — Protobuf backward compatibility.** You have a Protobuf message with fields 1-5. You need to remove field 3 (deprecated). Walk through: what happens if you just delete field 3 (binary compatibility?), the correct approach (reserve the field number), and how to handle existing data in the field.
+
+**Exercise 4 — JSON vs Protobuf performance.** Your service encodes 1M events/second. Measure (or estimate): JSON serialization time per event (~10µs), Protobuf serialization (~2µs). JSON size per event (~500 bytes), Protobuf (~100 bytes). Calculate: CPU and bandwidth savings at 1M events/second over 30 days. When does the migration payoff?
+
+**Exercise 5 — Schema registry design.** Design a schema registry for Kafka. Requirements: 100 producers, 50 consumers, schema evolution with backward compatibility enforcement, no downtime during schema changes. What's the API? How does a producer register a schema? How does a consumer resolve it?
+
+**Exercise 6 — Migration strategy comparison.** You need to migrate from JSON to Protobuf for a Kafka topic with 50 consumers. Design three migration strategies: (a) big bang, (b) dual-publish, (c) consumer-driven migration. For each: risk, rollback complexity, and migration time.
+
+---
+
+## Homework
+
+**Assignment 1 — Encoding audit.** For each data store and message bus your team owns: what encoding format is used? Is it self-describing (JSON) or schema-based (Protobuf/Avro)? What's the schema evolution story? Write a one-page summary with one recommendation per system.
+
+**Assignment 2 — Read Kleppmann "Designing Data-Intensive Applications" Chapter 4.** Focus on encoding formats and schema evolution. Write a one-paragraph summary: what does "backward compatible" and "forward compatible" actually mean, and why does it matter for rolling deployments?
+
+**Assignment 3 — Interview practice: schema evolution.** Practice answering "you have a Protobuf-encoded Kafka topic with 100 consumers and need to add a required field — how do you do it?" in 10 minutes. Cover: why you can't add a required field, the backward-compatible approach, the migration plan, and what monitoring you'd set up.
+
+**Assignment 4 — Implement a small schema migration.** Pick a JSON API in your codebase. Add a new field in a backward-compatible way (optional, with a sensible default). Add a test that verifies old clients (who don't send the field) still work correctly. Document the migration for future reference.

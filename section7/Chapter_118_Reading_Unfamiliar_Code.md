@@ -1548,6 +1548,60 @@ Use these to test your readiness to discuss "reading unfamiliar code" in any int
 
 ---
 
+### Brainstorming Questions — Part 1: The Mental Model Problem
+
+1. You join a team and are handed a 200K-line service with no documentation and the original author is gone. What do you do in the first 2 hours? What question has the highest leverage?
+2. When is a codebase "too complex to understand" a people problem vs. a technical problem? What's the sign that tells you which it is?
+3. What's the difference between reading code to "understand how it works" vs. reading code to "find where to make a change"? How does that difference change your approach?
+
+### Brainstorming Questions — Part 2: Entry Points Strategy
+
+1. You need to add a new REST endpoint to a service you've never touched. Where do you start — the routing layer, the controller, the database model, or somewhere else? Why?
+2. In your experience, what's the single most reliable entry point for understanding any backend service? What does it reveal that other entry points don't?
+3. Intern approach: reads the code top-to-bottom. Staff approach: starts from entry points and follows the flow. What specifically does the Staff approach reveal faster?
+
+### Brainstorming Questions — Part 3: Data First, Code Second
+
+1. You're debugging a subtle data corruption bug in unfamiliar code. Should you start with the code or with the data? Walk through your reasoning.
+2. When is understanding the data model more useful than understanding the business logic? Name a specific scenario where reading only code would lead you astray.
+3. How do you quickly understand the data model of an unfamiliar service without running it (no dev environment available)?
+
+### Brainstorming Questions — Part 4: Tests Are the Spec
+
+1. A codebase has 80% test coverage. But the tests only check the happy path. How useful are they for understanding behavior? What's missing?
+2. You find a test that describes behavior you don't understand. Do you trust the test, or do you verify the behavior manually? What influences your decision?
+3. What's the fastest way to understand what an unfamiliar function is supposed to do if the tests are well-written?
+
+### Brainstorming Questions — Part 5: Git History
+
+1. You find a line of code that looks wrong. Before fixing it, what do you do? How does the git history change your confidence in whether it's a bug or intentional?
+2. How far back in git history do you go when investigating a bug? What's your cutoff? What signals tell you you've gone far enough?
+3. An engineer rewrote a large module 6 months ago. The tests pass, but you suspect the behavior changed subtly. How do you use git history to verify?
+
+### Brainstorming Questions — Part 6: Invariants and Sharp Edges
+
+1. What's an "invariant" in a codebase? Give an example of a broken invariant that caused a production incident.
+2. How do you identify "sharp edges" (places where things are easy to break) in unfamiliar code before you touch it?
+3. You've found what looks like a bug. Before fixing it, what's the checklist of things to verify to ensure your fix doesn't break something else?
+
+---
+
+## Exercises
+
+**Exercise 1 — 2-hour codebase exploration.** Pick an open-source project you've never read: Prometheus, Temporal, Gitea, or Mattermost. Apply the entry points strategy: find the main function, trace one request end-to-end, understand the data model. Write a 1-paragraph summary of how the system works.
+
+**Exercise 2 — Data model extraction.** Find a service with no data model documentation. By reading only the database schema (or ORM models), write a 1-paragraph description of what the system does. How much can you infer about behavior from data structure alone?
+
+**Exercise 3 — Test-based specification.** Find a function in an unfamiliar codebase. Read only its tests — not the implementation. Write a specification (what it's supposed to do) based on the tests alone. Then read the implementation and validate your specification.
+
+**Exercise 4 — Git archaeology.** Find any code that looks surprising or wrong in a codebase you maintain. Use `git blame` + `git log` to find why it was written that way. Did the history change your assessment of whether it's correct or a bug?
+
+**Exercise 5 — Invariant documentation.** Pick any module you own. Identify 3 invariants that must always hold (conditions that must be true at all times). Document them as comments. Now: are there places in the code where these invariants could be violated? Add assertions or tests.
+
+**Exercise 6 — Entry point timing.** The next time you need to make a change to unfamiliar code, time yourself: how long does it take to feel confident enough to make the change? What was the bottleneck (understanding the data model, the flow, the tests)? Note what helped most.
+
+---
+
 ## Homework
 
 **Immediate (this week):**

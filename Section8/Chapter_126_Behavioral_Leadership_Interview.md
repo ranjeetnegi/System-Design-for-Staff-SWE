@@ -61,6 +61,12 @@ a detailed justification under several headings. The most important:
 Both are evaluated in every behavioral round. Googleyness is NOT a soft "culture fit"
 check. It is a structured evaluation of specific behaviors described below.
 
+**Brainstorming Questions:**
+1. The behavioral round is scored as heavily as a coding round, but most candidates spend 80% of their prep on coding. What does this imbalance cost them, and why do you think it persists?
+2. An interviewer writes "candidate was technically strong but I couldn't assess Googleyness — answers were too short." What specifically went wrong in the interview?
+3. Google uses structured feedback with specific headings. How does this change what you should be optimizing for vs. an unstructured interview format?
+4. Leadership and Googleyness are evaluated separately. Can you have one without the other? Give an example of each case.
+
 ---
 
 ## Part 2 — Googleyness: What It Actually Means
@@ -116,6 +122,12 @@ another team's problem."
 **Good signal:** "My service's SLA was met, but I noticed our latency added 200ms to
 the user journey end-to-end. I flagged it to the responsible team and helped them
 profile the issue. It wasn't my code, but the user felt it."
+
+**Brainstorming Questions:**
+1. Googleyness behavior #1 is "thrives in ambiguity." How would you demonstrate this in a 4-minute behavioral answer? What specific words or actions in your story signal it?
+2. Can a technically excellent engineer consistently fail the Googleyness evaluation? What would their behavioral stories look like?
+3. The "does the right thing" behavior sometimes means doing something inconvenient or costly in the short term. Can you think of a real example from your career where you chose the right thing over the expedient thing? How would you frame that story?
+4. Googleyness emphasizes "values user feedback." How does this show up in engineering decisions, not just product ones? What would an engineer who ignores user feedback look like to an interviewer?
 
 ---
 
@@ -212,6 +224,12 @@ Every behavioral answer will trigger follow-ups. Common ones:
 - "How did you know it worked?" → Forces you to cite a metric or observable outcome.
 
 Prepare follow-up answers as part of your story prep, not just the main answer.
+
+**Brainstorming Questions:**
+1. The STAR format says Situation should be brief and Action should be 70% of your answer. What happens when a candidate inverts this ratio (80% Situation, 20% Action)? What signal does that send?
+2. "Result" in STAR should include a measurable outcome. What's the difference between a measurable result and a non-measurable one? Give an example of upgrading a weak result to a strong one.
+3. You're asked "tell me about a time you failed." You have a great story but it happened 6 years ago. Is recency a factor in behavioral answers? What makes a story feel current vs. stale?
+4. STAR is the format, but authenticity matters too. If a candidate delivers a polished STAR answer that sounds rehearsed, does it help or hurt them? How do you balance preparation with sounding natural?
 
 ---
 
@@ -781,6 +799,12 @@ hurt GMV."
 - Cross-functional alignment (product + engineering)
 - Long-term thinking
 
+**Brainstorming Questions:**
+1. You have 6 prepared stories. The interviewer asks you 8 questions. You need to reuse 2 stories. Is this a problem? How do you decide which stories to reuse and how to adapt them?
+2. Each story in your bank should work for 3+ different question types. Take your strongest story — how many different behavioral questions could it answer? What aspect of the story do you emphasize differently for each?
+3. A candidate walks in with 6 stories but all of them are from the same project 3 years ago. What does this tell the interviewer? What's the risk?
+4. Story 3 in this chapter covers "pushing back on a bad technical decision." This is a high-risk story type — it can make you look difficult if told poorly. What makes the difference between a story that shows healthy disagreement vs. one that makes you look stubborn?
+
 ---
 
 ## Part 6 — Handling Behavioral Questions in Real Time
@@ -833,6 +857,12 @@ If you realize mid-answer that the example isn't strong, say so:
 let me use that one."
 
 Interviewers would rather you course-correct than push through a weak story.
+
+**Brainstorming Questions:**
+1. An interviewer interrupts you 90 seconds into your STAR answer and asks "what was the business impact?" How do you respond? Does this interrupt help you or hurt you?
+2. You realize at the 3-minute mark of your answer that you're still in the Situation phase. What do you do? How do you recover without seeming flustered?
+3. What's the difference between pausing to think (which is okay) and going silent because you're stuck (which looks bad)? How do you signal to the interviewer which one is happening?
+4. An interviewer asks a question you've never prepared for and nothing in your story bank fits. What's your decision process in the next 5 seconds?
 
 ---
 
@@ -920,6 +950,12 @@ that cross team boundaries?"
 - Questions with answers clearly on the team's website (shows you didn't research)
 - Vague open-ended questions: "So, what's the culture like?" (too broad to answer well)
 
+**Brainstorming Questions:**
+1. You have 3 minutes left in the behavioral round. The interviewer asks "do you have any questions for me?" You have 5 questions prepared. How do you choose which one to ask? What do you optimize for?
+2. An interviewer answers your question with "I'm not sure — I haven't been here very long." What does this tell you about the team, and do you adjust the rest of your questions?
+3. Asking about "what would you change about the team" is risky — it could produce a negative answer that changes how you feel about the offer. Is it still worth asking? Why?
+4. If you've already asked 3 strong questions in prior rounds and you're now in the last round, do you ask the same questions again or find new ones? What does repeating questions signal vs. running out of questions?
+
 ---
 
 ## Part 9 — The Week Before Your Interview
@@ -956,6 +992,12 @@ Have 3 things ready:
 2. 3–4 questions to ask the interviewer
 3. A concrete recent win from the last 6 months that you're proud of
    (interviewers sometimes ask "what have you been working on recently?")
+
+**Brainstorming Questions:**
+1. How many hours of preparation are appropriate for the behavioral round? What's the point of diminishing returns where more practice makes you sound over-rehearsed?
+2. "Trust the preparation" is the advice for the night before. But what if you realize there's a question type you haven't prepared for? Do you try to prep a new story the night before or go in without one?
+3. The day-of checklist includes a "recent win from the last 6 months." If you're currently between projects and don't have a clear recent win, what do you do?
+4. Practicing out loud is recommended strongly over reading your stories silently. Why does the modality matter? What does a story that's been practiced silently but not out loud sound like in an interview?
 
 ---
 
@@ -1002,6 +1044,12 @@ Have 3 things ready:
 > (3) failure, (4) mentorship, (5) proactive initiative, (6) technical direction;
 > deliver each in under 2 minutes with a specific quantified result and an honest
 > "what I'd do differently" — this is sufficient to pass Google's L5 behavioral bar.
+
+**Brainstorming Questions:**
+1. The most common mistake listed is telling a story about "we" without specifying your individual contribution. This is very hard to avoid — collaboration is real. How do you describe collaborative work accurately while still making your individual contribution clear?
+2. A candidate interviews at Google and uses Amazon's Leadership Principles vocabulary ("I was the DRI," "I had high ownership"). Does this help or hurt? Why?
+3. "No result" stories are flagged as a common mistake. But some of the most formative experiences end ambiguously — the project was cancelled, the company pivoted, the outcome was mixed. How do you handle a story with an uncertain or incomplete result?
+4. Giving a very short answer (under 90 seconds) is listed as a mistake. But some candidates over-talk, rambling past 5 minutes. What's the right length, and how do you self-monitor for it in real time?
 
 ---
 
@@ -4769,5 +4817,33 @@ Meta:    All interviewers calibrate in a live debrief call.
 > screen through offer.
 
 ---
+
+---
+
+## Exercises
+
+**Exercise 1 — Story bank construction.** Write 5 STAR stories from your career: one for each of conflict/disagreement, technical failure + recovery, influencing without authority, leading through ambiguity, and biggest impact. For each: time it (target 2.5 minutes), ask a peer if the impact is clear.
+
+**Exercise 2 — Googleyness signal mapping.** Take any behavioral story you have. Map it against the Googleyness attributes: comfort with ambiguity, team-first attitude, integrity, growth mindset. Does it hit multiple attributes? Reframe it to hit at least two.
+
+**Exercise 3 — STAR tightening.** Take your weakest STAR story. Cut it by 30% without losing the key signal. What did you remove? Was it actually important, or was it context that didn't change the impact?
+
+**Exercise 4 — Challenge handling drill.** Have a partner challenge one of your behavioral stories: "That sounds like you took credit for a team effort." Practice the response: acknowledge the observation, clarify the reality, and redirect without being defensive. Repeat 3 times with different challenges.
+
+**Exercise 5 — "Tell me about yourself" optimization.** Write your 90-second "tell me about yourself" response for a Staff-level behavioral interview. It should cover: current role + scope, biggest recent impact, why you're interviewing. Record yourself. Is the impact clear in the first 20 seconds?
+
+**Exercise 6 — Question bank for the interviewer.** Write 5 questions you'd ask the behavioral interviewer about the team or role. For each: explain what signal it gives the interviewer about you, and what you're actually trying to learn.
+
+---
+
+## Homework
+
+**Assignment 1 — Story bank (full version).** Build a story bank of 10 STAR stories covering: conflict, failure, influence, ambiguity, technical leadership, cross-team collaboration, mentorship, risk management, innovation, and scale. For each: write it out fully, then practice telling it in 2.5 minutes.
+
+**Assignment 2 — Mock behavioral interview.** Schedule a 30-minute mock behavioral interview with a peer. Ask them to use standard behavioral questions and to push back on at least 2 answers. After: what were your strongest stories? Where did you struggle to be concrete?
+
+**Assignment 3 — Googleyness calibration.** Read Google's public description of what Googleyness means. Rate yourself 1-5 on each dimension. For your lowest-rated dimension: write one story that demonstrates it, and one behavior change you'll make in the next 30 days.
+
+**Assignment 4 — Read "Cracking the PM Interview" (McDowell + Bavaro), Behavioral Chapter.** Even though it's for PMs, the behavioral interview chapter has excellent STAR story construction guidance. Write a one-paragraph summary of the most applicable technique and apply it to one of your existing stories.
 
 *Section 8 — Behavioral + Offer. Chapter 108. Standalone — covers full process from phone screen through reference checks.*

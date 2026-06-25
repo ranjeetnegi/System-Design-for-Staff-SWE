@@ -7786,3 +7786,31 @@ Cassandra's QUORUM consistency requires that reads and writes touch W+R > N repl
 - QUORUM also increases tail latency: a QUORUM read waits for the slowest of 2 nodes. If P99 latency for a single node is 10ms and 5% of nodes are slow (50ms), how often does a QUORUM read hit a slow node? Calculate the QUORUM P99.
 - Follow-up: Your service has a 100ms SLA. With QUORUM reads, your P99 is 85ms. With ONE reads, your P99 is 40ms. A new business requirement says certain user reads (those affecting billing) must be strongly consistent. Describe the two-consistency-level strategy: QUORUM for billing reads, ONE for display reads. What percentage of your traffic is billing reads? Use that to calculate weighted average cost.
 
+---
+
+## Exercises
+
+**Exercise 1 — Cost driver identification.** For a system you own: list every AWS/GCP service used and its monthly cost. Rank by cost. For the top 3: is this justified by the traffic/value it serves? What's the cost per request or cost per user? Identify one optimization per component.
+
+**Exercise 2 — Reserved vs. on-demand calculation.** Your database fleet costs $30K/month on-demand. Usage is stable. 1-year Reserved Instances save 35%. 3-year Reserved Instances save 55%. Calculate: break-even point for each RI type, risk if you need to scale down 50% mid-term, and your recommendation.
+
+**Exercise 3 — Storage tiering design.** Your data lake has 500TB. Access logs show: 20% accessed daily, 30% accessed monthly, 50% never accessed after 90 days. Design the tiering policy: hot/warm/cold tiers, transition rules, cost before and after, and restore time implications.
+
+**Exercise 4 — Spot instance architecture.** Your batch ML training pipeline runs 100 GPU instances for 4 hours daily, costing $80K/month on-demand. Design a spot instance architecture: which parts can use spot, checkpoint strategy for interruptions, and expected cost savings (spot ~70% cheaper).
+
+**Exercise 5 — Network cost modeling.** Your microservices make 10M cross-AZ calls/day, average 5KB response. Cross-AZ data transfer costs $0.01/GB. Calculate monthly cross-AZ cost. What architectural change (co-location, caching, batching) would have the biggest cost impact?
+
+**Exercise 6 — Right-sizing audit.** Use CloudWatch or GCP Monitoring to find all instances running below 30% average CPU utilization. Calculate potential savings from right-sizing each to the next smaller instance type. What's the risk of under-sizing? What monitoring would detect if you under-sized too aggressively?
+
+---
+
+## Homework
+
+**Assignment 1 — Cloud cost review meeting.** Pull last month's cloud bill. Identify the top 5 cost anomalies (unexpected spikes, services you don't recognize, idle resources). Write a one-page cost report with one optimization recommendation per anomaly.
+
+**Assignment 2 — Cost modeling spreadsheet.** Build a model that projects your team's cloud cost at 2x, 5x, and 10x current traffic. For each scale point: what breaks first, what needs to be redesigned, and what's the monthly cost?
+
+**Assignment 3 — Interview practice: cost-efficient design.** Practice "design a metrics collection pipeline that minimizes cost while meeting SLOs" in 30 minutes. Cover: ingestion cost, storage tiering, downsampling strategy, and how you balance cost vs. observability fidelity.
+
+**Assignment 4 — Read the AWS Cost Optimization Pillar whitepaper.** Write a one-paragraph summary of the 5 cost optimization pillars and which one is most relevant to your team's current situation.
+

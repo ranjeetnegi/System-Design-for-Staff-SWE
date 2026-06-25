@@ -2882,3 +2882,31 @@ The progression is not about knowing more. It is about:
 - L6: builds the right thing, understands the trade-offs, and thinks two years ahead
 
 In a 45-minute interview, an L6 signal is not "more answers." It is "better questions before the answers."
+
+---
+
+## Exercises
+
+**Exercise 1 — Framework timing drill.** Set a 45-minute timer. Design a URL shortener using the 5-phase framework explicitly: Phase 1 (users/use cases, 5 min), Phase 2 (functional requirements, 5 min), Phase 3 (scale/capacity, 5 min), Phase 4–5 (NFRs + HLD, 25 min), refinement (5 min). After the timer: where did you over-spend?
+
+**Exercise 2 — Phase 1 question bank.** For three different systems (news feed, ride-sharing, payments), write five clarifying questions you'd ask in Phase 1. For each question, identify what design dimension changes based on the answer.
+
+**Exercise 3 — Requirements to design mapping.** Take a real system you've worked on. Map each major design decision (database choice, caching strategy, replication factor) back to a requirement that justified it. For decisions you can't map to a requirement, ask: was that decision justified or was it over-engineering?
+
+**Exercise 4 — Trade-off articulation practice.** Pick any three design decisions in a system you know well. For each: write a one-sentence trade-off statement in the form "We chose X over Y. This gives us [benefit] at the cost of [downside]. We accept this because [requirement/constraint]."
+
+**Exercise 5 — NFR discovery.** Take a system that does not have explicit NFRs documented. Derive them by asking: what happens if the system is slow? Unavailable? Loses data? Inconsistent? Each answer maps to a reliability, latency, durability, or consistency requirement.
+
+**Exercise 6 — Scope creep defense.** Practice saying "that's out of scope for today" in response to five different feature requests during a design session. For each: explain why it's out of scope and what assumption you're making by deferring it.
+
+---
+
+## Homework
+
+**Assignment 1 — Document your last design.** Take any system you've designed in the last 6 months. Write it up using the 5-phase framework explicitly. Where does your design have gaps (requirements not traced to design, design decisions without justification)?
+
+**Assignment 2 — Interview practice (full session).** Complete one full 45-minute mock interview using the 5-phase framework. Have a partner play the interviewer. After: score yourself on whether you explicitly stated each phase transition and whether your design is traceable back to requirements.
+
+**Assignment 3 — Read "Clean Architecture" (Robert Martin), Chapters 1-4.** The first four chapters cover why architecture is about deferring decisions until you have enough information — directly applicable to the 5-phase framework's requirement-first approach.
+
+**Assignment 4 — Compare two system designs.** Find two public engineering blog posts describing a system design (e.g., Slack's architecture, Netflix's CDN). For each: identify which requirements drove which design decisions. What would change if the requirements were different?

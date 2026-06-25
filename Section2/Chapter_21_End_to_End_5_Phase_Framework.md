@@ -2498,6 +2498,34 @@ The framework is not a checklist. It is a thinking discipline. Checklists get yo
 
 **Common mistakes:** Not scoping requirements → designing the wrong system. Ignoring Phase 2 numbers → unjustified decisions. Never naming trade-offs → appears unaware of options. Spending >20 min on basics → no time for deep dive. Waiting for hard questions instead of surfacing them proactively.
 
+---
+
+## Exercises
+
+**Exercise 1 — Full 45-minute interview simulation.** Design "Instagram" using all 5 phases with explicit phase transitions. After: score yourself — did you explicitly state each phase transition? Did your design trace back to requirements? Did you manage time (5-5-5-25-5 minute splits)?
+
+**Exercise 2 — Phase time audit.** Record yourself on 3 different design problems. Time how long you spend in each phase. Where do you consistently over-spend? Under-spend? What does that tell you about your preparation gaps?
+
+**Exercise 3 — Design 3 systems end-to-end.** Apply the 5-phase framework to: (a) URL shortener, (b) distributed key-value store, (c) real-time leaderboard. For each: complete all 5 phases in writing (not just in your head). Compare the designs — what patterns recur across all three?
+
+**Exercise 4 — Framework under constraint.** Design a ride-sharing system in 20 minutes instead of 45. Which phases get compressed? Which NFRs do you drop? What's the minimum viable design that demonstrates L6 thinking in the time available?
+
+**Exercise 5 — Peer review drill.** Have a partner design any system using the 5-phase framework. Your job: for each phase, identify one signal of L6 thinking they demonstrated and one gap. Give specific, actionable feedback.
+
+**Exercise 6 — Framework vs. no framework comparison.** Design a notification system twice: once free-form (no structure), once using the 5-phase framework explicitly. Compare the two: which design is more complete? Which has fewer unresolved questions? Which would an interviewer prefer?
+
+---
+
+## Homework
+
+**Assignment 1 — Framework application to a real design.** Take the next design decision you encounter at work. Apply the 5-phase framework explicitly — even if it's a small decision. Write up the phases. What did the structure reveal that you would have missed with a free-form approach?
+
+**Assignment 2 — Interview bank: build 5 designs.** Over 2 weeks, complete 5 full designs using the framework: URL shortener, message queue, web crawler, rate limiter, distributed lock. For each: write up all 5 phases. Review after — are your designs getting deeper and faster?
+
+**Assignment 3 — Watch one system design video.** Find any public system design interview video (YouTube, interviewing.io). Evaluate the candidate using the 5-phase framework: which phases were weak, which signals were missing, what would you do differently?
+
+**Assignment 4 — Read "Designing Data-Intensive Applications" (Kleppmann), Chapters 5–6.** Replication and partitioning are the two most commonly tested design areas. For each concept: write a one-sentence explanation at the intern level, then at the L6 level. The difference between those two sentences is the signal you need to demonstrate.
+
 *Pairs with Chapter 22–26 (per-phase deep dives) and Chapter 100+ (case studies applying this framework).*
 
 `Chapter 21 | Section 2: Framework | End-to-End 5-Phase Framework`

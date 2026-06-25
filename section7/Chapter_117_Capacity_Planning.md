@@ -1997,8 +1997,46 @@ The Staff engineer's contribution:
 
 ---
 
-*Pairs with Chapter 109 (On-Call Engineering) for incident response when capacity fails, Chapter 120 (Cost Optimization) for the cost side of the capacity equation, and Chapter 56 (Metrics Collection System) for instrumenting the signals capacity planning depends on.*
+---
 
-`Chapter 117 | Section 7: Engineering Excellence | Capacity Planning` (On-Call Engineering) for incident response when capacity fails, Chapter 120 (Cost Optimization) for the cost side of the capacity equation, and Chapter 56 (Metrics Collection System) for instrumenting the signals capacity planning depends on.*
+## Exercises
+
+**Exercise 1 — Back-of-Envelope Capacity:**
+Pick one service you know (yours, or a public one like Twitter or Instagram). Estimate: peak QPS, average request size, storage growth rate per year, and number of servers needed at that load. Don't look up the real numbers — do the math from first principles. Then compare your estimate to any public data you can find. Where were you off by more than 2×?
+
+**Exercise 2 — Load Test Design:**
+Design a load test for a service you work on (or a hypothetical payment service). Specify: target QPS, ramp-up time, test duration, what metrics you'll watch (p50/p95/p99 latency, error rate, CPU, memory, connection pool usage), and what constitutes a pass vs. fail result. What's the most likely failure mode you'd expect to see first?
+
+**Exercise 3 — Database Connection Pool Audit:**
+For a service you work on: how many replicas does it run? What's the database connection pool size per replica? What's the database's `max_connections`? Apply the formula from Part 5: `pods × pool_size ≤ max_connections × 0.8`. Is the service within safe bounds? What happens if the service doubles in pod count?
+
+**Exercise 4 — Disk Runway Calculation:**
+Take a database or storage system you work with. Find its current storage utilization and growth rate (from logs, metrics, or your ops dashboard). Calculate: how many months of runway does it have at the current growth rate? What triggers an alert? What would you do if runway was under 3 months?
+
+**Exercise 5 — HPA Configuration Review:**
+Look at the autoscaler configuration for one service you run. What metric triggers scaling? What's the target utilization? What's the min/max pod count? Why were these values chosen? What happens if traffic exceeds the max pod count? Is there a circuit breaker?
+
+**Exercise 6 — Quarterly Capacity Review:**
+Write a 1-page quarterly capacity review for a real or hypothetical service. Include: current usage vs. capacity headroom (CPU, memory, storage, QPS), growth projection for next quarter, any risks or upcoming events that change the projection, and one recommended action with a specific owner and deadline.
+
+---
+
+## Homework
+
+**Assignment 1:**
+Read the Google SRE book chapter "Handling Overload" (available free at sre.google/sre-book). Compare their load shedding approach (serving degraded responses, prioritizing request types) to the circuit breaker patterns in this chapter. When would you use each approach?
+
+**Assignment 2:**
+Find a public capacity failure post-mortem: Amazon's DynamoDB capacity issues (2015), Reddit's capacity problems during traffic spikes, or Slack's capacity incidents during COVID-19 growth are documented publicly. For the one you pick: what failed first? Was it CPU, memory, storage, or connections? What would a proper capacity plan have done differently?
+
+**Assignment 3:**
+Talk to someone on your infrastructure or SRE team about how your company does capacity planning. Ask: How far in advance do you plan? How do you model growth? What's the biggest capacity surprise you've had in the last 2 years? What's the most common capacity mistake engineers make? Write down what you learn and compare it to the framework in this chapter.
+
+**Assignment 4:**
+For your most critical service: set up or audit the disk runway alert and the memory runway alert. Ensure they fire at 3 months of remaining runway (not when you're already out of space). Document what the alert says and what the on-call engineer should do when it fires.
+
+---
+
+*Pairs with Chapter 109 (On-Call Engineering) for incident response when capacity fails, Chapter 120 (Cost Optimization) for the cost side of the capacity equation, and Chapter 56 (Metrics Collection System) for instrumenting the signals capacity planning depends on.*
 
 `Chapter 117 | Section 7: Engineering Excellence | Capacity Planning`

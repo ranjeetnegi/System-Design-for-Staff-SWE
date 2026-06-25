@@ -3232,4 +3232,32 @@ microservices.
 
 *End of Chapter 41 -- Service Mesh: When, Why, and Trade-offs*
 
+---
+
+## Exercises
+
+**Exercise 1 — Service mesh need assessment.** Evaluate whether your current system needs a service mesh. Score each criterion: number of microservices (>10 = likely yes), mTLS requirements, observability gaps, traffic routing complexity, and team size to maintain. What's your recommendation?
+
+**Exercise 2 — mTLS implementation.** Design the certificate lifecycle for a service mesh with 50 microservices. Who issues the certificates? How often are they rotated? What happens when a certificate expires in production? Design the alerting and automated rotation process.
+
+**Exercise 3 — Traffic policy design.** You have a service mesh. Design the traffic policies for: (a) retry policy for idempotent GET requests (how many retries, backoff, circuit breaker threshold), (b) timeout hierarchy (per-request, per-retry, total), (c) load balancing algorithm (round-robin vs. least-connections vs. consistent hash for session-sticky services).
+
+**Exercise 4 — Service mesh overhead calculation.** Envoy sidecar adds ~2ms latency per hop and uses ~50MB RAM per service instance. You have 100 microservices, each with 10 instances. Calculate: total latency overhead for a request that touches 5 services, total RAM overhead for the sidecar fleet, and whether this overhead is justified by the benefits.
+
+**Exercise 5 — Observability with Istio.** Design the observability setup for a service mesh: what metrics are automatically collected (request rate, latency, error rate per service pair), what traces are generated (distributed traces for cross-service calls), and how you use this to debug a latency issue where P99 is 500ms but P50 is 10ms.
+
+**Exercise 6 — Service mesh vs. library approach.** Compare Istio (service mesh) to a shared library (like Netflix's Hystrix) for providing circuit breaking and retry logic. For a team of 5 microservices vs. 50 microservices: which approach is better? What changes at 50 services that doesn't apply at 5?
+
+---
+
+## Homework
+
+**Assignment 1 — Service mesh evaluation.** Research Istio, Linkerd, and Consul Connect. Write a one-page comparison: resource overhead, operational complexity, feature set, and which one you'd recommend for your current team size and infrastructure.
+
+**Assignment 2 — Traffic policy audit.** For a service you own: what are the current timeout, retry, and circuit breaker settings? Are they appropriate for the service's SLO? Write a proposal for the optimal policy settings with justification.
+
+**Assignment 3 — Interview practice: service mesh question.** Practice answering "when would you recommend a service mesh and when would you not" in 5 minutes. Cover: the problems it solves, the operational overhead it adds, the team size threshold, and a specific example of each.
+
+**Assignment 4 — Read the Envoy proxy documentation on circuit breaking.** Write a one-paragraph summary: how does Envoy's circuit breaker work (connection limits, pending requests, retries, outlier detection), and how does this compare to application-level circuit breakers like Hystrix or resilience4j?
+
 *Next: Chapter 42 -- Multi-Region Architecture and Global Traffic Management*

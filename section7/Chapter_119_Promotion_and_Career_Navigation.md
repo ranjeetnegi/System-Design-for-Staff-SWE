@@ -1939,6 +1939,48 @@ Do a mock design interview with an engineer at the target company's level or abo
 
 ---
 
+### Brainstorming Questions — Part 1: Staff Level Impact
+
+1. What's the difference between "I wrote the code for feature X" and "I led the design of feature X"? Why does the distinction matter for promotions?
+2. You're an L4 who wants to operate at L5. Name one thing you could do this week that would be clearly L5 behavior, not L4. What makes it different?
+3. "Scope" is one of the hardest dimensions of Staff impact to demonstrate. How do you increase your scope without a title change first?
+
+### Brainstorming Questions — Part 2: The Promo Packet
+
+1. If your promo packet has 3 strong bullets and 3 weak bullets, is that good or bad? What's the calibration committee looking for?
+2. The SOAR format (Situation, Outcome, Action, Result) is mentioned. What's the most common mistake engineers make in each of the four parts?
+3. Your strongest impact is on a project that shipped 18 months ago. Is it still relevant? How do you frame old impact vs. recent impact?
+
+### Brainstorming Questions — Part 3: Sponsorship
+
+1. What's the difference between a mentor and a sponsor? Why do engineers often conflate them and end up with the wrong support?
+2. You want a specific Staff engineer as your sponsor. How do you ask without it being awkward? What do you offer in return?
+3. Can you get promoted to Staff without a sponsor? What's the success rate? What fills the gap if you don't have one?
+
+### Brainstorming Questions — Parts 4–6: Calibration, Evidence, External Interviews
+
+1. Calibration committees compare you against peers. Who are the other candidates being considered? How do you find out, and how does it change your strategy?
+2. "12 months out" strategy: if you knew your promo decision was exactly 12 months away, what would you do differently starting today?
+3. When is interviewing externally the right career move vs. a distraction? What are the signals that tell you it's time?
+
+---
+
+## Exercises
+
+**Exercise 1 — Impact audit.** Write the 5 strongest impact bullets from the last 12 months of your work. Use SOAR format for each. Show them to a trusted peer. Ask: would these bullets be convincing to someone who doesn't know you? What's missing?
+
+**Exercise 2 — Scope analysis.** Map your current scope: what systems you own, what teams you influence, what decisions you make. Now map what Staff-level scope looks like at your company. What's the gap? What's one specific way to close it this quarter?
+
+**Exercise 3 — Promo packet draft.** Write a draft promotion packet for yourself right now — even if you're not up for review. Include: strongest impact bullets, cross-team influence examples, evidence of technical leadership. What's the weakest section? That's your focus area.
+
+**Exercise 4 — Sponsor identification.** List 3 people at Staff level or above who know your work well enough to advocate for you. For each: how strong is their advocacy, how often do they speak up in calibration contexts, and what would strengthen the relationship?
+
+**Exercise 5 — Calibration simulation.** Ask your manager: "If calibration happened today, how would I compare to other L5 candidates?" The answer (if honest) is the most valuable feedback you can get. Write down what you'd do differently based on the answer.
+
+**Exercise 6 — External interview benchmark.** If you're curious about the external bar: do one mock interview with an engineer at a FAANG company in your target level. Not to get an offer — to calibrate whether your current trajectory is on track.
+
+---
+
 ## Homework
 
 **This week:**

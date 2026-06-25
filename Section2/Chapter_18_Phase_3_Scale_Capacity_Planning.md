@@ -2690,4 +2690,30 @@ L6 CAPACITY MODEL ADDS:
 
 ---
 
+## Exercises
+
+**Exercise 1 — Back-of-envelope for 3 systems.** Estimate peak RPS, storage growth/year, and bandwidth for: (a) Instagram (1B users, 100M posts/day, 500KB average media), (b) Slack (10M DAU, 50 messages/day each, 1KB per message), (c) Uber (10M rides/day, driver location update every 4 seconds).
+
+**Exercise 2 — Scaling strategy selection.** Your service currently handles 1,000 RPS. You need to handle 100,000 RPS. For each scaling option (vertical, horizontal, read replicas, caching, CDN, sharding), estimate: cost, complexity added, time to implement, and how much headroom it buys. Which combination would you choose?
+
+**Exercise 3 — Database read replica sizing.** Your PostgreSQL primary handles 500 queries/second at 60% CPU. Adding a feature will add 300 read queries/second. Design the read replica configuration: how many replicas, what replication lag is acceptable, how do you route reads vs. writes?
+
+**Exercise 4 — Peak traffic planning.** Black Friday is in 6 weeks. Your e-commerce site normally handles 10,000 RPS. Historical data shows 5x spike on Black Friday. Design the capacity plan: what to pre-provision, what to auto-scale, what to gracefully degrade, and what the runbook looks like if you exceed 50,000 RPS.
+
+**Exercise 5 — Storage growth model.** Design a retention policy for a logging system that ingests 10GB/day. Requirements: full resolution for 7 days, 5-minute aggregates for 30 days, hourly aggregates for 1 year. Calculate storage cost before and after the retention policy at $0.023/GB/month.
+
+**Exercise 6 — Capacity interview drill.** Practice Phase 3 for "design YouTube" in 5 minutes. Cover: DAU, videos watched per day, average video size and duration, bandwidth, storage growth, and CDN vs. origin split. Present your estimates as ranges (conservative, expected, peak) not exact numbers.
+
+---
+
+## Homework
+
+**Assignment 1 — Capacity model for your service.** Build a spreadsheet that models your service's capacity: current RPS, CPU per request, memory per connection, DB queries per request, storage growth rate. Extend it to 3x, 10x, 100x traffic. Where does each resource hit its limit first?
+
+**Assignment 2 — Load test your assumptions.** Run a load test on a staging environment. Compare actual resource utilization to your capacity model. Where were you wrong? Update the model with real measurements.
+
+**Assignment 3 — Interview practice: Phase 3.** For "design a distributed message queue," spend 5 minutes on capacity only: estimate message volume, message size, retention period, storage, throughput. Present three scenarios (small business, mid-scale, Twitter-scale).
+
+**Assignment 4 — Review a public post-mortem involving capacity.** Find a public incident (AWS EC2 capacity, Heroku, Cloudflare) where a capacity planning failure caused an outage. Write a one-paragraph analysis: what was under-estimated, what would better capacity planning have caught, and what monitoring would have provided earlier warning?
+
 *End of Chapter 16 -- Phase 3: Scale and Capacity Planning*

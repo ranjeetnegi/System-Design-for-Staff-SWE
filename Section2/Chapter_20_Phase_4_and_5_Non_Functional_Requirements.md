@@ -2547,3 +2547,31 @@ Candidates sometimes skip Phase 5 entirely, or treat it as "let me quickly say I
 |                                                                             |
 +=============================================================================+
 ```
+
+---
+
+## Exercises
+
+**Exercise 1 — NFR derivation from business context.** Given: an e-commerce checkout service that processes $50M/day. Derive: required availability (what's 1 hour downtime worth?), latency target (what conversion drop does 1 second add?), durability requirement (can any payment be lost?), consistency requirement (can a user be charged twice?).
+
+**Exercise 2 — SLO writing.** Write three SLOs for a search service: latency (P95), availability (monthly), and freshness (how stale can results be). For each: what's the measurement method, the error budget, and what happens when the budget is exhausted?
+
+**Exercise 3 — NFR conflict resolution.** Strong consistency vs. high availability vs. low latency: pick any two that conflict for a specific system. Write a one-paragraph argument for each side, then write the resolution: which constraint wins, under what conditions, and what's the fallback when you can't meet both?
+
+**Exercise 4 — Reliability pattern matching.** For each NFR (99.99% availability, <50ms P99, RPO 1 minute), identify the design pattern that achieves it: circuit breakers, rate limiting, multi-region, graceful degradation, idempotent retries. What's the cost of each pattern?
+
+**Exercise 5 — Phase 4-5 interview drill.** Practice Phase 4 for "design a payment processing system" in 7 minutes. Hit: availability target (99.99%), latency target (P99 < 200ms), durability (no payment lost), idempotency (no double charge), and security (PCI compliance).
+
+**Exercise 6 — Trade-off table.** Build a trade-off table for a distributed database: for each consistency model (strong, causal, eventual), fill in: max write throughput, read latency, split-brain behavior, use case fit. Use this to justify a consistency choice for a specific product.
+
+---
+
+## Homework
+
+**Assignment 1 — NFR documentation sprint.** Write explicit NFRs for every service your team owns: availability (target + error budget), latency (P50, P95, P99), durability, and consistency. For each: how is it currently measured, and what's the current actual vs. target?
+
+**Assignment 2 — SLO review with stakeholders.** Present your team's SLOs to a product manager or business stakeholder. Translate: "99.9% availability" → "8.7 hours downtime/year" → business impact. Get alignment on whether the targets match business requirements.
+
+**Assignment 3 — Interview practice: full Phase 4-5.** Practice designing NFRs for "design a distributed cache" in 10 minutes. Specify: cache hit rate SLO, eviction policy, consistency model, failure behavior (what happens when a cache node dies), and client retry strategy.
+
+**Assignment 4 — Read the Google SRE Workbook, Chapter 2: "Implementing SLOs."** Write a one-paragraph summary of the error budget concept and how it changes the conversation between product and engineering teams about reliability.

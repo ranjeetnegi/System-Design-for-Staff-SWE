@@ -6126,3 +6126,31 @@ Your PostgreSQL cluster stores 20 TB of live data but the actual disk footprint 
 ---
 
 *End of Supplemental Brainstorming: Chapter 29.*
+
+---
+
+## Exercises
+
+**Exercise 1 — B-tree vs LSM comparison.** For each workload, choose B-tree or LSM-tree and justify: (a) write-heavy time-series (1M writes/second, rarely read), (b) transactional OLTP (50K reads/second, 5K writes/second), (c) append-only log store, (d) point lookup with occasional range scans. What's the key differentiator for each choice?
+
+**Exercise 2 — WAL and recovery.** A PostgreSQL instance crashes mid-transaction. Walk through: what's in the WAL, how crash recovery works (redo phase, undo phase), what the final committed state is, and what happens to in-flight transactions. What's the difference between checkpoint frequency and WAL segment size?
+
+**Exercise 3 — Index effectiveness analysis.** Given a query: `SELECT * FROM orders WHERE customer_id = ? AND status = 'pending' AND created_at > ?`. You have three indexes: (a) (customer_id), (b) (customer_id, status), (c) (customer_id, status, created_at). Which index does Postgres use? What's the selectivity order and how does it affect the choice?
+
+**Exercise 4 — MVCC visibility.** Two transactions run concurrently in PostgreSQL with READ COMMITTED isolation. Transaction A updates row X. Transaction B reads row X. Walk through: what version of row X does B see at different points (before A commits, during A's commit, after A commits)?
+
+**Exercise 5 — Vacuum and bloat.** A PostgreSQL table has 10M rows with 100 updates/second. After 30 days, what's the dead tuple count? What's the impact on query performance? When does autovacuum run, and what happens if it can't keep up?
+
+**Exercise 6 — Write amplification calculation.** A 10MB SSTable in RocksDB is compacted. Compaction reads the old SSTable and writes the result back. If there are 5 compaction levels and average write amplification is 10x per level, what's the total write amplification for data written to L0?
+
+---
+
+## Homework
+
+**Assignment 1 — EXPLAIN ANALYZE deep dive.** Take your three slowest production queries. Run EXPLAIN ANALYZE. Identify: sequential scans that should be index scans, nested loops that should be hash joins, and missing statistics. Propose one fix per query.
+
+**Assignment 2 — Storage engine comparison.** Choose any two storage engines (InnoDB vs MyISAM, RocksDB vs LevelDB, WiredTiger vs MMAPv1). Write a 2-page comparison: data structures used, write path, read path, crash recovery approach, and the workload each is optimized for.
+
+**Assignment 3 — Interview practice: database internals.** Practice explaining how B-tree indexes work, including: how data is stored, how a range scan works, why B-tree beats binary search tree, and what happens during an index rebuild on a live table.
+
+**Assignment 4 — Read "Designing Data-Intensive Applications" (Kleppmann), Chapter 3.** Focus on storage engines and data structures. Write a one-paragraph summary: what is the fundamental trade-off between B-tree and LSM-tree, and when does each win?

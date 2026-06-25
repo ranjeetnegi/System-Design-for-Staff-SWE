@@ -4518,3 +4518,15 @@ Write a Staff-level design review response that:
 **Fix applied:** Facebook implemented: out-of-band management access (a separate network path that does not depend on the main backbone), automated configuration validation that simulates routing table effects before deployment, and a two-person requirement for backbone configuration changes.
 
 **Staff lesson:** For any infrastructure change, ask: "If this goes wrong, can we still fix it?" If the answer is "no" -- because the fix requires the same infrastructure that just broke -- you have designed a scenario where outage is permanent until physical intervention. L6 engineers require an out-of-band recovery path for every category of infrastructure change.
+
+---
+
+## Homework
+
+**Assignment 1 — Ambiguity journal (2 weeks).** For two weeks, every time you receive an ambiguous request, write down: (a) what you assumed, (b) what clarifying question you asked (or should have asked), (c) what the actual requirement turned out to be. At the end, find the pattern in your most common assumption errors.
+
+**Assignment 2 — Decision under uncertainty practice.** Find a decision your team is currently deferring because of incomplete information. Write a one-pager: what's the cost of waiting, what's the cost of deciding now with current information, what's the minimum information needed to decide responsibly, and your recommendation.
+
+**Assignment 3 — Interview practice: ambiguous prompt.** Ask a peer to give you a deliberately vague system design prompt ("design something for a large company"). Practice spending 5 full minutes clarifying before touching the design. Record it and review: did you clarify scope, scale, failure cost, and constraints?
+
+**Assignment 4 — Read "Thinking in Systems" (Donella Meadows), Part 1.** The first 50 pages cover stocks, flows, and feedback loops — mental models that directly apply to designing resilient systems under ambiguity. Write a one-page summary connecting each concept to a system you currently maintain.

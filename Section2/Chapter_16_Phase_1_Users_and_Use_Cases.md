@@ -3789,3 +3789,19 @@ L6 PHASE 1 CHECKLIST:
 - L6: finds the hidden use cases, models future state, accounts for adversarial and regulatory actors
 
 In an interview: L6 signal is asking "what am I NOT being told about the users?" before drawing anything.
+
+---
+
+## Exercises
+
+**Exercise 1 — User segmentation.** For three different systems (ride-sharing app, enterprise analytics dashboard, real-time gaming platform), identify all distinct user types. For each type: describe their goals, their latency tolerance, their failure tolerance, and their frequency of use. How does each user type pull the design in a different direction?
+
+**Exercise 2 — Use case prioritization.** Given 10 potential use cases for a social platform (post, comment, like, follow, search, DM, notification, explore feed, story, live stream), force-rank them by technical complexity and business value. For the top 3: identify the core technical challenge each introduces.
+
+**Exercise 3 — Edge case hunting.** Take any system you know well. List 10 "what happens when..." scenarios that are not covered by the happy path. For each: is this a real use case the design must handle, or an acceptable edge case to defer?
+
+**Exercise 4 — Anti-user identification.** Design a rate limiting system. Who are the anti-users (people you want to block)? How does designing for anti-users change the architecture compared to designing only for legitimate users? What's the cost of over-blocking vs. under-blocking?
+
+**Exercise 5 — Interview Phase 1 drill.** Pick any system design prompt. Spend exactly 5 minutes on Phase 1 only: identify users, use cases, and the primary success metric. Stop at 5 minutes. Evaluate: do you have enough to start designing, or are there critical unknowns?
+
+**Exercise 6 — Functional vs. non-functional separation.** Take a vague requirement: "the system should be fast." Split it into: (a) functional requirements (what the system does), (b) non-functional requirements (how well it does it). Translate "fast" into a specific, measurable NFR. What did you have to assume to make it specific?

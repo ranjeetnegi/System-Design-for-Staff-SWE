@@ -4004,3 +4004,15 @@ Keep the tone: factual, blameless, forward-looking.
 **Fix applied:** Slack adopted a "reverse pyramid" doc structure: decision first (page 1), rationale second (page 2-3), background third (appendix). Design docs now have a "this doc asks you to decide X" in the first paragraph.
 
 **Staff lesson:** A design doc that does not get read is not a design doc -- it is a historical artifact. L6 engineers write design docs where the decision to be made is in the first paragraph, the recommendation is in the second, and the rationale follows. If a VP reads only 2 minutes, they should know exactly what they are being asked to approve.
+
+---
+
+## Homework
+
+**Assignment 1 — Design doc audit.** Find a design doc you wrote in the last 6 months. Read just the first paragraph. Does it clearly state: (a) the decision being requested, (b) your recommendation, (c) the key trade-off? If not, rewrite the first paragraph to meet this bar. Then share the revised version with one peer and ask if it's clear.
+
+**Assignment 2 — Audience translation practice.** Take a technical decision your team recently made. Write three versions of a 2-minute explanation: for a senior engineer, for a product manager, for an executive. Have someone in each role read the relevant version. Collect feedback.
+
+**Assignment 3 — Interview communication practice.** Record a 10-minute system design session. Watch it back. Count: how many times did you check in with the interviewer? How many times did you explain your reasoning before your conclusion (rather than after)? Identify one specific communication habit to fix.
+
+**Assignment 4 — Read one engineering blog post per week for 4 weeks.** Choose posts from Stripe, Cloudflare, Netflix, or Figma engineering blogs. For each: what decision did they make, how did they communicate it to stakeholders, and what signals of Staff-level thinking appear in the writing? Write a 3-sentence summary.

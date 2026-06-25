@@ -1994,8 +1994,32 @@ Build real things. Plan honestly. Ship what you commit to. That is the entire di
 
 ---
 
----
+## Exercises
+
+**Exercise 1 — Feature vs. foundational split.** Your team has 20 engineer-sprints next quarter. Product wants 15 sprints of features. Engineering needs 8 sprints of foundational work. Design the negotiation: what data do you bring, how do you frame foundational work in business terms, and what's your minimum acceptable foundational allocation?
+
+**Exercise 2 — Roadmap prioritization.** You have 10 technical roadmap items. Score each: business impact (1-5) × urgency (1-5) ÷ effort (1-5). Do the resulting priorities feel right? Where does the formula break down? What items need manual override and why?
+
+**Exercise 3 — Stakeholder communication.** You've finished your quarterly roadmap. Write three one-paragraph summaries: for your engineering team, for the product manager, and for the VP. What changes between versions? What must stay consistent?
+
+**Exercise 4 — Risk tracking design.** Your roadmap has a high-risk authentication migration. Design risk tracking: leading indicators that show the migration is on track vs. in trouble, early warning system, and contingency if the migration slips 4 weeks.
+
+**Exercise 5 — Roadmap retrospective.** Find a quarterly roadmap from the past. What was planned vs. delivered? What caused gaps? What planning assumption was wrong? Write a one-paragraph lessons-learned.
+
+**Exercise 6 — Strategy document.** Write a 1-page technical strategy for your team for the next 12 months: the problem you're solving, 3 bets you're making, 2 things explicitly deprioritized, and how you'll measure success.
 
 ---
+
+## Homework
+
+**Assignment 1 — Write next quarter's technical roadmap.** Draft a roadmap using this chapter's framework: items with business justification, effort estimates, dependencies, risk flags. Present it in a team meeting and collect feedback.
+
+**Assignment 2 — Annual technical strategy.** Write a 2-page technical strategy for the next year. What's the one technical bet that unlocks the most value? What's the one reliability investment that prevents the most risk?
+
+**Assignment 3 — Interview practice: roadmapping question.** Practice "how do you prioritize technical debt against new feature work" in 5 minutes. Cover: your framework for quantifying tech debt impact, how you communicate it to product, and a specific example.
+
+**Assignment 4 — Read "An Elegant Puzzle" (Will Larson), Part 3 on Strategy.** Write a one-paragraph summary of how Will Larson recommends writing engineering strategy and how it connects to quarterly roadmapping.
+
+*Pairs with [Chapter 123: Technology Evaluation Framework](Chapter_123_Technology_Evaluation_Framework.md) and [Chapter 119: Promotion and Career Navigation](Chapter_119_Promotion_and_Career_Navigation.md). Next: [Chapter 125: Interview Execution Meta-Skills](../section8/Chapter_125_Interview_Execution_Meta_Skills.md).*
 
 *Pairs with [Chapter 123: Technology Evaluation Framework](Chapter_123_Technology_Evaluation_Framework.md) (evaluation feeds the roadmap) and [Chapter 119: Promotion and Career Navigation](Chapter_119_Promotion_and_Career_Navigation.md) (roadmapping ability is a key L5→L6 signal). Next: [Chapter 125: Interview Execution Meta-Skills](../section8/Chapter_125_Interview_Execution_Meta_Skills.md).*

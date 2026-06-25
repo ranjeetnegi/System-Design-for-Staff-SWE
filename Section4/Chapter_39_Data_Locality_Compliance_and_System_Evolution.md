@@ -6348,3 +6348,15 @@ You have 47 microservices. Each service has its own database (service mesh, no s
 - Orchestration via Saga pattern: the deletion orchestrator publishes a "user.deletion.requested" Kafka event. Each of the 47 services subscribes, performs their deletion, and publishes a "user.deletion.completed.{service_name}" confirmation event. The orchestrator tracks which services have confirmed. After 24 hours, any service that has not confirmed is in an error state -- alert and retry. After 72 hours without confirmation, escalate to the service owner.
 - Audit trail: the orchestrator maintains a deletion record: deletion_id, user_id, requested_at, status per service, completed_at. This is stored in a compliance DB with 7-year retention. This record is your proof of deletion for regulators. Service confirmations include: rows_deleted, tables_affected, data_categories_deleted.
 - Follow-up: Service 23 (the recommendation service) goes down for 48 hours during the deletion window due to an unrelated outage. When it comes back up, the deletion request is retried. The recommendation service deletes the data. But in those 48 hours, the deleted user's data was still in the recommendation service. If the DPA asks "was the deletion complete within 30 days?" and Service 23 confirmed on day 31, how do you explain this in your audit log? What is your SLA for deletion completion, and how do you enforce it contractually on third-party processors?
+
+---
+
+## Homework
+
+**Assignment 1 — Data map.** Create a data inventory for your team's services: every table, every field that contains PII (name, email, location, payment info), the retention period for each, and whether deletion is implemented. Identify any gaps where PII retention is indefinite.
+
+**Assignment 2 — GDPR deletion design.** Design a right-to-erasure flow for a service you own. Cover: which data stores hold PII, the deletion sequence, idempotency, audit trail, and the SLA for completion. Share with your team for review.
+
+**Assignment 3 — Interview practice: compliance design.** Practice "design a GDPR-compliant data deletion system for a platform with 50 microservices" in 30 minutes. Cover: orchestration pattern (saga vs. direct), audit trail, SLA, what happens when a service is unavailable, and how you verify deletion completeness.
+
+**Assignment 4 — Read the GDPR text, Articles 17 and 20.** Article 17 covers right to erasure; Article 20 covers data portability. Write a one-paragraph summary of each. For each: what does your team's current system do to comply, and what's missing?

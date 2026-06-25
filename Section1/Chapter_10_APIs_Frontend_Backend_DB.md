@@ -2497,4 +2497,37 @@ Every database connection consumes memory on the database server — PostgreSQL 
 - "API versioning is a promise to clients; the hard part is keeping it."
 - "GraphQL pushes field selection responsibility to the client — great for mobile, dangerous without query depth limits."
 
+---
+
+### Brainstorming Questions — API Design
+
+1. REST vs GraphQL vs gRPC: you're building a new backend that serves a mobile app, a web dashboard, and 3 internal services. Which API style (or combination) do you choose? What's the deciding factor?
+2. A product team asks you to add a new field to a widely-used API response. What questions do you ask before agreeing? What could go wrong if you don't ask them?
+3. Your API has 10 clients. One needs the response in a completely different shape. Do you add a new endpoint, a query parameter, or a new API version? What principle guides the decision?
+4. Pagination is "boring." Name one production incident where bad pagination design caused a real problem. How would you design it differently?
+
+### Brainstorming Questions — Frontend-Backend Interaction
+
+1. A frontend team says the page is slow. Where do you start? What would make you say "this is a backend problem" vs. "this is a frontend problem"?
+2. You're building a BFF (Backend for Frontend). What does it do that the main API doesn't? When does a BFF become over-engineering?
+3. An API call is failing 0.1% of the time. The frontend retries automatically. At 1M calls/day, what happens to your backend? What should the retry policy look like?
+
+### Brainstorming Questions — Database Interaction
+
+1. Your service runs queries directly against the main database. Six months later, query latency has doubled. What's your diagnostic process? What are the top three suspects?
+2. N+1 query problem: give an example of how this shows up in a real application (not a textbook example). How do you detect it in production? How do you fix it?
+3. You have a choice: cache query results in Redis, or add a read replica. When does each win? What's the deciding question?
+
+---
+
+## Homework
+
+**Assignment 1 — API design review.** Find an internal API your team publishes. Review it for: consistent error codes, backward compatibility, pagination on list endpoints, and authentication. Write a one-page review with three concrete improvements.
+
+**Assignment 2 — Database query audit.** Pick the five slowest queries in your production database (use query logs or APM). For each: explain plan, identify the bottleneck, and propose one fix (index, query rewrite, caching, denormalization).
+
+**Assignment 3 — Interview practice: API design question.** Practice answering "design a public API for a URL shortener" in 30 minutes. Target: REST vs GraphQL choice with reasoning, pagination strategy, rate limiting design, versioning strategy, and error contract.
+
+**Assignment 4 — Read the Stripe API documentation.** Stripe has one of the best-designed APIs. Spend 30 minutes reading their API reference. Identify 5 specific design decisions that demonstrate expertise: error handling, idempotency keys, pagination, webhook retry strategy, versioning. Write down what you'd copy for your own APIs.
+
 `Chapter 10 | Section 1: Foundations | APIs, Frontend, Backend, DB`

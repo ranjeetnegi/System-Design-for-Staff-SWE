@@ -10370,3 +10370,31 @@ Chapter 28 covers database internals, including optimistic locking (read-modify-
 - Calculate the database load for each approach at 1M/second: (a) PostgreSQL optimistic locking: 1M primary writes + 300K retries = 1.3M write operations/second. (b) G-Counter: 1M writes spread across 3 replicas = 333K writes/replica, but 3x merge operations per read. Which scales better?
 - Follow-up: The business rule says "the like count displayed to users can be 5 seconds stale, but likes must never be lost." Which approach satisfies this requirement? Optimistic locking: retries can fail under extreme load, potentially dropping some like operations. G-Counter: never drops a like, but the count is eventually consistent (up to 5-second staleness during replication lag). G-Counter is the correct choice. Explain why to a non-technical stakeholder.
 
+---
+
+## Exercises
+
+**Exercise 1 — Database selection matrix.** Choose a database for each system and justify: (a) user profiles (100M users, read-heavy, structured), (b) real-time leaderboard (10M concurrent, sorted by score), (c) CMS documents (variable schema, full-text search), (d) time-series metrics (50K writes/second, 30-day retention). For each: one alternative considered and why it was rejected.
+
+**Exercise 2 — Schema evolution.** You have a PostgreSQL table with 100M rows and need to add a NOT NULL column. Walk through: direct ALTER TABLE locking behavior, the online migration approach (add nullable → backfill → add constraint), and how to validate without downtime.
+
+**Exercise 3 — Read/write pattern analysis.** For a system you own: what's the read:write ratio per major table, what indexes exist (used vs. unused), and which queries are slowest? Propose three optimizations (indexes, denormalization, caching).
+
+**Exercise 4 — Consistency model selection.** For each social media operation (post tweet, increment likes, follow user, view profile, view feed), pick the right consistency model and justify. What's the user experience cost of getting it wrong?
+
+**Exercise 5 — Database migration planning.** Migrate from MySQL to PostgreSQL: 500M rows, 10K RPS, 99.9% availability SLA. Write the migration plan: phases, risk mitigation, rollback procedure, and data integrity validation.
+
+**Exercise 6 — Connection pool sizing.** 20ms average query duration, 10 app servers, 200 max DB connections. Calculate: connections per server, max concurrent queries, queue depth at 500 RPS, and behavior when pool is exhausted.
+
+---
+
+## Homework
+
+**Assignment 1 — Database audit.** For every database your team owns: document access patterns, current indexes (used vs. unused), and the biggest performance bottleneck. Identify one optimization per database to implement this sprint.
+
+**Assignment 2 — Read "Use the Index, Luke."** For your three slowest production queries, run EXPLAIN ANALYZE. Write a one-page analysis identifying whether each query uses the right index.
+
+**Assignment 3 — Interview practice: database design.** Practice "design the data model for a Twitter-like feed" in 20 minutes. Cover: table structure, indexes, write path (fan-out), sharding strategy, consistency model per operation.
+
+**Assignment 4 — Chaos test on a replica.** Simulate a read replica failure. Observe how your application handles it. Measure impact on primary load. Document: detection time, degraded behavior, and fix.
+

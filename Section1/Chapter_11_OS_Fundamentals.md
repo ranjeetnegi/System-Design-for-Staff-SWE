@@ -2498,4 +2498,30 @@ Answer these out loud in under 60 seconds each:
 
 ---
 
+## Exercises
+
+**Exercise 1 — Process vs thread decision.** You're building a web server. Compare: single-process multi-threaded, multi-process (fork per request), and async event loop (Node.js style). Build a table: memory per concurrent connection, context switch cost, crash isolation, I/O throughput. When does each model win?
+
+**Exercise 2 — Memory allocation tracing.** Pick any service you run. Using tools like `top`, `vmstat`, or your APM, find: resident set size (RSS), virtual memory (VSZ), heap usage, and page fault rate. Interpret what they tell you about the process's memory behavior.
+
+**Exercise 3 — I/O scheduling impact.** You have a database server with two workloads competing: (a) sequential full-table scans and (b) random point lookups. What I/O scheduler behavior would you want? How does the OS scheduler affect latency for the point lookups?
+
+**Exercise 4 — Context switch measurement.** Write a benchmark (any language) that spawns 100 goroutines/threads/tasks, each sleeping 1ms and doing minimal work. Measure: total CPU time vs. wall clock time. The gap is context switch overhead. What did you observe?
+
+**Exercise 5 — File descriptor limits in production.** Find the open file descriptor count for any server process you run (`lsof | wc -l` or `/proc/PID/fd`). Compare to the system limit (`ulimit -n`). What happens if you exceed it? How does this relate to connection pool sizing?
+
+**Exercise 6 — OOM killer analysis.** Find a past incident (yours or public) where the Linux OOM killer terminated a process unexpectedly. Trace: what caused memory pressure, which process was killed, how the application handled the kill, and what the fix was.
+
+---
+
+## Homework
+
+**Assignment 1 — CPU profiling exercise.** Profile any service you own under realistic load. Identify the top 3 CPU consumers. For each: is this expected? Is there an optimization opportunity? Write a one-page analysis.
+
+**Assignment 2 — Read "The Linux Programming Interface" (Kerrisk), Chapters 1-3.** These cover processes, file I/O, and system calls — the foundation of everything a server does. Write a one-paragraph summary of anything that surprised you.
+
+**Assignment 3 — Interview practice: OS question.** Practice answering "what happens when a web server receives a request?" at the OS level (kernel, syscalls, file descriptors, TCP buffer, process/thread scheduling). Time yourself — can you cover all layers in 5 minutes?
+
+**Assignment 4 — Production memory audit.** Find a service where memory usage is growing over time (memory leak candidate). Use heap profiling or memory snapshots to identify the leak source. Document: what allocates, what doesn't free, and the fix.
+
 `Chapter 11 | Section 1: Foundations | OS Fundamentals`

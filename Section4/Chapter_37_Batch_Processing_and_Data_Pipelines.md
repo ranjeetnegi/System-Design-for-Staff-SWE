@@ -4575,3 +4575,31 @@ Chapter 35 covers batch processing (MapReduce, Spark, scheduled jobs). A batch p
 - Design three chaos experiments for a nightly financial batch pipeline: (a) kill a Spark executor mid-job, (b) introduce latency in the HDFS data read, (c) corrupt a small percentage of input records. For each: what is the expected system behavior? What is the blast radius?
 - For experiment (a): kill a Spark executor mid-job. Spark's resilience: tasks on the killed executor are rescheduled to other executors (at-least-once processing). If the job is not idempotent, some records may be double-processed. What metric tells you double-processing occurred? (Duplicate records in the output.)
 - Follow-up: Financial batch jobs often have reconciliation steps (output totals must match input totals). Design the chaos experiment that specifically tests the reconciliation logic: inject a failure after processing but before reconciliation runs. The reconciliation should detect the inconsistency and alert. Write the hypothesis, experiment design, and success criteria for this test.
+
+---
+
+## Exercises
+
+**Exercise 1 — Batch vs. streaming selection.** For each use case, choose batch or streaming and justify: (a) end-of-day bank reconciliation, (b) real-time fraud detection, (c) daily recommendation model retraining, (d) real-time inventory updates, (e) weekly marketing analytics report.
+
+**Exercise 2 — Checkpoint design.** Spark batch job: 10TB of data, 6-hour runtime. Design the checkpointing strategy: checkpoint frequency, what state to checkpoint, how to resume after failure, and storage cost of checkpoints.
+
+**Exercise 3 — Idempotency in pipelines.** A batch job processes payment transactions. The job fails halfway and is restarted. Design idempotency: how do you ensure transactions aren't processed twice, what's the idempotency key, and how do you handle partial batches?
+
+**Exercise 4 — Pipeline SLA design.** Financial pipeline must complete by 6am, starts at midnight, processes 100TB. Design: parallelism needed, SLO per stage, alerting for behind-schedule stages, escalation if deadline will be missed.
+
+**Exercise 5 — Data quality validation.** Ingesting 1M records/day from an external partner. Design a data quality gate: validations (schema, nulls, range checks), what happens on failure (reject all vs. quarantine), and how failures are reported.
+
+**Exercise 6 — Backfill strategy.** Bug fix deployed. Need to reprocess 30 days of data (3TB). Design the backfill: how to reprocess without affecting production, how to handle already-processed records, and estimated completion time.
+
+---
+
+## Homework
+
+**Assignment 1 — Pipeline audit.** For each batch pipeline your team runs: document the schedule, SLA, checkpoint strategy, failure recovery process, and current reliability. Identify the pipeline with the weakest failure story.
+
+**Assignment 2 — Design a reconciliation step.** For any pipeline modifying financial or inventory data, design a reconciliation step: input count vs. output count, input sum vs. output sum, sample validation. Write the SQL for the reconciliation query.
+
+**Assignment 3 — Interview practice: batch pipeline design.** Practice "design a pipeline that processes 1TB of user activity logs daily and produces a recommendation model" in 30 minutes. Cover: ingestion, processing framework, failure handling, reprocessing strategy, output validation.
+
+**Assignment 4 — Read the Google MapReduce paper.** Write a one-paragraph summary: what was the key insight of MapReduce, and how does modern Spark improve on it? What problems does MapReduce still have that Spark doesn't solve?

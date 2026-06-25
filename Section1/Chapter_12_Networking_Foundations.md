@@ -2510,3 +2510,15 @@ Client behavior during T=120s to T=150s (30s TTL window):
 **Fix applied:** Slack reviewed their DNS TTL strategy for failover-critical endpoints. For health-check-driven failover, a lower TTL (5-10 seconds) reduces the stale cache window, at the cost of more DNS queries during normal operation. They also evaluated using anycast or a global load balancer layer that can absorb regional failures without requiring DNS updates.
 
 **Staff lesson:** DNS TTL is a direct knob on your failover speed. If your TTL is 300 seconds (5 minutes), a DNS-based failover will have a 5-minute tail where some clients keep hitting the dead endpoint. Reduce TTL on health-check-driven endpoints to 30 seconds or less. Also: pre-lower the TTL before a planned maintenance window (do it 2x the TTL ahead of time, so client caches drain). And remember: you cannot instantly flush client DNS caches -- TTL is the only mechanism you control.
+
+---
+
+## Homework
+
+**Assignment 1 — Network trace analysis.** Use `tcpdump` or Wireshark to capture traffic to/from one of your services for 60 seconds during normal operation. Identify: TCP handshake overhead, keep-alive connections, TLS handshake latency, and any unexpected retransmissions. Write a one-page interpretation.
+
+**Assignment 2 — DNS TTL audit.** Check the DNS TTLs for your production services. For health-check-driven failover endpoints, are TTLs appropriately short (30-60s)? For stable endpoints, are TTLs appropriately long (300-3600s)? Make the case for any changes needed.
+
+**Assignment 3 — Interview practice: networking question.** Practice answering "what happens when you type google.com in a browser?" covering: DNS resolution, TCP handshake, TLS handshake, HTTP request, server processing, response. Time yourself covering all layers in 5 minutes without notes.
+
+**Assignment 4 — CDN configuration review.** Review the CDN configuration for a product you work on. Find: cache hit rate by content type, TTL settings, origin shield configuration, and any bypass rules. Identify one optimization that would improve performance or reduce origin cost.

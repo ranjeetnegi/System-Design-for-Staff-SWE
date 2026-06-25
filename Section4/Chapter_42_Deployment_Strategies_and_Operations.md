@@ -3398,3 +3398,31 @@ After completing this chapter, you should be able to:
 ---
 
 *Chapter 40 of Section 4. Next: Chapter 41 -- Advanced Topics in System Design.*
+
+---
+
+## Exercises
+
+**Exercise 1 — Deployment strategy selection.** For each scenario, choose the deployment strategy and justify: (a) payment service update with zero downtime requirement, (b) new feature with uncertain user reception, (c) critical security patch that must reach all users within 1 hour, (d) ML model update where performance degrades gradually, not abruptly. Strategies: blue-green, canary, feature flag, rolling update.
+
+**Exercise 2 — Canary analysis design.** You're rolling out a new checkout flow to 5% of users. Design the canary analysis: what metrics indicate success (conversion rate, latency, error rate), what thresholds trigger automatic rollback, what's the statistical significance requirement before expanding to 50%, and how long you run the canary before promoting.
+
+**Exercise 3 — Rollback procedure.** Write a rollback procedure for a database schema migration that has already been applied to production (new column added, application deployed using it). Walk through: rollback steps, data migration needed, service restart order, and how you verify rollback was successful.
+
+**Exercise 4 — Deployment pipeline audit.** Evaluate your current deployment pipeline: how long does a deploy take end-to-end, what's the test coverage at each gate, how quickly can you rollback, and what percentage of deploys require manual intervention? Identify one improvement that would reduce deployment risk.
+
+**Exercise 5 — Blue-green capacity planning.** You run a service on 50 instances. Blue-green deployment requires spinning up 50 new instances. At your current scale, this is feasible. At 10x scale (500 instances), is it still feasible? Design an alternative that achieves blue-green safety at lower cost.
+
+**Exercise 6 — Deployment frequency improvement.** Your team deploys once per week. You want to deploy daily. List all blockers: test suite runtime, approval process, deployment complexity, fear of Friday deploys. For each blocker: write one specific change that would remove it.
+
+---
+
+## Homework
+
+**Assignment 1 — Deployment runbook.** Write a deployment runbook for your most critical service: pre-deploy checklist, deploy steps, health check validation, rollback trigger criteria, and post-deploy verification steps. Have a team member run through it without your guidance — identify any gaps.
+
+**Assignment 2 — Feature flag audit.** Find all feature flags in your codebase. For each: is it still needed? What's the plan to remove it once the feature is fully rolled out? Feature flags that are never cleaned up become technical debt.
+
+**Assignment 3 — Interview practice: deployment design.** Practice "design a deployment strategy for a payment service update that must have zero downtime and be rollable back within 5 minutes" in 20 minutes. Cover: the deployment strategy, health check design, traffic migration, rollback trigger, and data migration considerations.
+
+**Assignment 4 — Read the Netflix engineering blog on Spinnaker or the Kubernetes documentation on rolling deployments.** Write a one-paragraph summary: what deployment strategy does the system use by default, what are the configurable parameters, and what happens during a failed deploy?

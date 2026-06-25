@@ -1999,5 +1999,69 @@ If the answer is "probably need to add some logging first" — start here.
 
 ---
 
+### Brainstorming Questions — Parts 1–3: Why Observability, Three Pillars, Metrics
+
+1. Your service has 100% test coverage but no production observability. Is it "observable"? What does observability give you that tests don't?
+2. Metrics vs. logs vs. traces: you have a budget to implement only one for a new service. Which do you pick? What's the reasoning, and what do you lose by not having the other two?
+3. You discover that your P99 latency is 10x your P50. What does this tell you? What's your next diagnostic step?
+
+### Brainstorming Questions — Parts 4–6: RED, USE, Logging
+
+1. RED method is for services, USE method is for resources. Give an example where applying the wrong method would mislead your diagnosis.
+2. You add structured logging to your service. 3 months later, log volume is 10x what you expected and costs $20K/month. What went wrong, and what's the fix without losing critical observability?
+3. A colleague adds a log line for every database query. Is this a good practice? What's the benefit and what's the risk at 10K RPS?
+
+### Brainstorming Questions — Parts 7–9: Tracing, OpenTelemetry, SLOs
+
+1. You have distributed tracing. A request spans 5 services. The total latency is 200ms but each service reports 10ms. Where are the missing 150ms? How do you find them?
+2. Error budget: you've burned 50% of your monthly budget in the first week. What do you do? Who do you call? What actions are now blocked vs. unblocked?
+3. An SLO says "99.9% of requests < 500ms." Your P99.9 is 510ms. Are you violating your SLO? What's the nuance here?
+
+### Brainstorming Questions — Parts 10–12: Alert Design, Dashboards, Cardinality
+
+1. You have 500 alerts configured. On a typical week, 80% fire and 90% are ignored. What's wrong with your alerting? What's the first thing you'd change?
+2. A dashboard has 50 metrics on it. An engineer opens it during an incident and is confused. What are the 5 most important metrics for an incident-response dashboard? What gets cut?
+3. You add a `user_id` label to a metric. Your Prometheus memory doubles overnight. Why? How do you fix the cardinality explosion without losing the debugging capability?
+
+---
+
+## Exercises
+
+**Exercise 1 — SLI/SLO Design:**
+Pick one service you work on. Define 3 SLIs for it (latency, availability, and one service-specific metric). For each SLI, specify: what measurement captures it, what target constitutes "good," and what the 30-day error budget is. Then: does your current instrumentation actually measure these SLIs? What's missing?
+
+**Exercise 2 — Dashboard Audit:**
+Open the dashboard for one service you own. For each panel: Is this metric actionable? If this panel shows something bad, what would you do? Could an on-call engineer who didn't write this service understand what it means at 2 AM? Delete or archive every panel that fails all three questions. Add any panel that's currently missing that you'd want during an incident.
+
+**Exercise 3 — Structured Logging Retrofit:**
+Find a function in your codebase that logs unstructured text (e.g., `log.info("User 1234 purchased item 5678")`). Rewrite it as structured JSON: `{"event": "purchase", "user_id": 1234, "item_id": 5678, "ts": "..."}`. Then write the query you'd use to find all purchases of item 5678 in the last hour in your logging system. Does structured logging make this query faster and more reliable?
+
+**Exercise 4 — Trace a Request:**
+Pick one user-facing request in your system (e.g., "checkout"). Trace it end-to-end: what services does it touch? Does your tracing infrastructure show the full trace across service boundaries? What's the slowest span in a typical trace? Is the slowest span instrumented well enough to know WHY it's slow?
+
+**Exercise 5 — Alert Quality Review:**
+List every alert that fired for your service in the last 30 days. For each: Was it actionable? Was it a false positive? Did it fire before users noticed (proactive) or after (reactive)? Classify each as: keep, retune, or delete. What's the ratio of good alerts to noise?
+
+**Exercise 6 — MTTD Measurement:**
+Pick a recent incident you know about. Reconstruct the timeline: when did it start? When did the first alert fire? When did the on-call engineer begin investigating? When was root cause identified? Calculate: MTTD (time from start to detection) and MTTR (time from detection to resolution). What would have needed to be different in your observability to cut MTTD in half?
+
+---
+
+## Homework
+
+**Assignment 1:**
+Read "Observability Engineering" by Charity Majors, chapters 1-4. Pay specific attention to the distinction between metrics, logs, traces, and events — and why the authors argue events are the primitive that unifies the others. After reading: does your current observability stack support high-cardinality event exploration (arbitrary field filtering, not just pre-defined metrics)? If not, what would you need to add?
+
+**Assignment 2:**
+Find a public post-mortem where poor observability extended MTTD or MTTR. GitHub's 2012 database incident, Cloudflare's 2022 network incident reports, or Stripe's engineering blog are good sources. For the incident you choose: what observability gap made diagnosis harder? What instrumentation would have helped?
+
+**Assignment 3:**
+Implement the USE method for one stateful component in your system (a database, a queue, or a cache). For each resource the component uses: are Utilization, Saturation, and Errors visible in your dashboards? Add any missing panels and set up alerts for saturation > 80% and error rate > 0.1%.
+
+**Assignment 4:**
+Spend 30 minutes after your next on-call incident filling out the three post-incident observability questions from the Closing Principle section: (1) What did I add during the incident? (2) What would have told me faster? (3) What should I add to catch this category earlier? Then implement at least one of the answers before the next on-call rotation.
+
+---
+
 *Pairs with [Chapter 117: Capacity Planning](Chapter_117_Capacity_Planning.md) (resource provisioning informed by metrics) and [Chapter 110: Code Review as a Discipline](Chapter_110_Code_Review_as_a_Discipline.md) (observability requirements in review checklists). Next: [Chapter 122: Performance Profiling](Chapter_122_Performance_Profiling.md).*
 

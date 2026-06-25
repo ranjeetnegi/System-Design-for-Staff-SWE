@@ -3072,4 +3072,30 @@ L6 PHASE 2 CHECKLIST:
 
 ---
 
+## Exercises
+
+**Exercise 1 — Requirement triage.** Given 15 potential functional requirements for a messaging app (send message, read receipt, typing indicator, search, file attachments, group chats, reactions, threads, scheduled messages, editing, deletion, forwarding, pinning, mentions, voice messages), categorize each as: must-have for MVP, nice-to-have, or out-of-scope. Justify each categorization.
+
+**Exercise 2 — Requirement to data model.** Take 5 functional requirements. For each: identify data to store, operations needed (create, read, update, delete), and consistency requirement (strong, eventual, best-effort).
+
+**Exercise 3 — API surface design.** Given 3 functional requirements for a task management system (create task, assign to user, mark complete), design the REST API: endpoints, HTTP verbs, request/response shapes, error codes. Evaluate for consistency and backward compatibility.
+
+**Exercise 4 — Write vs. read ratio.** For each system, estimate the write:read ratio and explain how it shapes the architecture: (a) Twitter, (b) Google Maps, (c) GitHub.
+
+**Exercise 5 — Consistency derivation.** For each banking operation (transfer, check balance, view history), answer: what consistency level is required? What happens if the user sees stale data?
+
+**Exercise 6 — Interview Phase 2 drill.** Practice a 5-minute Phase 2 for "design Dropbox." Write out: 3 must-have requirements, 2 you're explicitly deferring, and the key assumption you're making about scope.
+
+---
+
+## Homework
+
+**Assignment 1 — Requirements document.** For a system you're currently building, write explicit functional requirements in the form "The system shall [action] [subject] [constraint]." Identify any currently-implemented requirements that lack explicit documentation.
+
+**Assignment 2 — API versioning strategy.** Review your team's current API versioning approach. Write a one-page analysis: how are breaking changes handled, what's the deprecation process, and what would you change?
+
+**Assignment 3 — Interview practice: Phase 2.** For "design a real-time collaborative document editor," spend 5 minutes writing functional requirements before designing anything. Focus on must-haves, conflicts between requirements, and minimum viable set.
+
+**Assignment 4 — Read "Shape Up" (Basecamp).** Write a one-paragraph summary of the concept of "appetite" and how it connects to technical scoping decisions.
+
 *End of Chapter 15.*

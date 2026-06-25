@@ -2007,4 +2007,32 @@ The goal is not to be the fastest coder. The goal is to be the engineer whose se
 
 ---
 
+## Exercises
+
+**Exercise 1 — Flame graph analysis.** Generate a CPU flame graph for a service you own using `go pprof`, `py-spy`, or async-profiler. Identify the top 3 hottest stack frames. For each: is this expected, is there an optimization opportunity, and what's the estimated speedup?
+
+**Exercise 2 — CPU vs I/O diagnosis.** Design a 5-minute diagnostic flow for a service experiencing latency spikes. What metrics/tools do you check in what order to determine CPU-bound vs. I/O-bound? Write the decision tree.
+
+**Exercise 3 — GC profiling.** For any JVM or Go service: find GC frequency, pause duration (P50 and P99), and heap utilization. Is GC a bottleneck? What configuration change or code change reduces GC pressure?
+
+**Exercise 4 — N+1 detection and fix.** Design a REST endpoint that returns 100 users with their last 5 orders each. Observe the query log: you see 101 queries. Explain the N+1 pattern, how to detect it in production (APM trace, query count metric), and two ways to fix it.
+
+**Exercise 5 — Benchmark design.** Compare two JSON serialization libraries. Design the benchmark: what to measure, how to prevent JIT warmup effects, how to ensure realistic payload sizes, and how to control for environment noise.
+
+**Exercise 6 — Performance regression test.** Write a test that fails if P99 latency for your critical endpoint exceeds 100ms under 500 RPS load. What load testing tool do you use, how do you integrate it into CI, and what's the acceptable flakiness rate?
+
+---
+
+## Homework
+
+**Assignment 1 — Profile a production service.** Profile any service you own under realistic load. Identify top 3 CPU consumers and top 3 allocation sources. Write a one-page analysis with one optimization recommendation.
+
+**Assignment 2 — Latency attribution.** For your slowest endpoint: break down latency by component (DB, serialization, network, app code). Use APM traces or custom instrumentation. Implement one optimization and measure the improvement.
+
+**Assignment 3 — Interview practice: P99 investigation.** Practice "your API has P99 500ms but P50 20ms — what do you do?" in 10 minutes. Cover: what this gap tells you, diagnostic approach, likely causes, and two possible fixes.
+
+**Assignment 4 — Read "Systems Performance" (Brendan Gregg), Chapter 2.** Write a one-paragraph summary of the 60-second Linux performance analysis checklist and how you'd apply it to a production service experiencing latency spikes.
+
+*Pairs with [Chapter 121: Observability and Instrumentation](Chapter_121_Observability_and_Instrumentation.md) and [Chapter 117: Capacity Planning](Chapter_117_Capacity_Planning.md). Next: [Chapter 123: Technology Evaluation Framework](Chapter_123_Technology_Evaluation_Framework.md).*
+
 *Pairs with [Chapter 121: Observability and Instrumentation](Chapter_121_Observability_and_Instrumentation.md) (metrics reveal WHAT is slow; profiling reveals WHY) and [Chapter 117: Capacity Planning](Chapter_117_Capacity_Planning.md) (profiling informs capacity decisions). Next: [Chapter 123: Technology Evaluation Framework](Chapter_123_Technology_Evaluation_Framework.md).*

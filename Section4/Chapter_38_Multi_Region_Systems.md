@@ -8564,3 +8564,31 @@ Google Spanner achieves external consistency (linearizability) globally across c
 - CockroachDB uses HLC (not GPS) with maximum clock offset enforcement (500ms). How does CockroachDB achieve linearizability without TrueTime? (It reads timestamps from HLC and waits for the uncertainty window.) What is the latency overhead vs Spanner's GPS-based approach?
 - Follow-up: You are designing a global financial ledger. TrueTime (Spanner) gives you global linearizability with 7-10ms commit latency overhead. HLC (CockroachDB) gives you similar guarantees with 2-5ms overhead but requires bounded clock skew enforcement. For a ledger processing 100K global transactions/second: which approach do you choose? What is the cost difference? (Spanner: Google Cloud cost. CockroachDB: self-hosted or managed cost.) Calculate the latency and cost trade-off.
 
+---
+
+## Exercises
+
+**Exercise 1 — Active-active vs. active-passive.** For each system, choose active-active or active-passive and justify: (a) payment processing (global users, data consistency critical), (b) social media feed (global users, eventual consistency acceptable), (c) internal analytics dashboard (US only, used during business hours). What's the cost and complexity difference for each?
+
+**Exercise 2 — Conflict resolution design.** You're building an active-active document editing system. Two users in different regions simultaneously edit the same document section. Design the conflict resolution strategy: last-write-wins (LWW), operational transforms (OT), or CRDTs. What's the user experience implication of each?
+
+**Exercise 3 — Data residency compliance.** EU users' data must stay in the EU. US users' data must stay in the US. Design the routing and storage architecture. What happens when a US user travels to the EU and accesses their account? What's the edge case with shared data (a US-EU collaboration space)?
+
+**Exercise 4 — Cross-region failover drill.** Design a failover runbook: primary region goes down at 2am. What automated recovery happens, what requires manual intervention, what's the expected RTO and RPO, and what's the validation step before declaring recovery complete?
+
+**Exercise 5 — Replication lag impact.** Your active-passive setup has 200ms replication lag. A user creates an account in the primary region, then their mobile app (hitting the secondary) immediately reads their profile. Walk through: what do they see? How do you fix this? What's the trade-off of the fix?
+
+**Exercise 6 — Traffic routing strategy.** Your service has three regions: US-East, EU-West, Asia-Pacific. You want to route each user to the closest region. Design: DNS-based routing, health check integration, what happens when a region is degraded (partial failure vs. complete), and how you avoid routing loops.
+
+---
+
+## Homework
+
+**Assignment 1 — Region expansion plan.** Your service currently runs in one region. Write a multi-region expansion plan: which region to add first (and why), what must be replicated vs. what can stay regional, what new failure modes are introduced, and what's the runbook for a regional failover.
+
+**Assignment 2 — Latency measurement.** Set up latency measurements between your service and users in 3 different geographic locations. Identify the slowest region. Propose whether a CDN, a new region, or an edge cache would fix the problem — and justify based on the latency breakdown.
+
+**Assignment 3 — Interview practice: multi-region design.** Practice "design a globally consistent key-value store" in 45 minutes. Cover: consistency model choice, replication topology, conflict resolution, failover strategy, and how you handle the partition between regions during a network split.
+
+**Assignment 4 — Read the Amazon Dynamo paper (DeCandia et al., 2007).** Write a one-paragraph summary: what trade-offs did Dynamo make (availability over consistency, eventual consistency, vector clocks), and why were those trade-offs the right choice for Amazon's use case at the time?
+

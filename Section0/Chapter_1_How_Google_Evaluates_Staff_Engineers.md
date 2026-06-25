@@ -4475,3 +4475,88 @@ L6         | Fix queries + reframe the VP's  | (catches everything)
 **Fix applied:** Shopify extended the code freeze to 72 hours before major sale events. All changes after the freeze require VP approval. Load testing at 2x-3x expected peak is now a pre-freeze requirement.
 
 **Staff lesson:** Load testing at normal-load scale does not catch load-sensitive bugs (memory leaks, connection pool exhaustion, lock contention). Test at 2-3x peak. And respect code freezes: the cost of a deploy 48 hours before Black Friday is higher than the cost of the bug you were trying to fix.
+
+---
+
+## Brainstorming Questions
+
+### Section 2 — Why Google's Evaluation Framework Is Different
+
+1. If a friend asked "what makes Google L6 different from L5 in one sentence?", what would you say? How does your answer change if the friend is an intern vs. a Staff engineer?
+2. Google evaluates on ambiguity handling, not just correctness. Name a time you turned an ambiguous requirement into a concrete design decision. What made it hard?
+3. The chapter says Google cares about "signal density" — how much L6-level thinking shows up per minute. Where in your current design conversations is your signal density lowest?
+4. Why might an L5 engineer who is brilliant at coding still fail a Google Staff system design interview? What's the gap?
+
+### Section 3 — Core Concepts: Every Evaluation Dimension
+
+1. You have 5 minutes left in an interview and haven't discussed failure modes. Do you rush through them or skip and clean up what you have? Why? What does each choice signal to the interviewer?
+2. A candidate says "I'd use Kafka here because it's reliable." An L6 would say something different. What would they say, and why does the difference matter?
+3. Of the four evaluation axes, which one is hardest to demonstrate in a 45-minute interview? What's your plan to ensure you hit it?
+4. How do you show "clarity of thought" when you genuinely don't know the right answer? What does the L6 response look like vs. the L4 response?
+
+### Section 4 — Mental Models and Analogies
+
+1. The chapter uses the "ER doctor" analogy for Staff engineers. What's another analogy for the Staff → L6 jump that feels true to your experience?
+2. Mental models help you reason under pressure. What mental model do you currently use when evaluating whether a design will scale? Is it explicit or implicit?
+3. Why does having a mental model matter more in an interview than on the job? What's different about the constraints?
+
+### Section 5 — Real-World L5 vs L6 Behavior
+
+1. The L5 answer to "how do you handle a cache miss storm?" is usually "add more cache." What's the L6 answer and what additional dimensions does it cover?
+2. Think of a design decision you made in the last year. Now evaluate it as if you were a Google L6 interviewer. What would you probe? What gap would you find?
+3. The chapter shows L6 candidates raising failure modes before being asked. Why is proactivity on failure modes a signal, not just a nice-to-have?
+
+### Section 6 — Design Trade-offs
+
+1. "Trade-off thinking" is easy to say and hard to demonstrate. What does it look like in practice to show genuine trade-off thinking vs. just listing two options?
+2. In a 45-minute interview, you can't explore every trade-off. How do you decide which trade-offs to discuss and which to defer? What's your selection criterion?
+3. An interviewer challenges your database choice: "Why not Cassandra instead of Postgres?" Walk through how an L6 candidate handles this vs. an L5 candidate.
+
+### Section 7 — Common Interview Questions
+
+1. Pick any of the 15 interview questions in this section. Give yourself 2 minutes to answer it silently. Now: what signals did you hit? What did you miss?
+2. The chapter gives model L6 answers. Take one model answer and find the specific phrases that signal L6 thinking. What makes those phrases different from what you would have said?
+3. Why do certain interview questions (e.g., "design a notification system") appear so frequently in Staff-level interviews? What range of signals do they test?
+
+### Section 8 — Key Takeaways and Practice
+
+1. The chapter says consistency across all rounds matters more than one brilliant round. Why? What does an inconsistent signal pattern look like to a hiring committee?
+2. You have 4 weeks before your Google interview. What's the one thing from this chapter you would drill every single day? Why that thing specifically?
+3. What's the difference between practicing system design and practicing *Staff-level* system design? What would you add to make your practice target L6 signals?
+
+### Sections 9–11 — Advanced Deep Dives and Next Steps
+
+1. The chapter covers nine critical dimensions for L6. Which dimension is most underrepresented in your current interview preparation? What does targeted practice on it look like?
+2. "Institutional knowledge transfer" is listed as an L6 signal. How do you demonstrate this in an interview context where you haven't built the system yet?
+3. You compare yourself across companies (Section 10) and find your experience is weaker in multi-region systems. How do you close that gap in 6 weeks without a full system to build?
+4. What's the one behavior change from this chapter that you will implement in your *next* design conversation at work, not just in interviews?
+
+---
+
+## Exercises
+
+> Note: Seven fully worked exercises appear in Appendix J. The six below are quick-drill format for timed practice.
+
+**Exercise 1 — The 3-minute opening drill.** Pick any system design prompt. Set a 3-minute timer. Record yourself asking only clarifying questions — no design yet. Evaluate: did every question change the design if answered differently? Did you ask about failure cost, scale, and "why this problem exists"?
+
+**Exercise 2 — Signal mapping.** Take the last system design you did (interview or work). Map each thing you said to one of Google's four evaluation axes. What axis was underrepresented? What would you add if you could go back?
+
+**Exercise 3 — Failure mode stress test.** Pick any system (URL shortener, rate limiter, message queue). Spend 10 minutes listing every failure mode you can think of. Then: classify each as partial vs. total failure, user-visible vs. not, recoverable vs. not.
+
+**Exercise 4 — The L5→L6 rewrite.** Find a design decision you made recently. Write the L5 explanation (2 sentences). Now write the L6 explanation (explain trade-offs considered, options rejected, failure modes mitigated). Compare the two — what's different?
+
+**Exercise 5 — Challenge response drill.** Have a partner (or talk to yourself) challenge three design decisions in a row: "Why not X?", "That won't scale", "That's over-engineered." Practice the Acknowledge-Explore-Respond pattern for each without getting defensive.
+
+**Exercise 6 — Cross-audience translation.** Take one complex system design. Write a 3-sentence summary for: (a) a senior engineer colleague, (b) a product manager, (c) a VP. Each version should be accurate but pitched correctly for the audience.
+
+---
+
+## Homework
+
+**Assignment 1 — Full mock interview (week 1 priority).** Schedule a 45-minute mock interview with a peer. The interviewer's job: ask the opening question, stay quiet, ask one challenge in the middle, give honest feedback at the end. Use the 14-item checklist from Section 8 to score yourself. Anything below 11 has a specific gap to fix.
+
+**Assignment 2 — Failure pattern self-audit.** Read Appendix E's eight failure patterns. Rate yourself 1-5 on each. For your top two highest scores, write one specific behavior change you will practice. Share it with a peer for accountability.
+
+**Assignment 3 — Design three systems end-to-end.** Over the next two weeks, design one system per topic: (a) a feed ranking system, (b) a distributed rate limiter, (c) a real-time analytics pipeline. For each, hit all four evaluation axes explicitly and write out the failure modes before moving to the design.
+
+**Assignment 4 — Read three real post-mortems.** Find three public incident post-mortems (Google SRE book, Stripe engineering blog, AWS status history). For each: what was the failure mode? What was the blast radius? What was the containment? How would you design to prevent it?

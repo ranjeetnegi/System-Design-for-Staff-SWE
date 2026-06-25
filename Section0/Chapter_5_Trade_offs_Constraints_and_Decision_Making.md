@@ -3101,3 +3101,15 @@ Write a resolution process:
 **Fix applied:** (ongoing) Twitter documented dependencies and re-enabled critical infrastructure after identifying cascading failures.
 
 **Staff lesson:** Cost reduction under pressure requires a dependency map. You cannot safely reduce infrastructure X without knowing every system that depends on X and the cascading effect of reducing X's capacity. L6 engineers maintain a live dependency map and quantify "what breaks and how fast" for every infrastructure reduction.
+
+---
+
+## Homework
+
+**Assignment 1 — Trade-off ledger.** For each major technical decision your team made in the last quarter, write the trade-off in the form: "We chose X over Y. This gives us [benefit] and costs us [downside]. We accepted this because [constraint]." If you can't fill in all three parts, the decision was not made explicitly — it happened by default.
+
+**Assignment 2 — Constraint identification.** List the five constraints that most shape your team's current technical decisions (time, cost, team skill, existing architecture, compliance, etc.). For each: is it a real constraint or an assumed one? What would need to be true to relax it?
+
+**Assignment 3 — Interview practice: trade-off question.** Practice answering "walk me through a significant trade-off you made in a system design" out loud in 5 minutes. Structure: what options existed, what constraints applied, which option you chose, what you gave up, what you monitored to validate the decision was right.
+
+**Assignment 4 — Reversibility audit.** Review five recent decisions (architecture, process, tooling). Classify each as: (a) easily reversible, (b) reversible with cost, (c) nearly irreversible. For (c), verify that the decision was made with appropriate rigor. For (a), note where you may have over-analyzed a cheap-to-reverse decision.

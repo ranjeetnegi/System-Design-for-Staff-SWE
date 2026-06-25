@@ -5224,3 +5224,13 @@ Kafka partitions data across broker nodes for write parallelism. Database shardi
 
 ---
 
+## Homework
+
+**Assignment 1 — Kafka partition sizing.** For a topic you own: calculate the right number of partitions using throughput requirements (producer throughput / per-partition throughput cap). What's the current partition count vs. the optimal? What's the migration plan if they don't match?
+
+**Assignment 2 — ISR investigation.** Find a past Kafka incident (yours or public) where under-replicated partitions caused a problem. What was the root cause (slow broker, network partition, GC pause)? How was it detected? What's the alert you'd set up to catch it earlier?
+
+**Assignment 3 — Interview practice: Kafka internals.** Practice explaining Kafka's replication protocol: leader election, ISR, high watermark, and what happens when the leader fails. Cover the pull-based consumer model and why it beats push-based. Time yourself: all of this clearly in 8 minutes.
+
+**Assignment 4 — Read Kafka documentation on Log Compaction.** Write a one-paragraph explanation: what problem does log compaction solve (vs. retention-by-time), when would you use a compacted topic, and what are the failure modes of compaction?
+

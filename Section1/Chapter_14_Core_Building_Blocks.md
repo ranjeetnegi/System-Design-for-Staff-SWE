@@ -3111,3 +3111,15 @@ L6 CACHE FAILURE DESIGN:
 | System composition | Assembles building blocks for one service | Designs standard building block patterns used by the entire engineering org |
 | Failure mode | Knows each block can fail | Maps failure modes: what happens when each block fails, fallback for each |
 
+---
+
+## Homework
+
+**Assignment 1 — Building block failure mode audit.** Pick any system you own. For each core building block (load balancer, database, cache, queue), write: what is the failure mode, what is the blast radius, what is the fallback, and what is the detection mechanism? Identify the building block with the weakest failure story.
+
+**Assignment 2 — Selection justification.** Pick one building block you recently chose (a specific database, message queue, or cache). Write a one-page justification: options considered, why you chose this one, what you gave up, and what would change your decision. Share with a peer for feedback.
+
+**Assignment 3 — Interview practice: building blocks.** Practice answering "design a URL shortener" using the building blocks framework — identify each component, justify each choice, and map failure modes for each. Target 30 minutes. Record and review: did you address all major components?
+
+**Assignment 4 — Read "System Design Interview" (Alex Xu), Chapter on Consistent Hashing.** Consistent hashing is the foundational building block for distributed caching and partitioning. Write a one-paragraph summary: how does it solve the problem of rebalancing when nodes are added/removed? When would you use it vs. range partitioning?
+

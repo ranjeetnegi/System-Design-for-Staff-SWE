@@ -7991,3 +7991,31 @@ Kafka's exactly-once semantics (introduced in Kafka 0.11) implement a 2PC-like p
 - What is the equivalent of the "coordinator" in Kafka's transaction protocol? (The transaction coordinator partition, which is itself Raft-replicated within the Kafka cluster.) If the transaction coordinator crashes, what happens to in-flight transactions?
 - Follow-up: Kafka's exactly-once semantics require that the consumer's processing (business logic) AND the offset commit happen atomically. This is only achievable if the consumer writes its output back to Kafka (consume-transform-produce). If the consumer writes to an external database (e.g., PostgreSQL), you need external transaction coordination (2PC between Kafka and PostgreSQL). Describe this scenario and why it is usually avoided.
 
+---
+
+## Exercises
+
+**Exercise 1 — Event vs. command vs. query design.** For each interaction in an e-commerce system, classify as event, command, or query — and choose the right delivery mechanism: (a) user places order, (b) check inventory level, (c) order was shipped, (d) trigger fraud check, (e) daily sales report generation. Justify each choice and the delivery guarantee required.
+
+**Exercise 2 — Partition key design.** You're building a Kafka-backed order processing system. Messages must be processed in order per order ID. Design the partition key strategy. What happens if a popular seller generates 80% of all order events (hot partition)? How do you fix the hot partition without breaking ordering?
+
+**Exercise 3 — Consumer group lag analysis.** Your Kafka consumer group is 30 seconds behind at 50K messages/second. Total lag: 1.5M messages. You have 8 consumer instances and 16 partitions. Calculate: messages per partition per second, lag per partition, time to catch up if you add 8 more consumers. What's the bottleneck?
+
+**Exercise 4 — Exactly-once semantics design.** You're implementing a payment processing system using Kafka. Design the exactly-once flow: producer idempotency, consumer transaction, idempotency key in the downstream database. What's the failure mode if the consumer crashes after processing but before committing the offset?
+
+**Exercise 5 — Event schema evolution.** You have a Kafka topic with 30 consumers. The event schema needs a new required field. Design the migration: how do you add the field without breaking existing consumers, what schema registry changes are needed, and how do you handle old events that don't have the field?
+
+**Exercise 6 — Kafka vs. SQS selection.** You need to choose between Kafka and SQS for three scenarios: (a) audit log that must be replayed, (b) task queue for email sending, (c) real-time analytics pipeline with multiple downstream consumers. Justify each choice with the specific capability that drives it.
+
+---
+
+## Homework
+
+**Assignment 1 — Consumer lag monitoring.** Set up consumer lag monitoring for a Kafka topic your team uses. Create an alert: if lag exceeds 60 seconds, page on-call. Write the runbook: what does lag mean, how do you diagnose the cause, what are the first three things to check?
+
+**Assignment 2 — Design review: event-driven system.** Find any event-driven system your team operates. Write a one-page review: event schema design quality (does each event tell a complete story?), consumer group design, DLQ strategy, and monitoring. Identify one improvement.
+
+**Assignment 3 — Interview practice: event-driven design.** Practice "design a real-time notification system using Kafka" in 30 minutes. Cover: topic design, partition key strategy, consumer groups, message schema, DLQ, and what happens when a consumer is slow.
+
+**Assignment 4 — Read the LinkedIn engineering blog post on Kafka's origin ("Building a Distributed, Partitioned, and Replicated Log Service," Kreps et al.).** Write a one-paragraph summary: what problem was Kafka designed to solve that existing message queues couldn't, and what design choices followed from that?
+

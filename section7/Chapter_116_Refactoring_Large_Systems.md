@@ -1980,6 +1980,44 @@ That discipline, applied consistently over months and years, is what makes large
 
 ---
 
+## Exercises
+
+**Exercise 1 — Seam Identification:**
+Take a piece of code you work with that you find hard to test (or hard to change). Identify 3 seams — places where you could inject a fake or swap an implementation without changing the production behavior. For each seam: what would you inject, and what would it enable you to test that you can't test today?
+
+**Exercise 2 — Characterization Test:**
+Find a function or module in your codebase that has no tests and that you don't fully understand. Write a characterization test for it: call it with representative inputs and record the outputs. You're not verifying correctness — you're building a safety net so you can refactor without fear of undetected regressions.
+
+**Exercise 3 — Strangler Fig Plan:**
+Pick a monolithic component in a codebase you know. Design the first phase of a Strangler Fig extraction: which behavior would you carve out first? What's the interface you'd put between the old and new code? What's the dual-write or traffic-splitting strategy? Write a 1-page design doc for this first phase only.
+
+**Exercise 4 — Dependency Graph:**
+Take a module or class you work with. Draw its dependency graph: everything it imports, everything it calls, everything it writes to. Circle any dependencies that cross a bounded context (e.g., a user-facing service calling a billing database directly). These are the dependencies that make refactoring hard — and they're the ones worth fixing first.
+
+**Exercise 5 — Incremental Refactor Execution:**
+Choose one function (max 50 lines) that you believe needs refactoring. Refactor it in 3 commits, each independently deployable. Commit 1 introduces no behavioral change. Commit 2 changes one thing. Commit 3 cleans up. Then: was it actually possible to split it this way? What made some changes harder to separate than expected?
+
+**Exercise 6 — Boy Scout Rule Week:**
+For one week, apply the Boy Scout Rule: every file you open for ANY reason, make one small improvement (rename a variable, extract a function, add a comment explaining something non-obvious). At the end of the week: how many files did you touch? What's the cumulative effect? Did the rule slow you down or become automatic?
+
+---
+
+## Homework
+
+**Assignment 1:**
+Read Michael Feathers's "Working Effectively with Legacy Code," chapters 1-5 (the introduction and first few techniques). Apply one of the "Breaking Dependencies" techniques from chapter 3 or 4 to a real piece of code you work with. Write a brief summary of which technique you used and what it enabled.
+
+**Assignment 2:**
+Find a public example of a Strangler Fig migration: Shopify's Storefront Renderer extraction, Netflix's migration from monolith to microservices, or Airbnb's service extraction work are all documented in engineering blogs. Map the migration to the framework in this chapter: what was extracted first? How was dual-write handled? How long did it take? What went wrong?
+
+**Assignment 3:**
+Review the last major refactoring or rewrite that happened on your team. With the benefit of hindsight: did it follow the Boy Scout Rule (incremental) or the Big Bang approach? What was the actual migration period? Were there incidents during the cutover? What would you recommend doing differently?
+
+**Assignment 4:**
+Pick a service or module with no test coverage that your team owns. Estimate the time required to add characterization tests for the 5 most critical paths through it. Write a one-paragraph argument for why this investment is worth it, framed in terms of the tech debt impact × urgency ÷ cost scoring from Part 2.
+
+---
+
 ## Companion Resources
 
 - **"Working Effectively with Legacy Code"** — Michael Feathers (seams, characterization tests, breaking dependencies)

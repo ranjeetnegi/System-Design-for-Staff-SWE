@@ -545,6 +545,25 @@ Write the summary, timeline, root cause, contributing factors, and 3 action item
 
 ---
 
+## Exercises
+
+**Exercise 1 — RFC in One Hour:**
+Write a one-page RFC for a real or hypothetical technical decision you face. Use the template from Part 2: problem statement, proposed solution, alternatives considered, trade-offs, decision. Time yourself: can you write a useful RFC in under an hour? What parts took the most time?
+
+**Exercise 2 — Passive Voice Hunt:**
+Take 3 paragraphs of your recent writing (Slack messages, design docs, tickets). Highlight every passive construction. Rewrite each sentence in active voice. Which rewrites made the sentence more specific (naming who does what)? Did any passive constructions serve a purpose?
+
+**Exercise 3 — One-Sentence Summary:**
+For a project you're working on: write the problem statement in exactly one sentence. Then write the proposed solution in exactly one sentence. Then write the key trade-off in exactly one sentence. Share these three sentences with someone not on your team. Do they understand the decision? If not, which sentence failed?
+
+**Exercise 4 — Incident Post-Mortem:**
+Write a blameless post-mortem for a real or practice incident. Use the structure from Part 5: timeline, impact, root cause (5 Whys), contributing factors, what went well, action items. For each action item: is it specific? Does it have an owner? Is it verifiable?
+
+**Exercise 5 — Influence Without Authority:**
+Write a 1-paragraph persuasive argument for a technical decision you believe in, aimed at a senior engineer who is skeptical. Use evidence, not appeals to authority. Name the trade-off explicitly. Anticipate the main objection and address it. Then: read it aloud. Does it sound confident or defensive?
+
+---
+
 ## Homework
 
 **Homework 1:** Find a design doc you've written (or a colleague's with permission) and apply the 7 rules from Part 7. Count the filler phrases and passive constructions. Rewrite the first three paragraphs using the rules. Compare.

@@ -2816,3 +2816,50 @@ BLAST RADIUS:
 | Team impact | Scales own service | Writes scaling playbook used by 5 other teams |
 
 ---
+
+### Brainstorming Questions — Section 2: Why This Matters
+
+1. You join a team that treats their monolith as a single "black box." What's the first question you'd ask to understand the real system boundary?
+2. Why does understanding clients vs. servers matter when designing for failure? What breaks differently when the client is mobile vs. a server?
+3. At what point does "this is a simple server" become "this is a distributed system"? What's the threshold?
+
+### Brainstorming Questions — Section 3: Core Concepts
+
+1. A colleague says "just add more servers." What questions would you ask to evaluate whether horizontal scaling is actually the right move?
+2. Your server handles 1,000 RPS with 100ms average latency. You need 10,000 RPS with the same latency budget. Walk through your options from cheapest to most expensive.
+3. Stateless vs. stateful servers: give a concrete example where choosing stateful is the *right* answer, not just the easy one.
+4. The chapter covers server-sent events, long polling, and WebSockets. When does each one beat the others? What's the deciding factor?
+
+### Brainstorming Questions — Section 5–6: Examples and Trade-offs
+
+1. Pick any real product you use daily (Slack, Spotify, Google Maps). What mix of client types does it serve? How does that shape the server architecture?
+2. You're designing a server that must serve both mobile (bandwidth-constrained) and desktop (low-latency) clients. How do you handle the API contract differently for each?
+3. A client-side bug causes every client to retry aggressively when it receives a 503. How does your server design prevent this from becoming a full outage?
+
+---
+
+## Exercises
+
+**Exercise 1 — Client type mapping.** Pick any system you work on. List every client type that calls it (mobile app, web browser, internal service, batch job, etc.). For each: what are its latency tolerance, bandwidth constraints, and retry behavior? What does this mean for your server API design?
+
+**Exercise 2 — Stateless audit.** Take one stateful service you own. Identify what state it holds. For each piece of state: where does it live (in-memory, disk, external store)? What happens if the server restarts? What changes if you run 3 replicas?
+
+**Exercise 3 — Connection model comparison.** For a chat application, compare: polling (every 1 second), long polling, WebSockets, and server-sent events. Build a table: connection overhead, latency, server memory, failure behavior, client complexity. Which wins for chat at 10M concurrent users?
+
+**Exercise 4 — Load balancing algorithm analysis.** You have 4 servers with response times: 20ms, 80ms, 200ms, 50ms. Under round-robin, what's the average response time a client sees? Under least-connections? Under weighted round-robin (weight = 1/latency)? When does each algorithm win?
+
+**Exercise 5 — Failure mode walkthrough.** Your server has 3 replicas behind a load balancer. One replica starts returning errors for 5% of requests (intermittent). Walk through: how does the load balancer detect this? How quickly? What's the user experience during detection? How do you fix it without a full restart?
+
+**Exercise 6 — Back-of-envelope capacity planning.** You're designing a server for a new feature: 1M daily active users, each making 20 requests/day, average response body 2KB. Estimate: RPS at peak (assume 10:1 peak:average), bandwidth needed, memory for connection state if WebSocket, servers needed at 1000 RPS each.
+
+---
+
+## Homework
+
+**Assignment 1 — Read one chapter of "Designing Data-Intensive Applications" (Kleppmann), Chapter 1.** Specifically the section on reliability, scalability, and maintainability. Write a one-paragraph summary connecting each concept to a server you currently work on.
+
+**Assignment 2 — Capture a real traffic profile.** Look at your production metrics for any server you own. Find: average RPS, peak RPS, average latency, P99 latency, error rate, and connection count. Write a one-paragraph interpretation: what story do these numbers tell about your system's behavior?
+
+**Assignment 3 — Interview practice: client-server design.** Practice answering "design a real-time multiplayer game backend" in 45 minutes. Focus on: connection model choice, state management, failure handling when a server restarts mid-game, and scaling to 1M concurrent players.
+
+**Assignment 4 — Observe one production incident involving client-server interaction.** Next time a server issue occurs, study it from the client's perspective: how did clients behave when the server was degraded? Did they retry? Back off? Fail silently? What would you change to make clients more resilient?
