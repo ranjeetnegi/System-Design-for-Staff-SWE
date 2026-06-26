@@ -1,131 +1,71 @@
-# Section 6: Staff Engineer — Design Problems
+# Section 6 — L6 Case Studies + Google Systems
+
+32 worked problems at Google Staff/L6 level. These go deeper than Section 5 — multi-region complexity, organizational trade-offs, migration paths, and Google's actual internal systems. Every chapter includes a 45-minute Staff-level interview simulation with cross-questioning.
 
 ---
 
-## Overview
+## Chapters
 
-This section contains **17 system design problems** at the **Staff Engineer (L6)** level. Each chapter takes a problem that might appear in a Senior (L5) interview and elevates it to global scale, cross-team ownership, migration strategy, and organizational impact.
+### Staff Case Studies (Ch76–93)
 
-Staff-level chapters go beyond “make it work at scale.” They demand:
+| Chapter | Title | L5 Version |
+|---|---|---|
+| [Ch76](Chapter_76_Global_Rate_Limiter.md) | Global Rate Limiter | Ch50 |
+| [Ch77](Chapter_77_Distributed_Cache.md) | Distributed Cache | Ch51 |
+| [Ch78](Chapter_78_News_Feed.md) | News Feed | Ch73 |
+| [Ch79](Chapter_79_Real_Time_Collaboration.md) | Real-Time Collaboration | — |
+| [Ch80](Chapter_80_Messaging_Platform.md) | Messaging Platform | Ch60 |
+| [Ch81](Chapter_81_Metrics_and_Observability_System.md) | Metrics and Observability System | Ch56 |
+| [Ch82](Chapter_82_Configuration_Feature_Flags_Secrets.md) | Configuration, Feature Flags, Secrets | Ch61 |
+| [Ch83](Chapter_83_API_Gateway_and_Edge_Request_Routing.md) | API Gateway and Edge Request Routing | Ch59 |
+| [Ch84](Chapter_84_Search_and_Indexing_System.md) | Search and Indexing System | Ch55 |
+| [Ch85](Chapter_85_Recommendation_and_Ranking_System.md) | Recommendation and Ranking System | — |
+| [Ch86](Chapter_86_Notification_Delivery_Fan_out_at_Scale.md) | Notification Delivery: Fan-out at Scale | Ch53 |
+| [Ch87](Chapter_87_Authentication_and_Authorization_System.md) | Authentication and Authorization System | Ch54 |
+| [Ch88](Chapter_88_Distributed_Scheduler_and_Job_Orchestration.md) | Distributed Scheduler and Job Orchestration | Ch57 |
+| [Ch89](Chapter_89_Feature_Experimentation_and_AB_Testing.md) | Feature Experimentation and A/B Testing | — |
+| [Ch90](Chapter_90_Log_Aggregation_and_Query_System.md) | Log Aggregation and Query System | — |
+| [Ch91](Chapter_91_Payment_and_Transaction_Processing.md) | Payment and Transaction Processing | Ch58 |
+| [Ch92](Chapter_92_Media_Upload_and_Processing_Pipeline.md) | Media Upload and Processing Pipeline | — |
+| [Ch93](Chapter_93_Bonus_Advanced_Topics.md) | Bonus Advanced Topics | — |
 
-- **Multi-region and global scale** — consistency, latency, and failure across regions
-- **Cross-team ownership** — who owns what, conflict resolution, on-call playbooks
-- **Evolution and migration** — how to change a live system without downtime
-- **Compound and cascading failures** — what breaks when several things fail at once
-- **Cost and efficiency** — explicit cost modeling and optimization levers
-- **Organizational stress tests** — key person risk, vendor changes, regulatory shifts
+### Google Foundational Systems (Ch94–99)
 
-Every chapter follows the same deep structure: foundations, requirements, scale modeling, architecture, component design, data model, consistency and concurrency, **failure modes (including multi-component and deployment failures)**, performance, cost, multi-region, security, **evolution and migration**, alternatives, interview calibration, diagrams, and exercises.
+Google's actual internal systems. Understanding these signals genuine depth — interviewers at Google often reference them directly.
 
----
+| Chapter | Title | What It Is |
+|---|---|---|
+| [Ch94](Chapter_94_GFS.md) | GFS — Google File System | Distributed file system (2003); inspired HDFS |
+| [Ch95](Chapter_95_Bigtable.md) | Bigtable | Wide-column store; inspired Cassandra and HBase |
+| [Ch96](Chapter_96_MapReduce.md) | MapReduce | Batch processing framework; inspired Hadoop and Spark |
+| [Ch97](Chapter_97_Chubby.md) | Chubby — Distributed Lock Service | Consensus-based lock service; inspired Zookeeper |
+| [Ch98](Chapter_98_Spanner.md) | Spanner — Globally Distributed Database | TrueTime, external consistency at global scale |
+| [Ch99](Chapter_99_Borg.md) | Borg — Cluster Manager | Container orchestration; directly inspired Kubernetes |
 
-## Who This Section Is For
+### Gap Case Studies (Ch100–107)
 
-- **Staff Engineers (L6)** or Senior Engineers preparing for Staff-level system design interviews at Google or equivalent companies
-- Engineers who have completed Section 5 and want the same problems elevated to L6 scope
-- Anyone designing or operating systems that span multiple teams and regions
+High-frequency interview topics at Staff depth.
 
-**Prerequisites**: Sections 1–4 (mindset, framework, distributed systems, data systems) and ideally practice with Section 5 (Senior-level problems) first.
-
----
-
-## Section Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    SECTION 6: STAFF-LEVEL DESIGN PROBLEMS                   │
-│                                                                             │
-│   ┌── Infrastructure & Scale ───────────────────────────────────────────┐   │
-│   │  Ch 55: Global Rate Limiter                                         │   │
-│   │  Ch 56: Distributed Cache                                           │   │
-│   │  Ch 60: Metrics / Observability System                              │   │
-│   │  Ch 61: Configuration, Feature Flags & Secrets Management           │   │
-│   │  Ch 62: API Gateway / Edge Request Routing System                    │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                              │
-│   ┌── Application & User-Facing Systems ────────────────────────────────┐   │
-│   │  Ch 57: News Feed                                                   │   │
-│   │  Ch 58: Real-Time Collaboration                                    │   │
-│   │  Ch 59: Messaging Platform                                          │   │
-│   │  Ch 63: Search / Indexing System (Read-heavy, Latency-sensitive)      │   │
-│   │  Ch 64: Recommendation / Ranking System (Simplified)                │   │
-│   │  Ch 65: Notification Delivery System (Fan-out at Scale)              │   │
-│   │  Ch 66: Authentication & Authorization System                        │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                              │                                              │
-│   ┌── Platforms & Pipelines ────────────────────────────────────────────┐   │
-│   │  Ch 67: Distributed Scheduler / Job Orchestration System             │   │
-│   │  Ch 68: Feature Experimentation / A/B Testing Platform               │   │
-│   │  Ch 69: Log Aggregation & Query System                              │   │
-│   │  Ch 70: Payment / Transaction Processing System                      │   │
-│   │  Ch 71: Media Upload & Processing Pipeline                          │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| Chapter | Title | L5 Version |
+|---|---|---|
+| [Ch100](Chapter_100_Video_Streaming.md) | Video Streaming (YouTube/Netflix/TikTok) | Ch72 |
+| [Ch101](Chapter_101_Location_and_Maps.md) | Location & Mapping (Uber/Google Maps) | Ch74 |
+| [Ch102](Chapter_102_Typeahead_Autocomplete.md) | Typeahead / Autocomplete | Ch75 |
+| [Ch103](Chapter_103_Ad_Serving_RTB.md) | Ad Serving & Real-Time Bidding | — |
+| [Ch104](Chapter_104_Social_Graph.md) | Social Graph (Instagram/Twitter/LinkedIn) | — |
+| [Ch105](Chapter_105_Fraud_Detection.md) | Fraud Detection (Stripe/PayPal) | — |
+| [Ch106](Chapter_106_Ecommerce_Inventory.md) | E-commerce / Inventory (flash sales, catalog) | — |
+| [Ch107](Chapter_107_CDN_Architecture.md) | CDN Architecture (PoPs, anycast, cache hierarchy) | — |
 
 ---
 
-## Chapter Index
+## What Makes a Staff/L6 Answer Different
 
-| # | Chapter | Link |
-|---|---------|------|
-| 55 | Global Rate Limiter | [Chapter 55](Chapter_55_Global_Rate_Limiter.md) |
-| 56 | Distributed Cache | [Chapter 56](Chapter_56_Distributed_Cache.md) |
-| 57 | News Feed | [Chapter 57](Chapter_57_News_Feed.md) |
-| 58 | Real-Time Collaboration | [Chapter 58](Chapter_58_Real_Time_Collaboration.md) |
-| 59 | Messaging Platform | [Chapter 59](Chapter_59_Messaging_Platform.md) |
-| 60 | Metrics / Observability System | [Chapter 60](Chapter_60_Metrics_and_Observability_System.md) |
-| 61 | Configuration, Feature Flags & Secrets Management | [Chapter 61](Chapter_61_Configuration_Feature_Flags_and_Secrets_Management.md) |
-| 62 | API Gateway / Edge Request Routing System | [Chapter 62](Chapter_62_API_Gateway_and_Edge_Request_Routing.md) |
-| 63 | Search / Indexing System (Read-Heavy, Latency-Sensitive) | [Chapter 63](Chapter_63_Search_and_Indexing_System.md) |
-| 64 | Recommendation / Ranking System (Simplified) | [Chapter 64](Chapter_64_Recommendation_and_Ranking_System.md) |
-| 65 | Notification Delivery System (Fan-out at Scale) | [Chapter 65](Chapter_65_Notification_Delivery_System_Fan_out_at_Scale.md) |
-| 66 | Authentication & Authorization System | [Chapter 66](Chapter_66_Authentication_and_Authorization_System.md) |
-| 67 | Distributed Scheduler / Job Orchestration System | [Chapter 67](Chapter_67_Distributed_Scheduler_and_Job_Orchestration.md) |
-| 68 | Feature Experimentation / A/B Testing Platform | [Chapter 68](Chapter_68_Feature_Experimentation_and_AB_Testing_Platform.md) |
-| 69 | Log Aggregation & Query System | [Chapter 69](Chapter_69_Log_Aggregation_and_Query_System.md) |
-| 70 | Payment / Transaction Processing System | [Chapter 70](Chapter_70_Payment_and_Transaction_Processing_System.md) |
-| 71 | Media Upload & Processing Pipeline | [Chapter 71](Chapter_71_Media_Upload_and_Processing_Pipeline.md) |
-| 72 | Bonus Advanced Topics | [Chapter 72](Chapter_72_Bonus_Advanced_Topics.md) |
-
----
-
-## What Makes a Chapter “Staff-Level”
-
-Each chapter includes (at minimum):
-
-1. **L5 vs L6 comparison** — How a Senior answer differs from a Staff answer for the same prompt
-2. **Concrete scale** — QPS, storage, growth, and “what breaks first” modeling
-3. **Deep failure treatment** — Partial failures, slow dependencies, retry storms, data corruption, blast radius, and at least one **cascading or multi-component failure** and one **deployment/operational failure**
-4. **Cost breakdown** — Major cost drivers in $ and optimization levers
-5. **Data model and consistency** — Partitioning, schema evolution, race conditions, idempotency
-6. **Evolution over time** — V1 → V2 → V3 and how incidents drive redesign; where applicable, **migration strategy** (e.g. dual-write, canary, cutover)
-7. **Team ownership and operations** — Who owns what, on-call playbooks, cross-team conflicts
-8. **Organizational stress tests** — Key person attrition, vendor/regulatory changes, competitor pressure
-9. **Alternatives and explicit rejections** — Why other approaches were considered and rejected
-10. **Interview calibration** — How interviewers probe, common L5 mistakes, Staff-level answers and phrases
-11. **Diagrams** — At least four: flow, architecture, evolution, and one domain-specific
-12. **Exercises and trade-off debates** — “What if X changes?”, failure injection, explicit trade-off discussions
-
-Chapters that have been **L6-reviewed** (e.g. with MASTER_REVIEWER) also include a **Google L6 Review Verification** checklist at the end.
-
----
-
-## How to Use This Section
-
-- **Interview prep**: Pick 3–5 chapters in domains you know well and 2–3 in domains you don’t. Practice explaining the design and defending trade-offs; use the “Interview Calibration” and “Common L5 Mistakes” sections to self-check.
-- **Deep dives**: Use a chapter as a reference when designing or reviewing a similar system (rate limiting, payments, media pipeline, etc.).
-- **Reading order**: You can read in any order. Ch 55–56, 59–60, 62–63, 65–67, 70 map most directly to Section 5 counterparts; Ch 57–58, 64, 68–69, 71–72 are more platform/infra-focused and stand alone.
-
----
-
-## Progress
-
-**17 / 17 chapters** — Section 6 complete.
-
-All chapters are written to Staff depth. Selected chapters (e.g. Ch 64, 65) have been augmented with MASTER_REVIEWER for cascading failures, migration strategy, team ownership, and organizational stress tests; others can be reviewed the same way for consistency.
-
----
-
-[← Back to main README](../README.md)
+| Dimension | L5 | L6 |
+|---|---|---|
+| Scope | One service, one region | Multi-service, multi-region |
+| Trade-offs | Known patterns cited | Derived from first principles |
+| Migration | "We'd migrate later" | Strangler fig + dual-write + rollback plan |
+| Organization | Individual design | Who owns what, how teams coordinate |
+| Build vs Buy | Pick a technology | Justify with org and operational context |
+| Failure modes | Happy path + one failure | Full failure taxonomy with recovery SLAs |
