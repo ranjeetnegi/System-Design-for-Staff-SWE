@@ -13,126 +13,189 @@
 
 ---
 
-## Chapters — Basic to Advanced
+## L5 Reading Plan — Optimized for Senior SWE
 
-### 1. Foundations (read first, non-negotiable)
+> **Total: ~50 chapters** | **Reading time: 120-140 hours at normal pace**
+> 
+> This plan includes ONLY L5-scoped content. All L6 chapters are excluded.
 
-| Chapter | What it covers |
-|---------|---------------|
-| [Ch13 — Numbers & Estimation](Section1/Chapter_13_Numbers_Estimation.md) ✅ | QPS, storage, bandwidth math — do this fluently |
-| [Ch9 — Systems, Servers, Clients](Section1/Chapter_9_Systems_Servers_Clients.md) ✅ | HTTP, TCP, DNS, load balancers — fill any gaps |
-| [Ch14 — Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) ✅ | Cache, queue, CDN, blob storage — know when to use each |
+---
 
-### 2. The Interview Framework (how to structure 45 minutes)
+### Phase 1: Foundations (Must Read — 3 chapters, ~8 hours)
 
-| Chapter | What it covers |
-|---------|---------------|
-| [Ch15 — System Design Framework](Section2/Chapter_15_System_Design_Framework.md) ✅ | The 5-phase structure — memorise this |
-| [Ch16 — Phase 1: Users & Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) ✅ | How to clarify requirements in the first 5 min |
-| [Ch17 — Phase 2: Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) ✅ | Scoping without going in circles |
-| [Ch18 — Phase 3: Scale & Capacity Planning](Section2/Chapter_18_Phase_3_Scale_Capacity_Planning.md) ✅ | Back-of-envelope math, live in the interview |
-| [Ch20 — Phase 4&5: Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) ✅ | Availability, consistency, latency targets |
+Read first, before anything else.
 
-### 3. Distributed Systems Core (what interviewers probe on follow-ups)
+| Chapter | What it covers | Priority |
+|---------|---------------|----------|
+| [Ch13 — Numbers & Estimation](Section1/Chapter_13_Numbers_Estimation.md) | QPS, storage, bandwidth math — do this fluently | 🔴 Critical |
+| [Ch9 — Systems, Servers, Clients](Section1/Chapter_9_Systems_Servers_Clients.md) | HTTP, TCP, DNS, load balancers — fill any gaps | 🔴 Critical |
+| [Ch14 — Core Building Blocks](Section1/Chapter_14_Core_Building_Blocks.md) | Cache, queue, CDN, blob storage — know when to use each | 🔴 Critical |
 
-| Chapter | What it covers |
-|---------|---------------|
-| [Ch22 — Consistency Models](Section3/Chapter_22_Consistency_Models.md) ✅ | Strong vs eventual — when each matters and what breaks |
-| [Ch23 — Replication & Sharding](Section3/Chapter_23_Replication_and_Sharding.md) ✅ | Leader-follower, consistent hashing, hot shards |
-| [Ch25 — Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_and_Idempotency.md) ✅ | Circuit breakers, exponential backoff, exactly-once |
-| [Ch28 — CAP Theorem: Applied](Section3/Chapter_28_CAP_Theorem_Applied_Case_Studies.md) ✅ | Apply CAP to a real system — don't just recite it |
+---
 
-### 4. Data Systems Core (building blocks every L5 design assumes)
+### Phase 2: Interview Framework (Must Read — 5 chapters, ~12 hours)
 
-These chapters are the hidden prerequisite for Section 5. Redis appears in 80% of L5 designs. Kafka appears in async/notification/payment designs. Databases appear in every single design. Read these before attempting case studies.
+How to structure 45 minutes. Memorize this before doing any case studies.
 
-**Must-read (do in order):**
+| Chapter | What it covers | Priority |
+|---------|---------------|----------|
+| [Ch15 — System Design Framework](Section2/Chapter_15_System_Design_Framework.md) | The 5-phase structure — this is your template | 🔴 Critical |
+| [Ch16 — Phase 1: Users & Use Cases](Section2/Chapter_16_Phase_1_Users_and_Use_Cases.md) | How to clarify requirements in the first 5 min | 🔴 Critical |
+| [Ch17 — Phase 2: Functional Requirements](Section2/Chapter_17_Phase_2_Functional_Requirements.md) | Scoping without going in circles | 🔴 Critical |
+| [Ch18 — Phase 3: Scale & Capacity Planning](Section2/Chapter_18_Phase_3_Scale_Capacity_Planning.md) | Back-of-envelope math, live in the interview | 🔴 Critical |
+| [Ch20 — Phase 4&5: Non-Functional Requirements](Section2/Chapter_20_Phase_4_and_5_Non_Functional_Requirements.md) | Availability, consistency, latency targets | 🔴 Critical |
 
-| Chapter | Why it's critical |
-|---------|-----------------|
-| [Ch30 — Databases](Section4/Chapter_30_Databases_Choosing_Using_and_Evolving_Data_Stores.md) ✅ | SQL vs NoSQL choice, indexing, sharding basics — every design has a DB |
-| [Ch31 — Database Internals](Section4/Chapter_31_Database_Internals_Deep_Dive.md) ✅ | B-tree, WAL, MVCC — interviewers probe this in follow-ups |
-| [Ch33 — Caching at Scale](Section4/Chapter_33_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) ✅ | Redis, eviction policies, cache stampede — appears in 80% of L5 designs |
-| [Ch34 — Redis Internals](Section4/Chapter_34_Redis_and_Cache_Internals.md) ✅ | Single-thread model, persistence, why INCR is atomic |
-| [Ch35 — Event-Driven / Kafka](Section4/Chapter_35_Event_Driven_Architectures_Kafka_and_Streams.md) ✅ | Topics, partitions, consumer groups — async designs require this |
+---
 
-**Read if time allows:**
+### Phase 3: Distributed Systems Core (Must Read — 4 chapters, ~16 hours)
 
-| Chapter | What it adds |
-|---------|------------|
-| [Ch32 — Data Encoding](Section4/Chapter_32_Data_Encoding_and_Schema_Evolution.md) ✅ | Protobuf, schema evolution — relevant for API versioning questions |
-| [Ch36 — Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) ✅ | Deeper Kafka: ISR, log compaction, consumer lag |
-| [Ch42 — Deployment Strategies](Section4/Chapter_42_Deployment_Strategies_and_Operations.md) ✅ | Blue/green, canary — interviewers ask "how would you roll this out" |
+What interviewers probe on follow-ups. These concepts appear in every L5 interview.
 
-**Skip for L5 (with note why):**
+| Chapter | What it covers | Priority |
+|---------|---------------|----------|
+| [Ch22 — Consistency Models](Section3/Chapter_22_Consistency_Models.md) | Strong vs eventual — when each matters and what breaks | 🔴 Critical |
+| [Ch23 — Replication & Sharding](Section3/Chapter_23_Replication_and_Sharding.md) | Leader-follower, consistent hashing, hot shards | 🔴 Critical |
+| [Ch25 — Backpressure, Retries, Idempotency](Section3/Chapter_25_Backpressure_Retries_and_Idempotency.md) | Circuit breakers, exponential backoff, exactly-once | 🔴 Critical |
+| [Ch28 — CAP Theorem: Applied](Section3/Chapter_28_CAP_Theorem_Applied_Case_Studies.md) | Apply CAP to a real system — don't just recite it | 🔴 Critical |
 
-| Chapter | Why skip |
-|---------|---------|
-| Ch37 — Batch Processing | Only relevant for data engineering roles |
-| Ch38 — Multi-Region Architecture | L6 territory — adds complexity L5 interviews don't test |
-| Ch39-41 — Advanced Infra | L6 scope |
-| Ch43 — Service Mesh | Rarely tested at L5; skip unless infra/platform role |
-| Ch44 — ML System Design | Only for ML engineer roles |
-| Ch46 — Data Warehouse | Only for data engineering / analytics roles |
+---
 
-### 5. Section 5 Case Studies — L5 Level (core practice problems)
+### Phase 4: Data Systems Core (Must Read — 5 chapters, ~24 hours)
 
-Do each as a 45-minute mock before reading the chapter.
+**Critical Foundation:** These are the building blocks for 90% of L5 designs. Read BEFORE doing Section 5 case studies.
 
-| Chapter | Core concept tested |
-|---------|-------------------|
-| [Ch49 — URL Shortener](Section5/Chapter_49_URL_Shortener.md) ✅ | Warmup — hashing, redirect, analytics |
-| [Ch50 — Rate Limiter](Section5/Chapter_50_Single_Region_Rate_Limiter.md) ✅ | Token bucket, sliding window, Redis |
-| [Ch51 — Distributed Cache](Section5/Chapter_51_Distributed_Cache_Single_Cluster.md) ✅ | Eviction, cache stampede, TTL |
-| [Ch53 — Notification System](Section5/Chapter_53_Notification_System.md) ✅ | Push/pull, fan-out, delivery guarantees |
-| [Ch57 — Background Job Queue](Section5/Chapter_57_Background_Job_Queue.md) ✅ | Async processing, retry, dead-letter queue |
-| [Ch58 — Payment Flow](Section5/Chapter_58_Payment_Flow.md) ✅ | Idempotency, double-charge prevention |
-| [Ch60 — Real-Time Chat](Section5/Chapter_60_Real_Time_Chat.md) ✅ | WebSocket, presence, message ordering |
-| [Ch55 — Search System](Section5/Chapter_55_Search_System.md) 🟡 | Inverted index, ranking basics |
-| [Ch56 — Metrics Collection](Section5/Chapter_56_Metrics_Collection_System.md) 🟡 | Time-series, aggregation, push vs pull |
-| [Ch52 — Object Storage](Section5/Chapter_52_Object_and_File_Storage_System.md) ✅ | S3-like storage, multipart upload |
+| Chapter | Why it's critical | Priority |
+|---------|------------------|----------|
+| [Ch30 — Databases](Section4/Chapter_30_Databases_Choosing_Using_and_Evolving_Data_Stores.md) | SQL vs NoSQL, indexing, sharding — every design needs this | 🔴 Critical |
+| [Ch31 — Database Internals](Section4/Chapter_31_Database_Internals_Deep_Dive.md) | B-tree, WAL, MVCC — interviewers probe this | 🔴 Critical |
+| [Ch33 — Caching at Scale](Section4/Chapter_33_Caching_at_Scale_Redis_CDN_and_Edge_Systems.md) | Redis, eviction, cache stampede — 80% of L5 designs | 🔴 Critical |
+| [Ch34 — Redis Internals](Section4/Chapter_34_Redis_and_Cache_Internals.md) | Single-thread model, persistence, atomic operations | 🔴 Critical |
+| [Ch35 — Event-Driven / Kafka](Section4/Chapter_35_Event_Driven_Architectures_Kafka_and_Streams.md) | Topics, partitions, consumer groups — async designs | 🔴 Critical |
 
-### 6. Section 5 New Additions — L5 Level
+---
 
-| Chapter | Core concept tested |
-|---------|-------------------|
-| [Ch62 — Web Crawler](Section5/Chapter_62_Web_Crawler.md) ✅ | URL frontier, Bloom filter dedup, politeness |
-| [Ch63 — Proximity Service](Section5/Chapter_63_Proximity_Service.md) ✅ | GeoHash, QuadTree, radius search |
-| [Ch64 — Hotel Reservation](Section5/Chapter_64_Hotel_Reservation_System.md) ✅ | Optimistic locking, seat hold, idempotency |
-| [Ch65 — Key-Value Store](Section5/Chapter_65_Key_Value_Store.md) ✅ | LSM tree, WAL, consistent hashing, quorum |
-| [Ch66 — Leaderboard](Section5/Chapter_66_Leaderboard_System.md) ✅ | Redis ZSET, top-K, time-windowed ranking |
-| [Ch67 — File Sync (Dropbox)](Section5/Chapter_67_File_Sync_Service.md) ✅ | Chunking, delta sync, conflict resolution |
-| [Ch68 — Ride Sharing](Section5/Chapter_68_Ride_Sharing.md) ✅ | Redis GEOADD, driver matching, state machine |
-| [Ch69 — Live Streaming](Section5/Chapter_69_Live_Streaming.md) ✅ | RTMP ingest, real-time transcode, CDN push |
-| [Ch70 — Ticketing System](Section5/Chapter_70_Ticketing_System.md) ✅ | Flash sale, atomic seat hold, virtual queue |
-| [Ch71 — Stock / Trading Feed](Section5/Chapter_71_Stock_Trading_Feed.md) ✅ | Order book, market data fan-out, low latency |
+### Phase 5: Optional Data Systems (Read if Time — 3 chapters, ~9 hours)
 
-### 7. Google's Own Systems (unique to Google loops)
+| Chapter | What it adds | Priority |
+|---------|-------------|----------|
+| [Ch32 — Data Encoding](Section4/Chapter_32_Data_Encoding_and_Schema_Evolution.md) | Protobuf, schema evolution — API versioning | 🟡 Optional |
+| [Ch36 — Kafka Internals](Section4/Chapter_36_Kafka_Internals.md) | ISR, log compaction, consumer lag | 🟡 Optional |
+| [Ch42 — Deployment Strategies](Section4/Chapter_42_Deployment_Strategies_and_Operations.md) | Blue/green, canary, rollback | 🟡 Optional |
 
-| Chapter | What to know at L5 |
-|---------|-------------------|
-| [Ch45 — Google Systems Overview](Section4/Chapter_45_Google_Foundational_Systems.md) ✅ | Read first — how GFS/Bigtable/Spanner/Borg fit together |
-| [Ch94 — GFS](Section6/Chapter_94_GFS_Google_File_System.md) ✅ | Chunk servers, master, append-only, fault tolerance |
-| [Ch95 — Bigtable](Section6/Chapter_95_Bigtable.md) ✅ | Wide-column, SSTable, memtable, row key design |
-| [Ch96 — MapReduce](Section6/Chapter_96_MapReduce.md) ✅ | Map/reduce phases, compare to Spark |
-| [Ch97 — Chubby](Section6/Chapter_97_Chubby.md) ✅ | Distributed locking, how it differs from ZooKeeper |
-| [Ch98 — Spanner](Section6/Chapter_98_Spanner.md) 🟡 | TrueTime, global SQL — most cited at Google |
-| [Ch47 — Kubernetes](Section4/Chapter_47_Kubernetes_Internals.md) ✅ | Control plane, scheduler — for infra/platform roles |
+---
 
-### 8. Advanced — L6 Territory (skip if time is short)
+### Phase 6: Case Studies — PICK 12 OF 27 (~48 hours)
 
-| Chapter | Skip unless... |
-|---------|---------------|
-| [Ch24 — Leader Election & Locks](Section3/Chapter_24_Leader_Election_Coordination_and_Distributed_Locks.md) ✅ | You're asked about ZooKeeper/Chubby internals |
-| [Ch48 — Consensus Deep Dive](Section4/Chapter_48_Consensus_Deep_Dive.md) 🟡 | You're asked to explain Raft or Paxos in detail |
-| [Ch29 — Advanced Distributed Systems](Section3/Chapter_29_Advanced_Distributed_Systems.md) ✅ | You're applying for a distributed systems specialist role |
+**Strategy:** Do each as a 45-minute timed mock BEFORE reading the chapter. Then read to fill gaps.
 
-### 9. Behavioral + Offer (do in final 2 weeks)
+**Core 12 (covers all major patterns):**
 
-| Chapter | What it covers |
-|---------|---------------|
-| [Ch122 — Behavioral Interview](Section8/Chapter_122_Behavioral_Leadership_Interview.md) ✅ | STAR stories, Googleyness, L5+L6 scope, all FAANG companies |
-| [Ch123 — Offer Negotiation](Section8/Chapter_123_Offer_Negotiation.md) 📄 | RSU, joining bonus, notice period buyout |
+| Chapter | Core concept | Why this one |
+|---------|-------------|--------------|
+| [Ch49 — URL Shortener](Section5/Chapter_49_URL_Shortener.md) | Hashing, redirect, analytics | Warmup — easiest |
+| [Ch50 — Rate Limiter](Section5/Chapter_50_Single_Region_Rate_Limiter.md) | Token bucket, sliding window | Most common L5 question |
+| [Ch51 — Distributed Cache](Section5/Chapter_51_Distributed_Cache_Single_Cluster.md) | Eviction, stampede, TTL | Cache in every interview |
+| [Ch53 — Notification System](Section5/Chapter_53_Notification_System.md) | Push/pull, fan-out | Tests async thinking |
+| [Ch57 — Background Job Queue](Section5/Chapter_57_Background_Job_Queue.md) | Retry, dead-letter queue | Async processing pattern |
+| [Ch58 — Payment Flow](Section5/Chapter_58_Payment_Flow.md) | Idempotency, double-charge | Critical correctness |
+| [Ch60 — Real-Time Chat](Section5/Chapter_60_Real_Time_Chat.md) | WebSocket, presence | Real-time pattern |
+| [Ch62 — Web Crawler](Section5/Chapter_62_Web_Crawler.md) | URL frontier, Bloom filter | Deduplication at scale |
+| [Ch63 — Proximity Service](Section5/Chapter_63_Proximity_Service.md) | GeoHash, QuadTree | Geo/location pattern |
+| [Ch65 — Key-Value Store](Section5/Chapter_65_Key_Value_Store.md) | LSM tree, consistent hashing | Storage fundamentals |
+| [Ch68 — Ride Sharing](Section5/Chapter_68_Ride_Sharing.md) | Matching, state machine | Complex state |
+| [Ch70 — Ticketing System](Section5/Chapter_70_Ticketing_System.md) | Flash sale, atomic operations | High concurrency |
+
+**Skip these 15 for L5 (do only if extra time):**
+
+Ch52, 54, 55, 56, 59, 61, 64, 66, 67, 69, 71, 72, 73, 74, 75
+
+---
+
+### Phase 7: Google Systems (6 chapters, ~18 hours)
+
+**Critical for Google loops.** Reference these naturally in interviews.
+
+| Chapter | What to know | Priority |
+|---------|-------------|----------|
+| [Ch45 — Google Systems Overview](Section4/Chapter_45_Google_Foundational_Systems.md) | Read FIRST — how they fit together | 🔴 Critical |
+| [Ch94 — GFS](Section6/Chapter_94_GFS_Google_File_System.md) | Chunk servers, master, fault tolerance | 🔴 Critical |
+| [Ch95 — Bigtable](Section6/Chapter_95_Bigtable.md) | Wide-column, SSTable, row key design | 🔴 Critical |
+| [Ch96 — MapReduce](Section6/Chapter_96_MapReduce.md) | Map/reduce phases, compare to Spark | 🔴 Critical |
+| [Ch97 — Chubby](Section6/Chapter_97_Chubby.md) | Distributed locking vs ZooKeeper | 🟡 Optional |
+| [Ch98 — Spanner](Section6/Chapter_98_Spanner.md) | TrueTime, global SQL — skim high-level only | 🟡 Optional |
+
+**Skip for L5:** Ch47 (Kubernetes) — unless applying for infra/platform role
+
+---
+
+### Phase 8: Behavioral + Offer (2 chapters, ~8 hours)
+
+Do in final 2 weeks before interview.
+
+| Chapter | What it covers | Priority |
+|---------|---------------|----------|
+| [Ch126 — Behavioral Interview](Section8/Chapter_126_Behavioral_Leadership_Interview.md) | STAR stories, Googleyness, team-level scope | 🔴 Critical |
+| [Ch127 — Offer Negotiation](Section8/Chapter_127_Offer_Negotiation.md) | RSU, joining bonus, notice period buyout | 🔴 Critical |
+
+---
+
+## ❌ L6 Chapters — SKIP for L5
+
+These are explicitly excluded from the L5 plan. Read only if targeting L6 or have extra time.
+
+### Section 0 — Staff Mindset (L6 Only)
+- Ch1-8: Staff Engineer evaluation, cross-team scope, ambiguity handling
+
+### Section 3 — Advanced Distributed (L6 Only)
+- Ch24: Leader Election & Distributed Locks
+- Ch27: Failure Models
+- Ch29: Advanced Distributed Systems (CRDTs, vector clocks)
+
+### Section 4 — Advanced Infra (L6 Only)
+- Ch37: Batch Processing
+- Ch38: Multi-Region Systems
+- Ch39: Data Locality & Compliance
+- Ch40: Cost Efficiency
+- Ch41: System Evolution & Migrations
+- Ch43: Service Mesh
+- Ch44: ML System Design
+- Ch46: Data Warehouse / OLAP
+- Ch47: Kubernetes Internals
+- Ch48: Consensus Deep Dive
+
+### Section 6 — L6 Case Studies (L6 Only)
+- Ch76-93: Staff-level case studies (all Section 6)
+- Ch99: Borg
+- Ch100-107: Advanced case studies
+
+### Section 7 — Engineering Craft (L6 Only)
+- Ch108-124: All Section 7 chapters (debugging, migrations, code review, etc.)
+
+---
+
+---
+
+## Time Estimates by Reading Speed
+
+| Phase | Chapters | 1X (normal) | 0.5X (slow) |
+|-------|----------|-------------|-------------|
+| Foundations | 3 | 8h | 16h |
+| Framework | 5 | 12h | 24h |
+| Distributed Core | 4 | 16h | 32h |
+| Data Systems (must) | 5 | 24h | 48h |
+| Data Systems (opt) | 3 | 9h | 18h |
+| **12 Case Studies** | 12 | 24h | 48h |
+| Google Systems | 6 | 18h | 36h |
+| Behavioral + Offer | 2 | 8h | 16h |
+| **Reading Total** | **40** | **119h** | **238h** |
+| **Mocks + Practice** | — | **40h** | **40h** |
+| **GRAND TOTAL** | **40** | **159h** | **278h** |
+
+### At 7 hours/week
+- **Normal reader (1X):** 23 weeks (~5.5 months)
+- **Slow reader (0.5X):** 40 weeks (~9 months)
+
+**Recommendation for slow readers:** Focus on exercises > reading. Cut optional chapters. Budget 6 months minimum.
 
 ---
 
@@ -147,6 +210,21 @@ Build one story for each type. 2–3 minutes each, said out loud.
 | Project that failed or went wrong | Self-awareness, no blaming, what changed |
 | Helped someone on your team grow | Genuine, specific — mentoring, pairing, reviews |
 | Went beyond what was asked | Proactive ownership, noticed a gap and fixed it |
+
+---
+
+## Reading Order Summary (L5 Only)
+
+**Week 1-2:** Foundations (Ch13, 9, 14)  
+**Week 3-4:** Framework (Ch15-20)  
+**Week 5-7:** Distributed Systems (Ch22, 23, 25, 28)  
+**Week 8-11:** Data Systems (Ch30-35)  
+**Week 12-23:** 12 Case Studies + 8-10 timed mocks  
+**Week 24-26:** Google Systems (Ch45, 94-98)  
+**Week 27-28:** Behavioral (Ch126, 127)  
+**Week 29-30:** Final polish + 5 more mocks  
+
+**Total: 30 weeks for slow readers at 7h/week**
 
 ---
 
@@ -240,4 +318,28 @@ Offer call → negotiate → sign
 
 ---
 
-*Google L5 | India (Bangalore / Hyderabad) | Deep reader — 2× pace | Updated 2026-06-21*
+## Summary: What Changed in This L5-Only Plan
+
+### ✅ Kept (40 chapters)
+- All foundations, framework, distributed systems core
+- All data systems (databases, Redis, Kafka)
+- **12 of 27** Section 5 case studies (removed 15)
+- Google systems (GFS, Bigtable, MapReduce, Chubby, Spanner basics)
+- Behavioral + offer chapters
+
+### ❌ Removed (88 chapters)
+- **Section 0:** All 8 Staff mindset chapters (L6 only)
+- **Section 3:** 3 advanced chapters (leader election, failure models, CRDTs)
+- **Section 4:** 10 advanced infra chapters (multi-region, migrations, service mesh, etc.)
+- **Section 5:** 15 case studies (kept only 12 with diverse patterns)
+- **Section 6:** All 32 Staff case studies + 7 advanced Google systems
+- **Section 7:** All 17 engineering craft chapters (L6 only)
+
+### Result
+- **Before:** 128 chapters, 960K lines, 300+ hours
+- **After:** 40 chapters, ~160K lines, 160 hours (normal) / 280 hours (0.5X)
+- **Time saved:** 50-60% for slow readers
+
+---
+
+*Google L5 | India (Bangalore / Hyderabad) | L5-scoped only | Updated 2026-09-17*
