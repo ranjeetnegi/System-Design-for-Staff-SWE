@@ -1,4 +1,4 @@
-# Chapter 20: Consistency Models -- How Staff Engineers Choose the Right Guarantees
+# Chapter 22: Consistency Models -- How Staff Engineers Choose the Right Guarantees
 
 *(Author note: Consistency is the most interview-tested distributed systems concept. Engineers fail not because they don't know what "eventual consistency" means -- they fail because they can't explain which model to pick, why, and what breaks when you pick wrong. This chapter fixes that.)*
 
