@@ -6,50 +6,41 @@
 
 ## Chapter at a Glance
 
+```mermaid
+flowchart LR
+    L["Linearizable<br/>$15-25 / 1M ops<br/>200-800 ms"] --> S["Sequential<br/>$8-15 / 1M ops<br/>100-300 ms"] --> C["Causal<br/>$2-5 / 1M ops<br/>20-80 ms"] --> RYW["Read-Your-Writes<br/>$1-3 / 1M ops<br/>5-20 ms"] --> E["Eventual<br/>$0.50-1.50 / 1M ops<br/>1-5 ms"]
+    classDef strong fill:#fecaca,stroke:#b91c1c,color:#000
+    classDef mid fill:#fde68a,stroke:#b45309,color:#000
+    classDef weak fill:#bbf7d0,stroke:#15803d,color:#000
+    class L,S strong
+    class C,RYW mid
+    class E weak
 ```
-+==================================================================================+
-|              CONSISTENCY MODELS: THE COMPLETE PICTURE                           |
-+==================================================================================+
-|                                                                                  |
-|  CORE CONCEPT: Consistency is a SPECTRUM, not an on/off switch.                 |
-|                                                                                  |
-|  THE FULL SPECTRUM (Strongest -> Weakest):                                       |
-|                                                                                  |
-|  Linearizable -> Sequential -> Causal -> Read-Your-Writes -> Eventual              |
-|                                                                                  |
-|  COST PER 1 MILLION OPERATIONS:                                                 |
-|  +---------------------+------------------+------------------------------+      |
-|  | Model               | Cost / 1M ops    | Latency (cross-region write) |      |
-|  +---------------------+------------------+------------------------------+      |
-|  | Linearizable        | $15 - $25        | 200 - 800 ms                 |      |
-|  | Sequential          | $8  - $15        | 100 - 300 ms                 |      |
-|  | Causal              | $2  - $5         | 20  - 80 ms                  |      |
-|  | Read-Your-Writes    | $1  - $3         | 5   - 20 ms                  |      |
-|  | Eventual            | $0.50 - $1.50    | 1   - 5 ms                   |      |
-|  +---------------------+------------------+------------------------------+      |
-|                                                                                  |
-|  DECISION DIAGRAM:                                                               |
-|                                                                                  |
-|  Is money or safety at stake? (payments, inventory, locks)                      |
-|    +-> YES -> STRONG (Linearizable)                                              |
-|                                                                                  |
-|  Is this a reply, reaction, or social thread?                                    |
-|    +-> YES -> CAUSAL                                                              |
-|                                                                                  |
-|  Does the USER who just wrote need to see their own change?                      |
-|    +-> YES -> READ-YOUR-WRITES                                                   |
-|                                                                                  |
-|  Otherwise (counters, feeds, analytics, views)?                                  |
-|    +-> EVENTUAL                                                                  |
-|                                                                                  |
-|  KEY TAKEAWAYS:                                                                  |
-|  1. Use the weakest model that works. Stronger = more latency + more cost.      |
-|  2. Different data types in ONE system need different consistency models.        |
-|  3. CAP theorem is physics. During a partition, you choose: correct or fast.    |
-|  4. Eventual without read-your-writes destroys user trust for interactive UI.   |
-|  5. Optimistic UI hides eventual consistency from users at near-zero cost.      |
-+==================================================================================+
+
+*Strongest and most expensive on the left; weakest and cheapest on the right. Costs are cross-region estimates.*
+
+```mermaid
+flowchart TD
+    Q1{"Money or safety at stake?<br/>payments, inventory, locks"}
+    Q1 -- Yes --> STRONG["STRONG<br/>Linearizable"]
+    Q1 -- No --> Q2{"Reply, reaction,<br/>or social thread?"}
+    Q2 -- Yes --> CAUSAL["CAUSAL"]
+    Q2 -- No --> Q3{"Must the writer see<br/>their own change?"}
+    Q3 -- Yes --> RYW["READ-YOUR-WRITES"]
+    Q3 -- No --> EV["EVENTUAL<br/>counters, feeds, analytics, views"]
+    style STRONG fill:#fecaca,stroke:#b91c1c,color:#000
+    style CAUSAL fill:#fde68a,stroke:#b45309,color:#000
+    style RYW fill:#fef3c7,stroke:#b45309,color:#000
+    style EV fill:#bbf7d0,stroke:#15803d,color:#000
 ```
+
+**Key takeaways**
+
+1. Use the weakest model that works. Stronger means more latency and more cost.
+2. Different data types in one system need different consistency models.
+3. CAP is physics. During a partition you choose: correct or fast.
+4. Eventual without read-your-writes destroys user trust in interactive UIs.
+5. Optimistic UI hides eventual consistency from users at near-zero cost.
 
 Most engineers who have worked with distributed systems for several years can define eventual consistency. They can tell you what Dynamo is, what Cassandra does, and why a banking app uses something different from a social media feed. When interviewers ask "what consistency model would you use?", those engineers answer quickly and confidently. Then they fail the interview.
 
@@ -59,42 +50,44 @@ They fail not because of ignorance but because they stay at the definition layer
 
 ## The Bank Account Problem -- Why Consistency Matters
 
+**Without consistency: the $60 exploit**
+
+```mermaid
+sequenceDiagram
+    participant A as ATM A (New York)
+    participant DB as Replicas (balance = $100)
+    participant B as ATM B (London)
+    A->>DB: Read balance
+    DB-->>A: $100
+    B->>DB: Read balance
+    DB-->>B: $100 (stale copy)
+    Note over A,B: Both check $100 >= $80, both pass
+    A->>DB: Deduct $80 (balance = $20)
+    B->>DB: Deduct $80 (balance = $20)
+    A-->>A: Dispense $80
+    B-->>B: Dispense $80
+    Note over A,B: User withdrew $160 from a $100 account. Bank lost $60.
 ```
-+==================================================================================+
-|              WITHOUT CONSISTENCY: THE $60 EXPLOIT                               |
-+==================================================================================+
-|                                                                                  |
-|  Account Balance: $100                                                           |
-|                                                                                  |
-|  ATM A (New York)          ATM B (London)                                       |
-|  -----------------          --------------                                       |
-|  Reads balance: $100        Reads balance: $100   <- Both see stale copy         |
-|  User requests: $80         User requests: $80                                   |
-|  Check: $100 >= $80? YES    Check: $100 >= $80? YES  <- Both pass check         |
-|  Deduct $80 -> balance $20   Deduct $80 -> balance $20                            |
-|  Y Dispensed $80            Y Dispensed $80        <- Both succeed!              |
-|                                                                                  |
-|  RESULT: User withdrew $160 from a $100 account. Bank lost $60.                 |
-|                                                                                  |
-+==================================================================================+
-|              WITH STRONG CONSISTENCY: CORRECT BEHAVIOR                          |
-+==================================================================================+
-|                                                                                  |
-|  Account Balance: $100                                                           |
-|                                                                                  |
-|  ATM A (New York)          ATM B (London)                                       |
-|  -----------------          --------------                                       |
-|  Acquires global lock       Tries to acquire lock -> WAITS                        |
-|  Reads balance: $100                                                             |
-|  Check: $100 >= $80? YES                                                         |
-|  Deduct $80 -> balance $20                                                        |
-|  Commits, releases lock     Lock acquired                                        |
-|  Y Dispensed $80            Reads balance: $20                                   |
-|                             Check: $20 >= $80? NO                               |
-|                             N Transaction declined                               |
-|                                                                                  |
-|  RESULT: User withdrew $80 from a $100 account. Bank is correct.                |
-+==================================================================================+
+
+**With strong consistency: correct behavior**
+
+```mermaid
+sequenceDiagram
+    participant A as ATM A (New York)
+    participant L as Global lock + balance ($100)
+    participant B as ATM B (London)
+    A->>L: Acquire lock
+    B->>L: Try to acquire lock
+    Note right of B: B waits
+    A->>L: Read balance
+    L-->>A: $100 (>= $80, OK)
+    A->>L: Deduct $80 (balance = $20), commit, release lock
+    A-->>A: Dispense $80
+    L-->>B: Lock acquired
+    B->>L: Read balance
+    L-->>B: $20 (< $80)
+    B-->>B: Transaction declined
+    Note over A,B: User withdrew $80 from a $100 account. Bank is correct.
 ```
 
 What went wrong technically in the first scenario is a stale read followed by a decision based on that stale data. Both ATMs read the balance at roughly the same time. Both got the same answer: $100. Neither knew the other existed. Neither waited for the other to finish. Each ATM made a perfectly rational local decision based on the information it had. The problem is that "the information it had" was wrong by the time it mattered. This is what "eventual consistency" means at its worst: reads return data that is correct in isolation but stale relative to concurrent writes. The two ATMs represent two replicas, and without a protocol forcing them to coordinate before acting, they both act on a stale world.
@@ -107,32 +100,30 @@ This same pattern appears everywhere money, capacity, or scarce resources are in
 
 ## Quick Visual: What Users Actually Experience
 
-```
-+==================================================================================+
-|              USER EXPERIENCE BY CONSISTENCY MODEL                               |
-+==================================================================================+
-|                                                                                  |
-|  STRONG (Linearizable):                                                         |
-|  [User Clicks] --> [500ms pause] --> [Y Success!]                              |
-|  Everyone in the world immediately sees the new value.                          |
-|                                                                                  |
-|  READ-YOUR-WRITES:                                                               |
-|  [User Clicks] --> [~10ms] --> [Y Your change is visible to YOU]               |
-|  Others may see old value for 1-5 seconds. YOU see it immediately.              |
-|                                                                                  |
-|  CAUSAL:                                                                         |
-|  [User Posts] --> [~15ms] --> [Y Your reply always comes AFTER original]       |
-|  Causally related events always appear in correct order.                        |
-|  Unrelated events may appear in any order.                                      |
-|                                                                                  |
-|  EVENTUAL:                                                                       |
-|  [User Posts] --> [~5ms] --> [Y Server accepted it]                            |
-|       |                                                                          |
-|       +-> User refreshes feed --> [Where did it go?!]                          |
-|       +-> User refreshes again --> [WHERE IS IT??]                             |
-|       +-> User refreshes third time --> [There it is.]                         |
-|  (1-30 seconds after write, depending on replica lag)                           |
-+==================================================================================+
+```mermaid
+flowchart LR
+    subgraph STR["STRONG (Linearizable)"]
+        direction LR
+        s1["User clicks"] --> s2["~500 ms pause"] --> s3["Success. Everyone sees the new value immediately"]
+    end
+    subgraph RYW["READ-YOUR-WRITES"]
+        direction LR
+        r1["User clicks"] --> r2["~10 ms"] --> r3["You see your change. Others may see old value for 1-5 s"]
+    end
+    subgraph CAU["CAUSAL"]
+        direction LR
+        c1["User posts"] --> c2["~15 ms"] --> c3["Reply always appears after the original. Unrelated events in any order"]
+    end
+    subgraph EVT["EVENTUAL"]
+        direction LR
+        e1["User posts"] --> e2["~5 ms: server accepted"] --> e3["Refresh: where did it go?"] --> e4["Refresh: WHERE IS IT?"] --> e5["Refresh: there it is (1-30 s later)"]
+    end
+    STR ~~~ RYW ~~~ CAU ~~~ EVT
+    style e3 fill:#fecaca,stroke:#b91c1c,color:#000
+    style e4 fill:#fecaca,stroke:#b91c1c,color:#000
+    style s3 fill:#bbf7d0,stroke:#15803d,color:#000
+    style r3 fill:#bbf7d0,stroke:#15803d,color:#000
+    style c3 fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 The "where did it go?" problem is not a small annoyance. It is one of the most trust-destroying experiences a user can have with an application. The user did something -- they created a post, updated their bio, deleted a comment -- and now the thing they did has vanished. From the user's perspective, the app lost their data. It does not matter that the data is technically still there and will appear in 20 seconds. The user does not know that. They experience data loss. They file a support ticket. They tell friends the app is buggy. They screenshot the missing post and post it to Twitter. The engineering team investigates, finds no bug, closes the ticket as "working as intended." The user never comes back. This is the actual cost of pure eventual consistency applied to interactive user actions. The technical system is correct. The product is broken.
@@ -211,43 +202,21 @@ With eventual consistency, your write is accepted immediately and acknowledged q
 
 The email analogy is the cleanest way to understand eventual consistency. When you send an email, your mail server accepts it instantly and returns a success response. The email then propagates through a chain of mail servers -- your outbound server, possibly one or more relay servers, the recipient's incoming server -- each passing it along asynchronously. If the recipient checks their email the moment you hit send, they might not see it yet. If their mail server is temporarily overloaded, delivery might take 10 minutes. But eventually -- barring catastrophic failure -- the email arrives. Eventual consistency is the same pattern applied to database writes. The write is accepted. It propagates asynchronously. Readers might see the old value during propagation. Eventually everyone converges.
 
-```
-+==================================================================================+
-|              THE TELEPHONE GAME: EVENTUAL CONSISTENCY VISUALIZED                |
-+==================================================================================+
-|                                                                                  |
-|  A write enters the system at time T=0.                                         |
-|                                                                                  |
-|  T=0ms    Write accepted at Node 1: balance = $200                              |
-|           +---------+                                                            |
-|           | Node 1  |  balance=$200  <-- Write happens here                    |
-|           +----+----+                                                            |
-|                | async replication                                               |
-|                v                                                                 |
-|  T=50ms   +---------+                                                            |
-|           | Node 2  |  balance=$200  <- Updated                                  |
-|           +----+----+                                                            |
-|                | async replication                                               |
-|                v                                                                 |
-|  T=200ms  +---------+                                                            |
-|           | Node 3  |  balance=$200  <- Updated                                  |
-|           +----+----+                                                            |
-|                | async replication (cross-region, 150ms RTT)                    |
-|                v                                                                 |
-|  T=1200ms +---------+                                                            |
-|           | Node 4  |  balance=$200  <- Updated                                  |
-|           +----+----+          (EU replica, takes longer)                       |
-|                | async replication                                               |
-|                v                                                                 |
-|  T=1500ms +---------+                                                            |
-|           | Node 5  |  balance=$200  <- Updated                                  |
-|           +---------+          (APAC replica)                                   |
-|                                                                                  |
-|  During T=0 to T=1500ms:                                                        |
-|  -> Reads from Nodes 2-5 may return OLD value (e.g., $150)                      |
-|  -> There is NO guarantee about WHEN each node gets updated                      |
-|  -> The only guarantee: if writes stop, all nodes EVENTUALLY converge            |
-+==================================================================================+
+```mermaid
+sequenceDiagram
+    participant W as Writer
+    participant N1 as Node 1 (US)
+    participant N2 as Node 2
+    participant N3 as Node 3
+    participant N4 as Node 4 (EU)
+    participant N5 as Node 5 (APAC)
+    W->>N1: T=0 ms: write balance = $200
+    N1-->>W: Ack (fast)
+    N1->>N2: T=50 ms: async replication
+    N2->>N3: T=200 ms
+    N3->>N4: T=1200 ms (cross-region, slower)
+    N4->>N5: T=1500 ms
+    Note over N2,N5: Between T=0 and T=1500 ms reads from these nodes may return the OLD value ($150). No guarantee on WHEN each node updates. Only guarantee: if writes stop, all nodes eventually converge.
 ```
 
 The key word is "eventually" -- and the dangerous thing about that word is what it does NOT say. Eventual consistency provides no upper bound on how long convergence takes. The system might have an informal contract ("typically under 1 second") but that contract is not enforced by the consistency model itself. Under normal operating conditions, a well-tuned eventually consistent system might converge in 50-200ms. Under load, that might stretch to 5 seconds. During a partial network partition that resolves itself, some replicas might be 30 seconds stale before they catch up. After a data center failover, some replicas might spend several minutes converging. In all of these cases, the system is behaving correctly according to its eventual consistency guarantee. But a system that is "correct" according to its model and "producing the wrong answer" for its users at the same time is a system with a design mismatch -- and that design mismatch is the engineer's fault, not the consistency model's fault.
@@ -266,41 +235,39 @@ Causal consistency is the consistency model that most resembles how humans natur
 
 Alice posts: "Let's get pizza tonight." Bob replies: "Great idea!" Carol opens the app. Without causal consistency, Carol might see Bob's reply before Alice's original message. "Great idea!" with no context. She doesn't know what the great idea is, what it refers to, who said it first, whether she missed something. The conversation is broken. With causal consistency, Carol is guaranteed to see Alice's message before Bob's reply, because Alice's message is the cause and Bob's reply is the effect. The order is preserved. The conversation makes sense.
 
+```mermaid
+sequenceDiagram
+    participant Al as Alice
+    participant RA as Replica A
+    participant RB as Replica B
+    participant Bo as Bob
+    participant Ca as Carol
+    Note over Al,Ca: WITHOUT causal consistency
+    Al->>RA: "Let's get pizza tonight."
+    RA-->>Bo: Bob sees Alice's post
+    Bo->>RB: "Great idea!" (replies)
+    RB-->>Ca: Carol reads from Replica B
+    Note over Ca: Sees "Great idea!" first. Alice's post not here yet. Confusing.
+    RA-->>RB: (Alice's post arrives late)
 ```
-+==================================================================================+
-|              CAUSAL CONSISTENCY: THE CHAT ROOM EXAMPLE                          |
-+==================================================================================+
-|                                                                                  |
-|  WITHOUT CAUSAL CONSISTENCY:                                                    |
-|                                                                                  |
-|  Alice posts:  "Let's get pizza tonight."   -> Propagates to Replica A first    |
-|  Bob replies:  "Great idea!"               -> Propagates to Replica B first     |
-|                                                                                  |
-|  Carol reads from Replica B:                                                    |
-|  +---------------------------------+                                            |
-|  | 2:31 PM  Bob:   "Great idea!"  |  <- Carol sees reply first                 |
-|  | 2:30 PM  Alice: "Let's get ... |  <- Original appears later (confusing!)    |
-|  +---------------------------------+                                            |
-|                                                                                  |
-|  Carol is confused. She has no idea what the "great idea" is.                   |
-|                                                                                  |
-+==================================================================================+
-|                                                                                  |
-|  WITH CAUSAL CONSISTENCY:                                                       |
-|                                                                                  |
-|  Alice posts:  "Let's get pizza tonight."   -> Vector clock: [Alice:1, Bob:0]   |
-|  Bob replies:  "Great idea!"               -> Vector clock: [Alice:1, Bob:1]    |
-|  (Bob's message carries dependency on Alice:1)                                  |
-|                                                                                  |
-|  Carol reads from any replica:                                                   |
-|  +-----------------------------------------+                                    |
-|  | 2:30 PM  Alice: "Let's get pizza..."   |  <- Original always first          |
-|  | 2:31 PM  Bob:   "Great idea!"          |  <- Reply always after             |
-|  +-----------------------------------------+                                    |
-|                                                                                  |
-|  System holds Bob's reply until Alice's message is visible.                     |
-|  Cost: ~$2-5 per 1M ops. Latency: 20-80ms.                                    |
-+==================================================================================+
+
+```mermaid
+sequenceDiagram
+    participant Al as Alice
+    participant RA as Replica A
+    participant RB as Replica B
+    participant Bo as Bob
+    participant Ca as Carol
+    Note over Al,Ca: WITH causal consistency
+    Al->>RA: "Let's get pizza..." VC=[Alice:1, Bob:0]
+    RA-->>Bo: Bob reads Alice's post
+    Bo->>RB: "Great idea!" VC=[Alice:1, Bob:1] (depends on Alice:1)
+    Note over RB: Reply buffered. Dependency Alice:1 not yet visible.
+    RA-->>RB: Alice's post arrives
+    Note over RB: Dependency satisfied. Reply released.
+    Ca->>RB: Read thread
+    RB-->>Ca: 1) Alice: Let's get pizza... 2) Bob: Great idea!
+    Note over Ca: Cost about $2-5 per 1M ops. Latency 20-80 ms.
 ```
 
 Causal consistency is underrated precisely because it is not as famous as eventual consistency or as intuitive as strong consistency. Engineers often think they need strong consistency when they actually only need causal, and the cost difference is significant -- $2-5 per million operations for causal versus $15-25 for strong, a 5-10x difference. Causal consistency solves the real user experience problem in most social applications -- confusing conversation order, replies appearing before originals, reactions appearing before content -- without requiring global coordination. It only requires ordering within a causal chain. If Alice posts in New York and Bob in London reads her post and replies, the system only needs to ensure that Bob's reply includes a "happens-after" marker pointing to Alice's message. Any replica that receives Bob's reply will hold it in a buffer until it has also received Alice's post. This is local bookkeeping, not global consensus, and it is far cheaper than asking every node on the planet to agree on a global ordering.
@@ -317,53 +284,41 @@ The technical implementation of causal consistency typically uses vector clocks 
 
 Read-your-writes consistency makes a focused, narrow promise: if you make a write, all of your subsequent reads will see that write. Other users might still see the old value for a few seconds while replication catches up. The rest of the world gets eventual consistency. But you, the user who made the change, will never see your own old value after your write succeeds. You update your profile picture and you always see your new profile picture. You post a comment and you always see your comment in the feed. You change your password and you can immediately log in with the new password. Your changes are immediately visible to you, and only you.
 
+**Without read-your-writes**
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant App
+    participant Ldr as Leader (us-east-1a)
+    participant Rep as Replica (us-east-1b, 800 ms lag)
+    U->>App: Click "Post"
+    App->>Ldr: Write post
+    Ldr-->>App: Success
+    Ldr--)Rep: async replication (not yet arrived)
+    App->>Rep: Load feed (routed to replica)
+    Rep-->>App: Feed WITHOUT the new post
+    App-->>U: "Where is my post??"
+    U->>App: Clicks Post again
+    Note over U,Rep: Result: DUPLICATE POST
 ```
-+==================================================================================+
-|              THE GHOST POST PROBLEM: WITH AND WITHOUT READ-YOUR-WRITES          |
-+==================================================================================+
-|                                                                                  |
-|  WITHOUT READ-YOUR-WRITES:                                                      |
-|                                                                                  |
-|  User clicks "Post"                                                             |
-|       |                                                                          |
-|       v                                                                         |
-|  Write goes to Leader Node (US-East-1)  -> Y Write succeeds                    |
-|       |                                                                          |
-|       |  (async replication begins, 800ms lag on replica)                       |
-|       |                                                                          |
-|  App redirects user to feed                                                     |
-|       |                                                                          |
-|       v                                                                         |
-|  Load balancer routes READ request to Replica Node (US-East-1b)                |
-|       |   <- Replica hasn't received the write yet                               |
-|       v                                                                         |
-|  Feed renders WITHOUT the new post                                              |
-|       |                                                                          |
-|       v                                                                         |
-|  User panics: "Where is my post??"                                              |
-|  User clicks Post again -> DUPLICATE POST                                        |
-|                                                                                  |
-+==================================================================================+
-|                                                                                  |
-|  WITH READ-YOUR-WRITES:                                                         |
-|                                                                                  |
-|  User clicks "Post"                                                             |
-|       |                                                                          |
-|       v                                                                         |
-|  Write goes to Leader Node -> Y Write succeeds                                  |
-|  Session token updated: "last write at T=1704067200, node=us-east-1a"          |
-|       |                                                                          |
-|  App redirects user to feed                                                     |
-|       |                                                                          |
-|       v                                                                         |
-|  Read request carries session token                                             |
-|  Load balancer sees token -> routes to SAME node (us-east-1a) for 30 seconds    |
-|       |                                                                          |
-|       v                                                                         |
-|  Feed renders WITH the new post Y                                               |
-|  User sees their post. World is good.                                           |
-|  (Other users may not see it yet -- that's fine, they don't expect to)          |
-+==================================================================================+
+
+**With read-your-writes**
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant App
+    participant LB as Load balancer
+    participant Ldr as Leader (us-east-1a)
+    U->>App: Click "Post"
+    App->>Ldr: Write post
+    Ldr-->>App: Success + session token (last write T, node=1a)
+    App->>LB: Load feed + token
+    LB->>Ldr: Token seen: route to SAME node for 30 s
+    Ldr-->>App: Feed WITH the new post
+    App-->>U: User sees their post
+    Note over U,Ldr: Other users may not see it yet. That is fine.
 ```
 
 The "where did my post go?" problem is one of the most common support tickets in distributed systems, and it is almost entirely preventable with a simple implementation change. The underlying mechanism is well understood: the write lands on one node, but the subsequent read gets routed to a different replica that hasn't yet received the write. The user is not imagining things -- their data genuinely is not on the replica they're reading from. The data exists. It is just not visible from this vantage point. From the user's perspective, the app ate their data. They did not see an error. They did not see a warning. They just stopped seeing their post. The confidence-destroying moment is not the missing post itself -- it is the fact that the app told them the post succeeded, and then lied. That gap between "we told you it worked" and "here's the proof it didn't" is what creates lost user trust and support tickets. Read-your-writes consistency closes that gap by ensuring the feedback and the experience are aligned.
@@ -378,31 +333,23 @@ The technical overhead of read-your-writes is dominated by session state managem
 
 ## Linearizability: The Gold Standard
 
-```
-+==================================================================================+
-|              LINEARIZABILITY: THE GLOBAL ORDERING GUARANTEE                     |
-+==================================================================================+
-|                                                                                  |
-|  Time ------------------------------------------------------------------>       |
-|                                                                                  |
-|  Client A:  +---- Write(X=1) ----+                                              |
-|                                                                                  |
-|  Client B:          +- Read(X) -+                                               |
-|                     returns: 1  <- Must return 1 (A's write already completed)   |
-|                                                                                  |
-|  Client C:  +-- Read(X) --+  ...  +-- Read(X) --+                              |
-|             returns: 0           returns: 1                                      |
-|             (before A's write)   (after A's write)                              |
-|                                                                                  |
-|  VALID: C sees X=0 then X=1. The transition happens exactly once.               |
-|  INVALID: C sees X=1, then X=0. Linearizability forbids going backward.        |
-|  INVALID: B sees X=0 after A's write already returned. Write is visible to all. |
-|                                                                                  |
-|  KEY GUARANTEE:                                                                  |
-|  Every operation appears to take effect at a single instant in time,            |
-|  somewhere between when the client sent the request and when it received        |
-|  the response. No operation can appear to "un-happen."                          |
-+==================================================================================+
+```mermaid
+sequenceDiagram
+    participant A as Client A
+    participant S as System (single logical copy of X, X=0)
+    participant B as Client B
+    participant C as Client C
+    C->>S: Read(X)
+    S-->>C: 0 (before A's write)
+    A->>S: Write(X=1) begins
+    S-->>A: Write(X=1) completes
+    B->>S: Read(X)
+    S-->>B: 1 (must be 1, A's write already completed)
+    C->>S: Read(X)
+    S-->>C: 1 (never goes backward)
+    Note over A,C: VALID: C sees 0 then 1, one transition only.
+    Note over A,C: INVALID: C sees 1 then 0, or B sees 0 after A's write returned.
+    Note over A,C: Every op takes effect at one instant between request and response.
 ```
 
 The mental model that makes linearizability click is "one copy, one server, one global clock." Even though the system is distributed across dozens of servers and multiple data centers, it behaves as if there is exactly one server with exactly one copy of the data and a single global clock ticking. Every operation appears to take effect at a single atomic instant somewhere between when the client issued the request and when the client received the response. Once an operation appears to have taken effect, its effect is permanent and immediately visible to every subsequent operation from any client anywhere. No reader ever sees a value that was valid at time T but has already been superseded by time T+1. No operation can travel backward in time. If you read X=5, then all subsequent reads of X will return 5 or a newer value -- never a value written before your read. This property -- the inability to go back in time -- is what distinguishes linearizability from all weaker models. It is also what makes it so expensive to implement.
@@ -415,39 +362,18 @@ The situations where linearizability is worth that cost are specific and defensi
 
 ## The Full Consistency Spectrum
 
+```mermaid
+flowchart LR
+    A["Linearizable<br/>(strongest)"] --> B["Sequential"] --> C["Causal"] --> D["Read-Your-Writes"] --> E["Eventual"] --> F["None<br/>(weakest)"]
 ```
-Strongest <----------------------------------------------------> Weakest
 
-Linearizable -> Sequential -> Causal -> Read-Your-Writes -> Eventual -> None
-```
-
-```
-+==========================================================================================+
-|                    THE COMPLETE CONSISTENCY MODEL REFERENCE TABLE                       |
-+======================+==================+==========================+===================+
-| MODEL                | COST / 1M OPS    | BEST USE CASE            | ANALOGY           |
-+======================+==================+==========================+===================+
-| Linearizable         | $15 - $25        | Payments, inventory,     | One whiteboard,   |
-| (Strongest)          | 200-800ms        | distributed locks,       | everyone in the   |
-|                      | cross-region     | rate limiting (strict)   | same room         |
-+======================+==================+==========================+===================+
-| Sequential           | $8 - $15         | Leaderboards, audit      | One secretary     |
-|                      | 100-300ms        | logs, ordered event      | types all your    |
-|                      | cross-region     | streams                  | memos in order    |
-+======================+==================+==========================+===================+
-| Causal               | $2 - $5          | Chat messages, comment   | Morning briefing: |
-|                      | 20-80ms          | threads, social posts    | headline always   |
-|                      |                  | with replies             | before article    |
-+======================+==================+==========================+===================+
-| Read-Your-Writes     | $1 - $3          | Profile updates, user    | Your own diary:   |
-|                      | 5-20ms           | posts, settings,         | you always read   |
-|                      |                  | preference saves         | what you wrote    |
-+======================+==================+==========================+===================+
-| Eventual             | $0.50 - $1.50    | Like counts, view        | Email: arrives    |
-| (Weakest common)     | 1-5ms            | counts, feed ranking,    | eventually, no    |
-|                      |                  | recommendations          | delivery guarantee|
-+======================+==================+==========================+===================+
-```
+| Model | Cost / 1M ops | Cross-region latency | Best use case | Analogy |
+|---|---|---|---|---|
+| **Linearizable** (strongest) | $15 - $25 | 200-800 ms | Payments, inventory, distributed locks, strict rate limiting | One whiteboard, everyone in the same room |
+| **Sequential** | $8 - $15 | 100-300 ms | Leaderboards, audit logs, ordered event streams | One secretary types all your memos in order |
+| **Causal** | $2 - $5 | 20-80 ms | Chat messages, comment threads, social posts with replies | Morning briefing: headline always before article |
+| **Read-Your-Writes** | $1 - $3 | 5-20 ms | Profile updates, user posts, settings, preference saves | Your own diary: you always read what you wrote |
+| **Eventual** (weakest common) | $0.50 - $1.50 | 1-5 ms | Like counts, view counts, feed ranking, recommendations | Email: arrives eventually, no delivery guarantee |
 
 The golden rule of consistency model selection is: use the weakest consistency model that satisfies the requirement. This is not a guideline about cutting corners -- it is a fundamental engineering principle about paying costs only where they deliver value. Every step stronger on the consistency spectrum costs more latency, reduces throughput, increases per-operation cost, and decreases availability during network partitions. The burden of proof belongs to the person arguing for stronger consistency: you must demonstrate specifically, not vaguely, what breaks if you use a weaker model. "It feels like it should be consistent" is not a justification. "If two users concurrently modify this field, the outcome is an irreversible financial error" is a justification. This discipline -- demanding explicit justification for stronger consistency -- is one of the clearest markers of senior engineering judgment in system design discussions.
 
@@ -507,71 +433,35 @@ Read-your-writes consistency is probably the single most impactful improvement a
 
 You are at a coffee shop. You post "At my favorite coffee shop!" to social media. Your phone confirms the post was submitted. What happens next, under each consistency model?
 
-```
-+==================================================================================+
-|          "AT MY FAVORITE COFFEE SHOP!" -- WHAT HAPPENS UNDER EACH MODEL          |
-+==========================+=====================================================+
-| MODEL                    | YOUR EXPERIENCE                                      |
-+==========================+=====================================================+
-| Strong (Linearizable)    | Click post -> wait 500ms -> post appears on your feed |
-|                          | AND your friend's feed simultaneously. Your friend  |
-|                          | across town sees it the moment you see it. Perfect  |
-|                          | sync. But that 500ms felt slow on a button click.   |
-+==========================+=====================================================+
-| Causal                   | Click post -> instant confirmation -> post appears    |
-|                          | on your feed immediately. If anyone replies to your |
-|                          | post, their reply always appears after your post,   |
-|                          | in correct order, for every reader. Your friend     |
-|                          | might see your post 2 seconds after you do.         |
-+==========================+=====================================================+
-| Read-Your-Writes         | Click post -> instant confirmation -> you see your   |
-|                          | post immediately in your own feed. Your friend      |
-|                          | across town might not see it for 3-5 seconds. But  |
-|                          | you see it instantly, so you don't worry. No        |
-|                          | support ticket. No duplicate post.                  |
-+==========================+=====================================================+
-| Eventual (pure)          | Click post -> instant confirmation -> you check your |
-|                          | feed -> your post is not there. Refresh -> not there.|
-|                          | Refresh again -> there it is! You posted again while |
-|                          | waiting. Now you have two identical posts. You      |
-|                          | delete one. That deletion is also eventually        |
-|                          | consistent. The deleted post appears and disappears |
-|                          | twice more over the next 30 seconds. You log off.   |
-+==========================+=====================================================+
-```
+| Model | Your experience posting "At my favorite coffee shop!" |
+|---|---|
+| **Strong (Linearizable)** | Click post, wait 500 ms, post appears on your feed AND your friend's feed simultaneously. Perfect sync, but 500 ms felt slow for a button click. |
+| **Causal** | Instant confirmation, post appears on your feed. Replies always appear after your post, in order, for every reader. Your friend may see it about 2 s later. |
+| **Read-Your-Writes** | Instant confirmation, you see your post immediately. Your friend may not see it for 3-5 s, but you don't worry. No support ticket, no duplicate post. |
+| **Eventual (pure)** | Instant confirmation, but your post is not on your feed. Refresh: not there. Refresh again: there it is. You posted again while waiting, so now there are two. You delete one, and the deletion is also eventually consistent, so it appears and disappears twice over the next 30 s. |
 
 Notice that the "worst" model is not abstractly bad. Eventual consistency without read-your-writes is not a poorly designed system -- it is a system that made a choice with real consequences. For the status update post itself, pure eventual without read-your-writes creates genuine UX confusion: the user posted, got a confirmation, but cannot see their own post for 30 seconds. For the like count on that same post, eventual consistency is the perfect model: if 47,000 people have liked the post and the user sees 47,003 instead of 47,008, no user experience is damaged, no behavior changes, no trust is eroded. Same post, same user, same moment in time -- two different data types, two different right answers. The like count should be eventually consistent. The post itself should be read-your-writes consistent. Applying a single consistency model to the entire screen rather than to individual data types is a Level 5 mistake. Recognizing that every field has a different answer is the Level 6 baseline.
 
-```
-+==================================================================================+
-|              CONSISTENCY MODELS AS NEWS DELIVERY                                |
-+==================================================================================+
-|                                                                                  |
-|  BREAKING NEWS TICKER (TV)     =   Strong Consistency                          |
-|  -----------------------------------------------------                          |
-|  Everyone watching sees the same news at the same second.                       |
-|  The network synchronizes broadcast globally.                                   |
-|  Cost: expensive to run live broadcast infrastructure.                          |
-|                                                                                  |
-|  MORNING BRIEFING EMAIL        =   Causal Consistency                          |
-|  -----------------------------------------------------                          |
-|  You always see the headline before the full story.                             |
-|  Cause (headline published) always precedes effect (article follows).           |
-|  Not everyone gets it at exactly the same time, but order is preserved.        |
-|                                                                                  |
-|  PERSONAL RSS FEED             =   Read-Your-Writes Consistency                |
-|  -----------------------------------------------------                          |
-|  When YOU publish to YOUR blog, it appears in YOUR feed immediately.           |
-|  Your readers might see it 60 seconds later.                                    |
-|  But you always see your own articles the moment you publish them.              |
-|                                                                                  |
-|  NEWSPAPER (printed)           =   Eventual Consistency                        |
-|  -----------------------------------------------------                          |
-|  The news was written last night. It propagates to doorsteps all morning.      |
-|  By noon, everyone has it. But there was a window where some people knew        |
-|  about a story and others hadn't received their paper yet.                      |
-|  Cheap to distribute. No global coordination needed.                            |
-+==================================================================================+
+```mermaid
+flowchart LR
+    subgraph Models
+        direction TB
+        M1["Strong consistency"]
+        M2["Causal consistency"]
+        M3["Read-your-writes"]
+        M4["Eventual consistency"]
+    end
+    subgraph Analogy
+        direction TB
+        A1["Breaking news TV ticker<br/>Everyone sees it the same second. Expensive live infrastructure."]
+        A2["Morning briefing email<br/>Headline always before the story. Order preserved, timing not."]
+        A3["Personal RSS feed<br/>You see your own posts instantly. Readers see them ~60 s later."]
+        A4["Printed newspaper<br/>Delivered all morning, everyone has it by noon. Cheap, no coordination."]
+    end
+    M1 --- A1
+    M2 --- A2
+    M3 --- A3
+    M4 --- A4
 ```
 
 The news delivery analogy maps cleanly because it captures something deeper than just the timing -- it captures the cost and coordination structure of each model. A live television broadcast requires enormous infrastructure: satellite uplinks, synchronized broadcast towers, precise timing coordination across thousands of affiliates. That is why it is expensive and why not everything is broadcast live. A newspaper requires no coordination at delivery time -- the printing happened centrally, the trucks deliver asynchronously, and convergence happens by noon when the last truck arrives. The delivery mechanism is cheap and decentralized precisely because consistency was resolved upstream at the printing press, not at delivery time. RSS is personal -- your publisher writes for their own feed, sees their own posts instantly, and your reader experience follows a few seconds later. The asymmetry between author experience and reader experience is not a bug; it is the design.
@@ -592,34 +482,21 @@ An L6 engineer says: "Our system uses eventual consistency for engagement counts
 
 Before diving into the reasoning, look at this triangle. It shows the three properties a distributed system can have -- and the constraint that you can only fully achieve two of them at the same time.
 
-```
-                      CONSISTENCY
-                          /\
-                         /  \
-                        /    \
-                       /  CP  \
-                      /  ZONE  \
-                     /----------\
-                    /            \
-                   /    AP ZONE   \
-                  /________________\
-      AVAILABILITY                  PARTITION
-                                    TOLERANCE
-
-  CP Zone: System stays consistent during partition.
-           Minority partition returns errors.
-           Nobody sees wrong data -- they just see no data.
-           Examples: PostgreSQL (sync replication), Spanner, CockroachDB
-
-  AP Zone: System stays available during partition.
-           Both sides keep responding.
-           Data may diverge -- reconciled later.
-           Examples: Cassandra, DynamoDB, CouchDB
-
-  CA Zone: Consistent AND available, no partition tolerance.
-           Only possible with a single-node system.
-           Any distributed system will have partitions.
-           "CA" in a distributed context is not a real option.
+```mermaid
+flowchart TD
+    CAP(("CAP theorem<br/>pick two"))
+    CAP --> C["Consistency"]
+    CAP --> A["Availability"]
+    CAP --> P["Partition tolerance<br/>(not optional)"]
+    C --- CP["CP: consistent during partition<br/>Minority side returns errors<br/>Spanner, CockroachDB, PostgreSQL sync replication"]
+    P --- CP
+    A --- AP["AP: available during partition<br/>Both sides respond, data may diverge, reconciled later<br/>Cassandra, DynamoDB, CouchDB"]
+    P --- AP
+    C --- CA["CA: only a single-node system<br/>Not a real option for distributed systems"]
+    A --- CA
+    style CP fill:#fecaca,stroke:#b91c1c,color:#000
+    style AP fill:#bbf7d0,stroke:#15803d,color:#000
+    style CA fill:#e5e7eb,stroke:#6b7280,color:#000
 ```
 
 The CAP theorem says something specific and often misunderstood. During a network partition -- when some servers in your system cannot communicate with other servers -- you must choose between two things: consistency and availability. You cannot have both. Partition tolerance is not negotiable. Networks fail. This is not a design choice -- it is a physical fact of running software across multiple machines. Any distributed system must tolerate partitions, which means the real decision is always between C and A during those partition windows. The theorem does not say you give up one of them permanently -- only during the moments when a partition is active. When the network is healthy, you can have both. But you must decide, up front, what your system does when the network is not healthy.
@@ -642,67 +519,41 @@ An L6 engineer says: "CA is only achievable when there are no partitions. In pra
 
 Consistency is not free. It has a direct, measurable cost in milliseconds. Here is the math, written out explicitly, because these numbers matter for every design decision.
 
+| Item | Value |
+|---|---|
+| US-East to US-West, one-way / RTT | ~80 ms / ~160 ms |
+| US-East to EU-West, one-way / RTT | ~90 ms / ~180 ms |
+| US-East to Asia-Pacific, one-way | ~180 ms |
+| Quorum write US-East to US-West | 2 RTT = 320 ms minimum, 4 RTT = 640 ms, plus 10-50 ms per step for disk, CPU and processing |
+
+```mermaid
+flowchart LR
+    A["< 100 ms<br/>Feels instant"] --> B["100-300 ms<br/>Slight lag, tolerable"] --> C["> 300 ms<br/>Feels slow"] --> D["> 1000 ms<br/>Something is broken"]
+    style A fill:#bbf7d0,stroke:#15803d,color:#000
+    style B fill:#fef9c3,stroke:#a16207,color:#000
+    style C fill:#fed7aa,stroke:#c2410c,color:#000
+    style D fill:#fecaca,stroke:#b91c1c,color:#000
 ```
-Cross-datacenter network latency (one-way):
-  US-East to US-West:         ~80ms
-  US-East to EU-West:         ~90ms
-  US-East to Asia-Pacific:    ~180ms
 
-Round-trip time (RTT):
-  US-East to US-West RTT:     ~160ms
-  US-East to EU-West RTT:     ~180ms
-
-Strong consistency (quorum write) network cost:
-  Requires 2-4 network round trips
-  US-East to US-West quorum:  2 x 160ms = 320ms (minimum, just network)
-                               4 x 160ms = 640ms (4-RTT quorum)
-  Plus: disk I/O, CPU, processing = add 10-50ms per step
-
-User latency perception:
-  < 100ms:   Feels instant. User does not register delay.
-  100-300ms: Slight lag. Noticeable but tolerable for heavy actions.
-  > 300ms:   "This feels slow." User frustration begins.
-  > 1000ms:  "Something is broken." Users lose confidence.
-
-Like button example with strong consistency (US-East to US-West):
-  Click -> quorum write -> 320ms minimum
-  User waits 320ms per like
-  User thinks click did not register
-  User clicks again -> double-like
-  System must now reconcile duplicate -> extra logic
-  Final user experience: button feels broken
+```mermaid
+flowchart LR
+    A["Click Like with strong consistency"] --> B["Quorum write: 320 ms minimum"] --> C["User thinks click did not register"] --> D["Clicks again: double-like"] --> E["System must reconcile the duplicate"] --> F["Button feels broken"]
+    style F fill:#fecaca,stroke:#b91c1c,color:#000
 ```
 
 The latency math is not theoretical -- it is dictated by physics. Light travels through fiber at roughly two-thirds the speed of light in a vacuum. The US-East to US-West physical distance via fiber is about 4,800 kilometers. At two-thirds light speed through glass, one-way transit is roughly 24ms. But real-world routing adds hops, queuing, and switching overhead -- the actual measured RTT between AWS us-east-1 and us-west-2 is consistently 60-80ms. Quorum writes need multiple round trips because the coordinator must contact a majority of replicas, wait for acknowledgment from each, and then return success to the client. Two round trips is the minimum for a two-phase protocol. Four round trips is realistic for Paxos or Raft under load.
 
 The cost per operation compounds into real money at scale. Here is what different consistency models actually cost across regions:
 
-```
-+-------------------------+--------------------------------------+------------------------+
-| Consistency Model       | Cost per 1M Ops (Cross-Region)       | Why                    |
-+-------------------------+--------------------------------------+------------------------+
-| Strong (linearizable)   | $15 - $25                            | Multi-RTT consensus,   |
-|                         |                                      | cross-region traffic,  |
-|                         |                                      | leader coordination    |
-+-------------------------+--------------------------------------+------------------------+
-| Strong (single-region)  | $3 - $8                              | Single-region RTT is   |
-|                         |                                      | 1-5ms, quorum cheaper  |
-+-------------------------+--------------------------------------+------------------------+
-| Causal                  | $2 - $5                              | Vector clock overhead  |
-|                         |                                      | but no global quorum   |
-+-------------------------+--------------------------------------+------------------------+
-| Read-your-writes        | $1 - $3                              | Session affinity cost  |
-|                         |                                      | + occasional extra hop |
-+-------------------------+--------------------------------------+------------------------+
-| Eventual                | $0.50 - $1.50                        | Write and propagate.   |
-|                         |                                      | No coordination needed.|
-+-------------------------+--------------------------------------+------------------------+
+| Consistency model | Cost per 1M ops (cross-region) | Why |
+|---|---|---|
+| Strong (linearizable) | $15 - $25 | Multi-RTT consensus, cross-region traffic, leader coordination |
+| Strong (single-region) | $3 - $8 | Single-region RTT is 1-5 ms, quorum is cheaper |
+| Causal | $2 - $5 | Vector clock overhead but no global quorum |
+| Read-your-writes | $1 - $3 | Session affinity cost plus occasional extra hop |
+| Eventual | $0.50 - $1.50 | Write and propagate. No coordination needed. |
 
-Basis: AWS data transfer ($0.08/GB cross-region), compute for coordination,
-       and representative leader/quorum overhead at scale.
-       Numbers are estimates based on publicly documented AWS pricing
-       and published performance benchmarks from Google, Amazon, Meta.
-```
+*Basis: AWS data transfer ($0.08/GB cross-region), compute for coordination, and representative leader/quorum overhead at scale. Estimates from publicly documented AWS pricing and published benchmarks from Google, Amazon, Meta.*
 
 At Google and Facebook scale, the difference between strong and eventual consistency is hundreds of millions of dollars per year. This is not a theoretical claim. Facebook's news feed is eventually consistent. Not because their engineers do not understand consistency models, and not because they are lazy. The answer is simpler: Facebook has 2 billion daily active users. Each user loads a feed multiple times per day. If each feed load required a cross-region quorum read -- at $15-25 per million operations -- the annual cost at 2 billion users loading feeds five times daily would be in the billions of dollars just for feed reads. Facebook's total 2023 revenue was roughly $135 billion. Strong global consistency for the news feed would consume a material fraction of that. The engineering team looked at this math explicitly and chose eventual consistency with 5-60 second propagation targets. Users do not notice whether a post appears in their feed at T+1s or T+30s. The business absolutely notices a multi-billion-dollar infrastructure cost.
 
@@ -726,43 +577,16 @@ The real-world example that made this concrete was Amazon's 2012 DNS propagation
 
 The theory says choose based on the CAP theorem. Reality is messier. Let us look at what companies actually do, system by system.
 
-```
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Company          | System                 | Consistency Model     | Why                                      |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Google           | Spanner                | Strong                | Worth the cost for critical financial    |
-|                  |                        | (linearizable)        | and transactional data. Spanner's TrueAPI|
-|                  |                        |                       | uses atomic clocks to achieve this       |
-|                  |                        |                       | globally at 10-20ms extra latency.       |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Google           | YouTube view counts    | Eventual              | Counts don't need to be exact. +/-0.5%     |
-|                  |                        |                       | error is fine. Strong consistency would  |
-|                  |                        |                       | make every view a quorum write.          |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Facebook/Meta    | News Feed              | Eventual              | Latency matters more than precision.     |
-|                  |                        |                       | 30-60s propagation is acceptable.        |
-|                  |                        |                       | Strong at 2B users = unaffordable.       |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Facebook/Meta    | Payments               | Strong                | Financial accuracy is mandatory.         |
-|                  |                        |                       | Overdraft, fraud risk if eventual.       |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Twitter/X        | Tweet posting          | Eventual              | Speed matters. Tweet appears on sender's |
-|                  |                        |                       | timeline immediately (read-your-writes). |
-|                  |                        |                       | Follower feed delivery: eventual.        |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Twitter/X        | User blocking          | Strong                | Security must be immediate. Blocked user |
-|                  |                        |                       | should not see content 30 seconds after  |
-|                  |                        |                       | being blocked.                           |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Amazon           | Shopping cart          | Eventual              | Availability > perfect state. Classic    |
-|                  |                        |                       | Dynamo paper (2007): Amazon explicitly   |
-|                  |                        |                       | chose AP for cart to never lose items.   |
-+------------------+------------------------+-----------------------+------------------------------------------+
-| Amazon           | Order placement        | Strong                | Cannot lose orders. Cannot duplicate.    |
-|                  |                        |                       | A lost $500 order is a real customer     |
-|                  |                        |                       | complaint and financial liability.       |
-+------------------+------------------------+-----------------------+------------------------------------------+
-```
+| Company | System | Model | Why |
+|---|---|---|---|
+| Google | Spanner | Strong (linearizable) | Worth the cost for critical financial and transactional data. TrueTime atomic clocks achieve this globally at 10-20 ms extra latency. |
+| Google | YouTube view counts | Eventual | Counts need not be exact. +/-0.5% error is fine. Strong would make every view a quorum write. |
+| Facebook/Meta | News Feed | Eventual | Latency matters more than precision. 30-60 s propagation is acceptable. Strong at 2B users is unaffordable. |
+| Facebook/Meta | Payments | Strong | Financial accuracy is mandatory. Overdraft and fraud risk if eventual. |
+| Twitter/X | Tweet posting | Eventual | Speed matters. Tweet appears on sender's timeline immediately (read-your-writes). Follower feed delivery: eventual. |
+| Twitter/X | User blocking | Strong | Security must be immediate. A blocked user should not see content 30 s later. |
+| Amazon | Shopping cart | Eventual | Availability over perfect state. Dynamo paper (2007): AP chosen so the cart never loses items. |
+| Amazon | Order placement | Strong | Cannot lose or duplicate orders. A lost $500 order is a real complaint and liability. |
 
 The pattern is unmistakable once you see it: strong consistency where inconsistency causes real harm -- where the failure mode involves money, security, or legal liability -- and eventual consistency everywhere else. These companies have access to the best distributed systems engineers in the world. They have the budget to run strong consistency at global scale if they choose to. They do not choose it for news feeds, view counts, shopping carts, or tweet delivery. They choose it for payments, order placement, and access control. The reason is not "these companies got lazy." The reason is that they did the analysis, found that eventual consistency is correct for those use cases, and built accordingly. The cost of eventual consistency's failure mode (a user sees a stale feed for 30 seconds) is lower than the cost of strong consistency's failure mode (higher latency, lower availability, 10x higher infrastructure cost) for non-critical data.
 
@@ -796,46 +620,23 @@ This question -- "what breaks if this data is stale?" -- is the question to ask 
 
 The decision tree below encodes 90% of consistency model selections correctly. Work through it top to bottom, stopping at the first YES.
 
-```
-START: "What consistency does this specific data need?"
-          |
-          v
-+--------------------------------------------+
-| 1. Is real money directly at stake?         |
-|    (balance, payment, inventory at checkout)|
-+--------------------------------------------+
-     |              |
-    YES             NO
-     |              |
-     v              v
-  STRONG       +--------------------------------------------+
-               | 2. Is this access control or security?      |
-               |    (block user, revoke permission, auth)    |
-               +--------------------------------------------+
-                    |              |
-                   YES             NO
-                    |              |
-                    v              v
-                 STRONG       +--------------------------------------------+
-                              | 3. Is this causally related data?           |
-                              |    (replies to messages, reactions to posts,|
-                              |     edits to shared documents)              |
-                              +--------------------------------------------+
-                                   |              |
-                                  YES             NO
-                                   |              |
-                                   v              v
-                                CAUSAL       +--------------------------------------------+
-                                             | 4. Is this the user's own action?           |
-                                             |    (user updated their own profile, posted  |
-                                             |     their own content, changed their setting)|
-                                             +--------------------------------------------+
-                                                  |              |
-                                                 YES             NO
-                                                  |              |
-                                                  v              v
-                                          READ-YOUR-WRITES    EVENTUAL
-                                                              CONSISTENCY
+```mermaid
+flowchart TD
+    START(["What consistency does this specific data need?"])
+    START --> Q1{"1. Is real money directly at stake?<br/>balance, payment, inventory at checkout"}
+    Q1 -- Yes --> S1["STRONG"]
+    Q1 -- No --> Q2{"2. Is this access control or security?<br/>block user, revoke permission, auth"}
+    Q2 -- Yes --> S2["STRONG"]
+    Q2 -- No --> Q3{"3. Is this causally related data?<br/>replies, reactions, shared document edits"}
+    Q3 -- Yes --> C1["CAUSAL"]
+    Q3 -- No --> Q4{"4. Is this the user's own action?<br/>own profile, own post, own setting"}
+    Q4 -- Yes --> R1["READ-YOUR-WRITES"]
+    Q4 -- No --> E1["EVENTUAL"]
+    style S1 fill:#fecaca,stroke:#b91c1c,color:#000
+    style S2 fill:#fecaca,stroke:#b91c1c,color:#000
+    style C1 fill:#fde68a,stroke:#b45309,color:#000
+    style R1 fill:#fef3c7,stroke:#b45309,color:#000
+    style E1 fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 This decision tree covers the overwhelming majority of real design questions. The flow forces you to ask the right questions in the right order -- from most severe failure consequences (money) to least severe (no noticeable user impact). If you reach the bottom with all NOs, eventual consistency is correct for that data field.
@@ -848,49 +649,18 @@ The remaining 10% of cases involve scenarios this tree does not fully capture. C
 
 Different system categories land on different consistency models. Here is the wide view.
 
-```
-SYSTEM CATEGORY          CONSISTENCY MODEL      IMPLEMENTATION
-
-+--------------------+   +--------------------+   +---------------------------+
-|  BANKING /         |   |                    |   |                           |
-|  PAYMENT           +-->+ STRONG             +-->+ Google Spanner            |
-|                    |   | (linearizable)     |   | PostgreSQL + sync replica |
-|  - Balance updates |   |                    |   | CockroachDB               |
-|  - Transfers       |   |                    |   | Explicit BEGIN/COMMIT      |
-|  - Checkout/order  |   |                    |   | transactions              |
-+--------------------+   +--------------------+   +---------------------------+
-
-+--------------------+   +--------------------+   +---------------------------+
-|  CONVERSATIONAL    |   |                    |   |                           |
-|  - Chat messages   +-->+ CAUSAL             +-->+ Messaging DB with         |
-|  - Comment threads |   |                    |   | vector clocks             |
-|  - Doc edits       |   |                    |   | CRDTs for concurrent edit |
-|  - Reply chains    |   |                    |   | Sequence IDs per thread   |
-+--------------------+   +--------------------+   +---------------------------+
-
-+--------------------+   +--------------------+   +---------------------------+
-|  AGGREGATES        |   |                    |   |                           |
-|  - Like counts     +-->+ EVENTUAL           +-->+ Cassandra / DynamoDB      |
-|  - View counters   |   |                    |   | Redis counters (expiring) |
-|  - Feed ranking    |   |                    |   | Write-behind caches       |
-|  - Follower counts |   |                    |   | Async aggregation jobs    |
-+--------------------+   +--------------------+   +---------------------------+
-
-+--------------------+   +--------------------+   +---------------------------+
-|  USER-OWNED DATA   |   |                    |   |                           |
-|  - Profile updates +-->+ READ-YOUR-WRITES   +-->+ Sticky session to leader  |
-|  - Settings change |   |                    |   | Session token w/ version  |
-|  - Own posts       |   |                    |   | Cache-aside with write-   |
-|                    |   |                    |   | through invalidation      |
-+--------------------+   +--------------------+   +---------------------------+
-
-+--------------------+   +--------------------+   +---------------------------+
-|  SECURITY /        |   |                    |   |                           |
-|  ACCESS CONTROL    +-->+ STRONG             +-->+ Synchronous replication   |
-|  - Block user      |   |                    |   | Quorum read on permission |
-|  - Revoke token    |   |                    |   | checks                   |
-|  - Permission      |   |                    |   | Zero-lag replica for auth |
-+--------------------+   +--------------------+   +---------------------------+
+```mermaid
+flowchart LR
+    B["Banking / Payment<br/>balance updates, transfers, checkout, orders"] --> BM["STRONG (linearizable)"] --> BI["Spanner, PostgreSQL + sync replica, CockroachDB, explicit BEGIN/COMMIT"]
+    C["Conversational<br/>chat, comment threads, doc edits, reply chains"] --> CM["CAUSAL"] --> CI["Messaging DB with vector clocks, CRDTs, sequence IDs per thread"]
+    A["Aggregates<br/>like counts, view counters, feed ranking, follower counts"] --> AM["EVENTUAL"] --> AI["Cassandra / DynamoDB, Redis counters, write-behind caches, async aggregation"]
+    U["User-owned data<br/>profile updates, settings, own posts"] --> UM["READ-YOUR-WRITES"] --> UI["Sticky session to leader, session token with version, cache-aside with write-through invalidation"]
+    S["Security / Access control<br/>block user, revoke token, permissions"] --> SM["STRONG"] --> SI["Synchronous replication, quorum read on permission checks, zero-lag replica for auth"]
+    style BM fill:#fecaca,stroke:#b91c1c,color:#000
+    style SM fill:#fecaca,stroke:#b91c1c,color:#000
+    style CM fill:#fde68a,stroke:#b45309,color:#000
+    style UM fill:#fef3c7,stroke:#b45309,color:#000
+    style AM fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 ---
@@ -1112,28 +882,20 @@ This pattern -- fan-out across consistency tiers within a single response -- is 
 
 Every server must reach consensus with a majority of other servers before accepting or rejecting any request. Using Raft (the standard consensus protocol for distributed systems):
 
-```
-Request arrives -> Raft leader contacted -> Leader proposes count update ->
-Majority of followers acknowledge -> Leader commits -> Response returned
-
-Timeline per check:
-  Client to rate limiter server: 1ms
-  Rate limiter to Raft leader:   2ms (if not local)
-  Leader to followers (2 RTTs):  50-100ms cross-region
-  Leader to client:              1ms
-  Total:                         54-104ms per check
-
-At 1M req/sec:
-  Each check takes 50ms minimum
-  System processes: 1 / 0.050s = 20,000 checks/sec
-  Required: 1,000,000 checks/sec
-  Gap: 50x under capacity
-
-During leader election (triggered by leader failure, ~1-10 seconds):
-  All rate checks fail
-  System choice: fail-open (allow all requests) or fail-closed (block all)
-  Fail-open: rate limiting defeats itself
-  Fail-closed: all legitimate traffic blocked for 1-10 seconds
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant RL as Rate limiter server
+    participant LD as Raft leader
+    participant F as Followers (cross-region)
+    C->>RL: Request (1 ms)
+    RL->>LD: Check and increment count (2 ms)
+    LD->>F: Propose update (2 RTTs, 50-100 ms)
+    F-->>LD: Majority acknowledge
+    LD-->>RL: Commit
+    RL-->>C: Response (1 ms)
+    Note over C,F: Total 54-104 ms per check. At 1M req/s need 1,000,000 checks/s but each check takes 50 ms, so capacity is 20,000 checks/s. Gap: 50x under capacity.
+    Note over LD: Leader election (1-10 s): all checks fail. Fail-open defeats rate limiting. Fail-closed blocks all legitimate traffic.
 ```
 
 Strong consistency makes the rate limiter a catastrophic bottleneck. At 1M requests per second, a 50ms per-check latency means the rate limiter can handle 20,000 checks per second -- 50 times less than required. The rate limiter, designed to protect the system from overload, becomes the source of overload.
@@ -1223,28 +985,13 @@ Read-your-writes for preferences: after a user changes a preference, pin their s
 
 Note: blocking has a different consistency requirement than muting. Blocking is a security/access control action -- it needs strong consistency (blocked user must not see content within seconds). Muting is a personal preference -- it needs read-your-writes (the muting user must not see content immediately, but the 5-10 second consistency window is fine).
 
-```
-+---------------------------+------------------+-------------------------+
-| Data Type                 | Consistency      | Why                     |
-+---------------------------+------------------+-------------------------+
-| Post visibility (fan-out) | Eventual (60s)   | Synchronous fan-out to  |
-|                           |                  | 150M followers is       |
-|                           |                  | physically impossible   |
-+---------------------------+------------------+-------------------------+
-| Post deletion             | Eventual (5-10s) | "Quick" but not instant.|
-|                           |                  | 5s cache TTL sufficient.|
-+---------------------------+------------------+-------------------------+
-| Like / comment counts     | Eventual (5s)    | Approximations. Nobody  |
-|                           |                  | notices 5s staleness.   |
-+---------------------------+------------------+-------------------------+
-| Muting                    | Read-your-writes | Session-local. 30s pin  |
-|                           |                  | to leader sufficient.   |
-+---------------------------+------------------+-------------------------+
-| Blocking                  | Strong (seconds) | Security. Access        |
-|                           |                  | control requires        |
-|                           |                  | immediate propagation.  |
-+---------------------------+------------------+-------------------------+
-```
+| Data Type | Consistency | Why |
+|---|---|---|
+| Post visibility (fan-out) | Eventual (60s) | Synchronous fan-out to 150M followers is physically impossible |
+| Post deletion | Eventual (5-10s) | "Quick" but not instant. 5s cache TTL sufficient. |
+| Like / comment counts | Eventual (5s) | Approximations. Nobody notices 5s staleness. |
+| Muting | Read-your-writes | Session-local. 30s pin to leader sufficient. |
+| Blocking | Strong (seconds) | Security. Access control requires immediate propagation. |
 
 **L6 Interview Articulation:** "I'd use different consistency models for different parts of the news feed, because the data types have fundamentally different consistency requirements. Post fan-out to followers: eventual, 60-second target -- synchronous fan-out at 150M followers is physically infeasible. Post deletion: eventual with a 5-10 second target, achieved via short cache TTL rather than synchronous deletion. Like and comment counts: pure eventual at 5 seconds -- approximations. User preferences like muting: read-your-writes via session pinning to primary for 30 seconds. Blocking: strong, because it is access control. The key is that one system uses four different models for four different data types with four different failure-mode profiles."
 
@@ -1256,18 +1003,18 @@ A messaging system has an ordering requirement that is more subtle than either e
 
 **The Problem Without Causal Consistency:**
 
-```
-WHAT ACTUALLY HAPPENED:
-  T=0:   Alice sends "Want to get dinner?"
-  T=1:   Bob   sends "Sure, where?" (replying to Alice's message)
-  T=2:   Alice sends "That Italian place on 5th"
-
-WHAT CAROL SEES WITHOUT CAUSAL CONSISTENCY
-(Replica serving Carol is 2s behind on Alice's messages, current on Bob's):
-
-  Bob:   "Sure, where?"              <- Confusing. Where what?
-  Alice: "That Italian place on 5th" <- Responding to what?
-  Alice: "Want to get dinner?"       <- Oh... this makes no sense
+```mermaid
+sequenceDiagram
+    participant A as Alice
+    participant B as Bob
+    participant R as Replica serving Carol (2 s behind on Alice)
+    actor C as Carol
+    A->>R: T=0 "Want to get dinner?" (delayed)
+    B->>R: T=1 "Sure, where?" (reply to Alice)
+    A->>R: T=2 "That Italian place on 5th" (delayed)
+    C->>R: Open conversation
+    R-->>C: 1) Bob: "Sure, where?" 2) Alice: "That Italian place on 5th" 3) Alice: "Want to get dinner?"
+    Note over C: The thread is unreadable without causal ordering.
 ```
 
 This is not hypothetical. Early messaging applications built with eventual consistency and no causal tracking had exactly this bug. Users would see reply messages before the original messages they replied to. The conversation thread became unreadable. Users called it a "glitch." Engineering called it an "ordering issue." The root cause was choosing eventual consistency -- which provides no ordering guarantees -- for a data type (conversation messages) that requires causal ordering.
@@ -1323,36 +1070,25 @@ The failure mode I'm specifically avoiding with causal consistency is users seei
 
 No discussion of consistency models is complete without the failure cases. Knowing the correct choice is half the job. Knowing exactly how the wrong choice fails is what lets you defend your decision and catch others' mistakes.
 
-```
-+----------------------------------+----------------------------------+
-| TOO WEAK (Should have been       | TOO STRONG (Should have been     |
-| stronger consistency)            | weaker consistency)              |
-+----------------------------------+----------------------------------+
-|                                  |                                  |
-| EVENTUAL for banking/payments    | STRONG for like counts           |
-|   -> overdraft, double-spend,     |   -> 300-500ms per like click     |
-|     regulatory violation         |   -> users think button is broken |
-|                                  |   -> 23% engagement drop (real)   |
-|                                  |                                  |
-| EVENTUAL for chat ordering       | STRONG during network partition  |
-|   -> replies appear before        |   -> system refuses all writes    |
-|     originals                    |   -> app appears down to users    |
-|   -> confused, distrusting users  |   -> users switch to competitors  |
-|                                  |                                  |
-| EVENTUAL for access control      | STRONG for rate limiter          |
-|   -> blocked user still sees      |   -> 50ms quorum check per request|
-|     content for 30+ seconds      |   -> bottleneck at 20K req/sec    |
-|   -> harassment continues         |   -> rate limiter causes outage   |
-|   -> legal/policy liability       |                                  |
-|                                  |                                  |
-| NO READ-YOUR-WRITES for          | STRONG for cross-region caches   |
-| user profile updates             |   -> 200ms added to every read    |
-|   -> user sees old profile        |   -> cache provides no latency    |
-|     after editing                |     benefit                      |
-|   -> support tickets increase     |   -> might as well read primary   |
-|     (most common ticket type)    |     directly                     |
-|                                  |                                  |
-+----------------------------------+----------------------------------+
+```mermaid
+flowchart LR
+    subgraph WEAK["TOO WEAK (should have been stronger)"]
+        direction TB
+        W1["EVENTUAL for banking/payments<br/>overdraft, double-spend, regulatory violation"]
+        W2["EVENTUAL for chat ordering<br/>replies before originals, distrusting users"]
+        W3["EVENTUAL for access control<br/>blocked user still sees content 30+ s, legal liability"]
+        W4["NO READ-YOUR-WRITES for profile updates<br/>user sees old profile, most common support ticket"]
+    end
+    subgraph STRONG["TOO STRONG (should have been weaker)"]
+        direction TB
+        S1["STRONG for like counts<br/>300-500 ms per click, button feels broken, 23% engagement drop"]
+        S2["STRONG during network partition<br/>refuses all writes, app appears down, users switch"]
+        S3["STRONG for rate limiter<br/>50 ms quorum check, bottleneck at 20K req/s, causes outage"]
+        S4["STRONG for cross-region caches<br/>+200 ms per read, cache gives no latency benefit"]
+    end
+    WEAK ~~~ STRONG
+    style WEAK fill:#fee2e2,stroke:#b91c1c,color:#000
+    style STRONG fill:#dbeafe,stroke:#1d4ed8,color:#000
 ```
 
 ---
@@ -1444,51 +1180,17 @@ The cost of session pinning is near zero -- it is routing logic, not extra datab
 
 These numbers are not guesses or approximations -- they are physics-derived and benchmark-confirmed values that you should cite in interviews when discussing latency and consistency trade-offs.
 
-```
-+----------------------------------+-----------------------+-------------------------------------+
-| Metric                           | Typical Value         | Why It Matters                      |
-+----------------------------------+-----------------------+-------------------------------------+
-| Strong consistency write         | 200-500ms             | Cross-region quorum requires 2-4    |
-| latency (cross-region)           | (cross-region)        | RTTs. Speed of light + routing      |
-|                                  |                       | overhead sets the floor.            |
-+----------------------------------+-----------------------+-------------------------------------+
-| Eventual consistency             | 50ms - 5s             | Depends on replication topology.    |
-| propagation time                 | (typical range)       | Same-DC: 50ms. Cross-region async   |
-|                                  |                       | replication: 1-5s under normal      |
-|                                  |                       | load.                               |
-+----------------------------------+-----------------------+-------------------------------------+
-| Single-DC synchronous            | 1-5ms added           | Intra-DC RTT is 0.5-2ms. Sync       |
-| replication overhead             | per write             | replication adds one RTT plus       |
-|                                  |                       | replica disk write time.            |
-+----------------------------------+-----------------------+-------------------------------------+
-| Cross-region network             | 50-200ms one-way      | US-East to US-West: ~80ms.          |
-| latency (one-way)                |                       | US to EU: ~90ms. US to APAC:        |
-|                                  |                       | ~180ms. Physics sets the floor.     |
-+----------------------------------+-----------------------+-------------------------------------+
-| Network partition frequency      | 1-5 per year          | Major partition events at           |
-| (large systems)                  | (major events)        | Google/Amazon/Facebook scale.       |
-|                                  |                       | Minor flaps: more frequent.         |
-+----------------------------------+-----------------------+-------------------------------------+
-| Network partition duration       | Seconds to hours      | Brief cable flap: 5-30 seconds.     |
-|                                  |                       | Routing misconfiguration: hours.    |
-|                                  |                       | Plan for worst case.                |
-+----------------------------------+-----------------------+-------------------------------------+
-| Read-your-writes session TTL     | 30 seconds typical    | Long enough to cover a single       |
-|                                  |                       | user interaction. Short enough      |
-|                                  |                       | to return to normal replica         |
-|                                  |                       | routing quickly.                    |
-+----------------------------------+-----------------------+-------------------------------------+
-| Leader election time (Raft)      | 1-10 seconds          | Depends on election timeout         |
-|                                  |                       | configuration. Default Raft         |
-|                                  |                       | timeout: 150-300ms election         |
-|                                  |                       | timeout, but real elections with    |
-|                                  |                       | retries take 1-10s.                 |
-+----------------------------------+-----------------------+-------------------------------------+
-| In-memory local operation        | < 1ms                 | Counter check, cache lookup.        |
-| (no network)                     |                       | This is what eventual consistency   |
-|                                  |                       | operations on local state cost.     |
-+----------------------------------+-----------------------+-------------------------------------+
-```
+| Metric | Typical Value | Why It Matters |
+|---|---|---|
+| Strong consistency write latency (cross-region) | 200-500ms (cross-region) | Cross-region quorum requires 2-4 RTTs. Speed of light + routing overhead sets the floor. |
+| Eventual consistency propagation time | 50ms - 5s (typical range) | Depends on replication topology. Same-DC: 50ms. Cross-region async replication: 1-5s under normal load. |
+| Single-DC synchronous replication overhead | 1-5ms added per write | Intra-DC RTT is 0.5-2ms. Sync replication adds one RTT plus replica disk write time. |
+| Cross-region network latency (one-way) | 50-200ms one-way | US-East to US-West: ~80ms. US to EU: ~90ms. US to APAC: ~180ms. Physics sets the floor. |
+| Network partition frequency (large systems) | 1-5 per year (major events) | Major partition events at Google/Amazon/Facebook scale. Minor flaps: more frequent. |
+| Network partition duration | Seconds to hours | Brief cable flap: 5-30 seconds. Routing misconfiguration: hours. Plan for worst case. |
+| Read-your-writes session TTL | 30 seconds typical | Long enough to cover a single user interaction. Short enough to return to normal replica routing quickly. |
+| Leader election time (Raft) | 1-10 seconds | Depends on election timeout configuration. Default Raft timeout: 150-300ms election timeout, but real elections with retries take 1-10s. |
+| In-memory local operation (no network) | < 1ms | Counter check, cache lookup. This is what eventual consistency operations on local state cost. |
 
 These numbers matter in interviews because citing them shows you reason from first principles, not from folklore. When you say "strong consistency cross-region adds 200-500ms," that is not a guess -- it is physics. The speed of light through fiber from US-East to US-West is approximately 80ms one-way. Quorum requires a minimum of 2 round trips: 2 x 80ms = 160ms in network time alone, plus disk I/O at each replica (5-20ms on SSDs), plus processing overhead at each node (1-5ms), plus routing hops (10-30ms overhead). The 200ms floor is the number you arrive at when you do this math. The 500ms ceiling accounts for load, retries, and queuing. An interviewer who hears these numbers cited with their derivation knows they are talking to an engineer who has thought deeply about distributed systems.
 
@@ -1498,43 +1200,16 @@ These numbers matter in interviews because citing them shows you reason from fir
 
 A single e-commerce platform illustrates how one real system uses four different consistency models for eight different data types. This is the canonical example to use in interviews when making the point that consistency is per-data-type, not per-system.
 
-```
-+---------------------------+-------------------+----------------------------------------+
-| Data Type                 | Consistency       | Reasoning                              |
-+---------------------------+-------------------+----------------------------------------+
-| Product catalog           | Eventual (5 min)  | Updated rarely. Reads happen millions  |
-| (name, description, img)  |                   | of times. CDN caching + eventual is    |
-|                           |                   | perfect. 5-min staleness invisible.    |
-+---------------------------+-------------------+----------------------------------------+
-| Shopping cart             | Read-your-writes  | User must see their own adds/removes.  |
-|                           |                   | Other users never see my cart.         |
-|                           |                   | Session pinning sufficient.            |
-+---------------------------+-------------------+----------------------------------------+
-| Inventory count           | Eventual (30s)    | "Usually in stock" is approximate.     |
-| (browse mode)             |                   | Overselling during browse is fine      |
-|                           |                   | -- checkout will catch it.              |
-+---------------------------+-------------------+----------------------------------------+
-| Inventory check           | Strong            | "Can I sell this item right now?"      |
-| (at checkout)             |                   | Must be exact. Two customers buying    |
-|                           |                   | the last item simultaneously must be   |
-|                           |                   | resolved without overselling.          |
-+---------------------------+-------------------+----------------------------------------+
-| Order placement           | Strong            | Financial transaction. Cannot lose,    |
-|                           |                   | duplicate, or reorder. Must be         |
-|                           |                   | atomic across inventory deduction      |
-|                           |                   | and order record creation.             |
-+---------------------------+-------------------+----------------------------------------+
-| Order history             | Eventual (10s)    | User viewing past orders. 10s staleness|
-|                           |                   | invisible. Read-heavy. Cache-friendly. |
-+---------------------------+-------------------+----------------------------------------+
-| Reviews and ratings       | Eventual (30s)    | Aggregate. Approximations. No harm     |
-|                           |                   | in 30s staleness.                      |
-+---------------------------+-------------------+----------------------------------------+
-| User preferences          | Read-your-writes  | Saved payment methods, addresses,      |
-| (saved addresses, etc.)   |                   | notification settings. User must       |
-|                           |                   | see their own changes immediately.     |
-+---------------------------+-------------------+----------------------------------------+
-```
+| Data Type | Consistency | Reasoning |
+|---|---|---|
+| Product catalog (name, description, img) | Eventual (5 min) | Updated rarely. Reads happen millions of times. CDN caching + eventual is perfect. 5-min staleness invisible. |
+| Shopping cart | Read-your-writes | User must see their own adds/removes. Other users never see my cart. Session pinning sufficient. |
+| Inventory count (browse mode) | Eventual (30s) | "Usually in stock" is approximate. Overselling during browse is fine -- checkout will catch it. |
+| Inventory check (at checkout) | Strong | "Can I sell this item right now?" Must be exact. Two customers buying the last item simultaneously must be resolved without overselling. |
+| Order placement | Strong | Financial transaction. Cannot lose, duplicate, or reorder. Must be atomic across inventory deduction and order record creation. |
+| Order history | Eventual (10s) | User viewing past orders. 10s staleness invisible. Read-heavy. Cache-friendly. |
+| Reviews and ratings | Eventual (30s) | Aggregate. Approximations. No harm in 30s staleness. |
+| User preferences (saved addresses, etc.) | Read-your-writes | Saved payment methods, addresses, notification settings. User must see their own changes immediately. |
 
 The key insight this table demonstrates: a single e-commerce platform uses at minimum four distinct consistency models -- strong, read-your-writes, and eventual for different purposes -- with different TTLs for different eventual-consistency data types. There is no single "right consistency model for e-commerce." There is the right model for each specific data field.
 
@@ -1546,96 +1221,48 @@ The L6 move in an interview is to state this explicitly. When asked "how would y
 
 Six questions, in order. Stop at the first YES.
 
-```
-QUESTION 1: Does a wrong answer here involve real money changing hands?
-  YES -> STRONG CONSISTENCY
-        (bank balance, payment amount, inventory at checkout, billing)
-  NO  -> Continue to Question 2
-
-QUESTION 2: Does a wrong answer here involve access or security?
-  YES -> STRONG CONSISTENCY
-        (block user, revoke token, change permissions, deactivate account)
-  NO  -> Continue to Question 3
-
-QUESTION 3: Is this data causally linked to other data the user will read next?
-  YES -> CAUSAL CONSISTENCY
-        (reply messages, document edits, comment threads, reaction chains)
-  NO  -> Continue to Question 4
-
-QUESTION 4: Is this the user's own data that they just wrote?
-  YES -> READ-YOUR-WRITES
-        (their own post, profile update, preference change, own message)
-  NO  -> Continue to Question 5
-
-QUESTION 5: Would the user be confused or upset seeing stale data here?
-  YES -> READ-YOUR-WRITES (minimum)
-        (any user-visible state they recently changed)
-  NO  -> Continue to Question 6
-
-QUESTION 6: Is this data approximate, aggregated, or high-volume?
-  YES -> EVENTUAL CONSISTENCY
-        (view counts, like counts, feed order, follower counts, analytics)
-  ANY -> EVENTUAL CONSISTENCY (if none of questions 1-5 returned YES)
+```mermaid
+flowchart TD
+    Q1{"Q1. Does a wrong answer involve real money?<br/>balance, payment, checkout inventory, billing"}
+    Q1 -- Yes --> S1["STRONG"]
+    Q1 -- No --> Q2{"Q2. Access or security?<br/>block user, revoke token, change permissions"}
+    Q2 -- Yes --> S2["STRONG"]
+    Q2 -- No --> Q3{"Q3. Causally linked to data the user reads next?<br/>replies, doc edits, comment threads"}
+    Q3 -- Yes --> C1["CAUSAL"]
+    Q3 -- No --> Q4{"Q4. User's own data they just wrote?<br/>own post, profile, preference, message"}
+    Q4 -- Yes --> R1["READ-YOUR-WRITES"]
+    Q4 -- No --> Q5{"Q5. Would the user be confused by stale data here?"}
+    Q5 -- Yes --> R2["READ-YOUR-WRITES (minimum)"]
+    Q5 -- No --> Q6{"Q6. Approximate, aggregated, or high-volume?<br/>view/like/follower counts, feed order, analytics"}
+    Q6 -- Yes --> E1["EVENTUAL"]
+    Q6 -- No --> E2["EVENTUAL<br/>(default when Q1-Q5 are all No)"]
+    style S1 fill:#fecaca,stroke:#b91c1c,color:#000
+    style S2 fill:#fecaca,stroke:#b91c1c,color:#000
+    style C1 fill:#fde68a,stroke:#b45309,color:#000
+    style R1 fill:#fef3c7,stroke:#b45309,color:#000
+    style R2 fill:#fef3c7,stroke:#b45309,color:#000
+    style E1 fill:#bbf7d0,stroke:#15803d,color:#000
+    style E2 fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 ---
 
 ## The Consistency Cheat Sheet Visual
 
-```
-+==========================+==========================+================================+
-| SYSTEM TYPE              | USE THIS CONSISTENCY     | WHY                            |
-+==========================+==========================+================================+
-| Banking / payments       | STRONG (linearizable)    | Any inconsistency = money      |
-| Balance updates          |                          | lost, overdraft, fraud         |
-| Order processing         |                          |                                |
-+--------------------------+--------------------------+--------------------------------+
-| Access control           | STRONG                   | Security cannot have stale     |
-| User blocking            |                          | windows. Blocked user must     |
-| Permission revocation    |                          | be blocked NOW.                |
-| Token invalidation       |                          |                                |
-+--------------------------+--------------------------+--------------------------------+
-| Chat / messaging         | CAUSAL                   | Conversations are causal       |
-| Comment threads          |                          | chains. Replies must follow    |
-| Reply chains             |                          | originals. Not global order.   |
-| Document editing         |                          |                                |
-+--------------------------+--------------------------+--------------------------------+
-| User profile (own data)  | READ-YOUR-WRITES         | User must see their own        |
-| User settings            |                          | changes. Others' views can     |
-| Own posts (poster's view)|                          | be eventually consistent.      |
-+--------------------------+--------------------------+--------------------------------+
-| News feed delivery       | EVENTUAL (30-60s)        | Synchronous fan-out to         |
-| Follower timelines       |                          | millions of followers is       |
-|                          |                          | physically impossible.         |
-+--------------------------+--------------------------+--------------------------------+
-| Like / reaction counts   | EVENTUAL (5s)            | Approximations. Nobody         |
-| View counts              |                          | compares counts in real time.  |
-| Follower counts          |                          | No harm in brief staleness.    |
-+--------------------------+--------------------------+--------------------------------+
-| Rate limiting            | EVENTUAL (100ms)         | Approximate safety control.    |
-| Request counting         |                          | 5-10% overage during sync      |
-|                          |                          | window is acceptable.          |
-+--------------------------+--------------------------+--------------------------------+
-| Product catalog          | EVENTUAL (minutes)       | Updated rarely, read often.    |
-| Content metadata         |                          | CDN-cacheable. Perfect for     |
-|                          |                          | long TTL eventual.             |
-+--------------------------+--------------------------+--------------------------------+
-| Analytics / reporting    | EVENTUAL (minutes)       | Approximations by definition.  |
-| Dashboard metrics        |                          | Exact real-time is never       |
-|                          |                          | needed. Async aggregation.     |
-+--------------------------+--------------------------+--------------------------------+
-| Session state            | READ-YOUR-WRITES         | User's active session must     |
-| Auth tokens              |                          | be coherent. Session pinning   |
-| Shopping cart            |                          | to a source is sufficient.     |
-+--------------------------+--------------------------+--------------------------------+
-| Inventory (browse)       | EVENTUAL (30s)           | "Probably in stock." Checkout  |
-|                          |                          | will do the real check.        |
-+--------------------------+--------------------------+--------------------------------+
-| Inventory (checkout)     | STRONG                   | Cannot oversell. Two buyers    |
-|                          |                          | of the last item must resolve  |
-|                          |                          | atomically.                    |
-+--------------------------+--------------------------+--------------------------------+
-```
+| SYSTEM TYPE | USE THIS CONSISTENCY | WHY |
+|---|---|---|
+| Banking / payments Balance updates Order processing | STRONG (linearizable) | Any inconsistency = money lost, overdraft, fraud |
+| Access control User blocking Permission revocation Token invalidation | STRONG | Security cannot have stale windows. Blocked user must be blocked NOW. |
+| Chat / messaging Comment threads Reply chains Document editing | CAUSAL | Conversations are causal chains. Replies must follow originals. Not global order. |
+| User profile (own data) User settings Own posts (poster's view) | READ-YOUR-WRITES | User must see their own changes. Others' views can be eventually consistent. |
+| News feed delivery Follower timelines | EVENTUAL (30-60s) | Synchronous fan-out to millions of followers is physically impossible. |
+| Like / reaction counts View counts Follower counts | EVENTUAL (5s) | Approximations. Nobody compares counts in real time. No harm in brief staleness. |
+| Rate limiting Request counting | EVENTUAL (100ms) | Approximate safety control. 5-10% overage during sync window is acceptable. |
+| Product catalog Content metadata | EVENTUAL (minutes) | Updated rarely, read often. CDN-cacheable. Perfect for long TTL eventual. |
+| Analytics / reporting Dashboard metrics | EVENTUAL (minutes) | Approximations by definition. Exact real-time is never needed. Async aggregation. |
+| Session state Auth tokens Shopping cart | READ-YOUR-WRITES | User's active session must be coherent. Session pinning to a source is sufficient. |
+| Inventory (browse) | EVENTUAL (30s) | "Probably in stock." Checkout will do the real check. |
+| Inventory (checkout) | STRONG | Cannot oversell. Two buyers of the last item must resolve atomically. |
 
 ---
 
@@ -1643,50 +1270,36 @@ QUESTION 6: Is this data approximate, aggregated, or high-volume?
 
 This visual helps diagnose which mistake was made when a system is behaving incorrectly.
 
-```
-+===========================+===========================+
-| SYMPTOMS OF:              | SYMPTOMS OF:              |
-| PICKED TOO STRONG         | PICKED TOO WEAK           |
-+===========================+===========================+
-|                           |                           |
-| Writes feel slow.         | Users report stale data.  |
-| >300ms for simple actions.|                           |
-|                           | "I just updated X and     |
-| Users double-click        | it still shows old value."  |
-| thinking it didn't work.  |                           |
-|                           | Duplicate orders or       |
-| System becomes            | transactions appearing.   |
-| unavailable during        |                           |
-| network issues.           | Users see replies before  |
-|                           | the messages they reply to.|
-| App stops accepting       |                           |
-| writes during leader      | Support tickets about     |
-| election.                 | "things reverting."       |
-|                           |                           |
-| Rate limiter becomes      | Overdrafts or double      |
-| the bottleneck.           | charges.                  |
-|                           |                           |
-| Database CPU spikes       | Blocked users still see   |
-| on quorum reads.          | content for 30+ seconds.  |
-|                           |                           |
-| Engagement metrics drop   | Users report conversations|
-| (measured by A/B test).   | appearing out of order.   |
-|                           |                           |
-| Cost is 10x what          | Compliance/audit finding  |
-| it should be.             | about data integrity.     |
-|                           |                           |
-+---------------------------+---------------------------+
-| DIAGNOSIS:                | DIAGNOSIS:                |
-| Likely using STRONG or    | Likely using EVENTUAL for |
-| CAUSAL for data that only | data that needs STRONG,   |
-| needs EVENTUAL or         | CAUSAL, or at minimum     |
-| READ-YOUR-WRITES.         | READ-YOUR-WRITES.         |
-|                           |                           |
-| FIX: Apply decision tree. | FIX: Apply decision tree. |
-| Identify which fields     | Identify which fields     |
-| could drop to weaker      | need upgrading. Start     |
-| model without user harm.  | with money and security.  |
-+---------------------------+---------------------------+
+```mermaid
+flowchart TB
+    subgraph TS["SYMPTOMS: PICKED TOO STRONG"]
+        direction TB
+        a1["Writes feel slow: >300 ms for simple actions"]
+        a2["Users double-click, thinking it did not work"]
+        a3["Unavailable during network issues"]
+        a4["App stops accepting writes during leader election"]
+        a5["Rate limiter becomes the bottleneck"]
+        a6["DB CPU spikes on quorum reads"]
+        a7["Engagement drops (seen in A/B tests)"]
+        a8["Cost is 10x what it should be"]
+        ad["DIAGNOSIS: STRONG or CAUSAL used for data that only needs EVENTUAL or READ-YOUR-WRITES<br/>FIX: apply the decision tree, find fields that can drop to a weaker model"]
+        a1 --> a2 --> a3 --> a4 --> a5 --> a6 --> a7 --> a8 --> ad
+    end
+    subgraph TW["SYMPTOMS: PICKED TOO WEAK"]
+        direction TB
+        b1["Users report stale data after updating"]
+        b2["Duplicate orders or transactions"]
+        b3["Replies appear before the messages they answer"]
+        b4["Tickets about things reverting"]
+        b5["Overdrafts or double charges"]
+        b6["Blocked users still see content 30+ s"]
+        b7["Conversations out of order"]
+        b8["Compliance or audit finding on data integrity"]
+        bd["DIAGNOSIS: EVENTUAL used for data that needs STRONG, CAUSAL, or at least READ-YOUR-WRITES<br/>FIX: apply the decision tree, upgrade fields starting with money and security"]
+        b1 --> b2 --> b3 --> b4 --> b5 --> b6 --> b7 --> b8 --> bd
+    end
+    style TS fill:#dbeafe,stroke:#1d4ed8,color:#000
+    style TW fill:#fee2e2,stroke:#b91c1c,color:#000
 ```
 
 The wrong direction visual is diagnostic. If a system is exhibiting "picked too strong" symptoms -- slow writes, availability loss during partitions, engagement drops -- the first step is to run every data field through the decision tree and identify which ones could move to a weaker model without user-visible harm. Usually the answer is: most of them. Most data in most systems is eventually consistent by nature. The engineer who over-applied strong consistency did so by habit or fear rather than analysis.
@@ -1711,39 +1324,16 @@ That is the move. Proactively identify the consistency requirement for each piec
 
 Ride-sharing is a rich example because it combines real-time location data, financial transactions, user safety data, and aggregate metrics -- all with different staleness tolerances.
 
-```
-+----------------------------+-------------------+----------------------------------------------+
-| Data Type                  | Consistency       | Key Reasoning                                |
-+----------------------------+-------------------+----------------------------------------------+
-| Driver location            | Eventual (3-5s)   | Driver sends GPS ping every 3s. Fan-out to   |
-| (for display)              |                   | rider's map view. 5s staleness unnoticeable  |
-|                            |                   | at car-following resolution.                 |
-+----------------------------+-------------------+----------------------------------------------+
-| Driver availability        | Eventual (2-3s)   | "Is this driver available for a new ride?"   |
-| (for dispatch)             |                   | 2-3s lag acceptable -- dispatch algorithm     |
-|                            |                   | handles multiple candidates anyway.          |
-+----------------------------+-------------------+----------------------------------------------+
-| Trip status                | Strong            | Driver and rider must agree on trip state.   |
-| (active/completed/cancelled)|                  | "Trip ended" triggers payment. Cannot be     |
-|                            |                   | stale -- disputed end states = disputed fares.|
-+----------------------------+-------------------+----------------------------------------------+
-| Fare calculation           | Strong            | Real money. Amount must be agreed upon by    |
-|                            |                   | both systems before charge.                  |
-+----------------------------+-------------------+----------------------------------------------+
-| Surge pricing multiplier   | Eventual (30s)    | "Is this area surging?" Approximate answer   |
-|                            |                   | is fine. 30s staleness doesn't hurt users    |
-|                            |                   | meaningfully.                                |
-+----------------------------+-------------------+----------------------------------------------+
-| Safety features            | Strong            | SOS button, share-my-trip, emergency         |
-| (SOS, emergency contact)   |                   | contact. Must be instantly reliable.         |
-+----------------------------+-------------------+----------------------------------------------+
-| Driver ratings             | Eventual (minutes)| Aggregate. Approximate. No harm in lag.      |
-| Ride history               | Eventual (10s)    | Read-heavy reference data. No staleness harm.|
-+----------------------------+-------------------+----------------------------------------------+
-| Rider payment method       | Read-your-writes  | Rider just added a new card. Must see it     |
-| (at booking)               |                   | when booking the next ride.                  |
-+----------------------------+-------------------+----------------------------------------------+
-```
+| Data Type | Consistency | Key Reasoning |
+|---|---|---|
+| Driver location (for display) | Eventual (3-5s) | Driver sends GPS ping every 3s. Fan-out to rider's map view. 5s staleness unnoticeable at car-following resolution. |
+| Driver availability (for dispatch) | Eventual (2-3s) | "Is this driver available for a new ride?" 2-3s lag acceptable -- dispatch algorithm handles multiple candidates anyway. |
+| Trip status (active/completed/cancelled) | Strong | Driver and rider must agree on trip state. "Trip ended" triggers payment. Cannot be stale -- disputed end states = disputed fares. |
+| Fare calculation | Strong | Real money. Amount must be agreed upon by both systems before charge. |
+| Surge pricing multiplier | Eventual (30s) | "Is this area surging?" Approximate answer is fine. 30s staleness doesn't hurt users meaningfully. |
+| Safety features (SOS, emergency contact) | Strong | SOS button, share-my-trip, emergency contact. Must be instantly reliable. |
+| Driver ratings Ride history | Eventual (minutes) Eventual (10s) | Aggregate. Approximate. No harm in lag. Read-heavy reference data. No staleness harm. |
+| Rider payment method (at booking) | Read-your-writes | Rider just added a new card. Must see it when booking the next ride. |
 
 The ride-sharing example illustrates a nuance that often comes up: the same entity (a driver) has different consistency requirements for different attributes. A driver's GPS coordinates are eventually consistent -- it is fine if a rider's map shows the driver 5 seconds stale in position. But the driver's trip-status -- whether they just accepted a trip, are en route, or completed a ride -- must be strongly consistent. Two dispatch systems assigning the same driver to two simultaneous trips because of a stale availability flag would be a real operational problem, causing driver confusion, rider frustration, and potentially unsafe situations.
 
@@ -1757,29 +1347,19 @@ Causal consistency sounds abstract until you understand the mechanism that imple
 
 Every message (or write operation) carries a version vector -- a small map from server ID to sequence number. The version vector says: "this message was created after server A had processed N events and server B had processed M events."
 
-```
-Example: Three servers -- A, B, C -- in a distributed chat system.
-
-Alice sends message M1 at Server A:
-  M1 version vector: {A:1, B:0, C:0}
-  (Server A has processed 1 event, B and C have processed 0)
-
-Bob receives M1 and replies at Server B:
-  Bob's server B receives M1 with vector {A:1, B:0, C:0}
-  Bob sends M2 (reply to M1) at Server B
-  M2 version vector: {A:1, B:1, C:0}
-  (This message was created after A:1 and B:1, meaning
-   it causally depends on M1 from Server A)
-
-Carol's server C receives M2 before M1:
-  M2 requires {A:1} to be present before delivery
-  Server C checks: has C seen A:1? NO.
-  Server C holds M2 in a pending queue.
-  Server C receives M1 from Server A.
-  Server C delivers M1. Updates its view: {A:1, B:0, C:0}
-  Server C checks pending queue: M2 requires {A:1} Y
-  Server C delivers M2.
-  Carol sees: M1 then M2. Correct causal order.
+```mermaid
+sequenceDiagram
+    participant A as Server A (Alice)
+    participant B as Server B (Bob)
+    participant C as Server C (Carol)
+    A->>A: Alice sends M1, vector {A:1, B:0, C:0}
+    A->>B: M1
+    B->>B: Bob replies M2, vector {A:1, B:1, C:0} (depends on A:1)
+    B->>C: M2 arrives first
+    Note over C: Needs A:1 but has not seen it. M2 goes to pending queue.
+    A->>C: M1 arrives
+    Note over C: Deliver M1, view = {A:1, B:0, C:0}. Pending M2 needs A:1: satisfied. Deliver M2.
+    Note over C: Carol sees M1 then M2 (correct causal order).
 ```
 
 This is the vector clock mechanism in action. Without it, Carol might see M2 ("Sure, where?") before M1 ("Want to get dinner?"). With vector clocks, the delivery is gated on causal dependencies being satisfied.
@@ -1796,34 +1376,28 @@ This distinction matters in interviews. Vector clocks are the general solution. 
 
 CAP describes a system's behavior during partitions. But partitions are rare -- once every few months for a large system. What about the other 99.9% of the time? The PACELC theorem (Daniel Abadi, 2012) extends CAP:
 
-```
-P: If there is a Partition...
-A: Choose Availability
-C: or Consistency
-
-ELSE (no partition):
-L: Trade off Latency
-C: against Consistency
+```mermaid
+flowchart TD
+    P{"Is there a network<br/>Partition?"}
+    P -- Yes --> PA["Choose Availability (A)<br/>or Consistency (C)"]
+    P -- "Else (normal operation)" --> EL["Trade off Latency (L)<br/>against Consistency (C)"]
 ```
 
 Written as: PAC/ELC, or simply "PACELC."
 
 The key insight: even when the network is healthy, there is a latency-consistency trade-off. Strong consistency requires coordination -- waiting for replicas to acknowledge before returning. This adds latency even during perfect network conditions. Eventual consistency requires no coordination -- write locally, propagate later. This gives lower latency always, not just during partitions.
 
-```
-System Behavior During Normal Operation:
-                                                    
-  STRONG CONSISTENCY:   EVENTUAL CONSISTENCY:        
-                                                    
-  Client -> Write ->       Client -> Write ->           
-  Wait for quorum ->       Return immediately ->      
-  200-500ms total         Return in 5-20ms           
-                                                    
-  Latency to client:      Latency to client:         
-  200-500ms (cross-region)  5-20ms                  
-                                                    
-  During partition:       During partition:          
-  Refuse writes (CP)      Accept writes (AP)         
+```mermaid
+flowchart LR
+    subgraph STR["STRONG CONSISTENCY"]
+        direction TB
+        s1["Client writes"] --> s2["Wait for quorum"] --> s3["200-500 ms cross-region latency"] --> s4["During partition: refuse writes (CP)"]
+    end
+    subgraph EVT["EVENTUAL CONSISTENCY"]
+        direction TB
+        e1["Client writes"] --> e2["Return immediately"] --> e3["5-20 ms latency"] --> e4["During partition: accept writes (AP)"]
+    end
+    STR ~~~ EVT
 ```
 
 PACELC helps explain why systems like Cassandra (PA/EL -- favors availability and low latency in both scenarios) are designed differently from Spanner (PC/EC -- favors consistency in both scenarios). Cassandra trades consistency for latency even during normal operation. Spanner maintains consistency even at the cost of latency, all the time.
@@ -1836,25 +1410,11 @@ For L6 interview discussions, PACELC is a useful frame to bring up when asked ab
 
 "Eventual consistency" sounds like data might be arbitrarily stale -- stale by milliseconds or by hours, with no guarantee. In practice, most eventual consistency deployments use bounded staleness: a guarantee that data will be at most K milliseconds stale (or K operations behind).
 
-```
-Staleness Bound Examples:
-
-Cassandra with LOCAL_QUORUM:
-  Reads guaranteed consistent within local datacenter
-  Cross-DC staleness: bounded by async replication lag
-  Typical: 50-200ms
-  SLA: "data visible within 1 second cross-region"
-
-Azure Cosmos DB bounded staleness level:
-  Configure max staleness: e.g., 10 seconds or 1000 operations
-  Guarantees: reads never see data older than 10s or 1000 writes behind
-  Cost: higher than eventual, lower than strong
-
-DynamoDB with DAX (caching layer):
-  Cache TTL: configurable (e.g., 5 seconds)
-  Staleness: bounded by TTL -- data at most 5 seconds stale
-  Read latency: < 1ms from cache
-```
+| System | Staleness bound | Details |
+|---|---|---|
+| Cassandra with LOCAL_QUORUM | Typically 50-200 ms cross-DC | Reads consistent within local DC. Cross-DC staleness bounded by async replication lag. SLA: "data visible within 1 second cross-region". |
+| Azure Cosmos DB (bounded staleness) | Configurable, e.g. 10 s or 1000 operations | Reads never more than 10 s or 1000 writes behind. Cost higher than eventual, lower than strong. |
+| DynamoDB with DAX | Cache TTL, e.g. 5 s | Data at most 5 s stale. Read latency under 1 ms from cache. |
 
 Bounded staleness is often the right answer when "eventual" sounds too imprecise and "strong" sounds too expensive. When an interviewer asks "what if users see stale data?", the answer is not just "it's eventual" -- it is "staleness is bounded at 5 seconds. Here is why 5-second-stale data causes no user-visible harm for this use case."
 
@@ -1868,45 +1428,21 @@ The operational implication: if you commit to bounded staleness, you need a moni
 
 This section provides the technical definitions at the appropriate level of precision for L6 discussions. These are not exam questions -- they are the vocabulary you need to have precise conversations with other engineers.
 
-```
-STRONGER <------------------------------------------------------------------> WEAKER
-
-LINEARIZABILITY (Strict Consistency)
-  |  All operations appear to execute atomically at a single point in time.
-  |  Every read sees the most recent completed write.
-  |  Most expensive. Requires global coordination.
-  |  Example: single-node database reads.
-
-SEQUENTIAL CONSISTENCY
-  |  All operations appear to execute in some sequential order,
-  |  and each client's operations appear in the order they were issued.
-  |  Slightly weaker than linearizability -- the "single point in time"
-  |  requirement is relaxed, but per-client order is preserved.
-  |  Rare in production systems; mostly theoretical.
-
-CAUSAL CONSISTENCY
-  |  Operations that are causally related are seen in causal order
-  |  by all clients. Concurrent (causally unrelated) operations
-  |  may appear in different orders on different clients.
-  |  Right for: messaging, comment threads, collaborative edits.
-
-READ-YOUR-WRITES (Session Consistency)
-  |  Within a single session, a client always sees its own writes.
-  |  Other clients may see stale data.
-  |  Weakest "personal consistency" guarantee.
-  |  Right for: user profile updates, own content.
-
-MONOTONIC READ CONSISTENCY
-  |  If a client has seen a value X, it will never subsequently
-  |  see an older value. Reads only move forward in time.
-  |  Prevents the "oscillating stale" problem.
-  |  Right for: any system that caches reads per session.
-
-EVENTUAL CONSISTENCY
-     All replicas will converge to the same value given enough time
-     and no new writes. No guarantees about when convergence happens
-     or what any individual read will see.
-     Right for: counts, feeds, aggregates, reference data.
+```mermaid
+flowchart TD
+    A["LINEARIZABILITY (strict)<br/>All ops appear atomic at one point in time. Every read sees the latest completed write.<br/>Most expensive, global coordination."]
+    B["SEQUENTIAL<br/>Some global sequential order, each client's order preserved.<br/>Rare in production, mostly theoretical."]
+    C["CAUSAL<br/>Causally related ops seen in causal order by all clients. Concurrent ops may differ.<br/>Messaging, comment threads, collaborative edits."]
+    D["READ-YOUR-WRITES (session)<br/>A client always sees its own writes. Others may be stale.<br/>Profile updates, own content."]
+    E["MONOTONIC READS<br/>Once a value is seen, never see an older one. Reads only move forward.<br/>Anything caching reads per session."]
+    F["EVENTUAL<br/>Replicas converge given time and no new writes. No timing guarantee.<br/>Counts, feeds, aggregates, reference data."]
+    A -->|"weaker, cheaper"| B --> C --> D --> E --> F
+    style A fill:#fecaca,stroke:#b91c1c,color:#000
+    style B fill:#fed7aa,stroke:#c2410c,color:#000
+    style C fill:#fde68a,stroke:#b45309,color:#000
+    style D fill:#fef9c3,stroke:#a16207,color:#000
+    style E fill:#d9f99d,stroke:#4d7c0f,color:#000
+    style F fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 In practice, most databases offer a choice between linearizability (strong consistency) and eventual consistency, with some also providing causal consistency or read-your-writes. The models in the middle of the spectrum -- sequential consistency and monotonic reads -- are less commonly exposed as explicit configuration options, but are often achieved implicitly through session routing.
@@ -1919,22 +1455,11 @@ The L6 interview discussion typically centers on linearizability vs. causal vs. 
 
 Multi-region adds a dimension that single-region designs do not face. Single-region strong consistency costs 1-5ms of replica synchronization overhead. Multi-region strong consistency costs 50-500ms of cross-region network transit -- a 50-100x difference. This changes which consistency models are viable.
 
-```
-SINGLE-REGION (all servers in one datacenter, RTT 0.5-2ms):
-  Strong consistency: 1-5ms overhead -> usually acceptable
-  Eventual consistency: sub-millisecond -> significant improvement
-  Decision: often worth the cost of strong for simplicity
-
-MULTI-REGION (US-East + EU-West + APAC, RTTs 80-200ms):
-  Strong consistency: 200-500ms overhead -> usually unacceptable for UI
-  Eventual consistency: sub-millisecond locally -> clear winner for reads
-  Decision: strong only where legally/financially mandatory
-
-GLOBAL (50+ regions, variable RTTs):
-  Strong consistency: 400-800ms overhead (worst-case quorum) -> impossible for UI
-  Strong consistency (regional): possible within one region -> practical compromise
-  Decision: regional strong consistency + cross-region eventual
-```
+| Deployment | Strong consistency cost | Eventual consistency | Decision |
+|---|---|---|---|
+| **Single-region** (one DC, RTT 0.5-2 ms) | 1-5 ms overhead, usually acceptable | Sub-millisecond, a significant improvement | Often worth paying for strong, for simplicity |
+| **Multi-region** (US-East + EU-West + APAC, RTT 80-200 ms) | 200-500 ms overhead, usually unacceptable for UI | Sub-millisecond locally, clear winner for reads | Strong only where legally or financially mandatory |
+| **Global** (50+ regions, variable RTT) | 400-800 ms worst-case quorum, impossible for UI (regional strong is possible) | Clear winner | Regional strong consistency plus cross-region eventual |
 
 Most real-world systems use a hybrid: strong consistency within a region (where latency is 1-5ms and the cost is acceptable) and eventual consistency across regions (where latency is 50-200ms and the cost is too high). This means:
 
@@ -1952,59 +1477,14 @@ The L6 design decision: "We'll accept strong consistency within a single region.
 
 The table below is not about credentials or titles. It is about the quality of reasoning that distinguishes a strong systems design response from a surface-level one.
 
-```
-+----------------------------------+------------------------------------------+
-| L5 PATTERN                       | L6 PATTERN                               |
-+----------------------------------+------------------------------------------+
-| "We'll use PostgreSQL for        | "We'll use PostgreSQL for the order      |
-| strong consistency."             | table with synchronous replication to    |
-|                                  | a local standby. Reads for this data     |
-|                                  | will be pinned to the primary. The       |
-|                                  | profile read replica will be async --     |
-|                                  | eventual consistency there is fine."     |
-+----------------------------------+------------------------------------------+
-| "The feed is eventually          | "Feed delivery is eventual with a 60s    |
-| consistent."                     | target. Here's why: synchronous fan-out  |
-|                                  | to 50M followers at 1ms per fan-out      |
-|                                  | operation = 50,000 seconds of sequential |
-|                                  | work. We fan out async. The poster sees  |
-|                                  | their own post via read-your-writes."    |
-+----------------------------------+------------------------------------------+
-| "I'll use Cassandra for scale."  | "For like counts, I'll use Cassandra     |
-|                                  | because eventual consistency is correct  |
-|                                  | for aggregates. Tunable consistency --    |
-|                                  | I'll write at LOCAL_QUORUM (one DC)      |
-|                                  | not ALL -- cross-DC eventual is fine,     |
-|                                  | adds 200ms if we go ALL."                |
-+----------------------------------+------------------------------------------+
-| "User blocking needs to be       | "Blocking is access control, so I need   |
-| consistent."                     | strong. Specifically: the block record   |
-|                                  | writes synchronously, block status       |
-|                                  | checked on every content request, check  |
-|                                  | routes to primary. 30-second window      |
-|                                  | where content is visible post-block is   |
-|                                  | unacceptable for a harassment scenario." |
-+----------------------------------+------------------------------------------+
-| "If there's a partition, the     | "During partition, the right behavior    |
-| system will be unavailable."     | depends on the data. For payments:       |
-|                                  | fail-safe -- return error rather than     |
-|                                  | risk duplicate charge. For feed reads:   |
-|                                  | serve stale cached data from local       |
-|                                  | replica rather than timeout. We pre-     |
-|                                  | decide the partition behavior per data   |
-|                                  | type, not per system."                   |
-+----------------------------------+------------------------------------------+
-| "I'll add a cache to make it     | "Adding a cache shifts consistency from  |
-| faster."                         | 'whatever the database provides' to      |
-|                                  | 'eventual with cache-TTL staleness.'     |
-|                                  | For read counts: fine, cache is correct. |
-|                                  | For user's own posts: I need cache       |
-|                                  | invalidation on write, or the user       |
-|                                  | hits the cache and doesn't see their     |
-|                                  | own post. Cache invalidation is my       |
-|                                  | read-your-writes implementation here."   |
-+----------------------------------+------------------------------------------+
-```
+| L5 PATTERN | L6 PATTERN |
+|---|---|
+| "We'll use PostgreSQL for strong consistency." | "We'll use PostgreSQL for the order table with synchronous replication to a local standby. Reads for this data will be pinned to the primary. The profile read replica will be async -- eventual consistency there is fine." |
+| "The feed is eventually consistent." | "Feed delivery is eventual with a 60s target. Here's why: synchronous fan-out to 50M followers at 1ms per fan-out operation = 50,000 seconds of sequential work. We fan out async. The poster sees their own post via read-your-writes." |
+| "I'll use Cassandra for scale." | "For like counts, I'll use Cassandra because eventual consistency is correct for aggregates. Tunable consistency -- I'll write at LOCAL_QUORUM (one DC) not ALL -- cross-DC eventual is fine, adds 200ms if we go ALL." |
+| "User blocking needs to be consistent." | "Blocking is access control, so I need strong. Specifically: the block record writes synchronously, block status checked on every content request, check routes to primary. 30-second window where content is visible post-block is unacceptable for a harassment scenario." |
+| "If there's a partition, the system will be unavailable." | "During partition, the right behavior depends on the data. For payments: fail-safe -- return error rather than risk duplicate charge. For feed reads: serve stale cached data from local replica rather than timeout. We pre- decide the partition behavior per data type, not per system." |
+| "I'll add a cache to make it faster." | "Adding a cache shifts consistency from 'whatever the database provides' to 'eventual with cache-TTL staleness.' For read counts: fine, cache is correct. For user's own posts: I need cache invalidation on write, or the user hits the cache and doesn't see their own post. Cache invalidation is my read-your-writes implementation here." |
 
 The common thread in L6 patterns: precision about which data, which operation, which failure mode, and what the user experiences. L5 patterns name the technology or the model at a system level. L6 patterns specify the model at the data-field level, with explicit failure mode analysis and quantified trade-offs.
 
@@ -2183,53 +1663,56 @@ Staff engineers don't just choose consistency models for the happy path. They un
 
 ## What Happens to Consistency During Failures
 
+**Strongly consistent system**
+
+```mermaid
+flowchart LR
+    subgraph N["Normal"]
+        n1["Client write"] --> n2["Leader"] --> n3["Propose to quorum"] --> n4["ACK, done"]
+    end
+    subgraph P["Partition"]
+        p1["Client write"] --> p2["Leader"] --> p3["Propose to quorum"] --> p4["QUORUM UNAVAILABLE"] --> p5["ERROR or TIMEOUT"]
+    end
+    subgraph Rc["Recovery"]
+        r1["Partition heals"] --> r2["Quorum re-forms"] --> r3["Resume writes, no divergent state"]
+    end
+    N ~~~ P ~~~ Rc
+    style p4 fill:#fecaca,stroke:#b91c1c,color:#000
 ```
-+==========================================================================+
-|          CONSISTENCY BEHAVIOR DURING FAILURES -- THREE MODELS            |
-+==========================================================================+
-|                                                                          |
-|  STRONGLY CONSISTENT SYSTEM                                              |
-|  -------------------------                                               |
-|  Normal:    Client -> Write to Leader -> Propose to Quorum -> ACK -> Done   |
-|                                                                          |
-|  Partition: Client -> Write to Leader -> Propose to Quorum                |
-|                                        v                                 |
-|                                   [QUORUM UNAVAILABLE]                   |
-|                                        v                                 |
-|                               ERROR or TIMEOUT returned                  |
-|                                                                          |
-|  Recovery: Wait for partition to heal -> Quorum re-forms                  |
-|            -> Resume accepting writes -> No divergent state                |
-|                                                                          |
-+==========================================================================+
-|                                                                          |
-|  EVENTUALLY CONSISTENT SYSTEM                                            |
-|  -----------------------------                                           |
-|  Normal:    Client -> Write to Local Node -> ACK immediately               |
-|                       v                                                  |
-|                  Async replicate to B, C in background                   |
-|                                                                          |
-|  Partition: Client -> Write to Local Node -> ACK immediately               |
-|                       v                                                  |
-|                  Replications queue (can't reach other side)             |
-|                                                                          |
-|  Recovery: Partition heals -> Replay queued writes -> Converge             |
-|            -> Both sides reach same state (conflict resolution applies)   |
-|                                                                          |
-+==========================================================================+
-|                                                                          |
-|  CAUSALLY CONSISTENT SYSTEM                                              |
-|  --------------------------                                              |
-|  Normal:    Write carries causal deps [A:3, B:2] -> Replicate in order   |
-|             Receiver checks deps -> Deliver only when deps satisfied      |
-|                                                                          |
-|  Partition: Writes without cross-partition deps -> Continue normally      |
-|             Writes with cross-partition deps -> Queue until deps arrive   |
-|                                                                          |
-|  Recovery: Replay with dep ordering -> Causally dependent writes          |
-|            delivered in correct order -> No causal violations             |
-|                                                                          |
-+==========================================================================+
+
+**Eventually consistent system**
+
+```mermaid
+flowchart LR
+    subgraph N["Normal"]
+        n1["Client write"] --> n2["Local node"] --> n3["ACK immediately"]
+        n2 -.-> n4["Async replicate to B, C"]
+    end
+    subgraph P["Partition"]
+        p1["Client write"] --> p2["Local node"] --> p3["ACK immediately"]
+        p2 -.-> p4["Replication queues, cannot reach other side"]
+    end
+    subgraph Rc["Recovery"]
+        r1["Partition heals"] --> r2["Replay queued writes"] --> r3["Converge, conflict resolution applies"]
+    end
+    N ~~~ P ~~~ Rc
+```
+
+**Causally consistent system**
+
+```mermaid
+flowchart LR
+    subgraph N["Normal"]
+        n1["Write carries deps [A:3, B:2]"] --> n2["Replicate in order"] --> n3["Receiver delivers only when deps satisfied"]
+    end
+    subgraph P["Partition"]
+        p1["No cross-partition deps: continue normally"]
+        p2["Cross-partition deps: queue until deps arrive"]
+    end
+    subgraph Rc["Recovery"]
+        r1["Replay with dependency ordering"] --> r2["Dependent writes delivered in order, no causal violations"]
+    end
+    N ~~~ P ~~~ Rc
 ```
 
 The failure mode is part of the model, not an accident of implementation. Strong consistency fails loudly: your users get errors and timeouts. The writes that couldn't reach quorum are simply rejected. Nothing is lost, nothing is incorrect, but the system is temporarily broken from the user's perspective. Eventually consistent systems fail quietly: writes succeed, users get confirmations, but the data silently diverges across replicas. Stale reads happen without announcement. Causal consistency fails partially: operations that have no causal dependencies on the partition boundary continue normally, while operations that depend on data from the other side queue up and wait. Some users are blocked, others are not -- and the blocking is invisible.
@@ -2269,24 +1752,20 @@ The danger is not the first replica going down. The system handles it. The dange
 
 A degraded network is worse than a clean partition because the degradation is invisible to automated systems until it has already cascaded. Watch how this unfolds:
 
-```
-NORMAL STATE:
-  Write -> Quorum ACK in 5ms -> Client response in 10ms
-  99.9% of requests complete within SLO
-
-DEGRADED STATE (network latency spikes to 100ms):
-  Write -> Quorum ACK in ~500ms -> Client response in 510ms
-  Some clients have 300ms timeout configured -> ~30% of writes timeout
-  Timed-out clients retry -> 3 retries each -> write QPS triples
-  Tripled QPS overloads the consensus layer -> latency climbs to 1,500ms
-  More timeouts -> more retries -> 5x original QPS on leader
-  Leader CPU hits 100% -> drops requests -> clients see errors
-  Cascading degradation fully underway
-
-CLEAN PARTITION (by comparison):
-  Write -> minority side immediately gets ERROR
-  Circuit breaker trips -> retries stop
-  Degradation is bounded and contained
+```mermaid
+flowchart TD
+    N["NORMAL: write, quorum ACK in 5 ms, client response in 10 ms<br/>99.9% of requests within SLO"]
+    D["DEGRADED: network latency spikes to 100 ms<br/>quorum ACK about 500 ms, client response 510 ms"]
+    T["Clients with 300 ms timeout: about 30% of writes time out"]
+    RT["Timed-out clients retry 3x: write QPS triples"]
+    OV["Consensus layer overloaded: latency climbs to 1,500 ms"]
+    AM["More timeouts, more retries: 5x original QPS on leader"]
+    CR["Leader CPU 100%, drops requests, clients see errors<br/>CASCADING DEGRADATION"]
+    CL["CLEAN PARTITION (by comparison)<br/>minority side gets ERROR immediately, circuit breaker trips, retries stop<br/>degradation is bounded and contained"]
+    N --> D --> T --> RT --> OV --> AM --> CR
+    CR -. contrast .-> CL
+    style CR fill:#fecaca,stroke:#b91c1c,color:#000
+    style CL fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 This pattern -- a degraded-but-not-partitioned network triggering a retry storm -- is the hardest failure mode to handle. No circuit breaker trips because requests are technically succeeding. Timeouts are ambiguous: is the replica slow or dead? Monitoring shows "success rate 97%" because some requests complete eventually. The system looks healthy right up until it collapses. Clean partitions are easy to detect and easy to handle. Slow networks masquerading as partitions are the nightmare scenario.
@@ -2312,22 +1791,15 @@ This is split-brain. The detection must be bidirectional. One-way heartbeats -- 
 
 When consistency checks start timing out, retries amplify the load on the very system that is struggling. The math:
 
-```
-NORMAL OPERATION:
-  1,000,000 QPS writes -> 1,000,000 QPS consistency checks on leader
-  Leader CPU: 65%
-
-INITIAL DEGRADATION (10% timeout rate):
-  100,000 writes/sec fail -> clients retry
-  3 retries per failed write -> 300,000 additional QPS
-  Total: 1,300,000 QPS on consensus layer -> 30% overload
-
-AMPLIFICATION CYCLE:
-  30% overload -> more timeouts -> 20% timeout rate
-  200,000 retries x 3 = 600,000 additional QPS
-  Total: 1,600,000 QPS -> 60% overload -> more timeouts -> ...
-  System collapses not from the initial 10% slowdown
-  but from the amplification of retries
+```mermaid
+flowchart TD
+    A["NORMAL<br/>1,000,000 QPS writes = 1,000,000 QPS checks on leader<br/>Leader CPU 65%"]
+    B["INITIAL DEGRADATION: 10% timeout rate<br/>100,000 writes/s fail, 3 retries each = +300,000 QPS<br/>Total 1,300,000 QPS: 30% overload"]
+    C["AMPLIFICATION<br/>30% overload leads to 20% timeouts<br/>200,000 retries x 3 = +600,000 QPS, total 1,600,000 QPS: 60% overload"]
+    D["COLLAPSE<br/>Not from the initial 10% slowdown, but from retry amplification"]
+    A --> B --> C --> D
+    C -- "more timeouts" --> C
+    style D fill:#fecaca,stroke:#b91c1c,color:#000
 ```
 
 The already-struggling leader faces more load from retries, which causes more timeouts, which triggers more retries. This is a positive feedback loop. The system does not gracefully degrade to 90% capacity -- it collapses to 0% capacity as the feedback loop runs to completion. The correct intervention is breaking the feedback loop: circuit breakers, exponential backoff, request shedding at the front edge.
@@ -2336,24 +1808,19 @@ The already-struggling leader faces more load from retries, which causes more ti
 
 The recovery itself becomes a failure mode when not planned for:
 
-```
-DURING PARTITION (20 minutes):
-  10,000 writes queued on minority side
-  5,000 retry attempts queued from clients
-  Total: 15,000 operations waiting for recovery
-
-PARTITION HEALS (T+0s):
-  All 15,000 operations attempt simultaneously
-  Leader receives 15,000 concurrent write proposals
-  CPU -> 100% -> starts dropping requests
-  Clients see errors -> generate MORE retries
-  Recovery turns into secondary failure
-
-CORRECT APPROACH (staggered recovery):
-  Start at 10% capacity (1,500 ops/sec)
-  Gradually increase: 25% -> 50% -> 75% -> 100%
-  Over 2-3 minutes instead of 0 seconds
-  Allows leader to absorb backlog without collapsing
+```mermaid
+flowchart LR
+    subgraph W["Wrong: thundering herd"]
+        direction TB
+        w1["Partition lasts 20 min<br/>10,000 writes + 5,000 retries queued = 15,000 ops"] --> w2["Partition heals T+0 s<br/>all 15,000 attempt at once"] --> w3["Leader CPU 100%, drops requests"] --> w4["Clients get errors, generate MORE retries"] --> w5["Recovery becomes a secondary failure"]
+    end
+    subgraph G["Correct: staggered recovery"]
+        direction TB
+        g1["Start at 10% capacity, 1,500 ops/s"] --> g2["Ramp 25% then 50% then 75% then 100%"] --> g3["Over 2-3 minutes, not 0 seconds"] --> g4["Leader absorbs backlog without collapsing"]
+    end
+    W ~~~ G
+    style w5 fill:#fecaca,stroke:#b91c1c,color:#000
+    style g4 fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 **Prevention Strategies**
@@ -2504,47 +1971,23 @@ The L6 articulation for interviews: "For read-your-writes, I would use session s
 
 ## Implementing Causal Consistency -- Vector Clocks
 
+A vector clock is a map `{participant: logical_clock}` attached to each write, meaning "this was sent after Alice's Nth op, Bob's Mth op, ...".
+
+```mermaid
+sequenceDiagram
+    participant Al as Alice
+    participant Bo as Bob
+    participant Cr as Carol's replica
+    Al->>Al: Posts "Dinner tonight?" clock [Alice:1]
+    Al->>Bo: Delivers message
+    Bo->>Bo: Replies "Sure! 7pm?" clock [Alice:1, Bob:1]
+    Bo->>Cr: Reply arrives first
+    Note over Cr: Has Alice:1? NO. Queue Bob's message.
+    Al->>Cr: Alice's message arrives
+    Note over Cr: Deliver Alice's, then the queued Bob's. Carol sees Dinner tonight? then Sure! 7pm?
 ```
-VECTOR CLOCK MECHANICS
 
-Each write carries a vector clock -- a snapshot of the "logical time"
-at which the write occurred, relative to all participants.
-
-Format: { participant_id: logical_clock_value, ... }
-Example: [Alice: 3, Bob: 2, Carol: 5]
-Meaning: "This message was sent after Alice's 3rd op,
-          Bob's 2nd op, and Carol's 5th op."
-
--------------------------------------------------------------
-EXAMPLE: Three-person group chat
-
-  Alice posts "Dinner tonight?"   -> Clock: [Alice: 1]
-  Bob sees Alice's message
-  Bob replies "Sure! 7pm?"        -> Clock: [Alice: 1, Bob: 1]
-                                    (Bob's clock includes Alice's [1])
-  Carol needs to see both
-
--------------------------------------------------------------
-REPLICA DELIVERY LOGIC (at Carol's replica):
-
-  Receives Bob's message [Alice: 1, Bob: 1]
-  Checks: "Do I have Alice's message [Alice: 1]?"
-
-    YES -> Deliver Bob's message immediately (causal order satisfied)
-    NO  -> Queue Bob's message until Alice: 1 arrives
-
-  When Alice's message arrives [Alice: 1]:
-    -> Deliver Alice's message
-    -> Deliver queued Bob's message
-    -> Carol sees: "Dinner tonight?" then "Sure! 7pm?" -- correct order
-
--------------------------------------------------------------
-VIOLATION WITHOUT VECTOR CLOCKS (eventual consistency):
-
-  Carol's replica receives Bob first -> shows "Sure! 7pm?"
-  Alice's message arrives 2 seconds later -> shows "Dinner tonight?"
-  Carol sees reply before the question -> causal violation
-```
+Without vector clocks (plain eventual consistency), Carol's replica shows "Sure! 7pm?" first and "Dinner tonight?" 2 seconds later, a causal violation.
 
 Vector clocks are elegant but have a scaling problem that is not immediately obvious. The clock size grows linearly with the number of participants. In a group chat with 10 people, each message carries a vector clock with 10 entries -- manageable. In a group with 1,000 participants, each message carries 1,000 entries. In a system with millions of concurrent conversations and group sizes up to 256, the storage overhead of vector clocks becomes material: a 256-entry vector clock on every message, at millions of messages per second, adds up to terabytes of clock data per day that must be stored, transmitted, and compared.
 
@@ -2574,48 +2017,27 @@ The hidden bandwidth cost is significant at scale. Raft requires roughly 2x the 
 
 **Diagram 1: Strong Consistency Write Path**
 
-```
-CLIENT
-  |
-  | Write request
-  | T+0ms
-  v
-LOAD BALANCER
-  |
-  | Routes to current leader
-  | T+1ms
-  v
-LEADER NODE (US-East-1a)
-  |
-  | Appends to local log
-  | T+2ms
-  +------------------------------+
-  |                              |
-  | Propose [LogEntry #4521]     | Propose [LogEntry #4521]
-  | T+3ms                        | T+3ms
-  v                              v
-FOLLOWER A (US-East-1b)     FOLLOWER B (US-East-1c)
-  |                              |
-  | ACK                          | ACK
-  | T+6ms                        | T+7ms
-  +--------------+---------------+
-                 |
-                 | Quorum reached (2/3 nodes)
-                 | T+7ms
-                 v
-              LEADER
-                 |
-                 | Commit to state machine
-                 | T+8ms
-                 |
-                 | Response to client
-                 | T+9ms
-                 v
-              CLIENT
-              "Write confirmed" at T+9ms
-
-TOTAL: ~9ms same-region (within one availability zone cluster)
-       ~400ms cross-region (quorum spanning US-East + EU-West)
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant LB as Load balancer
+    participant L as Leader (US-East-1a)
+    participant FA as Follower A (1b)
+    participant FB as Follower B (1c)
+    C->>LB: Write request (T+0 ms)
+    LB->>L: Route to current leader (T+1 ms)
+    L->>L: Append to local log (T+2 ms)
+    par Propose LogEntry 4521
+        L->>FA: Propose (T+3 ms)
+    and
+        L->>FB: Propose (T+3 ms)
+    end
+    FA-->>L: ACK (T+6 ms)
+    FB-->>L: ACK (T+7 ms)
+    Note over L: Quorum reached, 2 of 3 nodes (T+7 ms)
+    L->>L: Commit to state machine (T+8 ms)
+    L-->>C: Write confirmed (T+9 ms)
+    Note over C,FB: About 9 ms same-region. About 400 ms cross-region (quorum spanning US-East + EU-West).
 ```
 
 Every millisecond in this diagram represents a real cost. The 9ms same-region write is perfectly acceptable for most applications. The 400ms cross-region write is often not. This is why strongly consistent systems are typically designed with geographically co-located quorums for the write path, and read replicas spread globally for the read path. The quorum is local -- fast writes. The reads can be served anywhere -- low latency reads. The trade-off is that reads may be slightly stale if a non-quorum replica serves them, which is why "strong consistency" often means "strong for writes, read-your-writes or eventual for reads."
@@ -2624,37 +2046,20 @@ The diagram also illustrates what happens during follower failure. If Follower A
 
 **Diagram 2: Eventual Consistency Propagation**
 
-```
-CLIENT
-  |
-  | Write: "Alice liked this post"
-  | T+0ms
-  v
-NODE A (US-East) -------- ACK to client at T+2ms
-  |
-  | Write persisted locally at T+1ms
-  | Client already has confirmation
-  |
-  | Background replication begins
-  | T+5ms
-  +-------------------------------------+
-  |                                     |
-  v                                     v
-NODE B (US-West)                   NODE C (EU-West)
-Write arrives at T+55ms            Write arrives at T+80ms
-                                   (higher latency cross-Atlantic)
-
-DURING REPLICATION WINDOW:
-  T+0ms to T+55ms: Node B serves STALE data (like not yet visible)
-  T+0ms to T+80ms: Node C serves STALE data (like not yet visible)
-  T+55ms onward:   Node B serves FRESH data
-  T+80ms onward:   Node C serves FRESH data
-
-USER EXPERIENCE:
-  Alice (US-East):  Sees her own like immediately Y
-  Bob (US-West):    May not see Alice's like for up to 55ms
-  Carol (EU-West):  May not see Alice's like for up to 80ms
-  ALL nodes:        Converge to same state by T+100ms
+```mermaid
+sequenceDiagram
+    actor Al as Alice (US-East)
+    participant A as Node A (US-East)
+    participant B as Node B (US-West)
+    participant C as Node C (EU-West)
+    Al->>A: Write: Alice liked this post (T+0 ms)
+    A->>A: Persist locally (T+1 ms)
+    A-->>Al: ACK (T+2 ms)
+    A--)B: Background replication starts (T+5 ms)
+    A--)C: Background replication starts (T+5 ms)
+    Note over B: Write arrives T+55 ms. Stale until then.
+    Note over C: Write arrives T+80 ms (cross-Atlantic). Stale until then.
+    Note over Al,C: Alice sees her like at once. Bob may lag up to 55 ms, Carol up to 80 ms. All converge by T+100 ms.
 ```
 
 The propagation window is invisible to users in most cases because 80ms is below human perception thresholds for a like counter. A user in EU-West who loads a post and sees a like count of 1,203 instead of 1,204 will not notice. This is the core insight behind using eventual consistency for social engagement metrics: the data does converge, the staleness window is short, and the user experience impact is effectively zero. The trade-off is real but the cost to users is negligible.
@@ -2663,49 +2068,18 @@ The replication window becomes a problem when it interacts with user actions. If
 
 **Diagram 3: Consistency Failure Cascade Timeline**
 
-```
-TIMELINE: US-East <-> US-West Network Partition
-
-T+0s:   --- PARTITION BEGINS --------------------------------------
-        Network link between US-East and US-West drops
-        No immediate user impact -- buffers absorb first writes
-
-T+1s:   Strongly consistent writes that need cross-region quorum fail
-        Error rate: ~5% (only writes needing US-West quorum participation)
-        Logs show: "quorum not reached, timeout after 200ms"
-
-T+2s:   Clients with 300ms timeouts begin retry loops
-        Each failed write retried 3x automatically
-        Write QPS at consistency layer: 115% of normal
-
-T+5s:   Retry amplification reaches critical threshold
-        Consensus layer at 140% capacity
-        Latency for successful writes: 800ms (was 9ms)
-        Error rate climbs to 35%
-
-T+10s:  First user-visible errors appear in dashboards
-        "Service unavailable" shown to ~35% of users attempting writes
-        Support ticket rate: 10x normal baseline
-        Monitoring page: RED
-
-T+15s:  Cascading failure fully underway
-        Leader CPU: 100%, dropping incoming proposals
-        Error rate: 60%+
-        New retries from fresh clients compound the load
-
-T+60s:  --- PARTITION HEALS -------------------------------------
-        Network link restored
-        15,000 queued writes + retry backlog all attempt simultaneously
-        Leader overwhelmed again -- secondary failure begins
-
-T+90s:  Recovery rate limiting engages (if designed)
-        Without rate limiting: secondary failure continues to T+180s
-        With rate limiting: gradual recovery, back to normal by T+120s
-
-T+120s: Full recovery (with rate limiting)
-        Write success rate: 99.9%
-        Latency: back to 9ms
-        Post-incident: verify no diverged state
+```mermaid
+timeline
+    title US-East to US-West partition: cascading failure timeline
+    T+0s : Partition begins : Link drops, buffers absorb first writes
+    T+1s : Cross-region quorum writes fail (~5%) : "quorum not reached, timeout after 200ms"
+    T+2s : Clients retry 3x : Write QPS at 115% of normal
+    T+5s : Retry amplification critical : Consensus at 140%, latency 800 ms (was 9 ms), errors 35%
+    T+10s : First user-visible errors : ~35% of writers see Service unavailable, tickets 10x, monitoring RED
+    T+15s : Cascade fully underway : Leader CPU 100%, errors 60%+
+    T+60s : Partition heals : 15,000 queued writes plus retries hit at once, secondary failure
+    T+90s : Recovery rate limiting engages : Without it failure runs to T+180s
+    T+120s : Full recovery : 99.9% success, latency back to 9 ms, verify no diverged state
 ```
 
 The cascade diagram reveals why partition recovery is a separate engineering problem from partition detection. Detecting the partition at T+1s is relatively straightforward -- latency spikes, quorum failure logs appear. But the recovery at T+60s requires explicit engineering: if the system does not have rate limiting on replayed writes, the recovery attempt at T+60s produces a second failure from the thundering herd. Systems that detect partitions but do not manage recovery backlog will oscillate: recover briefly, fail again from the replay storm, recover briefly, fail again. This oscillation can last 10-20 minutes on top of the original 60-second partition -- extending a 1-minute incident into a 20-minute incident.
@@ -2809,46 +2183,21 @@ In an interview, when asked how you would verify your consistency model is worki
 
 ## Active-Passive vs Active-Active
 
-```
-ACTIVE-PASSIVE (one write region):
-+-----------------------------------------------------+
-|                                                     |
-|  US-EAST (PRIMARY -- accepts writes)                 |
-|  +------------------------------+                   |
-|  |  Write -> Commit -> Replicate  |                   |
-|  +--------------+---------------+                   |
-|                 |                                   |
-|         Async replication                           |
-|         (50-200ms lag)                              |
-|                 |                                   |
-|  +--------------v---------------+                   |
-|  |  EU-WEST (REPLICA -- reads    |                   |
-|  |  only; promotes if US-East   |                   |
-|  |  fails -- takes 30-120s)      |                   |
-|  +------------------------------+                   |
-|                                                     |
-|  Pros: No conflicts; simple consistency             |
-|  Cons: All writes go through one region;            |
-|        US-West user writes incur 200ms extra RTT    |
-+-----------------------------------------------------+
-
-ACTIVE-ACTIVE (writes accepted in all regions):
-+-----------------------------------------------------+
-|                                                     |
-|  US-EAST <----------------------> EU-WEST             |
-|  (accepts writes)   Bi-directional   (accepts writes)|
-|       |             replication           |          |
-|       |             + conflict            |          |
-|       |             resolution            |          |
-|       +----------------+------------------+         |
-|                        |                            |
-|                   APAC (accepts writes)             |
-|                                                     |
-|  Pros: Low latency writes globally;                 |
-|        No single point of failure                   |
-|  Cons: Concurrent writes = conflicts;               |
-|        Requires conflict resolution strategy        |
-+-----------------------------------------------------+
+```mermaid
+flowchart TB
+    subgraph AP["ACTIVE-PASSIVE: one write region"]
+        direction TB
+        P1["US-EAST PRIMARY<br/>accepts writes: write, commit, replicate"] -->|"async replication, 50-200 ms lag"| P2["EU-WEST REPLICA<br/>reads only, promotes if US-East fails (30-120 s)"]
+        PN["Pros: no conflicts, simple consistency<br/>Cons: all writes via one region, remote users pay ~200 ms extra RTT"]
+    end
+    subgraph AA["ACTIVE-ACTIVE: writes accepted in all regions"]
+        direction TB
+        A1["US-EAST<br/>accepts writes"] <-->|"bi-directional replication + conflict resolution"| A2["EU-WEST<br/>accepts writes"]
+        A1 <--> A3["APAC<br/>accepts writes"]
+        A2 <--> A3
+        AN["Pros: low-latency writes globally, no single point of failure<br/>Cons: concurrent writes conflict, need a conflict resolution strategy"]
+    end
+    AP ~~~ AA
 ```
 
 ## Conflict Resolution Strategies
@@ -2864,36 +2213,18 @@ ACTIVE-ACTIVE (writes accepted in all regions):
 
 This concrete example illustrates why the merge strategy matters:
 
-```
-SCENARIO: User shops from two devices simultaneously
-
-  US-West device adds item B to cart:  Cart = [A, B]
-  US-East device adds item C to cart:  Cart = [A, C]
-  (Both read initial Cart = [A], diverge before replication)
-
-  LAST-WRITE-WINS:
-    US-West write arrives at T+5ms
-    US-East write arrives at T+7ms -> wins
-    Result: Cart = [A, C]   <- user loses item B
-    User experience: "Why did my item disappear?"
-    This is the failure mode Amazon's Dynamo paper described as unacceptable.
-
-  MERGE (set union):
-    Combine [A, B] and [A, C] -> [A, B, C]
-    Result: Cart = [A, B, C]   <- both items present
-    User experience: Both items in cart as expected
-    Correct behavior for a shopping cart.
-
-  FIRST-WRITE-WINS:
-    US-West arrives first -> Cart = [A, B] wins
-    US-East write (Cart = [A, C]) rejected
-    Result: Cart = [A, B]   <- user loses item C
-    Same problem, different item lost.
-
-LESSON: For shopping carts, use merge (set union).
-        For balance fields, use neither LWW nor merge -- use strong consistency.
-        The right conflict resolution strategy depends entirely on the semantic
-        meaning of the data, not on technical convenience.
+```mermaid
+flowchart TD
+    S["Two devices edit the cart concurrently<br/>both read Cart = [A]<br/>US-West adds B: [A, B]<br/>US-East adds C: [A, C]"]
+    S --> LWW["LAST-WRITE-WINS<br/>US-East arrives later and wins<br/>Cart = [A, C]: item B lost"]
+    S --> MG["MERGE (set union)<br/>Cart = [A, B, C]<br/>both items present: correct for a cart"]
+    S --> FWW["FIRST-WRITE-WINS<br/>US-West arrives first, US-East rejected<br/>Cart = [A, B]: item C lost"]
+    LWW --> LS["Dynamo paper called this unacceptable"]
+    L["LESSON: carts use merge. Balances use neither LWW nor merge, use strong consistency.<br/>Strategy depends on the meaning of the data, not technical convenience."]
+    MG --> L
+    style LWW fill:#fecaca,stroke:#b91c1c,color:#000
+    style FWW fill:#fecaca,stroke:#b91c1c,color:#000
+    style MG fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 ## Security and Compliance: Data Sensitivity -> Consistency Requirement
@@ -3067,41 +2398,15 @@ The correct structure: for each data type with a defined consistency requirement
 
 ## Consistency Violation Runbook
 
-```
-ALERT: Consistency SLO Violation -- Replication Lag P99 > 10s
-
-STEP 1 -- ASSESS SCOPE (first 5 minutes)
-  [ ] What is the current P99 lag?
-  [ ] How many replicas are affected? (1 replica = localized; all = systemic)
-  [ ] What data types are on the affected replica path?
-  [ ] Are users reporting symptoms? Check support queue.
-  [ ] What is the current degradation level? (L0-L4)
-
-STEP 2 -- DETERMINE CAUSE (minutes 5-15)
-  [ ] Is there a network partition? (Check cross-region RTT metrics)
-  [ ] Is the primary/leader healthy? (Check leader health dashboard)
-  [ ] Is the replica falling behind due to write volume? (Check write QPS)
-  [ ] Did a recent deploy change replication configuration?
-  [ ] Is disk I/O on replicas elevated? (Check disk metrics)
-
-STEP 3 -- MITIGATE (minutes 15-30)
-  [ ] If partition: activate degradation ladder to appropriate level
-  [ ] If replica unhealthy: route traffic away from lagging replica
-  [ ] If write volume spike: apply write rate limiting at ingress
-  [ ] If recent deploy: evaluate rollback
-  [ ] Communicate degradation level to status page
-
-STEP 4 -- COMMUNICATE (ongoing)
-  [ ] Internal: Slack incident channel with current status every 10 minutes
-  [ ] External: Status page updated within 5 minutes of degradation level change
-  [ ] Stakeholders: Notify if user impact exceeds 5% of affected service
-
-STEP 5 -- POST-INCIDENT (within 48 hours)
-  [ ] Run anti-entropy checksum comparison across all replicas
-  [ ] Verify no permanent data divergence occurred
-  [ ] Document timeline and root cause
-  [ ] Identify one monitoring improvement and one prevention mechanism
-  [ ] Update runbook with lessons learned
+```mermaid
+flowchart TD
+    AL["ALERT: Consistency SLO violation, replication lag P99 > 10 s"]
+    S1["STEP 1: ASSESS SCOPE (first 5 min)<br/>Current P99 lag? How many replicas affected (1 = local, all = systemic)?<br/>Which data types? User symptoms in support queue? Current degradation level L0-L4?"]
+    S2["STEP 2: DETERMINE CAUSE (min 5-15)<br/>Network partition (cross-region RTT)? Leader healthy? Write volume spike?<br/>Recent deploy changing replication config? Replica disk I/O elevated?"]
+    S3["STEP 3: MITIGATE (min 15-30)<br/>Partition: activate degradation ladder. Unhealthy replica: route away.<br/>Write spike: rate limit at ingress. Recent deploy: evaluate rollback. Update status page."]
+    S4["STEP 4: COMMUNICATE (ongoing)<br/>Slack incident channel every 10 min. Status page within 5 min of a level change.<br/>Notify stakeholders if impact exceeds 5% of the service."]
+    S5["STEP 5: POST-INCIDENT (within 48 h)<br/>Anti-entropy checksum comparison, verify no permanent divergence, document timeline and root cause,<br/>one monitoring improvement and one prevention mechanism, update runbook"]
+    AL --> S1 --> S2 --> S3 --> S4 --> S5
 ```
 
 ---
@@ -3623,42 +2928,17 @@ The user experiences Layer 1. The infrastructure cost is dominated by Layer 2. T
 
 Different databases provide different consistency guarantees by default. Knowing what you're actually getting is a staff-level skill.
 
-```
-+===================================================================================+
-|          WHAT MAJOR DATABASES ACTUALLY GIVE YOU                                   |
-+================+======================+======================+====================+
-| Database       | Default Reads        | Strong Read Option   | Write Guarantee    |
-+================+======================+======================+====================+
-| PostgreSQL     | EVENTUAL from        | READ from primary    | Linearizable on    |
-| (primary +     | replicas (async      | (no built-in         | primary. Replicas  |
-| replicas)      | replication lag)     | routing support)     | may be seconds     |
-|                |                      |                      | behind.            |
-+================+======================+======================+====================+
-| MySQL          | EVENTUAL from        | Read from primary    | Linearizable on    |
-| (replica set)  | replicas             | explicitly           | primary            |
-+================+======================+======================+====================+
-| DynamoDB       | EVENTUAL             | ConsistentRead=true  | Conditional writes |
-|                | (default)            | (reads from leader   | are linearizable   |
-|                |                      | in each partition)   |                    |
-+================+======================+======================+====================+
-| Cassandra      | EVENTUAL             | QUORUM reads (costs  | QUORUM writes for  |
-|                | (ONE quorum)         | 2-3x more)           | strong consistency |
-+================+======================+======================+====================+
-| Google Spanner | LINEARIZABLE         | (default is already  | Linearizable.      |
-|                | (default)            | strong)              | Uses TrueTime API. |
-+================+======================+======================+====================+
-| MongoDB        | EVENTUAL from        | readConcern:         | Write concern w:   |
-|                | secondaries          | "linearizable"       | majority for       |
-|                |                      | (high latency)       | durability         |
-+================+======================+======================+====================+
-| Redis          | EVENTUAL (async      | Redis Sentinel:      | Single-node:       |
-|                | replica sync)        | read from master     | linearizable.      |
-|                |                      |                      | Cluster: per-shard |
-+================+======================+======================+====================+
-| Apache Kafka   | EVENTUAL (consumer   | Wait for acks from   | acks=all for       |
-|                | reads from replicas) | all ISR replicas     | leader+replicas    |
-+================+======================+======================+====================+
-```
+| WHAT MAJOR DATABASES ACTUALLY GIVE YOU |
+|---|
+| Database |
+| PostgreSQL (primary + replicas) |
+| MySQL (replica set) |
+| DynamoDB |
+| Cassandra |
+| Google Spanner |
+| MongoDB |
+| Redis |
+| Apache Kafka |
 
 After this table: 3 critical insights.
 
@@ -3814,28 +3094,24 @@ The L6 insight: "Consistency model selection without verification is hope, not e
 
 Understanding why leader election creates inconsistency windows is critical for explaining strong consistency limitations in interviews.
 
-```
-NORMAL OPERATION (Raft with 3 nodes):
-  
-  Node A (Leader) --writes--> B, C acknowledge --> Commit --> Respond to client
-  
-  Timeline: 2ms (local) + 5ms (replication) + 2ms (ack) = ~9ms per write
-
-
-LEADER FAILURE SCENARIO:
-  
-  T=0:    Client sends write to Node A (leader)
-  T=1ms:  Node A accepts write, starts replication to B and C
-  T=2ms:  Node A CRASHES -- write partially replicated
-  T=3ms:  B and C detect A is down (heartbeat timeout)
-  T=1000ms: B and C elect a new leader (election timeout = 150-300ms min)
-            -- during this 1000ms window, ALL WRITES FAIL --
-  T=1001ms: New leader (say B) begins serving writes
-  T=1002ms: Question: was the T=1ms write that was partially replicated committed?
-            Answer: depends on whether B and C both acknowledged it before A crashed.
-            If yes (both acked): B is the new leader and KNOWS this write happened.
-            If no (only B acked): A died before C could ack. B must check.
-  T=1003ms: New leader runs "leader commit check" -- re-replicates any uncommitted entries.
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as Node A (leader)
+    participant B as Node B
+    participant D as Node C
+    Note over A,D: NORMAL: ~9 ms per write (2 ms local + 5 ms replication + 2 ms ack)
+    C->>A: T=0 write
+    A->>B: T=1 ms replicate
+    A->>D: T=1 ms replicate
+    Note over A: T=2 ms: Node A CRASHES, write partially replicated
+    B->>B: T=3 ms heartbeat timeout, A is down
+    D->>D: T=3 ms heartbeat timeout, A is down
+    Note over B,D: Election window (about 1000 ms): ALL WRITES FAIL
+    B->>D: T=1000 ms B elected leader
+    Note over B: T=1001 ms begins serving writes
+    Note over B,D: Was the T=1 ms write committed? If both B and C acked before the crash: yes, B knows. If only B acked: B must check.
+    B->>D: T=1003 ms leader commit check, re-replicate uncommitted entries
 ```
 
 **What this means for callers:**
@@ -4511,24 +3787,25 @@ Target state: reads for session validation (90% of traffic) use eventual consist
 
 ## Decision Tree
 
-```
-Is this data financial, security-critical, or access-control?
-  YES -> Strong consistency (linearizable)
-  NO v
-
-Does the user immediately read back their own write?
-  YES -> At minimum Read-Your-Writes
-  Does it also contain reply/reaction relationships? -> Causal
-  Otherwise -> Read-Your-Writes is sufficient
-  NO v
-
-Is there a causal relationship (replies, reactions, sequences)?
-  YES -> Causal consistency
-  NO v
-
-Will users notice if the data is 1-30 seconds stale?
-  YES (high-stakes display, named users) -> Read-Your-Writes or Causal
-  NO (aggregate counts, anonymous metrics) -> Eventual consistency
+```mermaid
+flowchart TD
+    Q1{"Financial, security-critical,<br/>or access control?"}
+    Q1 -- Yes --> S["STRONG (linearizable)"]
+    Q1 -- No --> Q2{"Does the user immediately<br/>read back their own write?"}
+    Q2 -- Yes --> Q2b{"Also reply or reaction<br/>relationships?"}
+    Q2b -- Yes --> CA["CAUSAL"]
+    Q2b -- No --> RY["READ-YOUR-WRITES"]
+    Q2 -- No --> Q3{"Causal relationship?<br/>replies, reactions, sequences"}
+    Q3 -- Yes --> CA2["CAUSAL"]
+    Q3 -- No --> Q4{"Will users notice 1-30 s staleness?"}
+    Q4 -- "Yes: high-stakes display, named users" --> RC["READ-YOUR-WRITES or CAUSAL"]
+    Q4 -- "No: aggregate counts, anonymous metrics" --> EV["EVENTUAL"]
+    style S fill:#fecaca,stroke:#b91c1c,color:#000
+    style CA fill:#fde68a,stroke:#b45309,color:#000
+    style CA2 fill:#fde68a,stroke:#b45309,color:#000
+    style RY fill:#fef3c7,stroke:#b45309,color:#000
+    style RC fill:#fef3c7,stroke:#b45309,color:#000
+    style EV fill:#bbf7d0,stroke:#15803d,color:#000
 ```
 
 ## Key Numbers to Know
@@ -4547,28 +3824,13 @@ Will users notice if the data is 1-30 seconds stale?
 
 ## Common Mistakes
 
-```
-+==================================================================+
-|  N MISTAKE                    Y CORRECT APPROACH                 |
-+==================================================================+
-|                                                                  |
-|  One model for the whole      Per-type: strong for money,        |
-|  system                       eventual for counts                |
-|                                                                  |
-|  "Strong everywhere,          Strong only where cost of          |
-|  just to be safe"             violation > cost of consistency    |
-|                                                                  |
-|  "Eventual is fine"           "Eventual is fine if P99 <5s       |
-|  (without SLO)                and I'm monitoring it"             |
-|                                                                  |
-|  Designing happy path         Designing degradation ladder       |
-|  consistency only             for each failure mode              |
-|                                                                  |
-|  Treating metadata as         Checking: does this metadata       |
-|  "non-critical"               gate a critical operation?         |
-|                                                                  |
-+==================================================================+
-```
+| Mistake | Correct approach |
+|---|---|
+| One model for the whole system | Per-type: strong for money, eventual for counts |
+| "Strong everywhere, just to be safe" | Strong only where cost of violation exceeds cost of consistency |
+| "Eventual is fine" (without an SLO) | "Eventual is fine if P99 < 5s and I'm monitoring it" |
+| Designing happy-path consistency only | Designing a degradation ladder for each failure mode |
+| Treating metadata as "non-critical" | Checking: does this metadata gate a critical operation? |
 
 ## Sample L6 Answer Structure
 
@@ -4637,46 +3899,15 @@ When a PM (or interviewer playing PM) says "users need to see changes instantly,
 
 ## Chapter Summary: The Consistency Models in One Page
 
-```
-+======================================================================+
-|                   CHAPTER 20 -- ONE-PAGE SUMMARY                      |
-+======================================================================+
-|                                                                        |
-|  THE SPECTRUM                                                          |
-|  Linearizable -> Sequential -> Causal -> Read-Your-Writes -> Eventual    |
-|  $25/1M ops    $15/1M ops    $5/1M    $3/1M ops          $0.50/1M    |
-|  200-800ms     100-300ms     20-80ms  5-20ms              1-5ms       |
-|                                                                        |
-|  THE DECISION                                                          |
-|  Money/security at risk?     -> STRONG (linearizable)                 |
-|  Reply/reaction to content?  -> CAUSAL                                |
-|  User's own action?          -> READ-YOUR-WRITES                      |
-|  Everything else?            -> EVENTUAL                              |
-|                                                                        |
-|  THE TRADE-OFFS                                                        |
-|  Stronger = more latency, higher cost, lower availability             |
-|  Weaker = stale data risk, harder UX, self-correcting                 |
-|  CAP: during partition, choose correct (errors) or available (stale) |
-|                                                                        |
-|  THE FAILURE MODES                                                     |
-|  Too strong: rate limiter saturates, app feels slow, unavailable      |
-|              during partition                                          |
-|  Too weak: money lost, conversations out of order, ghost posts        |
-|                                                                        |
-|  THE IMPLEMENTATION PATTERNS                                           |
-|  Read-your-writes: session tokens + 30s sticky routing               |
-|  Causal: vector clocks or use a CRDT-aware database                  |
-|  Strong: Raft/Paxos -- accept 200-800ms write latency                 |
-|  Eventual: async replication + anti-entropy background repair        |
-|  Optimistic UI: client updates instantly, server catches up          |
-|                                                                        |
-|  THE L6 SIGNALS                                                        |
-|  Y Different models for different data types in the same system      |
-|  Y Knows what breaks when model is violated (specific scenarios)     |
-|  Y Designs the degradation path, not just the happy path            |
-|  Y Quantifies the cost trade-off in dollars and milliseconds        |
-|  Y Uses optimistic UI to hide eventual consistency from users        |
-+======================================================================+
+```mermaid
+flowchart TD
+    SP["THE SPECTRUM<br/>Linearizable ($25/1M, 200-800 ms) to Sequential ($15, 100-300 ms) to Causal ($5, 20-80 ms) to Read-Your-Writes ($3, 5-20 ms) to Eventual ($0.50, 1-5 ms)"]
+    DE["THE DECISION<br/>Money or security at risk: STRONG. Reply or reaction: CAUSAL.<br/>User's own action: READ-YOUR-WRITES. Everything else: EVENTUAL."]
+    TR["THE TRADE-OFFS<br/>Stronger: more latency, higher cost, lower availability<br/>Weaker: stale-data risk, harder UX, self-correcting<br/>CAP: during a partition choose correct (errors) or available (stale)"]
+    FM["THE FAILURE MODES<br/>Too strong: rate limiter saturates, app feels slow, unavailable in partition<br/>Too weak: money lost, conversations out of order, ghost posts"]
+    IM["THE IMPLEMENTATION PATTERNS<br/>Read-your-writes: session tokens + 30 s sticky routing<br/>Causal: vector clocks or CRDT-aware DB<br/>Strong: Raft/Paxos, accept 200-800 ms writes<br/>Eventual: async replication + anti-entropy repair<br/>Optimistic UI: client updates instantly, server catches up"]
+    SG["THE L6 SIGNALS<br/>Different models per data type. Knows what breaks when violated.<br/>Designs the degradation path. Quantifies cost in dollars and ms. Uses optimistic UI."]
+    SP --> DE --> TR --> FM --> IM --> SG
 ```
 
 The map above is the chapter in miniature. If you can explain every row in the table above with specific examples and real numbers -- and explain what happens when each trade-off goes wrong -- you are ready to discuss consistency models at the Staff Engineer level.
@@ -4882,97 +4113,50 @@ Additionally, the team added monitoring for the replication lag P99 on cart-rela
 
 ### ASCII Diagram: Before vs After Fix
 
+**Before (broken)**
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant W as Cart Write Service
+    participant AZ1 as AZ-1 (primary)
+    participant AZ2 as AZ-2 (lag 300 ms)
+    participant AZ3 as AZ-3 (lag 400 ms)
+    participant R as Cart Read Service
+    U->>W: Tap Add to Cart
+    W->>AZ1: UpdateItem(cart), written
+    AZ1--)AZ2: replicating (Prime Day lag 300-500 ms)
+    AZ1--)AZ3: replicating
+    W-->>U: Ack when 2 of 3 AZs confirm
+    U->>R: Open Cart page (200 ms later)
+    R->>AZ2: GetItem(ConsistentRead=false), routed to any AZ
+    AZ2-->>R: [] stale, write not yet replicated
+    R-->>U: Empty cart
+    Note over U: Confused, gives up
 ```
-BEFORE (broken):
 
-  User taps "Add to Cart"
-          |
-          v
-  +--------------------+
-  | Cart Write Service |
-  | UpdateItem(cart)   |
-  +--------------------+
-          |
-          v  (write ack'd when 2/3 AZs confirm)
-  +----------+----------+----------+
-  |   AZ-1   |   AZ-2   |   AZ-3   |
-  | (primary)|  [lag]   |  [lag]   |
-  | [written]|  300ms   |  400ms   |
-  +----------+----------+----------+
+**After (fixed)**
 
-  (Under Prime Day load: replica lag = 300-500ms)
-
-  User navigates to Cart page (200ms after write)
-          |
-          v
-  +--------------------+
-  | Cart Read Service  |
-  | GetItem(           |
-  |  ConsistentRead=   |
-  |  false)            |
-  +--------------------+
-          |
-          v  (DynamoDB routes to any available AZ)
-          |
-     +----+----+
-     |         |
-     v         v
-  +------+  +------+
-  | AZ-2 |  | AZ-3 |
-  | stale|  | stale|  <-- write not yet replicated
-  | []   |  | []   |
-  +------+  +------+
-          |
-          v
-  User sees empty cart --> confused, gives up
-
-
-AFTER (fixed):
-
-  User taps "Add to Cart"
-          |
-          v
-  +-----------------------------+
-  | Cart Write Service          |
-  | UpdateItem(cart)            |
-  | -> stores write_timestamp   |
-  |    in session token         |
-  +-----------------------------+
-          |
-          v
-  +----------+----------+----------+
-  |   AZ-1   |   AZ-2   |   AZ-3   |
-  | (primary)| [lagging]| [lagging]|
-  | [written]|          |          |
-  +----------+----------+----------+
-
-  User navigates to Cart page (200ms after write)
-          |
-          v
-  +-----------------------------+
-  | Cart Read Service           |
-  | check: time since last      |
-  | write to this cart < 500ms? |
-  +-----------------------------+
-          |
-     YES  +----------+  NO
-          |          |
-          v          v
-  ConsistentRead=  ConsistentRead=
-  true             false (cheap)
-          |          |
-          v          v
-  +----------+  +----------+
-  |   AZ-1   |  | any AZ   |
-  | (primary)|  | (usually |
-  | [fresh]  |  |  fresh)  |
-  +----------+  +----------+
-          |          |
-          v          v
-  Cart shows     Cart shows
-  added item     (acceptable
-  guaranteed     risk after
-                 window)
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant W as Cart Write Service
+    participant AZ1 as AZ-1 (primary)
+    participant AZx as AZ-2 / AZ-3 (lagging)
+    participant R as Cart Read Service
+    U->>W: Tap Add to Cart
+    W->>AZ1: UpdateItem(cart), store write_timestamp in session token
+    AZ1--)AZx: replicating
+    U->>R: Open Cart page (200 ms later)
+    R->>R: Time since last write to this cart < 500 ms?
+    alt Yes
+        R->>AZ1: ConsistentRead=true
+        AZ1-->>R: Fresh cart with added item (guaranteed)
+    else No
+        R->>AZx: ConsistentRead=false (cheap, any AZ)
+        AZx-->>R: Usually fresh (acceptable risk after window)
+    end
+    R-->>U: Cart shows added item
 ```
 
 ---
@@ -5035,89 +4219,42 @@ The architectural fix was to create a "critical write" pathway: writes to the bl
 
 ### ASCII Diagram: Before vs After Fix
 
+**Before (broken)**
+
+```mermaid
+sequenceDiagram
+    actor U as userA
+    participant G as Authoritative Graph Store
+    participant J as Graph Snapshot Job (Spark, ran 2 min ago)
+    participant C as PYMK Recommendation Cache
+    participant S as PYMK Serve Layer
+    U->>G: Block person Z, block(userA, Z) stored
+    Note over J: Batch job runs every 3-7 min, NOT now
+    Note over J,C: Stale snapshot, no block recorded. Cache still includes Z.
+    U->>S: Open PYMK feed (30 s after blocking Z)
+    S->>C: Read cache only
+    C-->>S: List with Z
+    S-->>U: Blocked person Z shown. SAFETY VIOLATION
 ```
-BEFORE (broken):
 
-  User blocks person Z
-          |
-          v
-  +------------------------+
-  | Authoritative Graph    |
-  | Store (write primary)  |
-  | block(userA, Z) stored |
-  +------------------------+
-          |
-          v  (batch job runs every 3-7 min -- does NOT run now)
-  +------------------------+
-  | Graph Snapshot Job      |
-  | (Spark, last ran        |
-  |  2 minutes ago)         |
-  | -> stale snapshot,      |
-  |    no block recorded    |
-  +------------------------+
-          |
-          v
-  +------------------------+
-  | PYMK Recommendation    |
-  | Cache (pre-computed)   |
-  | -> still includes Z in |
-  |    userA's PYMK list   |
-  +------------------------+
+**After (fixed)**
 
-  userA opens PYMK feed (30 seconds after blocking Z)
-          |
-          v
-  +------------------------+
-  | PYMK Serve Layer       |
-  | reads from cache only  |
-  | -> returns list with Z |
-  +------------------------+
-          |
-          v
-  userA sees blocked person Z in PYMK --> safety violation
-
-
-AFTER (fixed):
-
-  User blocks person Z
-          |
-          +---------------------+---------------------+
-          |                                           |
-          v                                           v
-  +----------------------+           +-----------------------------+
-  | Authoritative Graph  |           | Kafka "critical-write"      |
-  | Store                |           | topic (block event emitted) |
-  +----------------------+           +-----------------------------+
-          |                                           |
-          | (batch, 3-7 min)                          | (real-time, <1s)
-          v                                           v
-  +----------------------+           +-----------------------------+
-  | Graph Snapshot Job   |           | PYMK Serve Layer            |
-  | (eventually removes Z)|           | in-memory exclusion set:    |
-  +----------------------+           | immediately marks Z as      |
-          |                          | excluded for userA session  |
-          v                          +-----------------------------+
-  +----------------------+
-  | PYMK Recommendation  |
-  | Cache (stale, may    |
-  |  still have Z)       |
-  +----------------------+
-
-  userA opens PYMK feed (30 seconds after blocking Z)
-          |
-          v
-  +----------------------------------------+
-  | PYMK Serve Layer                        |
-  | 1. read pre-computed list (may have Z) |
-  | 2. synchronous exclusion check:        |
-  |    -> query block list from            |
-  |       authoritative store (5-15ms)     |
-  |    -> Z is on block list               |
-  | 3. strip Z from list before serving   |
-  +----------------------------------------+
-          |
-          v
-  userA sees PYMK list without Z --> safe
+```mermaid
+sequenceDiagram
+    actor U as userA
+    participant G as Authoritative Graph Store
+    participant K as Kafka critical-write topic
+    participant S as PYMK Serve Layer
+    participant J as Snapshot Job + Cache
+    U->>G: Block person Z
+    U->>K: Block event emitted (real-time, under 1 s)
+    K->>S: In-memory exclusion set: Z excluded for userA session
+    G--)J: Batch (3-7 min) eventually removes Z, cache may be stale meanwhile
+    U->>S: Open PYMK feed (30 s after blocking Z)
+    S->>J: 1) Read pre-computed list (may contain Z)
+    S->>G: 2) Synchronous exclusion check, query block list (5-15 ms)
+    G-->>S: Z is on the block list
+    S-->>U: 3) Strip Z before serving. List without Z. SAFE
 ```
 
 ---
@@ -5163,30 +4300,28 @@ Better. But L4 applies eventual consistency globally to profiles without asking:
 
 L5 builds a consistency matrix before writing any code:
 
-```
-OPERATION             | MODEL NEEDED         | REASON
-----------------------+----------------------+-------------------------------
-Read bio (display)    | Eventual             | 2s stale is fine
-Update bio            | Read-your-writes     | User should see their own change
-Update password       | Linearizable         | Security critical
-Login check           | Linearizable         | Must see latest password
-Read follower count   | Eventual             | Approximate is fine
-Follow/unfollow       | Causal               | Must see your own follow
-Block user            | Linearizable         | Safety critical
-View blocked list     | Read-your-writes     | User must see their own blocks
-```
+| Operation | Model needed | Reason |
+|---|---|---|
+| Read bio (display) | Eventual | 2 s stale is fine |
+| Update bio | Read-your-writes | User should see their own change |
+| Update password | Linearizable | Security critical |
+| Login check | Linearizable | Must see latest password |
+| Read follower count | Eventual | Approximate is fine |
+| Follow/unfollow | Causal | Must see your own follow |
+| Block user | Linearizable | Safety critical |
+| View blocked list | Read-your-writes | User must see their own blocks |
 
 L5 now has a concrete spec. The architecture follows from the spec, not the other way around.
 
-```
-L5 CONSISTENCY DECISION TREE:
-  Is this security-critical? (password, auth, block)
-         YES -> Linearizable (synchronous primary read)
-         NO  -> Is this user-generated content?
-                YES -> Read-your-writes (route to primary for 30s post-write)
-                NO  -> Is ordering important across users?
-                        YES -> Causal
-                        NO  -> Eventual (cheapest, fastest)
+```mermaid
+flowchart TD
+    Q1{"Security-critical?<br/>password, auth, block"}
+    Q1 -- Yes --> A["LINEARIZABLE<br/>synchronous primary read"]
+    Q1 -- No --> Q2{"User-generated content?"}
+    Q2 -- Yes --> B["READ-YOUR-WRITES<br/>route to primary for 30 s post-write"]
+    Q2 -- No --> Q3{"Ordering important<br/>across users?"}
+    Q3 -- Yes --> C["CAUSAL"]
+    Q3 -- No --> D["EVENTUAL<br/>cheapest, fastest"]
 ```
 
 ### Staff (L6): "Consistency model is a product decision, not a technical one"
