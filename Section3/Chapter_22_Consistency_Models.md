@@ -196,6 +196,10 @@ These five ideas carry the rest of the chapter. Each later part expands one of t
 
 Before defining anything formally, understand what each consistency model feels like to users. Technical definitions are not the goal -- they are tools. The goal is to build an intuition strong enough that when you are sitting in a system design interview at 2pm on a Tuesday, you can instantly sense which model belongs where without having to derive it from first principles. The best way to build that intuition is not memorizing definitions. It is understanding what each model looks like from the chair of a user who just clicked a button.
 
+Every model below ends with worked examples. Each one uses a concrete system, walks through it on a timeline in milliseconds, shows what each user sees, and names what breaks and what fixes it. Read the examples, not just the prose: they show the intuition actually being applied.
+
+Part 1 is about intuition. Part 1b, right after it, rebuilds each model from first principles: the exact rule, examples you can check by hand, how to get it in Postgres or MySQL, the distributed algorithm (Raft, Paxos, vector clocks, CRDTs), and which production systems use it.
+
 ---
 
 ## Strong Consistency: "What I Write, Everyone Sees Immediately"
@@ -227,6 +231,75 @@ The technical reason strong consistency is expensive has nothing to do with hard
 The L5 approach to strong consistency is to reach for it when something "seems important." L6 is different. An L6 engineer says: strong consistency adds 200-500ms cross-region for every write and reduces availability during partitions -- the system will return errors to users during a network partition rather than serve potentially stale data. Before I choose strong consistency, I ask precisely: what breaks if this data is 5 seconds stale? For payments, the answer is "money is lost or double-spent, regulatory compliance is violated, and customer trust is destroyed" -- that justifies strong consistency and the 400ms overhead. For a like count on a post, the answer is "nothing -- users cannot perceive a 5-second stale like count" -- strong consistency is the wrong choice and would make the feature feel broken because every like tap would take half a second to respond. For profile picture updates, the answer is "nothing breaks for other users seeing the old picture for 5 seconds, but the user who just updated will panic if they see their old picture" -- this calls for read-your-writes, which is much cheaper than strong. The model choice falls out of this analysis naturally.
 
 Strong consistency is the right choice when: processing financial transactions of any kind (including in-app purchases, subscriptions, and refunds); enforcing rate limits that protect against abuse; managing inventory that maps to physical items; acquiring and releasing distributed locks; updating account permissions and access control lists; and any operation where two simultaneous decisions based on the same stale read would cause irreversible harm. The question to ask is: "if two users act on data that is 500ms stale at the same time, is the resulting inconsistency recoverable?" If the answer is no, use strong consistency and pay the cost.
+
+### Worked examples: strong consistency in action
+
+**Example 1 -- The last concert seat, traced millisecond by millisecond**
+
+Setup: seat A-1-7 is the last seat for a sold-out show. The record is `{seat: "A-1-7", owner: null, version: 41}`, stored on three replicas: R1 and R2 in us-east, R3 in us-west. Alice (New York) and Bob (San Francisco) click "Buy" at the same moment.
+
+*Version 1: eventual consistency.* Each user writes to the nearest replica, replication is asynchronous (~80 ms), and conflicts are resolved by last-writer-wins.
+
+| Time | Alice (served by R1, us-east) | Bob (served by R3, us-west) | What the replicas hold |
+|---|---|---|---|
+| 0 ms | Reads seat: owner = null | Reads seat: owner = null | All three: null |
+| 4 ms | Writes owner = Alice. Sees "Booked!" | | R1 = Alice, R3 = null |
+| 6 ms | | Writes owner = Bob. Sees "Booked!" | R1 = Alice, R3 = Bob |
+| 90 ms | | | Replication meets. LWW keeps Bob (later timestamp) everywhere |
+| 2 s | Confirmation email for A-1-7 | Confirmation email for A-1-7 | Database says Bob |
+
+Both were charged. Alice will arrive at the venue with a ticket the database says is not hers. In a real on-sale, with 50,000 fans hitting the last few hundred seats in the same second, this is not one double booking -- it is hundreds, and each one becomes a refund plus a support ticket.
+
+*Version 2: strong consistency.* The seat lives in one Raft group whose leader is R1. Buying is a conditional write that the leader evaluates in log order:
+
+```sql
+UPDATE seats SET owner = :user, version = version + 1
+WHERE  seat = 'A-1-7' AND owner IS NULL;     -- 1 row: you won. 0 rows: someone else did.
+```
+
+| Time | Event |
+|---|---|
+| 0 ms | Alice's request leaves New York; Bob's leaves San Francisco |
+| 2 ms | Alice's write reaches leader R1. Condition is true. Appended at log index 900, sent to R2 and R3 |
+| 3 ms | R2 (same region) acknowledges. 2 of 3 is a majority: committed, version is now 42 |
+| 5 ms | Alice sees "Booked!" |
+| 36 ms | Bob's write reaches R1 after the one-way trip from the west coast. `owner IS NULL` is false. 0 rows |
+| 71 ms | Bob sees "Sorry, this seat was just taken" |
+
+Exactly one winner, decided by log order. Bob paid ~70 ms for the round trip to the leader; Alice paid ~5 ms. Notice what was *not* strong: Bob's seat map, which showed A-1-7 as available a second earlier, could come from a stale replica. That is fine. **Display can be stale; the decision cannot.** Only the conditional write goes through the leader.
+
+**Example 2 -- Revoking a fired employee's access**
+
+Setup: the access-control list is replicated asynchronously to four regions. Replication lag is 300 ms at P50 but 8 s at P99 under load. At 17:00:00 HR revokes Dave's access to the finance drive. Dave has a script in eu-west downloading one file every 100 ms.
+
+| | Eventual ACL store | Strong ACL store |
+|---|---|---|
+| Revoke acknowledged to HR | 17:00:00.005 | 17:00:00.150 (cross-region quorum) |
+| When eu-west stops honoring Dave | When replication arrives: up to 17:00:08 at P99 | Every check that starts after 17:00:00.150 |
+| Files downloaded after "revoked" | Up to 80 | 0 |
+| What the audit log shows | "Access revoked 17:00:00", followed by 80 downloads | "Access revoked", followed by denied requests |
+
+The leak window under eventual consistency is the P99 lag, not the average, and an attacker gets to pick the worst moment. The fix costs 150 ms on an admin action that happens a few dozen times a day. The millions of access *checks* per second do not each need a consensus round -- they need to be evaluated against an ACL snapshot at least as new as the revoke, which is how Zanzibar does it (Section 10.6).
+
+**Example 3 -- What users see when a strongly consistent system is partitioned**
+
+Setup: a payment ledger on 5 replicas -- 2 in us-east, 2 in us-west, 1 in eu-west -- with the leader in us-east. The system handles 2,000 payments per second, 40% of them from us-east. At 14:00 a fiber cut isolates us-east for 6 minutes.
+
+1. **us-east has 2 of 5 replicas: no majority.** Its leader can no longer collect acknowledgements. Once its lease expires (about 10 s), it stops accepting writes, and us-east clients get "Payment temporarily unavailable".
+2. **us-west and eu-west have 3 of 5: a majority.** After the election timeout (1-2 s), they elect a new leader in us-west and keep committing.
+3. **Clients that retry to us-west succeed**, with ~70 ms of extra latency. Clients that cannot reach us-west fail: up to 800 payments/s x 360 s = 288,000 attempts in the worst case.
+4. **When the cut heals**, the us-east replicas see the higher term, throw away any entries they appended but never committed (those clients got errors or timeouts, never "success"), and catch up from the new leader's log.
+
+What did *not* happen: no payment was accepted on both sides, no customer was charged twice, and no reconciliation job was needed afterwards. This is the CP trade from Mental Model 3 in concrete form: some users saw errors so that no user saw a wrong balance.
+
+**Example 4 -- When strong is the wrong choice: the like button**
+
+Setup: an L5 design stores like counts in a cross-region linearizable store, at 250 ms per write.
+
+- The user taps the heart. The UI waits for the acknowledgement, so the heart fills 250 ms later. Many users assume the tap was missed and tap again -- which unlikes the post.
+- A post goes viral at 20,000 likes per second. Every like updates the same row in the same consensus group, so they are serialized through one leader. Latency climbs past 2 s and requests time out. The "important" data is now the least available data in the system.
+
+The fix is an eventually consistent counter (sharded, or a G-Counter from Section 1b.5) plus an optimistic UI that fills the heart immediately. The count is a few seconds behind, and nobody can tell.
 
 **Interview line:** "Strong consistency for payments, inventory at checkout, locks, and permission changes. It costs 2-4 cross-region round trips per write (200-500 ms) and the minority side errors during a partition, so I use it only where a stale read causes irreversible harm."
 
@@ -262,6 +335,67 @@ DNS is the most famous real-world example of eventual consistency, and it illust
 The Amazon shopping cart is one of the most studied examples of intentional eventual consistency design. Amazon's 2007 Dynamo paper, which described the key-value store powering Amazon's shopping cart among other systems, explicitly documents the choice to use eventual consistency for cart operations. The reasoning was straightforward: Amazon would rather occasionally show a user an item they already removed from their cart than have the cart become unavailable during a network partition. The cart being slow or showing slightly stale data is annoying. The cart being completely unavailable during a peak shopping period costs Amazon directly measurable revenue -- at Black Friday scale, every minute of cart downtime costs hundreds of thousands of dollars. The Dynamo paper acknowledges that users occasionally see items that shouldn't be there, and Amazon accepted this as a reasonable trade-off. Crucially, when the user actually checks out -- when money changes hands -- Amazon switches to a much stronger consistency model. Eventual consistency for browsing. Strong for buying. The threshold of consistency strengthens precisely where the cost of inconsistency becomes real.
 
 The cost of eventual consistency is approximately $0.50-$1.50 per million operations, compared to $15-$25 for linearizable consistency. This 10-20x cost reduction comes from two sources: first, writes don't wait for replica acknowledgment, so throughput is limited only by the local node's capacity rather than by network RTT to replicas; second, reads can be served from any nearby replica without needing to check if it has the latest value, so read throughput scales horizontally with no coordination overhead. At Instagram scale -- 1 billion users, hundreds of millions of daily active users, tens of billions of database operations per day -- the difference between eventual and strong consistency on the like count system alone is hundreds of thousands of dollars per day. That is real money, and it is the right trade-off for a number that users cannot perceive being stale.
+
+### Worked examples: eventual consistency in action
+
+**Example 1 -- A like counter across three regions**
+
+Setup: a post has 1,000 likes. Replicas in the US, EU, and AP each accept likes locally and ship them to the others asynchronously.
+
+| Time | Event | US shows | EU shows | AP shows |
+|---|---|---|---|---|
+| 0 ms | Start | 1,000 | 1,000 | 1,000 |
+| 10 ms | 3 users in the US like it | 1,003 | 1,000 | 1,000 |
+| 15 ms | 2 users in the EU like it | 1,003 | 1,002 | 1,000 |
+| 90 ms | US likes reach EU | 1,003 | 1,005 | 1,000 |
+| 95 ms | EU likes reach US | 1,005 | 1,005 | 1,000 |
+| 220 ms | Both batches reach AP | 1,005 | 1,005 | 1,005 |
+
+For about 200 ms, three people looking at the same post saw three different numbers. Nobody can notice that, and everyone ends at 1,005. This is eventual consistency working as intended.
+
+It converges to the *right* number only if replicas ship *increments*, not *values*. A common bug is a read-modify-write on each replica:
+
+```text
+US:  read 1000, write 1003      EU:  read 1000, write 1002
+After replication with last-writer-wins: 1002 or 1003 everywhere -- never 1005
+```
+
+Two or three likes are not delayed; they are lost permanently. That is a convergence bug, not a propagation bug. The fix is a counter in which each replica owns a slot (`{US: 3, EU: 2}`, value = sum), so merging in any order, any number of times, gives 1,005 (the G-Counter in Section 1b.5).
+
+**Example 2 -- A price change through a CDN cache**
+
+Setup: product pages are cached at the CDN for 300 s. At 09:00:00 the merchant drops a price from $49 to $39 for a flash sale. Each edge location refreshes its copy when its cached page expires, so for the next five minutes some users see $49 and some see $39.
+
+- **Displaying** a stale price for a few minutes is acceptable, and the improvement is cheap: call the CDN purge API on every price change, which cuts the window from 300 s to a few seconds.
+- **Charging** a stale price is not acceptable. If checkout trusts the price the page displayed, users pay $49 during a $39 sale (complaints and chargebacks) or, after a price increase, pay the old lower price (lost revenue). The checkout service re-reads the price from the authoritative store and shows "The price of this item changed" if it differs.
+
+It is the same rule as the concert seat: eventual for what users look at, strong for what money depends on.
+
+**Example 3 -- "Usually 100 ms" becomes 4 minutes**
+
+Setup: a Postgres primary with three async replicas serves the "My Orders" page. Normal replication lag is 50-150 ms, and the team has never had to think about it.
+
+1. At 02:00 a data engineer runs a backfill `UPDATE` touching 40 million rows. The primary generates WAL faster than the replicas can replay it.
+2. On one replica, a long analytics query holds up replay (Postgres delays replay rather than cancel the query, up to `max_standby_streaming_delay`).
+3. Lag reaches 4 minutes. Customers who order at 02:05 see an empty order history, and some order again.
+
+Nothing violated eventual consistency -- it never promised 100 ms. The design was missing four pieces that each cost very little:
+
+| Missing piece | Concrete fix |
+|---|---|
+| A staleness SLO | "Replica lag P99 < 2 s"; page on-call above 5 s |
+| Lag-aware routing | Remove replicas with lag > 2 s from the read pool; fall back to the primary |
+| Read-your-writes for the buyer | Route the buyer's next reads by log position (Section 1b.4) |
+| Protection from bulk jobs | Run backfills in batches of 10,000 rows with pauses between them |
+
+A quick lag check a router can run on each replica every second:
+
+```sql
+-- Seconds since the last replayed transaction
+SELECT EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp()) AS lag_seconds;
+```
+
+On a quiet primary this number grows even when there is no real lag, so production routers either compare log positions (Section 1b.4) or have the primary write a heartbeat row every second.
 
 **Interview line:** "Eventual for counts, feeds, and recommendations, with a measured convergence SLO (P99 under 5 s) and optimistic UI on the client. 'Eventually' has no built-in bound, so I add one and alert on it."
 
@@ -316,6 +450,65 @@ What causal consistency does not guarantee is equally important to understand. C
 
 The technical implementation of causal consistency typically uses vector clocks or version vectors -- data structures that track "what each node knew when it created this write." Each write carries a vector clock that encodes its causal history. When a replica receives a write, it checks whether all causal dependencies (all events referenced in the write's vector clock) are present locally. If they are, the write is delivered. If they are not, the write is buffered until the dependencies arrive. This mechanism adds roughly 20-80ms of latency over eventual consistency (for the buffering and dependency-checking overhead) and costs $2-5 per million operations rather than $0.50-$1.50. For most social applications -- messaging, threads, comment sections, reaction chains -- this is the right trade-off. You pay a small premium over eventual consistency and gain the guarantee that makes the application coherent for users.
 
+### Worked examples: causal consistency in action
+
+**Example 1 -- A comment thread across three regions, with the real metadata**
+
+Each comment carries the comments it depends on -- the ones its author had seen when writing it:
+
+```json
+{ "id": "c1", "thread": "t9", "author": "alice", "text": "Pizza tonight?",  "deps": [] }
+{ "id": "c2", "thread": "t9", "author": "bob",   "text": "Yes! 8pm?",       "deps": ["c1"] }
+{ "id": "c3", "thread": "t9", "author": "alice", "text": "Booked a table.", "deps": ["c2"] }
+```
+
+Alice writes from Mumbai, Bob from London, and Carol reads in New York. Today the Mumbai-to-New-York link is congested; London-to-New-York is fast.
+
+| Time | Event | What New York has stored | What Carol can see |
+|---|---|---|---|
+| 0 ms | Alice writes c1 in Mumbai | -- | -- |
+| 120 ms | c1 reaches London; Bob reads it | -- | -- |
+| 130 ms | Bob writes c2 in London (`deps: [c1]`) | -- | -- |
+| 170 ms | c2 reaches New York. Its dependency c1 is missing, so c2 is stored but hidden | c2 | nothing |
+| 250 ms | Carol opens the thread | c2 | nothing new |
+| 400 ms | c1 finally reaches New York, satisfying c2's dependency | c1, c2 | c1, then c2 |
+
+c2 was hidden for 230 ms. That delay is the entire price of causal consistency: a reader occasionally waits a little, but never sees "Yes! 8pm?" with nothing above it. Under eventual consistency, Carol at 250 ms would see Bob answering a message that, as far as her screen is concerned, does not exist.
+
+**Example 2 -- Why sorting by timestamp is not enough**
+
+Setup: Bob's phone clock is 4 s behind. Alice posts at 12:00:10.000 by her clock. Bob reads the post and replies 2 s later, and his phone stamps the reply 12:00:08.000. A thread sorted by client timestamp shows Bob's reply first, for every reader, forever.
+
+Moving timestamps to the server helps but does not solve it. Server clocks drift by milliseconds normally and by much more during NTP incidents, so a reply written 1 ms after the post on a different server can get an earlier timestamp. A hybrid logical clock (Section 1b.3) fixes this by construction, because a write's clock is always greater than the clock of everything it depends on:
+
+```text
+c1 (Alice's post)   HLC = (12:00:10.000, 0)
+Bob's server clock reads 12:00:09.990 -- behind the dependency
+c2 (Bob's reply)    HLC = (max(12:00:09.990, 12:00:10.000), counter 0 + 1) = (12:00:10.000, 1)
+Sorted by HLC: c1 before c2, on every server
+```
+
+**Example 3 -- When a causality violation becomes permanent**
+
+Setup: a task board. Priya creates card #88 in "To Do" and, two seconds later, drags it to "Done". The two operations go to different shards that replicate independently.
+
+1. A replica in another region receives "move #88 to Done" before "create #88".
+2. The handler looks up #88, finds nothing, logs "card not found", and drops the move.
+3. "create #88" arrives. On this replica the card sits in "To Do" -- forever, because the move will never be replayed.
+
+This is the case that changes how you think about causal consistency. Violating it does not always cause a temporary glitch: when a handler rejects an operation because its cause has not arrived yet, the replicas diverge permanently. Causal delivery (hold the move until the create has been applied) removes the whole class of bug.
+
+**Example 4 -- What causal consistency does not order**
+
+Setup: in a group chat, Priya renames the group to "Goa Trip". At the same moment, without seeing her change, Rahul renames it to "Goa 2026".
+
+The two renames are concurrent -- neither caused the other -- so causal consistency puts no order on them. If each replica simply applies whichever rename arrives last, Priya's region can end on "Goa 2026" and Rahul's on "Goa Trip", permanently. Two things are still needed:
+
+1. **A convergence rule**, so everyone ends on the same name. Last-writer-wins by HLC is fine for a group name; everyone converges to "Goa 2026".
+2. **A visible event** ("Rahul renamed the group to Goa 2026"), so the change makes sense to members who briefly saw "Goa Trip".
+
+If the product required every member to see exactly the same sequence of renames, that would be sequential consistency, and every rename would have to go through one ordered log.
+
 **Interview line:** "Causal for conversations: each message carries its dependencies and replicas hold it until they arrive. That fixes reply-before-original for a few milliseconds of bookkeeping instead of global consensus; unrelated threads need no ordering."
 
 ---
@@ -369,6 +562,77 @@ The one place read-your-writes breaks down is across devices. When a user posts 
 
 The technical overhead of read-your-writes is dominated by session state management rather than by replication coordination. The most common implementation stores write tokens in the session layer (cookies, JWTs, or Redis session stores) and implements routing middleware that inspects the token on each request. At 10,000 requests per second, this adds approximately 1-2ms of overhead per read (one Redis lookup to fetch the write token, one routing decision). The replication itself is still asynchronous -- other users continue to get eventual consistency for their reads. Only the user who made the write gets the stronger guarantee, and only for the 30-60 second window where their replica lag matters. After the replica catches up (typically within a few hundred milliseconds to a few seconds under normal conditions), the sticky routing becomes unnecessary and the system transparently returns to standard load balancing.
 
+### Worked examples: read-your-writes in action
+
+**Example 1 -- A bio update, with and without a token**
+
+Setup: the primary is in us-east-1a, with replicas in 1b and 1c. Replication lag is usually 20 ms; right now, under load, replica 1b is 800 ms behind.
+
+*Without read-your-writes:*
+
+| Time | Event |
+|---|---|
+| 0 ms | User saves a new bio. The write commits on the primary |
+| 12 ms | Response "Saved". The browser redirects to the profile page |
+| 60 ms | `GET /profile` -- the load balancer picks replica 1b, which is 800 ms behind |
+| 65 ms | The page shows the **old** bio. The user edits again, or files a ticket |
+| 800 ms | Replica 1b catches up -- too late |
+
+*With read-your-writes*, the write returns a log position and the user's reads go only to replicas that have applied it:
+
+```python
+def update_bio(user_id, bio):
+    primary.execute("UPDATE users SET bio = %s WHERE id = %s", (bio, user_id))
+    lsn = primary.scalar("SELECT pg_current_wal_lsn()")
+    redis.set(f"min_lsn:{user_id}", lsn, ex=60)       # per user, not per device
+
+def read_for_user(user_id, sql, args):
+    min_lsn = redis.get(f"min_lsn:{user_id}")
+    if min_lsn is None:                                # no recent write: any replica is fine
+        return any_replica().query(sql, args)
+    for replica in replicas_nearest_first():
+        if replica.applied_lsn >= min_lsn:             # applied_lsn polled every ~10 ms
+            return replica.query(sql, args)
+    return primary.query(sql, args)                    # no replica has caught up yet
+```
+
+At 60 ms the router sees that 1b's applied position is below the user's `min_lsn`, checks 1c (which caught up at 25 ms), and serves from 1c. The user sees the new bio. The cost is one Redis lookup (~0.5 ms) on reads by users who wrote in the last minute -- for most traffic the key is absent and nothing changes -- plus an occasional primary read when every replica is behind.
+
+**Example 2 -- The double order**
+
+Setup: an e-commerce site. "Place order" writes to the primary and redirects to `/orders`, which reads from a replica.
+
+1. A replica is 1.5 s behind, and the redirect lands 200 ms after the write.
+2. `/orders` says "You have no orders yet."
+3. The user goes back and clicks "Place order" again. Two orders, two charges.
+
+There are two fixes, and you need both:
+
+- **Read-your-writes** makes `/orders` show the order, so the user has no reason to click again. It fixes the *confusion*.
+- **An idempotency key** -- generated when the checkout page loads and sent with every submit -- makes a second submit return the existing order instead of creating a new one. It fixes the *money*, including cases read-your-writes cannot cover: double-clicks, network retries, and the phone resending a request.
+
+**Example 3 -- Phone, then laptop**
+
+Setup: the app uses sticky sessions. After a write, the session is pinned to the primary for 30 s.
+
+1. On her phone, Meera changes her delivery address. The phone's session is pinned to the primary.
+2. Ten seconds later she opens her laptop to order. The laptop is a new session with no pin, so it reads from a lagging replica and shows the old address.
+3. She checks out to the old address.
+
+Sticky sessions and session cookies are per device. The per-user token in the code above fixes this, because it lives in Redis under the user ID: any device reading on her behalf finds `min_lsn` and routes accordingly. Two details make it reliable. The token's TTL (60 s) must be longer than the worst lag you tolerate before alerting. And checkout should read the address from the primary regardless, because a wrong delivery address is a money problem, not a display problem.
+
+**Example 4 -- What read-your-writes does not promise: the flickering comment**
+
+Setup: Carol is reading a thread in which Bob has just posted a comment.
+
+| Refresh | Replica hit | What Carol sees |
+|---|---|---|
+| 1 | 1c (caught up) | Bob's comment |
+| 2 | 1b (behind) | Bob's comment is **gone** |
+| 3 | 1c | Bob's comment is back |
+
+Read-your-writes says nothing here, because Carol did not write anything. This breaks a different guarantee, **monotonic reads**: once you have seen something, you never see an older state. The fix uses the same mechanism -- store the highest log position the session has *read*, not only written, and never serve the session from a replica below it. Read-your-writes, monotonic reads, and two related session guarantees together give a client causal consistency (Section 10.9).
+
 **Interview line:** "Read-your-writes for anything the user just edited: the write returns a version token and the user's reads go to a replica at or above it for about 30 s. Cross-device needs a per-user minimum version in a fast store."
 
 ---
@@ -400,7 +664,157 @@ The implementation of linearizability in practice uses Raft or Paxos consensus p
 
 The situations where linearizability is worth that cost are specific and defensible. Banking is the clearest case -- losing money or double-spending due to a consistency error is both a regulatory violation and a direct financial loss. At $0.00002 per transaction in coordination overhead (the cost delta between strong and eventual consistency), the cost of linearizability for financial transactions is essentially zero compared to the cost of a single double-spend incident. Inventory management at checkout is similar: if two users simultaneously purchase the last unit of a product, the company must either oversell (fulfill both orders, potentially at a loss if the product is out of stock) or disappoint one customer and issue a refund. The legal liability and customer service cost of overselling far exceeds the latency cost of using linearizable inventory locks at checkout. Distributed locks are the third major category: if a distributed system uses locks to prevent two workers from processing the same job simultaneously, and the lock system is only eventually consistent, two workers will occasionally both acquire the same lock and both process the same job -- resulting in duplicate actions that may be irreversible. Linearizable locks prevent this entirely.
 
+### Worked examples: linearizability in action
+
+**Example 1 -- The kill switch that takes 30 seconds to work**
+
+Setup: 400 application servers check the feature flag `new_payment_path` on every payment. A bug in the new path charges some customers twice. At 10:00:00 the on-call engineer flips the flag to `off`, and the config store answers "OK".
+
+| Config design | When servers stop using the bad path | Extra double charges at 1,000 payments/s |
+|---|---|---|
+| Async-replicated store; servers poll every 30 s | Spread over 0-30 s, about 15 s on average | About 15,000 |
+| Linearizable store (etcd); servers read per request or watch the key | Every read that starts after the "OK" returns `off`; watchers are notified within milliseconds | About 0 |
+| Linearizable store, but each server caches the flag for 30 s | Same as the first row | About 15,000 |
+
+The third row is the staff-level point: **a guarantee ends at the last copy.** A linearizable store behind a 30-second local cache is a 30-second eventually consistent system. For a kill switch, use a watch (push) or a short cache with invalidation, and measure "time from flip to last server switched" in game days.
+
+**Example 2 -- A lock, a GC pause, and a fencing token**
+
+Setup: workers take a lease from a lock service before generating the monthly invoice batch. The lease lasts 10 s, and every grant comes with a **fencing token**, a number that increases with each grant.
+
+| Time | Worker A | Worker B | Storage |
+|---|---|---|---|
+| 0 s | Gets the lease with token 33. Starts work | | |
+| 1 s | Enters a 15 s garbage-collection pause | | |
+| 10 s | Still paused; the lease expires | Gets the lease with token 34 | |
+| 11 s | | Writes invoices with token 34 | Accepts. Highest token seen = 34 |
+| 16 s | Wakes up, believes it still holds the lease, writes with token 33 | | **Rejects**: 33 < 34 |
+
+Without the token check, both A and B write invoices and customers receive two bills. Both halves of the fix need linearizability. The lock service must never grant one lease to two holders at once and must issue tokens in strictly increasing order -- an eventually consistent lock (for example, a Redis primary that fails over before replicating the grant) can hand B the lease while A legitimately holds it. And storage must compare each token with the highest one it has seen, which is itself a linearizable check-then-write. Section 10.7 covers fencing in depth.
+
+**Example 3 -- Two people sign up as "ranjeet" in the same second**
+
+Setup: two users, one in Mumbai and one in Frankfurt, sign up 20 ms apart and both choose the username `ranjeet`.
+
+- *Region-local databases with async cross-region replication.* Both inserts succeed locally, both users log in, and the conflict surfaces 200 ms later when replication meets. Someone has to be renamed to `ranjeet_2` after they have already shared their profile link.
+- *One linearizable uniqueness index* (a single consensus group, or Spanner) with its leader in Mumbai. The Mumbai insert commits in a few milliseconds. The Frankfurt insert travels to the leader (~120 ms round trip), hits the unique constraint, and the user is asked to choose another name before the account exists.
+
+The cost is ~120 ms once, at signup, an operation each user performs once in their lifetime. That is the shape of a good linearizability decision: a rare operation, an irreversible conflict, and a cost that is cheap to pay.
+
+**Example 4 -- Computing the latency bill**
+
+Setup: a 5-replica Raft group with its leader in us-east-1. Round-trip times from the leader: us-east-2 12 ms, us-west-2 65 ms, eu-west-1 75 ms, ap-south-1 190 ms. Each node fsyncs in ~2 ms.
+
+| Question | Calculation | Answer |
+|---|---|---|
+| Write latency for a client next to the leader | Majority = 3 of 5 = leader + the 2 fastest followers: us-east-2 (12) and us-west-2 (65), plus fsync | ~67 ms |
+| The same write from a client in Mumbai | Add the client's round trip to the leader (190 ms) | ~257 ms |
+| Write latency while us-west-2 is down | The next-fastest follower is eu-west-1 (75) | ~77 ms |
+| Linearizable read with ReadIndex | One heartbeat round to a majority (65 ms), no fsync | ~65 ms at the leader |
+| Linearizable read with a leader lease | Answered from the leader's memory | ~1 ms at the leader, still +190 ms for a Mumbai client |
+
+Two conclusions fall out of the table. The commit time is set by the *second-fastest follower*, so placing two replicas close to the leader is the biggest lever on write latency. And no read technique removes the client's distance to the leader, which is why Mumbai users of this system should have their data homed in a group whose leader is in Mumbai.
+
 **Interview line:** "Linearizable means every operation takes effect at one instant between request and response, and reads never go backward. I get it from a consensus log with a leaseholder serving reads, and I pay a cross-region round trip on writes."
+
+---
+
+## Sequential Consistency: "Everyone Sees the Same Order, Not Necessarily the Latest"
+
+Sequential consistency, defined by Leslie Lamport in 1979, makes two promises. First, there is one single total order of all operations, and every reader in the system observes that same order. Second, each client's own operations appear in that order in the sequence the client issued them (its "program order"). What it does not promise is that the order respects real time across different clients. If Alice's write finished at 10:00:00 and Bob reads at 10:00:01, sequential consistency allows Bob to still see the old value -- as long as Bob's read is placed before Alice's write in the one agreed order, and as long as nobody ever sees history in a different order than Bob does.
+
+That single difference -- dropping the real-time requirement -- is the entire gap between linearizability and sequential consistency. Linearizability says "one copy, and it is always current." Sequential says "one history, everyone replays it in the same order, but some readers may be a few pages behind."
+
+```mermaid
+sequenceDiagram
+    participant P1 as Writer 1
+    participant P2 as Writer 2
+    participant Seq as Sequencer / log
+    participant R1 as Reader A (nearby replica)
+    participant R2 as Reader B (lagging replica)
+    P1->>Seq: Write(score = 100)
+    P2->>Seq: Write(score = 200)
+    Note over Seq: Log order fixed once: #1 score=100, #2 score=200
+    Seq-->>R1: apply #1, then #2
+    Seq-->>R2: apply #1 (#2 still in flight)
+    R1->>R1: Read: 200
+    R2->>R2: Read: 100 (stale, but allowed)
+    Note over R1,R2: VALID: B sees 100 now and 200 later. Same order as A, just behind.
+    Note over R1,R2: INVALID: any reader sees 200 and then 100. That would contradict the agreed order.
+```
+
+*Sequential consistency: one log order, every replica applies it in the same sequence, and replicas are allowed to lag.*
+
+The "one secretary" analogy captures it. Every memo from every manager goes through a single secretary, who types them into one numbered stack. Copies of the stack are mailed to every office. Some offices receive their copy later than others, so on any given afternoon the Tokyo office may be reading memo #41 while New York is already on #45. But no office ever receives #45 before #41, and no two offices ever disagree about what #43 said. Delay is allowed. Disagreement about the order is not.
+
+The contrast with causal consistency is the most useful way to place sequential on the spectrum. Causal only orders operations that are related: a reply must follow the post it replies to, but two unrelated posts can show up in different orders for different readers. Sequential orders everything, including unrelated operations. If Writer 1 sets `x = 1` and Writer 2, completely independently, sets `x = 2`, causal consistency lets Reader A see 1 then 2 while Reader B sees 2 then 1 -- and the two replicas may then need a conflict-resolution rule to converge. Sequential consistency forbids that split: the system picks one order (say, 1 then 2), and every reader sees exactly that. That is why sequential is the minimum guarantee for anything where readers in different places must agree on "what happened, in what order": a ranked leaderboard, an audit trail, a replicated state machine, or an event stream that several services replay to build their own views.
+
+The implementation reveals why it sits between linearizable and causal in cost. Writes still need a single agreed order, so they go through a sequencer -- a single leader, a consensus-replicated log, or a total-order broadcast. That is the expensive part, and it is why sequential writes cost roughly $8-15 per million operations rather than the $2-5 of causal. Reads are where the savings appear. A replica that applies the log strictly in order can serve reads locally without contacting the leader and without a quorum round trip, because a stale-but-in-order answer is allowed. In a read-heavy system, that removes the cross-region round trip from 90%+ of operations, which is how sequential lands at 100-300 ms on the write path but local-replica latency on reads. The one piece of client bookkeeping required is program order: a client must not read from a replica that is behind the client's own last write or last read. Systems handle this by tagging each client session with the last log position it has seen and only serving its reads from replicas at or past that position -- the same mechanism as read-your-writes and monotonic reads, applied per session.
+
+ZooKeeper is the canonical production example. All writes go through the leader and are ordered by a single transaction id (the zxid), so every server applies updates in the same order. Reads are served by whichever server the client is connected to, which may be behind the leader. ZooKeeper documents this as "sequential consistency: updates from a client are applied in the order they were sent," plus a guarantee that a client never sees an older view after reconnecting to another server. If a client needs a linearizable read -- for example, before acting on a lock -- it calls `sync()` first, which forces its server to catch up with the leader. That is the practical pattern: sequential by default because it is cheap, and an explicit opt-in to linearizable for the few reads that drive irreversible decisions. A single Kafka partition behaves the same way for its consumers: one offset order, every consumer group sees it identically, and lagging consumers are simply behind rather than out of order.
+
+There are two staff-level caveats. The first is that sequential consistency is not composable. Linearizability is a "local" property: if object X is linearizable and object Y is linearizable, the system of X and Y together is linearizable. Sequential consistency does not have this property. Two separately sequentially consistent stores, each with its own sequencer, can together produce a history that no single total order explains -- Reader A sees X's update but not Y's, while Reader B sees Y's but not X's. If your design relies on "everyone sees the same order" across two systems, you need one shared log (or a single sequencer) across both, not two independent ones. The second caveat is the stale-read trap: because sequential allows a reader to be behind, a client that reads "lock is free" from a lagging replica and acts on it can conflict with a client that already took the lock. Order agreement does not protect check-then-act decisions. Those decisions need linearizable reads -- ZooKeeper's `sync()`, a leader read, or a fencing token.
+
+The L5 answer treats sequential and linearizable as interchangeable "strong" options. The L6 answer separates them precisely: "The leaderboard needs every viewer to agree on the ranking history, so I put score updates through one ordered log and let regional replicas serve reads in log order. Viewers may be a second or two behind, which is fine. What I will not do is let the prize-payout service decide a winner from a replica read -- that one call goes to the leader, because acting on a stale value there is irreversible."
+
+### Worked examples: sequential consistency in action
+
+**Example 1 -- A game leaderboard read from three regions**
+
+Ben starts with 800 points. The leaderboard's log then records three updates, in this order:
+
+```text
+#101  Asha = 900
+#102  Ben  = 950
+#103  Asha = 1000
+```
+
+At the same instant, four reads hit replicas that have applied different amounts of the log:
+
+| Viewer | Replica has applied | Viewer sees | Allowed? |
+|---|---|---|---|
+| US | up to #103 | 1. Asha 1000, 2. Ben 950 | Yes (current) |
+| EU | up to #102 | 1. Ben 950, 2. Asha 900 | Yes (one step behind) |
+| AP | up to #101 | 1. Asha 900, 2. Ben 800 | Yes (two steps behind) |
+| A replica that applied #103 but not #102 | #101, #103 | 1. Asha 1000, 2. Ben 800 | **No** -- that ranking never existed |
+
+The last row is what separates sequential from causal. Ben's update and Asha's second update are unrelated -- different players, different clients -- so under causal consistency a replica may apply #103 before #102 and show a ranking that was never true at any moment of the game. For a leaderboard that decides prizes, or that players screenshot to argue about, every viewer must see a state that actually existed. Sequential consistency guarantees that every replica is always at some point *in* the real history, just possibly an earlier one.
+
+**Example 2 -- Two services replaying the same account events**
+
+Setup: an account's events are published to Kafka. A balance service and a fraud service each consume them independently to build their own view.
+
+```text
+e1  deposit   +100     balance after: 100
+e2  withdraw   -80     balance after:  20
+```
+
+- *One topic, partitioned by `account_id`.* Both services read e1 then e2, so both compute a balance of 20. One may lag behind the other, but they never disagree about history.
+- *Deposits and withdrawals in separate topics.* Today the fraud service's withdrawals consumer is faster, so it applies e2 before e1, computes a balance of -80, flags an overdraft, and freezes the account of a customer who did nothing wrong.
+
+The fix costs nothing at design time: put every event for one account in one partition (`key = account_id`). One account's events are then processed one at a time, which is fine, because parallelism comes from spreading many accounts across many partitions.
+
+**Example 3 -- Two ordered logs do not make one ordered system**
+
+Setup: an `orders` topic and a `payments` topic, each ordered on its own. The order service writes "order #5 created"; a moment later the payment service writes "payment for order #5 captured".
+
+The shipping service consumes both topics. Its `orders` consumer is 3 s behind, so it receives "payment for #5" for an order it has never heard of. It either drops the event (the order never ships) or errors and retries in a loop.
+
+Each topic is sequential; the two together are not. This is the non-composability caveat above, in a real system. There are two fixes:
+
+1. **One log.** Write both events through a single ordered stream, for example a transactional outbox partitioned by order ID.
+2. **Carry the dependency.** The payment event says "requires order #5", and the consumer waits until it has seen order #5. That is causal consistency, and it is often the cheaper fix.
+
+**Example 4 -- Reading a stale leader from ZooKeeper**
+
+Setup: services find the current database leader by reading `/db/leader` from ZooKeeper. The leader changed from `node-3` to `node-5` two seconds ago. A client is connected to a ZooKeeper follower that is 3 s behind.
+
+- The client reads `/db/leader` and gets `node-3`. Sequential consistency allows this: the follower is behind, not out of order.
+- The client sends writes to `node-3`, which is no longer the leader. With fencing (Example 2 in the linearizability section) they are rejected; without it, they may land on a node that is about to be rebuilt.
+
+For a read that drives an action, call `sync()` first, which makes the follower catch up with the leader before answering, at the cost of one round trip to the leader. Better still, set a watch so the client is notified when the value changes. ZooKeeper's own lock recipe never depends on a stale read: it *creates* an ephemeral sequential node, and creates are writes, which always go through the leader.
+
+**Interview line:** "Sequential means one global order that every reader agrees on, with each client's own operations in program order -- but no real-time guarantee, so replicas can lag. I get it from a single ordered log with in-order replica reads, and I upgrade to a linearizable read (sync or leader read) for any check-then-act decision."
 
 ---
 
@@ -423,6 +837,690 @@ The golden rule of consistency model selection is: use the weakest consistency m
 
 The same company needing all of these models simultaneously is not a contradiction or a sign of inconsistent engineering philosophy -- it is the natural result of designing a large system with many different data types. Google uses linearizable consistency in Cloud Spanner for financial transactions and billing data, where a double-charge or missed charge is both a business and regulatory problem. Some Bigtable operations use a form of causal consistency for user activity data, where relative ordering within a user's session matters but global ordering across all users does not. Google Workspace (Docs, Sheets, Slides) uses read-your-writes consistency for user edits, so you always see your own typing in real time. YouTube uses eventual consistency for view counts, where the engineering team famously ships a view count that is sampled and batched rather than exact -- the number you see is real-time-ish but not accurate to the second. These are not accidents. They are deliberate, explicit design decisions made by engineers who understood the cost and user experience implications of each model. That is the standard this chapter is preparing you to reach.
 
+### Worked example: one food delivery app, every model
+
+A single order on a food delivery app touches every level of the spectrum. Picking a model per data type is only half the exercise; the other half is stating concretely what breaks one level weaker, because that is the proof the stronger model is needed.
+
+| Data | Model | Why this level | What breaks one level weaker |
+|---|---|---|---|
+| Payment capture and refunds | Linearizable | A charge or refund cannot be silently undone | A timed-out retry charges the card twice |
+| Assigning a courier to an order | Linearizable | Exactly one courier per order | Two couriers drive to the same restaurant; one is unpaid for the trip |
+| Single-use promo code | Linearizable | Redemption is check-then-act | The code is redeemed twice from two phones |
+| Order status timeline (placed, accepted, picked up, delivered) | Sequential per order (one partition per order ID) | Customer, restaurant, and courier apps must agree on the history | The customer sees "Delivered", then "Preparing" |
+| Chat between customer and courier | Causal | A reply must follow the message it answers | "Yes, gate 2" appears before "Which gate?" |
+| The customer's own address and cart edits | Read-your-writes | The person who edited must see the edit | The customer edits again, or sees the old address (checkout reads the primary anyway) |
+| Courier's live location | Eventual (last-writer-wins) | Overwritten every 4 s; older values are worthless | Nothing -- the dot on the map is a few seconds old |
+| Restaurant rating and review count | Eventual (counters) | Nobody can tell 4.62 from 4.63 | Nothing |
+| "Sold out" badge on a menu item | Eventual for display, linearizable when the restaurant accepts the order | The same split as the concert seat | A stale badge lets an order through, and the accept step rejects it |
+
+Count operations, not rows. Location updates, menu views, and rating reads are well over 90% of the traffic and run on the cheapest model. Payments, courier assignment, and promo redemption are a small fraction of a percent of operations and pay for consensus. That ratio is what "use the weakest model that works" looks like in a real system.
+
+---
+
+# Part 1b: Each Model From First Principles -- What It Is, How to Build It, What Runs in Production
+
+Part 1 gave you the feel of each model. This part rebuilds the core models from scratch, assuming you have taken a databases course and an operating systems course but have never built a distributed system. Every model is taught top-down in the same order:
+
+1. **The plain-words rule** -- what the model promises, in sentences you could explain to a classmate.
+2. **Worked examples** -- small timelines where you decide "allowed or not allowed", because the rules only make sense once you have applied them.
+3. **How to get it in a relational database** -- one Postgres or MySQL server, then a primary with replicas, then failover.
+4. **How to get it in a distributed system** -- the algorithm, step by step.
+5. **What runs in production** -- the algorithms and the systems that use them.
+6. **Common mistakes and a self-check.**
+
+---
+
+## 1b.0 The Starting Point: One Server, Then Two
+
+**With one database server there is no consistency problem.** There is exactly one copy of each row. When a write commits, every later read sees it, because there is nowhere else to read from. (Which interleavings of *multi-row transactions* are allowed is a separate topic called isolation -- see Section 10.1. This part is about single reads and writes.)
+
+Problems start the moment you make **copies (replicas)**. You make copies for three reasons:
+
+1. **Survive failures.** If the only server's disk dies, the data is gone.
+2. **Serve more reads.** One server handles maybe 10,000-50,000 queries per second; ten replicas handle ten times more.
+3. **Be close to users.** A user in Mumbai reading from Virginia pays ~200 ms per round trip; a Mumbai replica answers in ~5 ms.
+
+Five words you need for the rest of this part:
+
+| Term | Meaning |
+|---|---|
+| **Leader / primary** | The replica that accepts writes and decides their order |
+| **Follower / replica / standby** | A copy that applies the leader's changes |
+| **Log** | The ordered list of changes. Postgres calls it the WAL (write-ahead log), MySQL the binlog. Almost every consistency mechanism is a statement about *who has applied how much of the log* |
+| **Synchronous replication** | The leader waits for a replica to confirm before telling the client "OK". Safer, slower |
+| **Asynchronous replication** | The leader says "OK" immediately and ships the change later. Faster, but replicas lag behind (replication lag) |
+
+```mermaid
+flowchart LR
+    C["Client: UPDATE balance = 400"] --> P["Primary<br/>log position 1005<br/>balance = 400"]
+    P -- "async, ~50-500 ms behind" --> R1["Replica 1<br/>log position 1003<br/>balance = 500 (old)"]
+    P -- "async" --> R2["Replica 2<br/>log position 1005<br/>balance = 400"]
+    style R1 fill:#fde68a,stroke:#b45309,color:#000
+    style R2 fill:#bbf7d0,stroke:#15803d,color:#000
+```
+
+*A read routed to Replica 1 returns the old balance. Every consistency model is a rule about whether that read is allowed.*
+
+**One history, five models.** Here is one tiny scenario. `x` starts at 0. Client A writes `x = 1`; the write starts at t=10 ms and is acknowledged at t=20 ms. Client B (a different client) reads `x` at t=30 ms and again at t=40 ms. Which pairs of answers may B see?
+
+| Model | Allowed results for B's two reads | Why |
+|---|---|---|
+| **Linearizable** | (1, 1) only | A's write finished before B's reads started, so B must see it |
+| **Sequential** | (0, 0), (0, 1), (1, 1) | B may be "behind", but can never go from new back to old |
+| **Causal** | (0, 0), (0, 1), (1, 1) | Once B has seen `x = 1`, that write is in B's causal past and cannot disappear |
+| **Read-your-writes** | Anything, including (1, 0) | B did not write anything, so this guarantee promises B nothing |
+| **Eventual** | Anything, including (1, 0) | The only promise: if writes stop, reads *eventually* return 1 |
+
+Read the table top to bottom: each weaker model allows *more* answers. "Stronger" literally means "fewer surprising answers are allowed". The rest of this part explains how each row is built.
+
+---
+
+## 1b.1 Linearizability -- From Zero to Production
+
+### Step 1: The rule in plain words
+
+Linearizability (Herlihy and Wing, 1990; also called *atomic consistency*, and usually what people mean by "strong consistency") makes the system behave as if there were **one copy of the data** and every operation happened **at one instant**.
+
+Three rules you can check by hand:
+
+1. Every operation takes effect at a single instant -- its **linearization point** -- somewhere between the moment the client sent the request and the moment it got the response.
+2. Those instants put all operations, from all clients, into one order.
+3. Every read returns the value of the latest write before it in that order.
+
+Two consequences that matter in practice:
+
+- **Real-time order is respected.** If operation A *finished* before operation B *started* (on a wall clock), A comes before B. No exceptions.
+- **No going back.** Once *any* client has seen a new value, *no* client can see the older value afterward.
+
+### Step 2: Worked examples -- allowed or not?
+
+`x` starts at 0. Each bar is one operation, from request sent to response received.
+
+**Example 1 -- the write finished before the read started.**
+
+```text
+Client A:  |--- write(x=1) ---|
+Client B:                         |--- read(x) ---|      returns ?
+```
+
+The read *must* return 1. A's write finished first, so its instant is earlier.
+
+**Example 2 -- the read overlaps the write.**
+
+```text
+Client A:  |---------- write(x=1) ----------|
+Client B:        |--- read(x) ---|                      returns 0 or 1
+```
+
+Both are allowed. The two operations are **concurrent** (their bars overlap), so the write's instant can fall before or after the read's instant.
+
+**Example 3 -- the flip-back (the trademark violation).**
+
+```text
+Client A:  |-------------- write(x=1) --------------|
+Client B:     |-- read -> 1 --|
+Client C:                        |-- read -> 0 --|
+```
+
+**Not linearizable**, even though both reads overlap the write. B saw 1, so the write's instant is before B's read. C's read started after B's read finished, so C's instant is later still -- after the write. C must see 1. Seeing "new, then old" is the one behaviour linearizability exists to forbid. This is exactly what happens when B reads from an up-to-date replica and C reads from a lagging one.
+
+**Example 4 -- stale but in order.**
+
+```text
+Client A:  |--- write(x=1) ---|
+Client B:                         |--- read -> 0 ---|
+```
+
+**Not linearizable** (B started after the write finished). It *is* sequentially consistent: B's read can be ordered before A's write, because sequential consistency ignores real time across clients (Section 1b.2).
+
+**Example 5 -- two buyers, one seat.** Alice and Bob both run `book(seat 14C)` at the same moment. Booking means "if the seat has no owner, set owner to me". With linearizability, the two bookings get two distinct instants, so exactly one of them sees "no owner" and wins. Everyone who reads the seat afterwards sees the same winner. Without it, both can read "no owner" from different replicas and both get a confirmation email.
+
+### Step 3: Why you would pay for it -- four concrete cases
+
+| Case | What goes wrong without linearizability |
+|---|---|
+| **Uniqueness** (usernames, seat booking, "one active subscription") | Two clients each read "free" from different replicas; both succeed |
+| **Locks and leader election** | Two workers each believe they hold the lock; both process the same job (and both charge the card) |
+| **Check-then-act on money** | The ATM example at the start of this chapter: two withdrawals pass the balance check |
+| **Two channels racing** | A web server stores a new profile photo, then puts "resize photo 42" on a queue. The resizer reads the photo from a lagging replica and resizes the *old* photo. The queue message travelled faster than replication |
+
+The last case is the one freshers miss. Your system has more than one communication path (a database *and* a queue, a database *and* an HTTP callback). If one path is faster than replication, a reader acting on a message can see data from before the message was sent. Linearizable storage closes that gap. A weaker store needs the message to carry a version, and the reader then waits for that version.
+
+### Step 4: Getting it in a relational database
+
+**Level 0 -- one Postgres or MySQL server.** Single-row reads and writes are linearizable out of the box. A commit becomes visible atomically, and every statement that starts after the commit returns takes a snapshot that includes it. (In Postgres's default READ COMMITTED isolation, each *statement* takes a fresh snapshot.) The classic "exactly one buyer wins" pattern:
+
+```sql
+-- Two buyers run this at the same moment. Exactly one gets "1 row updated".
+UPDATE seats
+SET    owner_id = :user_id, booked_at = now()
+WHERE  flight_id = :flight_id
+  AND  seat_no   = '14C'
+  AND  owner_id IS NULL;
+-- 1 row  -> you won
+-- 0 rows -> someone else already owns the seat
+```
+
+Why this works: the first UPDATE takes a row lock. The second blocks on that lock. When the first commits, Postgres re-checks the second statement's `WHERE` clause against the *new* row version, finds `owner_id` is no longer NULL, and updates 0 rows. A `UNIQUE` index gives the same guarantee for usernames: the second `INSERT` fails with a unique-violation error.
+
+Two caveats even on one server:
+
+- `synchronous_commit = off` (Postgres) or `innodb_flush_log_at_trx_commit = 0/2` (MySQL) acknowledges commits *before* they are durable on disk. After a crash the last acknowledged writes can vanish, so a client that saw "seat booked" can later see "seat free". That is a linearizability violation caused by a performance setting.
+- Anything you put in front of the database -- a Redis cache, an application-level cache -- is a second copy. Reads served from it are not linearizable unless invalidation completes before the write is acknowledged.
+
+**Level 1 -- primary plus read replicas.** Postgres streaming replication and MySQL replication are asynchronous by default. The moment the application sends reads to a replica, Example 3 (the flip-back) becomes possible. Your options:
+
+| Option | How | What you get | What it costs |
+|---|---|---|---|
+| Read only from the primary | Route linearizable reads in the application or proxy | Linearizable (one copy) | The primary serves all those reads |
+| Postgres `synchronous_commit = remote_apply` with `synchronous_standby_names` | Commit waits until the named standby has *applied* the change | Reads on that standby see every acknowledged commit | Every commit waits for a round trip to the standby. If the standby dies, commits stall unless you list several standbys (for example `ANY 1 (s1, s2)`) |
+| Postgres `synchronous_commit = on` with a sync standby | Commit waits until the standby has *flushed* the WAL to disk, not applied it | No lost writes on failover. Reads on the standby **can still be stale** | One round trip per commit |
+| MySQL semi-sync (`AFTER_SYNC`) | Commit waits until a replica has *received* the change | Lossless failover. Replica reads **can still be stale** | One round trip per commit |
+| MySQL Group Replication with `group_replication_consistency = BEFORE` (or `AFTER`) | Paxos-based group. `BEFORE` makes a read wait until its member has applied everything committed before it; `AFTER` makes a commit wait until all members have applied it | Linearizable reads on any member | Extra wait on reads (`BEFORE`) or on writes (`AFTER`) |
+
+The trap in that table: "synchronous replication" in most databases guarantees **durability** (the replica has the bytes), not **visibility** (the replica will show them to readers). Only "applied" modes give you linearizable replica reads.
+
+**Level 2 -- failover, where most real systems actually lose linearizability.**
+
+```mermaid
+sequenceDiagram
+    participant Al as Alice
+    participant P as Primary
+    participant R as Async replica (200 ms behind)
+    participant Bo as Bob
+    Al->>P: Book seat 14C at 10:00:00.100
+    P-->>Al: Booked
+    Note over P: 10:00:00.150 primary crashes. The booking never reached R.
+    Note over R: Failover tool promotes R to primary
+    Bo->>R: Book seat 14C
+    R-->>Bo: Booked (R thinks the seat is free)
+    Note over Al,Bo: Two confirmed owners of one seat. An acknowledged write was lost.
+```
+
+A second failure hides behind the first: **split brain**. Suppose the old primary was not dead, just cut off from the failover tool by a network problem. Now two primaries accept writes. Fixing failover takes three rules, and the third one needs consensus:
+
+1. **Read from a copy that has every acknowledged write** (primary, or an `remote_apply` standby).
+2. **Only promote a copy that has every acknowledged write** (a synchronous standby).
+3. **Guarantee the old primary stops accepting writes** before the new one starts. This needs a single source of truth about "who is primary" that cannot itself split.
+
+Production Postgres HA tools do exactly this. Patroni stores a "leader key" with a short TTL in etcd, Consul, or ZooKeeper, all of which are consensus systems. A primary that cannot renew the key demotes itself, and in `synchronous_mode` Patroni only promotes a synchronous standby. On the MySQL side, InnoDB Cluster uses Group Replication's Paxos-based membership for the same purpose. **Every serious highly available relational setup has a consensus system somewhere.** That is the bridge to the next step.
+
+### Step 5: Getting it in a distributed system -- consensus, step by step
+
+The goal: make N machines behave like one, even when some crash and messages are delayed. The tool is a **replicated log**. All replicas agree on the same sequence of commands, and each one applies them in order to its own copy (this is called *state machine replication*). Agreement uses **majorities**, because any two majorities of the same N nodes share at least one node. So whoever leads next can always find every committed entry.
+
+**Raft** (Ongaro and Ousterhout, 2014) is the algorithm most new systems use, designed specifically to be understandable. Walk through it with 5 nodes:
+
+**(a) Roles and terms.** Each node is a *follower*, a *candidate*, or the *leader*. Time is divided into numbered **terms**; each term has at most one leader.
+
+**(b) Leader election.**
+
+1. Followers expect a heartbeat from the leader. If a follower hears nothing for its **election timeout** (randomized, for example 150-300 ms in the Raft paper; etcd defaults to a 100 ms heartbeat and a 1,000 ms election timeout), it becomes a candidate.
+2. The candidate increments the term, votes for itself, and asks the others for votes.
+3. A node grants its vote only if it has not voted in this term **and** the candidate's log is at least as up-to-date as its own.
+4. A candidate with a majority (3 of 5) becomes leader. Randomized timeouts make it unlikely that two candidates split the vote repeatedly.
+
+**(c) Log replication -- one write.**
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant L as Leader (term 3)
+    participant F1 as Follower 1
+    participant F2 as Follower 2
+    participant F3 as Follower 3
+    participant F4 as Follower 4 (slow)
+    C->>L: SET x = 1
+    L->>L: Append entry at index 7 (term 3) and fsync
+    L->>F1: AppendEntries(prev = index 6 term 3, entry 7)
+    L->>F2: AppendEntries(prev = index 6 term 3, entry 7)
+    L->>F3: AppendEntries(prev = index 6 term 3, entry 7)
+    L->>F4: AppendEntries(prev = index 6 term 3, entry 7)
+    F1-->>L: OK, stored 7
+    F2-->>L: OK, stored 7
+    Note over L: Leader + F1 + F2 = 3 of 5, a majority. commitIndex = 7. Apply x = 1.
+    L-->>C: OK
+    L->>F1: Next heartbeat carries commitIndex = 7, followers apply it
+    Note over F3,F4: F3 and F4 catch up later. Any future leader is guaranteed to have entry 7.
+```
+
+The `prev = index 6 term 3` part is the **consistency check**. A follower accepts entry 7 only if its own entry 6 matches. If it does not, it rejects, and the leader walks back until it finds the point where they agree, then overwrites the follower's divergent tail. That is how all logs end up identical.
+
+**(d) Why committed data survives a leader crash.** An entry is committed once a majority has stored it. A future candidate needs votes from a majority. Those two majorities overlap in at least one node, and that node refuses to vote for a candidate whose log is missing the entry (rule 3 of the election). So no node missing a committed entry can become leader.
+
+**(e) What happens if the leader crashes mid-write.** If entry 7 had reached a majority, it survives and will be applied. If it was only on the leader, it may be lost -- but the client never received "OK", only a timeout. The client cannot tell which case happened. The fix is to make writes **idempotent**: the client attaches a request ID, retries, and the state machine ignores IDs it has already applied. (Section 11.7 covers this "ambiguous timeout".)
+
+**(f) The read trap -- a leader reading its own memory is NOT linearizable.**
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1
+    participant OL as Old leader (cut off by partition)
+    participant NL as New leader (has majority)
+    participant C2 as Client 2
+    Note over OL: Partitioned from the majority but has not noticed yet
+    C2->>NL: SET x = 2
+    NL-->>C2: OK (committed by majority)
+    C1->>OL: GET x
+    OL-->>C1: 1 (stale, and C2 already saw x = 2 committed)
+    Note over C1,C2: Fix: OL must prove it is still leader before answering, and it cannot.
+```
+
+Production systems use one of four fixes, in increasing order of speed (details in Section 10.3):
+
+| Read method | How it works | Cost |
+|---|---|---|
+| **Log read** | Put the read through the log like a write | One full consensus round per read |
+| **ReadIndex** | Leader notes its commitIndex, confirms it is still leader with one heartbeat round to a majority, waits until it has applied up to that index, then answers | One round trip to a majority, no disk write |
+| **Lease read** | After a successful heartbeat round, the leader knows no new leader can be elected for roughly the election timeout, so it answers locally until then | No extra round trip, but **depends on bounded clock drift** |
+| **Follower read** | A follower asks the leader for the current commitIndex, waits until it has applied that far, then answers | Moves read load off the leader |
+
+etcd, for example, uses ReadIndex for its default linearizable reads, and offers "serializable" reads that a member answers locally without that check (faster, may be stale).
+
+**(g) Paxos in one paragraph.** Paxos (Lamport, 1989/1998) is the older algorithm that Raft simplifies. Basic Paxos agrees on *one* value in two phases. In Phase 1 a proposer sends Prepare(n) and acceptors promise to ignore lower-numbered proposals. In Phase 2 it sends Accept(n, value) and acceptors accept unless they have promised a higher number. A value is chosen once a majority accepts it. **Multi-Paxos** agrees on a sequence of values (a log): a stable leader runs Phase 1 once and then only Phase 2 per entry. That has the same message pattern as Raft, so in practice Raft and Multi-Paxos have the same cost: one round trip to a majority per write. Viewstamped Replication (Oki and Liskov, 1988) and ZooKeeper's ZAB are close relatives.
+
+**(h) Two other ways to build linearizable storage.**
+
+- **Quorum registers (ABD algorithm).** With no leader, a write first reads the highest version from a majority, then writes version+1 to a majority. A read collects from a majority, takes the highest version, and **writes that value back to a majority before returning**. The write-back is what prevents the Example 3 flip-back. ABD gives linearizable reads and writes, but not compare-and-set, because CAS needs consensus. This is why Cassandra's `QUORUM` alone is not linearizable (Section 10.2), and why its `IF NOT EXISTS` lightweight transactions run Paxos, costing about four round trips.
+- **Chain replication** (van Renesse and Schneider, 2004). Replicas form a chain. Writes enter at the head and flow to the tail; the tail acknowledges and serves reads. A read at the tail only sees fully replicated writes, so reads are linearizable. Write latency grows with chain length, and reconfiguring the chain after a failure needs an external coordinator, which is again usually consensus-based.
+
+### Step 6: What runs in production
+
+| Algorithm | Production systems | Notes |
+|---|---|---|
+| **Raft** | etcd (Kubernetes' brain), Consul, CockroachDB (one Raft group per data range), TiKV / TiDB, YugabyteDB, Kafka's KRaft metadata quorum | MongoDB's replication protocol is Raft-inspired |
+| **Multi-Paxos** | Google Spanner, Chubby, Megastore; Amazon DynamoDB replication groups (per the 2022 DynamoDB paper) | Spanner adds TrueTime for global ordering (Section 10.5) |
+| **ZAB** | Apache ZooKeeper (used by HBase, Hadoop, older Kafka) | Writes linearizable; reads sequential unless you call `sync()` |
+| **Paxos-variant group communication** | MySQL Group Replication / InnoDB Cluster | Read guarantee chosen with `group_replication_consistency` |
+| **Paxos per operation** | Cassandra lightweight transactions (`IF NOT EXISTS`, `IF col = ...`) | About 4 round trips; use only for CAS-style operations |
+| **Quorum storage + single writer** | Amazon Aurora: 6 copies across 3 availability zones, writes need 4 of 6, read quorum 3 of 6 | The single writer instance orders all writes |
+| **Leader + in-sync replica set** | Kafka partitions (`acks=all`, `min.insync.replicas`) | Membership decided by the controller (Raft in KRaft mode) |
+
+**Latency rule of thumb.** Inside one region (RTT ~0.5-1 ms) a Raft write costs one RTT plus an fsync, typically 1-5 ms. Spread across three regions, a leader in us-east needs only one other region to acknowledge (2 of 3), so a write costs one RTT to the nearest other region (~60-70 ms to us-west). A client in Europe first has to reach the leader, adding ~80 ms. Placing the leader near the writers is the biggest lever you have.
+
+**How teams verify it.** Jepsen-style testing injects partitions, clock jumps, and crashes, records every operation's start and end time, and runs a checker (Knossos, Elle, or Porcupine) that searches for a valid linearization point for each operation. If none exists, the history is not linearizable -- exactly the exercise you did in Step 2, automated.
+
+### Step 7: Common mistakes
+
+1. **"We use Postgres, so we are strongly consistent."** Not if any read goes to an async replica or a cache.
+2. **"Synchronous replication means replica reads are fresh."** Only *apply*-level modes give visibility; *flush* and *receive* modes give durability.
+3. **Leader reads without ReadIndex or a lease.** A partitioned old leader serves stale data.
+4. **Treating Cassandra `QUORUM` as linearizable.** It gives overlap, not linearizability, and sloppy quorums can break even overlap.
+5. **Retrying writes after a timeout without an idempotency key.** The first attempt may have committed.
+6. **Using a lock without a fencing token.** A paused lock holder wakes up and writes (Section 10.7).
+
+### Step 8: Self-check
+
+1. *A Raft leader answers reads from memory. Why is that unsafe, and what are two fixes?* -- A partitioned old leader can still believe it is leader while a new leader commits writes. Fixes: ReadIndex (confirm leadership with a majority before answering) or a time-bounded leader lease.
+2. *Your Postgres primary has one synchronous standby with `synchronous_commit = on`. Can a read on that standby return stale data?* -- Yes. `on` waits for the standby to flush WAL, not to apply it. Use `remote_apply` for read visibility.
+3. *Why does a 5-node Raft cluster tolerate 2 failures but a 4-node cluster tolerates only 1?* -- A majority of 5 is 3, so 2 can fail. A majority of 4 is 3, so only 1 can fail. The fourth node adds cost without adding tolerance, which is why clusters use odd sizes.
+4. *Two clients overlap with a write. One sees the new value, then the other sees the old value. Linearizable?* -- No. That is the flip-back (Example 3).
+
+---
+
+## 1b.2 Sequential Consistency -- How It Is Built
+
+The rule (from Part 1): **one total order of all operations that every reader agrees on, with each client's own operations in the order it issued them -- but no real-time promise across clients.** Readers may be behind; they may never disagree about the order.
+
+**Implementation insight: sequential = linearizable minus the "am I up to date?" check on reads.** Writes still go through one ordered log. Reads are served by any replica that has applied a *prefix* of that log, as long as each client never moves backward.
+
+**In a relational database.** A Postgres or MySQL replica applies the log strictly in order, so every replica is always an exact prefix of the primary's history. All replicas therefore agree on the order. What can still break sequential consistency is a client hopping between replicas at different positions. The fix is to remember, per client session, the highest log position it has seen, and only serve it from replicas at or beyond that position:
+
+```sql
+-- Postgres: after a write on the primary, remember the position
+SELECT pg_current_wal_lsn();                  -- e.g. '0/3A1F2B8', store in the session
+
+-- After a read on a replica, remember that replica's position too
+SELECT pg_last_wal_replay_lsn();
+
+-- Before serving this session from a replica, check it is not behind the session
+SELECT pg_last_wal_replay_lsn() >= '0/3A1F2B8'::pg_lsn;   -- false -> wait briefly or use another replica
+```
+
+**In a distributed system.** You need **total order broadcast**: every node delivers the same messages in the same order. Total order broadcast is equivalent to consensus (each can be built from the other), so in practice this means a Raft, Paxos, or ZAB log. Replicas apply the log in order and serve reads locally. Clients track the last log index they have seen.
+
+| System | How it provides sequential consistency |
+|---|---|
+| ZooKeeper | ZAB orders every write by a transaction id (`zxid`). Any server answers reads; a client never sees an older `zxid` than it has already seen, even after reconnecting to another server. `sync()` upgrades a read to linearizable |
+| Kafka (one partition) | One offset order per partition. Every consumer sees the same order, and lagging consumers are simply behind |
+| etcd "serializable" reads | Local reads from a member's applied state. Sequential per member; a client moving between members needs to track revisions to avoid going backward |
+
+**Common mistakes.** Assuming two independently ordered logs (two Kafka partitions, two ZooKeeper ensembles) give one global order -- they do not, because sequential consistency is not composable (Part 1). Making check-then-act decisions from a sequential read -- the answer may be stale, so call `sync()` or read from the leader first.
+
+---
+
+## 1b.3 Causal Consistency -- From Zero to Production
+
+### Step 1: The rule in plain words
+
+First define **happens-before** (Lamport, 1978). Operation A happens-before operation B (written A -> B) if any of these is true:
+
+1. A and B are from the same client, and A was issued first.
+2. B read a value that A wrote.
+3. There is a chain: A -> C and C -> B.
+
+If neither A -> B nor B -> A, the two operations are **concurrent**: neither could have known about the other.
+
+**Causal consistency: if A -> B, then every client that sees B also sees A.** Concurrent operations may be seen in any order, and different clients may see them in *different* orders.
+
+### Step 2: Worked examples -- allowed or not?
+
+**Example 1 -- the privacy bug (the reason causal consistency was studied).** Alice removes her boss from her friends list, then posts "My boss is the worst." Removal -> post, because both come from Alice and the removal came first. Under causal consistency, any replica that shows the post also shows the removal, so the boss's view is checked against the new friends list. Under eventual consistency, a replica can receive the post before the removal, and the boss reads it.
+
+**Example 2 -- writes from one client.**
+
+```text
+Client A:   write(x=1)   then   write(y=1)
+Client B:                          read(y) -> 1   then   read(x) -> 0
+```
+
+**Not causal.** `write(x=1) -> write(y=1)` (same client), and B read y=1, so `write(x=1)` is in B's causal past. B must see x=1.
+
+**Example 3 -- concurrent writes seen in different orders.**
+
+```text
+Client A:   write(x=1)
+Client D:   write(x=2)                       (A and D never saw each other's write)
+Client B:   read(x) -> 1, then read(x) -> 2
+Client E:   read(x) -> 2, then read(x) -> 1
+```
+
+**Causal: allowed** (the writes are concurrent). **Sequential: not allowed** (B and E disagree about the order). This is the exact line between the two models. Because replicas may disagree, a causal system still needs a rule to **converge** on one final value (Section 1b.5).
+
+**Example 4 -- the chat reply.** Bob reads Alice's "Pizza tonight?" and replies "Yes!". Bob's read of Alice's message means `post -> reply`. Carol may never see "Yes!" without "Pizza tonight?" above it.
+
+### Step 3: How a system knows what caused what -- clocks
+
+Wall-clock timestamps cannot tell you causality: clocks drift, and two events a microsecond apart on different machines may have nothing to do with each other (Section 10.4). Systems use logical clocks instead.
+
+**Lamport clock -- one counter per node.** Rules: increment before every event. Attach the counter to every message. On receiving a message, set `counter = max(local, received) + 1`.
+
+```text
+Node P1:  a (L=1) ---- send m (L=2) ----------------->
+Node P2:  b (L=1) ---------------------- receive m: max(1,2)+1 = 3
+Node P3:  c (L=1)
+```
+
+Guarantee: if A -> B then L(A) < L(B). **But not the reverse**: c has L=1 and "receive m" has L=3, yet they are concurrent. A Lamport clock gives a total order consistent with causality, but it cannot *detect* concurrency.
+
+**Vector clock -- one counter per node, carried as a vector.** Each node increments its own slot on every event and takes the element-wise max on receive.
+
+```text
+A writes x           ->  [A:1, B:0, C:0]
+B reads x, writes y  ->  [A:1, B:1, C:0]     (B saw A's write, so it carries A:1)
+C writes z alone     ->  [A:0, B:0, C:1]
+```
+
+Comparison rule: V1 happened-before V2 if every slot of V1 is <= the matching slot of V2 (and they are not equal). `[1,0,0]` vs `[1,1,0]` -> before. `[1,1,0]` vs `[0,0,1]` -> neither is <= the other -> **concurrent**. Vector clocks detect concurrency exactly, but they grow with the number of writers (Part 9).
+
+**Explicit dependencies (COPS style).** Instead of a full vector, each write carries a short list of its *nearest* dependencies, for example `reply depends on {post: version 17}`. A replica delays making the write visible until every dependency is visible. The size grows with dependencies, not with the number of nodes.
+
+**Hybrid logical clock (HLC).** A physical timestamp plus a small logical counter. If A -> B then HLC(A) < HLC(B), the value stays close to wall time, and it is a fixed size. CockroachDB and YugabyteDB use HLCs, and MongoDB's cluster time works on the same principle.
+
+### Step 4: Getting it in a relational database
+
+**Key insight for single-leader databases: the log already respects causality.** Anything you *read* was committed earlier in the log than anything you *write* afterwards. So Bob's reply always lands at a later log position than Alice's post. Every replica is a prefix of the log, so any replica showing the reply also shows the post. Readers get causal order for free.
+
+What breaks it is the *client* moving between replicas:
+
+- Carol sees the reply on Replica 1 (position 900), refreshes, lands on Replica 2 (position 850), and the reply disappears. This violates **monotonic reads**.
+- Bob replies, then reads from a lagging replica and his own reply is missing. This violates **read-your-writes**.
+
+Both are fixed by the same session token you saw in Section 1b.2: track the highest log position the session has seen (written or read), and only serve the session from replicas at or beyond it. A known result ties this together: **a client that gets all four session guarantees (Section 10.9) observes causal consistency.** For a single-leader database, causal consistency is therefore "replicas apply the log in order" plus "sessions carry a log-position token".
+
+Single-leader stops being enough when **more than one place accepts writes independently**:
+
+- Multi-region active-active (each region's primary accepts writes, as in Postgres multi-master logical replication or MySQL multi-source setups).
+- Offline-first mobile apps, where every phone is a writer.
+- Several independent databases or partitions without a shared log.
+
+There is no single log there, so you need vector clocks or dependency tracking.
+
+### Step 5: Getting it in a distributed system -- a geo-replicated causal store
+
+The design below follows COPS (Lloyd et al., 2011) and its successors. It gives local-latency writes like eventual consistency, but causal visibility everywhere:
+
+1. **Write locally.** Alice's "remove boss" goes to her nearest region and is acknowledged in a few milliseconds. The client library records it as a dependency of the session.
+2. **Next write carries dependencies.** Her post is written locally with metadata `depends on {friends_list: v42}`.
+3. **Replicate asynchronously.** Both writes are shipped to other regions, possibly arriving out of order.
+4. **Dependency check before visibility.** A remote region that receives the post first stores it but keeps it **invisible** until `friends_list v42` has arrived and been applied.
+5. **Converge on concurrent writes.** If two regions update the same key concurrently, a deterministic rule picks one (last-writer-wins on HLC timestamp) or merges them (a CRDT). COPS calls the combination of causal plus convergent **causal+**.
+
+The cost compared with eventual consistency is metadata on each write plus occasional short waits for dependencies. Compared with linearizability, no write ever waits for another region.
+
+**MongoDB causal sessions -- the same idea as a product feature.**
+
+```mermaid
+sequenceDiagram
+    participant App as App (causal session)
+    participant P as Primary
+    participant S as Secondary
+    App->>P: Update profile (writeConcern majority)
+    P-->>App: OK, operationTime = T105
+    App->>S: Read profile (readConcern majority, afterClusterTime = T105)
+    Note over S: Secondary has applied only up to T101. It waits until it reaches T105.
+    S-->>App: Profile including the update
+```
+
+The driver tracks `operationTime` and sends `afterClusterTime` on the next read. Any secondary can serve it, but only once it has caught up to the session's causal past. The full guarantee during failures requires `majority` read and write concern.
+
+### Step 6: What runs in production
+
+| Mechanism | Production systems | Notes |
+|---|---|---|
+| Session tokens on a single ordered log | MongoDB causal sessions, Azure Cosmos DB "session" consistency, Postgres/MySQL with log-position or GTID routing | The most common way causal consistency is delivered |
+| Timestamp tokens on a strongly consistent store | Google Zanzibar zookies (Section 10.6) | Causal "at least as fresh as" checks with cache-speed reads |
+| Hybrid logical clocks | CockroachDB, YugabyteDB, MongoDB cluster time | Cheap causality-preserving timestamps |
+| Vector clocks / version vectors | Riak, original Dynamo | Used mainly to **detect** concurrent writes so they can be merged |
+| Explicit dependency tracking | COPS, Eiger (research systems that shaped this field) | Causal+ across data centers |
+| Causal delivery + CRDTs | Collaborative editors such as Automerge and Yjs | Every replica applies an edit only after the edits it depends on |
+| Cosmos DB "consistent prefix" | Azure Cosmos DB | Readers see a prefix of the write order -- weaker than causal because sessions can still go backward |
+
+### Step 7: Common mistakes
+
+1. **Ordering by wall-clock timestamp.** Clock skew can place a reply before its post.
+2. **Spreading one conversation across Kafka partitions.** Order holds only within a partition, so partition by conversation ID.
+3. **Thinking causal means "everyone sees the same order".** Concurrent writes can be seen in different orders; you still need a convergence rule.
+4. **Letting vector clocks grow without bound.** Prune entries, or use dependency lists or HLCs.
+5. **Forgetting the client is part of the system.** A stateless load balancer that sends each request to a random replica breaks causal order even when every replica is a perfect prefix.
+
+### Step 8: Self-check
+
+1. *Your app uses one Postgres primary with async replicas. Do you need vector clocks for causal consistency?* -- No. The WAL already orders writes causally. You need per-session log-position tokens so sessions never read from a replica behind what they have already seen.
+2. *Why can a Lamport clock not tell you two writes were concurrent?* -- Different counter values do not imply causality. Only vector clocks (or dependency lists) can show that neither write saw the other.
+3. *Two regions both accept writes to a user's display name at the same moment. Does causal consistency decide the final value?* -- No. The writes are concurrent; you need a convergence rule such as last-writer-wins or a merge.
+
+---
+
+## 1b.4 Read-Your-Writes -- The Concrete Recipes
+
+The rule: **after you write, your own later reads include that write.** Other clients may still see old data. The mechanism is always the same: the write returns a **token** describing "how far the log must be applied", and the session's reads go only to replicas that have applied that far. (Part 9 compares sticky sessions, tokens, and primary routing.)
+
+**Postgres:**
+
+```sql
+-- On the primary, right after the write commits
+SELECT pg_current_wal_lsn();                                   -- store e.g. '0/3A1F2B8' for this user
+
+-- On a replica, before serving this user's read
+SELECT pg_last_wal_replay_lsn() >= '0/3A1F2B8'::pg_lsn AS fresh_enough;
+-- true  -> serve from this replica
+-- false -> wait a few ms, try another replica, or read from the primary
+```
+
+**MySQL (GTIDs):**
+
+```sql
+-- With session_track_gtids = OWN_GTID the client receives the GTID of its own commit,
+-- for example '3E11FA47-71CA-11E1-9E33-C80AA9429562:23'
+
+-- On a replica: wait up to 50 ms for that transaction to be applied
+SELECT WAIT_FOR_EXECUTED_GTID_SET('3E11FA47-71CA-11E1-9E33-C80AA9429562:23', 0.05);
+-- 0 -> applied, safe to read here;  1 -> timed out, use another replica or the primary
+```
+
+Proxies such as ProxySQL can do this GTID-aware routing for you.
+
+**Other stores:** DynamoDB `ConsistentRead=true` on that one read. Cassandra `QUORUM` (or `LOCAL_QUORUM`) on both the write and the read. MongoDB causal sessions (Section 1b.3).
+
+**Two traps.** The token must be stored **per user** (for example in Redis), not per browser session, or switching from phone to laptop loses the guarantee. And the replica check must run **inside** the routing decision, not once at login.
+
+---
+
+## 1b.5 Eventual Consistency -- From Zero to Production
+
+### Step 1: The rule in plain words
+
+**If writes stop, all replicas eventually return the same value.** That is the entire promise. There is no bound on how long "eventually" is, no promise about order, and a client can see a new value and then an old one.
+
+Every real eventually consistent system has to answer two separate questions, and freshers usually answer only the first:
+
+1. **Propagation:** how does each update reach every replica, even through crashes and partitions?
+2. **Convergence:** when two replicas accepted *different* writes to the same key, how do they end up with the same value?
+
+A system that propagates everything but has no convergence rule never converges, so it is not even eventually consistent.
+
+### Step 2: Two very different kinds of "eventual"
+
+| Kind | Who accepts writes | Conflicts? | Examples |
+|---|---|---|---|
+| **Single-leader eventual** | One primary orders everything; replicas lag | **No** -- there is one order, replicas are just behind | Postgres/MySQL async replicas, Redis replicas, CDN and cache copies |
+| **Multi-writer eventual** | Any replica, or one leader per region | **Yes** -- two replicas can accept concurrent writes to the same key | Cassandra, Riak, Dynamo, DynamoDB global tables, CouchDB, offline-first mobile apps |
+
+Single-leader eventual only needs propagation. Multi-writer eventual needs both propagation and convergence, which is where the interesting algorithms live.
+
+### Step 3: Worked examples -- allowed or not?
+
+| Scenario | Eventual consistency? |
+|---|---|
+| Replica 1 says `x = 5`, Replica 2 says `x = 3` for 2 seconds, then both say 5 | Allowed |
+| A client reads `x = 5` and then `x = 3` (it hit a lagging replica) | Allowed (this is why read-your-writes and monotonic reads exist) |
+| Writes stopped an hour ago, and two replicas still disagree permanently | **Violation** -- they never converged |
+| A like counter shows 47,003 on one replica and 47,008 on another for 3 seconds | Allowed, and usually fine |
+| A deleted item reappears after a repair | Technically "converged", but to the wrong answer -- a bug in the convergence rule (see tombstones below) |
+
+### Step 4: Propagation -- how updates reach every replica
+
+**(a) Direct asynchronous replication.** The leader streams its log to replicas (Postgres WAL streaming, MySQL binlog). Simple and ordered, and the source of almost all relational "eventual" behaviour.
+
+**(b) Leaderless writes to N replicas.** In Dynamo-style stores, a coordinator sends the write to all N replicas of the key and returns after W acknowledgements (Section 10.2). Replicas that were slow or down miss the write, so three repair mechanisms exist:
+
+**(c) Hinted handoff.** If a replica is down, another node stores the write together with a "hint" (meant for node 7). When node 7 recovers, the hint is replayed to it.
+
+**(d) Read repair.** During a read, the coordinator compares versions from several replicas. If one is stale, it writes the newer value back to it.
+
+**(e) Anti-entropy with Merkle trees.** A background process compares whole replicas cheaply:
+
+```mermaid
+flowchart TD
+    R["Root hash<br/>Replica A: 9f3c / Replica B: 71aa<br/>DIFFERENT, descend"] --> L["Left half of key range<br/>A: 22b1 / B: 22b1<br/>same, skip all its keys"]
+    R --> RR["Right half of key range<br/>A: 5e07 / B: c410<br/>DIFFERENT, descend"]
+    RR --> RL["Keys 500-749<br/>same, skip"]
+    RR --> RRR["Keys 750-999<br/>DIFFERENT, exchange only these keys"]
+    style R fill:#fde68a,stroke:#b45309,color:#000
+    style RR fill:#fde68a,stroke:#b45309,color:#000
+    style RRR fill:#fecaca,stroke:#b91c1c,color:#000
+    style L fill:#bbf7d0,stroke:#15803d,color:#000
+    style RL fill:#bbf7d0,stroke:#15803d,color:#000
+```
+
+Each leaf hashes a range of keys, and each parent hashes its children. Two replicas compare roots. If they match, the replicas are identical and nothing more is sent. If they differ, they descend only into the differing branches. With a billion keys and ten differences, they exchange a few hundred hashes and ten keys instead of a billion keys. Cassandra's `nodetool repair` and Dynamo-style stores use this.
+
+**(f) Gossip (epidemic spreading).** Every second, each node picks a random peer and exchanges what it knows. Like a rumour, an update reaches all N nodes in about log2(N) rounds: roughly 10 rounds for 1,000 nodes, even if some nodes are down. Cassandra uses gossip to spread cluster membership and node state (the data itself goes from coordinator to replicas). HashiCorp's Serf and Consul use a gossip protocol based on SWIM for membership and failure detection.
+
+### Step 5: Convergence -- what happens when two writes conflict
+
+Running example: a shopping cart replicated in two regions. The user's phone and laptop update it at the same moment through different regions.
+
+**Option 1 -- Last-writer-wins (LWW).** Each write carries a timestamp; the highest timestamp wins, the other write is discarded.
+
+```text
+Region 1: cart = [shoes, hat]     at 10:00:00.100
+Region 2: cart = [shoes, socks]   at 10:00:00.120
+After merge: [shoes, socks]       -- the hat is silently lost
+```
+
+LWW is simple and always converges, but it **loses data** on every true conflict, and clock skew can make the *earlier* write win (Section 10.4). Cassandra uses LWW per column, which is fine for "latest location" or "last seen" fields, and wrong for carts, counters, and collaborative edits.
+
+**Option 2 -- Keep both and let the application merge (siblings).** Version vectors detect that the two writes are concurrent. The store keeps both versions ("siblings") and returns both on the next read, and the application merges them. Riak works this way, and so did the original Dynamo shopping cart, which merged by taking the union. The weakness of union is that an item removed on one device and kept on another comes back.
+
+**Option 3 -- CRDTs (conflict-free replicated data types).** CRDTs are data structures whose merge function is mathematically guaranteed to converge: merging is order-independent, and merging the same state twice changes nothing. Three you should be able to draw:
+
+- **G-Counter (grow-only counter), used for likes and views.** Each replica increments **only its own slot**. Merge takes the element-wise max; the value is the sum.
+
+  ```text
+  Replica A gets 3 likes:        {A:3, B:0, C:0}
+  Replica B gets 2 likes:        {A:0, B:2, C:0}
+  A merges with B:               {A:3, B:2, C:0}   value = 5
+  C gets 1 like, merges with A:  {A:3, B:2, C:1}   value = 6
+  A receives B's state again:    {A:3, B:2, C:1}   value = 6   (duplicate delivery is harmless)
+  ```
+
+  Compare with sending "+3" messages: a duplicated message over-counts. With CRDT state, duplicates are harmless.
+- **PN-Counter** (supports unlike). Two G-Counters, one for increments and one for decrements; the value is P minus N.
+- **OR-Set (observed-remove set), used for carts and tags.** Every add creates a unique tag, for example `shoes#a1`. A remove deletes only the tags it has *seen*. If the phone removes `shoes#a1` while the laptop concurrently adds shoes again as `shoes#b7`, the merge keeps `shoes#b7`. A concurrent re-add wins, and items removed on purpose do not come back.
+
+CRDTs are used in Riak data types, Redis Enterprise Active-Active databases, and collaborative editors such as Automerge and Yjs.
+
+**Option 4 -- Domain-specific merge.** Bank balances are not stored as one value at all. They are stored as an append-only list of transactions, and the balance is computed from it. Appends from two regions never conflict; only the invariant check (enough balance?) needs strong consistency.
+
+### Step 6: Eventual consistency in a relational database
+
+Every Postgres or MySQL **async read replica** is single-leader eventual. You should know how to see the lag:
+
+```sql
+-- Postgres, on the primary: how far behind is each replica?
+SELECT application_name, client_addr, replay_lag
+FROM   pg_stat_replication;
+
+-- MySQL 8.0.22+, on the replica
+SHOW REPLICA STATUS;          -- look at Seconds_Behind_Source
+```
+
+Lag is usually milliseconds, but it jumps to seconds or minutes during heavy writes, long-running queries on the replica, or network trouble. That is why "eventual" needs a monitored staleness SLO and not just hope.
+
+**Multi-primary relational setups** (for example Postgres bidirectional logical replication, or EDB Postgres Distributed) are multi-writer eventual. Conflicting updates to the same row are typically resolved by a conflict handler that defaults to something like latest-commit-timestamp-wins -- which is LWW, with all of LWW's data loss. Teams that run them usually partition writes so that each row has a "home" region, avoiding conflicts instead of resolving them.
+
+### Step 7: What runs in production
+
+| Mechanism | Production systems |
+|---|---|
+| Async log shipping (single leader) | Postgres and MySQL read replicas, Redis replicas, Elasticsearch replicas, most CDN and cache layers |
+| Leaderless N/W/R quorums + hinted handoff + read repair | Cassandra, ScyllaDB, Riak, Amazon Dynamo (the 2007 design) |
+| Merkle-tree anti-entropy | Cassandra / ScyllaDB repair, Riak active anti-entropy, Dynamo |
+| Gossip for membership and state | Cassandra, Consul / Serf (SWIM-based), many service-discovery systems |
+| Last-writer-wins | Cassandra (per column), DynamoDB global tables (for concurrent updates to the same item) |
+| Version vectors + siblings | Riak, CouchDB (conflict revisions) |
+| CRDTs | Riak data types, Redis Enterprise Active-Active, Automerge, Yjs |
+| Hierarchical caching with TTLs | DNS -- the largest eventually consistent system in the world |
+
+### Step 8: Making eventual consistency safe
+
+1. **Bound it.** Measure replication lag and convergence time, publish a staleness SLO (for example "P99 under 5 s"), and alert on it.
+2. **Add read-your-writes for the writer** (Section 1b.4). It removes the worst user-facing symptom at low cost.
+3. **Prefer commutative, idempotent updates.** "Add 1 like from replica A" (a CRDT slot) converges; "set likes = 47,003" with LWW loses updates.
+4. **Handle deletes with tombstones.** A delete must be stored as a marker, or anti-entropy will copy the old value back from a replica that missed the delete. Tombstones are eventually garbage-collected (Cassandra's `gc_grace_seconds` defaults to 10 days). If a replica stays out of sync longer than that and repair never runs, **deleted data comes back to life**. Run repair more often than the grace period.
+5. **Keep invariants out of it.** Uniqueness, balances, and inventory limits cannot be enforced by a store where two replicas accept conflicting writes. Move those operations to a linearizable path (Section 1b.1).
+
+### Step 9: Self-check
+
+1. *A Postgres replica is 3 seconds behind. Is that eventual consistency with or without conflicts?* -- Without. There is one leader and one order, so the replica is just behind.
+2. *Why does a G-Counter use one slot per replica instead of one shared number?* -- So every replica updates only its own slot. Merging by max is then safe to repeat and to apply in any order, and nothing is double-counted or lost.
+3. *A user deletes a comment, and it reappears two weeks later. What is the likely cause?* -- A replica missed the delete and repair did not run within the tombstone grace period, so the tombstone was garbage-collected and anti-entropy resurrected the old value.
+4. *Why is LWW a bad choice for a shopping cart?* -- Concurrent edits from two devices are real conflicts, and LWW keeps one and silently discards the other. Use an OR-Set or an application merge.
+
+---
+
+## 1b.6 One Table to Remember
+
+| Model | One server | Relational DB with replicas | Distributed algorithm | Production examples |
+|---|---|---|---|---|
+| **Linearizable** | Automatic for single rows | Read from primary or a `remote_apply` standby; HA failover via a consensus system (Patroni + etcd, InnoDB Cluster) | Raft / Multi-Paxos log, with ReadIndex or lease reads; ABD for registers; Paxos for CAS | etcd, ZooKeeper writes, Spanner, CockroachDB, TiKV, DynamoDB strong reads |
+| **Sequential** | Automatic | Replicas apply the log in order, plus a per-session log-position token | Total order broadcast (any consensus log) with local reads | ZooKeeper reads, single Kafka partition, etcd serializable reads |
+| **Causal** | Automatic | Single log is already causal; add per-session log-position tokens | Vector clocks, dependency lists (COPS), hybrid logical clocks; causal+ with a convergence rule | MongoDB causal sessions, Cosmos DB session, Zanzibar zookies |
+| **Read-your-writes** | Automatic | `pg_current_wal_lsn` / `pg_last_wal_replay_lsn`, MySQL GTID wait | Version token routed to a fresh-enough replica | DynamoDB `ConsistentRead` on that read, Cassandra `QUORUM`, ProxySQL GTID routing |
+| **Eventual** | n/a | Async read replicas (no conflicts); multi-primary needs conflict handlers | Hinted handoff, read repair, Merkle anti-entropy, gossip; LWW, siblings, or CRDTs for convergence | Cassandra, Riak, Dynamo, DynamoDB global tables, DNS, CDNs |
+
 ---
 
 # Part 2: What User Experience Each Model Creates
@@ -438,6 +1536,7 @@ You are at a coffee shop. You post "At my favorite coffee shop!" to social media
 | Model | Your experience posting "At my favorite coffee shop!" |
 |---|---|
 | **Strong (Linearizable)** | Click post, wait 500 ms, post appears on your feed AND your friend's feed simultaneously. Perfect sync, but 500 ms felt slow for a button click. |
+| **Sequential** | Click post, wait about 150 ms while it is ordered in the log, then see it on your feed. Your friend's replica may be a second behind, but every viewer sees your post, and the posts around it, in exactly the same order. |
 | **Causal** | Instant confirmation, post appears on your feed. Replies always appear after your post, in order, for every reader. Your friend may see it about 2 s later. |
 | **Read-Your-Writes** | Instant confirmation, you see your post immediately. Your friend may not see it for 3-5 s, but you don't worry. No support ticket, no duplicate post. |
 | **Eventual (pure)** | Instant confirmation, but your post is not on your feed. Refresh: not there. Refresh again: there it is. You posted again while waiting, so now there are two. You delete one, and the deletion is also eventually consistent, so it appears and disappears twice over the next 30 s. |
@@ -1717,21 +2816,20 @@ The hidden bandwidth cost is significant at scale. Raft requires roughly 2x the 
 
 Different databases provide different consistency guarantees by default. Knowing what you're actually getting is a staff-level skill.
 
-| WHAT MAJOR DATABASES ACTUALLY GIVE YOU |
-|---|
-| Database |
-| PostgreSQL (primary + replicas) |
-| MySQL (replica set) |
-| DynamoDB |
-| Cassandra |
-| Google Spanner |
-| MongoDB |
-| Redis |
-| Apache Kafka |
+| Database | Default guarantee | Stronger option | What it costs |
+|---|---|---|---|
+| PostgreSQL (primary + replicas) | Linearizable on the primary; replicas are asynchronous, so replica reads are eventual | Read from the primary, or `synchronous_commit = remote_apply` for fresh standby reads | Each commit waits a round trip to the standby |
+| MySQL (replica set) | Linearizable on the source; async replicas are eventual | Semi-sync for lossless failover; Group Replication with `group_replication_consistency = BEFORE/AFTER` for fresh reads | Extra wait on commit or read |
+| DynamoDB | Eventually consistent reads | `ConsistentRead=true` (served by the partition leader) | 2x read capacity, slightly higher latency; global tables remain last-writer-wins across regions |
+| Cassandra | Tunable per query; `ONE` is eventual | `QUORUM` reads and writes for overlap; lightweight transactions (Paxos) for compare-and-set | QUORUM touches more replicas; LWT costs about 4 round trips |
+| Google Spanner | Strict serializability (external consistency) | Already strongest; bounded-staleness reads to go cheaper | Cross-region writes pay Paxos round trips plus commit-wait |
+| MongoDB | Primary reads see the primary's latest data; secondary reads may be stale | `readConcern: "linearizable"` on the primary; causal sessions with majority read/write concern | Linearizable reads confirm with a majority |
+| Redis | Asynchronous replication; acknowledged writes can be lost on failover | `WAIT` reduces loss but does not make Redis linearizable | Not a substitute for a consensus store |
+| Apache Kafka | Total order within a partition, none across partitions | `acks=all` + `min.insync.replicas >= 2` for durability; partition by entity key for ordering | Higher produce latency |
 
 After this table: 3 critical insights.
 
-**Insight 1 -- PostgreSQL is NOT strongly consistent by default when you have replicas.** This surprises almost every engineer who hasn't thought about it carefully. PostgreSQL streaming replication is asynchronous by default. Reads from replicas return data that may be milliseconds to seconds behind the primary. If your API reads from a read replica for performance, you have eventual consistency. You only have strong consistency if: (a) you read only from the primary, or (b) you use synchronous replication (set synchronous_commit = on AND point your reads to replicas, which then wait for the primary's confirmation). Synchronous replication adds 2-5ms to every write and reduces write throughput significantly. Most teams don't use it, which means most PostgreSQL read-replica setups are eventually consistent whether the team knows it or not.
+**Insight 1 -- PostgreSQL is NOT strongly consistent by default when you have replicas.** This surprises almost every engineer who hasn't thought about it carefully. PostgreSQL streaming replication is asynchronous by default. Reads from replicas return data that may be milliseconds to seconds behind the primary. If your API reads from a read replica for performance, you have eventual consistency. You only have strong consistency if: (a) you read only from the primary, or (b) you use synchronous replication with `synchronous_commit = remote_apply` and read only from the synchronous standbys. The common setting `synchronous_commit = on` waits only until the standby has flushed the WAL, which protects against data loss on failover but still allows stale reads on the standby. Synchronous replication adds 2-5ms to every write and reduces write throughput significantly. Most teams don't use it, which means most PostgreSQL read-replica setups are eventually consistent whether the team knows it or not.
 
 **Insight 2 -- DynamoDB's strongly consistent reads cost 2x the read capacity.** When you set ConsistentRead=true in DynamoDB, you're charged double the read capacity units and the read is slightly higher latency. At scale, this matters: if 10% of your reads need strong consistency, the naive approach (strong consistency globally) costs 2x the read cost. The staff-level approach is to route only the reads that actually need consistency to ConsistentRead=true, and leave the rest on eventual. For most applications, this means routing reads that immediately follow a write (and only for the writing user) to strong consistency, and everything else to eventual.
 
